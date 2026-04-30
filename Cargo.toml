@@ -110,3 +110,7 @@ required-features = ["bench", "openslide-bench"]
 [[bin]]
 name = "svcache"
 path = "src/bin/svcache.rs"
+
+[workspace]
+members = [".", "xtask"]
+resolver = "2"

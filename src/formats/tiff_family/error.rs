@@ -149,8 +149,8 @@ mod tests {
     #[test]
     fn from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
-        let tpe: TiffParseError = io_err.into();
-        match &tpe {
+        let parse_error: TiffParseError = io_err.into();
+        match &parse_error {
             TiffParseError::Io { kind, source, .. } => {
                 assert_eq!(*kind, std::io::ErrorKind::PermissionDenied);
                 assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
@@ -162,9 +162,9 @@ mod tests {
 
     #[test]
     fn into_wsi_error_conversion() {
-        let tpe = TiffParseError::Structure("bad header".into());
+        let parse_error = TiffParseError::Structure("bad header".into());
         let path = Path::new("/tmp/slide.svs");
-        let wsi_err = tpe.into_wsi_error(path);
+        let wsi_err = parse_error.into_wsi_error(path);
         match wsi_err {
             WsiError::Tiff {
                 path: p,
@@ -179,12 +179,12 @@ mod tests {
 
     #[test]
     fn into_wsi_error_io_routes_to_io_with_path() {
-        let tpe = TiffParseError::Io {
+        let parse_error = TiffParseError::Io {
             kind: std::io::ErrorKind::NotFound,
             source: Arc::new(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")),
             path: None,
         };
-        let wsi_err = tpe.into_wsi_error(Path::new("/tmp/test.ndpi"));
+        let wsi_err = parse_error.into_wsi_error(Path::new("/tmp/test.ndpi"));
         match wsi_err {
             WsiError::IoWithPath { source, path: p } => {
                 assert_eq!(source.kind(), std::io::ErrorKind::NotFound);

@@ -2,7 +2,7 @@
 //! comparable benchmark targets and emits a gate-oriented comparison summary.
 //!
 //! Usage:
-//!   bench_driver <slide-path> <workload-name>
+//!   `bench_driver SLIDE_PATH WORKLOAD_NAME`
 //!
 //! Iris is optional because it is a Python package and consumes pre-encoded
 //! `.iris` files. Set `WSI_BENCH_INCLUDE_IRIS=1`; for non-`.iris` source
