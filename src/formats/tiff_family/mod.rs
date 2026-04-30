@@ -188,12 +188,12 @@ mod tests {
     /// Each entry is (width, height, source_lens).
     fn build_ndpi_tiff(entries: &[(u32, u32, f32)]) -> NamedTempFile {
         // Step 1: Build minimal JPEG for each entry
-        let mut jpeg_datas: Vec<Vec<u8>> = Vec::new();
+        let mut jpeg_blocks: Vec<Vec<u8>> = Vec::new();
         for &(w, h, _) in entries {
             let actual_w = w.min(64);
             let actual_h = h.min(64);
             let rgb = image::RgbImage::new(actual_w, actual_h);
-            jpeg_datas.push(encode_test_jpeg(&rgb));
+            jpeg_blocks.push(encode_test_jpeg(&rgb));
         }
 
         let mut buf = Vec::new();
@@ -207,7 +207,7 @@ mod tests {
         // Write JPEG data blocks
         let mut strip_offsets: Vec<u32> = Vec::new();
         let mut strip_byte_counts: Vec<u32> = Vec::new();
-        for jpeg in &jpeg_datas {
+        for jpeg in &jpeg_blocks {
             strip_offsets.push(buf.len() as u32);
             strip_byte_counts.push(jpeg.len() as u32);
             buf.extend_from_slice(jpeg);

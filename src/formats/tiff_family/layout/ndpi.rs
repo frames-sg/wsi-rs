@@ -979,7 +979,7 @@ mod tests {
     /// Build a synthetic NDPI TIFF with embedded strip payloads at valid offsets.
     /// Each entry is (width, height, source_lens, focal_plane, compression_tag).
     fn build_ndpi_with_strips(entries: &[(u32, u32, f32, i32, u32)]) -> NamedTempFile {
-        let mut strip_datas: Vec<Vec<u8>> = Vec::new();
+        let mut strip_blocks: Vec<Vec<u8>> = Vec::new();
         for &(w, h, _, _, compression_tag) in entries {
             let actual_w = w.min(64);
             let actual_h = h.min(64);
@@ -989,7 +989,7 @@ mod tests {
                 let rgb = image::RgbImage::new(actual_w, actual_h);
                 encode_test_jpeg(&rgb)
             };
-            strip_datas.push(strip_data);
+            strip_blocks.push(strip_data);
         }
 
         let mut buf = Vec::new();
@@ -1003,7 +1003,7 @@ mod tests {
         // Write JPEG data blocks and remember their offsets
         let mut strip_offsets: Vec<u32> = Vec::new();
         let mut strip_byte_counts: Vec<u32> = Vec::new();
-        for strip_data in &strip_datas {
+        for strip_data in &strip_blocks {
             strip_offsets.push(buf.len() as u32);
             strip_byte_counts.push(strip_data.len() as u32);
             buf.extend_from_slice(strip_data);

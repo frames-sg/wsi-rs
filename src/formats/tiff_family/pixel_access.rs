@@ -4571,7 +4571,7 @@ mod tests {
     use crate::formats::tiff_family::layout::DatasetLayout;
     use crate::properties::Properties;
     use flate2::write::ZlibEncoder;
-    use flate2::Compression as FlateCompression;
+    use flate2::Compression as DeflateCompression;
     use image::{DynamicImage, ImageFormat};
     use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
     use std::collections::HashMap;
@@ -6458,7 +6458,7 @@ mod tests {
     fn read_associated_deflate_predictor_uses_tilecodec_path() {
         let expected = [10u8, 15, 20, 1, 3, 6];
         let predictor_encoded = [10u8, 5, 5, 1, 2, 3];
-        let mut encoder = ZlibEncoder::new(Vec::new(), FlateCompression::fast());
+        let mut encoder = ZlibEncoder::new(Vec::new(), DeflateCompression::fast());
         encoder.write_all(&predictor_encoded).unwrap();
         let compressed = encoder.finish().unwrap();
         let file = build_stripped_tiff(3, 2, &compressed, 1, Some(1), Some(2), 8);

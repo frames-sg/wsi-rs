@@ -1,7 +1,7 @@
 //! `openslide_bench` — runs the audit workload set against a single slide via libopenslide.
 //!
 //! Usage:
-//!   openslide_bench <slide-path>
+//!   `openslide_bench SLIDE_PATH`
 //!
 //! Prints a single JSON object to stdout in the same shape as wsi_bench.
 

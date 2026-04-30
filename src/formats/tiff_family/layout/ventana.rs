@@ -1220,9 +1220,9 @@ fn validate_no_adjacent_overlap(
                 break;
             }
             // Check Y overlap
-            let ix = (x2.min(nx2) - x1.max(nx1)).max(0.0);
-            let iy = (y2.min(ny2) - y1.max(ny1)).max(0.0);
-            let overlap_area = ix * iy;
+            let intersection_x = (x2.min(nx2) - x1.max(nx1)).max(0.0);
+            let intersection_y = (y2.min(ny2) - y1.max(ny1)).max(0.0);
+            let overlap_area = intersection_x * intersection_y;
             if overlap_area > 0.0 {
                 return Err(TiffParseError::Structure(format!(
                     "Ventana BIF: tiles ({},{}) and ({},{}) overlap by {:.1} pixels",

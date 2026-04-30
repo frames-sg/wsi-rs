@@ -1,7 +1,7 @@
 //! `wsi_bench` — runs the audit workload set against a single slide via ziggurat.
 //!
 //! Usage:
-//!   wsi_bench <slide-path>
+//!   `wsi_bench SLIDE_PATH`
 //!
 //! Prints a single JSON object to stdout describing the run.
 

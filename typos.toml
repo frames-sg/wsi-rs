@@ -1,0 +1,13 @@
+[files]
+extend-exclude = [
+    ".git",
+    "target",
+]
+
+[default.extend-words]
+OME = "OME"
+SIZ = "SIZ"
+Siz = "Siz"
+ome = "ome"
+siz = "siz"
+subtile = "subtile"
