@@ -76,7 +76,30 @@ fn coverage() -> Result<(), String> {
 }
 
 fn package() -> Result<(), String> {
+    ensure_clean_worktree()?;
     run_cargo(&["package", "--no-verify"])
+}
+
+fn ensure_clean_worktree() -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|err| format!("failed to start `git status --porcelain`: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git status --porcelain` exited with {}",
+            output.status
+        ));
+    }
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    if status.trim().is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "working tree must be clean before packaging:\n{status}"
+        ))
+    }
 }
 
 fn run_cargo(args: &[&str]) -> Result<(), String> {
@@ -121,6 +144,6 @@ fn print_help() {
            typos        run typos\n\
            release-test run release-mode library and integration tests\n\
            coverage     generate lcov.info with cargo-llvm-cov\n\
-           package      package the crate without verification"
+           package      package the crate from a clean worktree without verification"
     );
 }
