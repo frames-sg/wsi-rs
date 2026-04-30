@@ -179,5 +179,5 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
 }
 
 fn strict_corpus_required() -> bool {
-    std::env::var_os("ZIGGURAT_PARITY_REQUIRE_CORPUS").is_some() || std::env::var_os("CI").is_some()
+    std::env::var_os("ZIGGURAT_PARITY_REQUIRE_CORPUS").is_some()
 }

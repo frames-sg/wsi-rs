@@ -363,11 +363,7 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
                 });
             }
 
-            for ((slot, key), tile) in missed_slots
-                .into_iter()
-                .zip(missed_keys.into_iter())
-                .zip(decoded.into_iter())
-            {
+            for ((slot, key), tile) in missed_slots.into_iter().zip(missed_keys).zip(decoded) {
                 let arc_tile = Arc::new(tile);
                 if let Some(cache) = cache {
                     cache.put(key, arc_tile.clone());

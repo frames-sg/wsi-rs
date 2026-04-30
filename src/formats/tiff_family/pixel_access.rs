@@ -118,14 +118,12 @@ fn jpeg_segment_color_hint(data: &[u8]) -> JpegBitstreamColorHint {
         let payload = &data[payload_start..payload_end];
 
         match marker {
-            0xEE => {
-                if payload.len() >= 12 && &payload[..5] == b"Adobe" {
-                    return match payload[11] {
-                        0 => JpegBitstreamColorHint::Rgb,
-                        1 | 2 => JpegBitstreamColorHint::YCbCr,
-                        _ => JpegBitstreamColorHint::Unknown,
-                    };
-                }
+            0xEE if payload.len() >= 12 && &payload[..5] == b"Adobe" => {
+                return match payload[11] {
+                    0 => JpegBitstreamColorHint::Rgb,
+                    1 | 2 => JpegBitstreamColorHint::YCbCr,
+                    _ => JpegBitstreamColorHint::Unknown,
+                };
             }
             marker if is_jpeg_sof_marker(marker) => {
                 return jpeg_sof_color_hint(payload);
@@ -5273,7 +5271,7 @@ mod tests {
             [140, 150, 160],
             [160, 170, 180],
         ];
-        for (pixel, rgb) in image.pixels_mut().zip(source_pixels.into_iter()) {
+        for (pixel, rgb) in image.pixels_mut().zip(source_pixels) {
             *pixel = image::Rgb(rgb);
         }
         let mut jpeg = Vec::new();

@@ -15,10 +15,8 @@ pub fn parse_element_text(xml: &str, tag: &str) -> Option<String> {
     let mut inside_tag = false;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                if e.name().as_ref() == tag.as_bytes() {
-                    inside_tag = true;
-                }
+            Ok(Event::Start(e)) if e.name().as_ref() == tag.as_bytes() => {
+                inside_tag = true;
             }
             Ok(Event::Text(e)) if inside_tag => {
                 return e.unescape().ok().map(|s| s.into_owned());
@@ -42,12 +40,10 @@ pub fn parse_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == tag.as_bytes() {
-                    for a in e.attributes().flatten() {
-                        if a.key.as_ref() == attr.as_bytes() {
-                            return a.unescape_value().ok().map(|s| s.into_owned());
-                        }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == tag.as_bytes() => {
+                for a in e.attributes().flatten() {
+                    if a.key.as_ref() == attr.as_bytes() {
+                        return a.unescape_value().ok().map(|s| s.into_owned());
                     }
                 }
             }
