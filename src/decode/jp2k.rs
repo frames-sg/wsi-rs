@@ -514,11 +514,7 @@ mod tests {
             assert_eq!(decoded_pixel.0[3], 255);
         }
 
-        let avg_delta_x100 = if channels == 0 {
-            0
-        } else {
-            (total_delta * 100) / channels
-        };
+        let avg_delta_x100 = (total_delta * 100).checked_div(channels).unwrap_or(0);
 
         assert!(
             max_delta <= MAX_CHANNEL_DELTA,
