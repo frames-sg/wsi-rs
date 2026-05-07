@@ -1182,7 +1182,196 @@ fn scan_encapsulated_frames(
         }
     }
 
+    if fragments.is_empty() {
+        if let Some(frames) = scan_encapsulated_frames_raw_little_endian(path, number_of_frames)? {
+            return Ok(frames);
+        }
+    }
+
     build_encapsulated_frame_index(path, fragments, offset_table, number_of_frames)
+}
+
+const PIXEL_DATA_TAG_LE: [u8; 4] = [0xE0, 0x7F, 0x10, 0x00];
+const DICOM_ITEM_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0x00, 0xE0];
+const DICOM_SEQUENCE_DELIMITER_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0xDD, 0xE0];
+const UNDEFINED_LENGTH_LE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+const EXPLICIT_VR_LONG_HEADER_LEN: usize = 12;
+
+fn scan_encapsulated_frames_raw_little_endian(
+    path: &Path,
+    number_of_frames: u32,
+) -> Result<Option<DicomEncapsulatedFrames>, WsiError> {
+    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(source),
+        path: path.to_path_buf(),
+    })?;
+    let Some(pixel_data_offset) = find_encapsulated_pixel_data_offset_le(&mut file, path)? else {
+        return Ok(None);
+    };
+
+    let (fragments, offset_table) =
+        scan_raw_encapsulated_pixel_sequence(&mut file, path, pixel_data_offset)?;
+    build_encapsulated_frame_index(path, fragments, offset_table, number_of_frames).map(Some)
+}
+
+fn find_encapsulated_pixel_data_offset_le(
+    file: &mut File,
+    path: &Path,
+) -> Result<Option<u64>, WsiError> {
+    const CHUNK_LEN: usize = 64 * 1024;
+    let mut chunk = [0u8; CHUNK_LEN];
+    let mut overlap = Vec::new();
+    let mut chunk_offset = 0u64;
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+
+    loop {
+        let read_len = file
+            .read(&mut chunk)
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.to_path_buf(),
+            })?;
+        if read_len == 0 {
+            return Ok(None);
+        }
+
+        let window_offset = chunk_offset.saturating_sub(overlap.len() as u64);
+        let mut window = Vec::with_capacity(overlap.len() + read_len);
+        window.extend_from_slice(&overlap);
+        window.extend_from_slice(&chunk[..read_len]);
+
+        for index in 0..=window.len().saturating_sub(EXPLICIT_VR_LONG_HEADER_LEN) {
+            let header = &window[index..index + EXPLICIT_VR_LONG_HEADER_LEN];
+            if is_encapsulated_pixel_data_header_le(header) {
+                return Ok(Some(window_offset + index as u64));
+            }
+        }
+
+        let keep = window.len().min(EXPLICIT_VR_LONG_HEADER_LEN - 1);
+        overlap.clear();
+        overlap.extend_from_slice(&window[window.len() - keep..]);
+        chunk_offset = chunk_offset
+            .checked_add(read_len as u64)
+            .ok_or_else(|| invalid_slide(path, "DICOM raw Pixel Data scan offset overflow"))?;
+    }
+}
+
+fn is_encapsulated_pixel_data_header_le(header: &[u8]) -> bool {
+    header.len() >= EXPLICIT_VR_LONG_HEADER_LEN
+        && header[0..4] == PIXEL_DATA_TAG_LE
+        && matches!(&header[4..6], b"OB" | b"OW" | b"UN")
+        && header[6..8] == [0, 0]
+        && header[8..12] == UNDEFINED_LENGTH_LE
+}
+
+fn scan_raw_encapsulated_pixel_sequence(
+    file: &mut File,
+    path: &Path,
+    pixel_data_offset: u64,
+) -> Result<(Vec<DicomFragmentRef>, Vec<u32>), WsiError> {
+    let mut cursor = pixel_data_offset
+        .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
+        .ok_or_else(|| invalid_slide(path, "DICOM raw Pixel Data offset overflow"))?;
+    let mut offset_table = None;
+    let mut fragments = Vec::new();
+
+    loop {
+        let mut item_header = [0u8; 8];
+        read_exact_at(file, path, cursor, &mut item_header)?;
+        let tag = &item_header[0..4];
+        let len = u32::from_le_bytes(
+            item_header[4..8]
+                .try_into()
+                .expect("DICOM item length header is 4 bytes"),
+        );
+        cursor = cursor
+            .checked_add(item_header.len() as u64)
+            .ok_or_else(|| invalid_slide(path, "DICOM raw item offset overflow"))?;
+
+        if tag == DICOM_SEQUENCE_DELIMITER_TAG_LE {
+            return Ok((fragments, offset_table.unwrap_or_default()));
+        }
+        if tag != DICOM_ITEM_TAG_LE {
+            return Err(invalid_slide(
+                path,
+                format!(
+                    "unexpected DICOM pixel sequence tag {:02x?} at byte {}",
+                    tag,
+                    cursor - item_header.len() as u64
+                ),
+            ));
+        }
+
+        if offset_table.is_none() {
+            offset_table = Some(read_basic_offset_table_at(file, path, cursor, len)?);
+        } else {
+            if len == 0 {
+                return Err(invalid_slide(
+                    path,
+                    "zero-length DICOM pixel fragment is not supported",
+                ));
+            }
+            fragments.push(DicomFragmentRef {
+                payload_offset: cursor,
+                item_offset: cursor - item_header.len() as u64,
+                len,
+            });
+        }
+
+        cursor = cursor
+            .checked_add(len as u64)
+            .ok_or_else(|| invalid_slide(path, "DICOM raw item payload offset overflow"))?;
+    }
+}
+
+fn read_basic_offset_table_at(
+    file: &mut File,
+    path: &Path,
+    offset: u64,
+    len: u32,
+) -> Result<Vec<u32>, WsiError> {
+    if len % 4 != 0 {
+        return Err(invalid_slide(
+            path,
+            format!("DICOM basic offset table has non-u32 length {len}"),
+        ));
+    }
+    let len = usize::try_from(len)
+        .map_err(|_| invalid_slide(path, "DICOM basic offset table length overflow"))?;
+    let mut bytes = vec![0u8; len];
+    read_exact_at(file, path, offset, &mut bytes)?;
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| {
+            u32::from_le_bytes(
+                chunk
+                    .try_into()
+                    .expect("DICOM basic offset table chunk is 4 bytes"),
+            )
+        })
+        .collect())
+}
+
+fn read_exact_at(
+    file: &mut File,
+    path: &Path,
+    offset: u64,
+    buf: &mut [u8],
+) -> Result<(), WsiError> {
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+    file.read_exact(buf).map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(source),
+        path: path.to_path_buf(),
+    })
 }
 
 fn build_encapsulated_frame_index(
@@ -2481,6 +2670,69 @@ mod tests {
             frame.extend_from_slice(&segment);
         }
         frame
+    }
+
+    fn push_explicit_vr_long_element(
+        bytes: &mut Vec<u8>,
+        tag: [u8; 4],
+        vr: &[u8; 2],
+        value: &[u8],
+    ) {
+        bytes.extend_from_slice(&tag);
+        bytes.extend_from_slice(vr);
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(value);
+    }
+
+    fn push_pixel_fragment(bytes: &mut Vec<u8>, payload: &[u8]) -> u64 {
+        let item_offset = bytes.len() as u64;
+        bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        item_offset
+    }
+
+    #[test]
+    fn raw_encapsulated_scan_handles_extended_offset_table_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raw-eot-htj2k.dcm");
+        let first = [0xFF, 0x4F, 0x01, 0x02];
+        let second = [0xFF, 0x4F, 0x03, 0x04, 0x05, 0x06];
+        let mut bytes = vec![0; 132];
+        bytes[128..132].copy_from_slice(b"DICM");
+
+        let mut eot = Vec::new();
+        eot.extend_from_slice(&0u64.to_le_bytes());
+        eot.extend_from_slice(&(first.len() as u64 + 8).to_le_bytes());
+        push_explicit_vr_long_element(&mut bytes, [0xE0, 0x7F, 0x01, 0x00], b"OV", &eot);
+
+        let mut eot_lengths = Vec::new();
+        eot_lengths.extend_from_slice(&(first.len() as u64).to_le_bytes());
+        eot_lengths.extend_from_slice(&(second.len() as u64).to_le_bytes());
+        push_explicit_vr_long_element(&mut bytes, [0xE0, 0x7F, 0x02, 0x00], b"OV", &eot_lengths);
+
+        bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+        bytes.extend_from_slice(b"OB");
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+        bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let first_item_offset = push_pixel_fragment(&mut bytes, &first);
+        let second_item_offset = push_pixel_fragment(&mut bytes, &second);
+        bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let frames = scan_encapsulated_frames_raw_little_endian(&path, 2)
+            .expect("raw scan succeeds")
+            .expect("Pixel Data is found");
+        assert_eq!(frames.frame_ranges, vec![0..1, 1..2]);
+        assert_eq!(frames.fragments.len(), 2);
+        assert_eq!(frames.fragments[0].item_offset, first_item_offset);
+        assert_eq!(frames.fragments[0].len, first.len() as u32);
+        assert_eq!(frames.fragments[1].item_offset, second_item_offset);
+        assert_eq!(frames.fragments[1].len, second.len() as u32);
     }
 
     #[test]

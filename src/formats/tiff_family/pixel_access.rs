@@ -2775,6 +2775,62 @@ impl TiffPixelReader {
         paste_rgb_interleaved_u8_tile(&downsampled, w, h, dst_x, dst_y)
     }
 
+    fn read_synthetic_display_tile(
+        &self,
+        req: &TileViewRequest,
+        base_level: u32,
+        factor: u32,
+    ) -> Result<CpuTile, WsiError> {
+        let series = self
+            .layout
+            .dataset
+            .scenes
+            .get(req.scene)
+            .and_then(|scene| scene.series.get(req.series))
+            .ok_or_else(|| WsiError::SeriesOutOfRange {
+                index: req.series,
+                count: self
+                    .layout
+                    .dataset
+                    .scenes
+                    .get(req.scene)
+                    .map_or(0, |scene| scene.series.len()),
+            })?;
+        let level =
+            series
+                .levels
+                .get(req.level as usize)
+                .ok_or_else(|| WsiError::LevelOutOfRange {
+                    level: req.level,
+                    count: series.levels.len() as u32,
+                })?;
+
+        let origin_x = req.col.saturating_mul(i64::from(req.tile_width));
+        let origin_y = req.row.saturating_mul(i64::from(req.tile_height));
+        let level_w = i64::try_from(level.dimensions.0).unwrap_or(i64::MAX);
+        let level_h = i64::try_from(level.dimensions.1).unwrap_or(i64::MAX);
+        if origin_x >= level_w || origin_y >= level_h {
+            return Err(WsiError::TileRead {
+                col: req.col,
+                row: req.row,
+                level: req.level,
+                reason: "display tile origin out of bounds".into(),
+            });
+        }
+
+        let clipped = RegionRequest::legacy_xywh(
+            req.scene,
+            req.series,
+            req.level,
+            req.plane,
+            origin_x,
+            origin_y,
+            req.tile_width.min((level_w - origin_x) as u32),
+            req.tile_height.min((level_h - origin_y) as u32),
+        );
+        self.read_full_synthetic_region_fastpath(None, &clipped, base_level, factor)
+    }
+
     fn get_or_decode_synthetic_level(
         &self,
         req: &TileRequest,
@@ -5491,6 +5547,9 @@ impl SlideReader for TiffPixelReader {
                 strip_byte_count,
                 ..
             } => self.read_ndpi_full_display_tile(req, *ifd_id, *strip_offset, *strip_byte_count),
+            TileSource::SyntheticDownsample { base_level, factor } => {
+                self.read_synthetic_display_tile(req, *base_level, *factor)
+            }
             _ => read_display_tile_from_source(self, None, req, TileOutputPreference::cpu()),
         }
     }
@@ -6880,6 +6939,31 @@ mod tests {
             reader.synthetic_region_cache.lock().unwrap().current_bytes,
             0,
             "ROI reads must not populate full synthetic region cache entries"
+        );
+    }
+
+    #[test]
+    fn synthetic_ndpi_display_tile_uses_roi_fastpath_without_materializing_level() {
+        let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
+        let tile = reader
+            .read_display_tile(&TileViewRequest {
+                scene: 0,
+                series: 0,
+                level: 1,
+                plane: PlaneSelection::default(),
+                col: 1,
+                row: 1,
+                tile_width: 2,
+                tile_height: 2,
+            })
+            .unwrap();
+        let expected = expected_synthetic_ndpi_region(&reader, 2, 2, 2, 2, 2);
+
+        assert_tile_eq(&tile, &expected);
+        assert_eq!(
+            reader.synthetic_level_cache.lock().unwrap().current_bytes,
+            0,
+            "display-tile reads must not materialize the whole synthetic level"
         );
     }
 
