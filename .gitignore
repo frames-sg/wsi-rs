@@ -7,5 +7,6 @@ paper/
 papers/
 docs/papers/
 docs/benchmarks/paper/
+*.pdf
 *.docx
 *.pptx
