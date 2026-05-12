@@ -228,6 +228,32 @@ fn tracked_text_files_do_not_contain_local_user_paths() {
 }
 
 #[test]
+fn tracked_text_files_do_not_reference_agent_private_artifacts() {
+    let private_dir = ["docs", "private-docs"].join("/");
+    let migration_doc = ["MIGRATION", ".md"].concat();
+    let migration_doc_lower = migration_doc.to_ascii_lowercase();
+    let mut offenders = Vec::new();
+
+    for path in tracked_text_files(crate_root()) {
+        let relative = relative_path(&path);
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if relative.starts_with(&private_dir) || file_name == migration_doc_lower {
+            offenders.push(relative);
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "tracked text files must not include agent-private planning docs or migration scratch files:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
 fn referenced_parity_corpus_fetch_script_exists() {
     let script = crate_root().join("scripts/parity-corpus-fetch.sh");
     assert!(

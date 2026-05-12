@@ -14,10 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const DEFAULT_MANIFEST: &str = "perf/v1-corpus.json";
-const SCOREBOARD_JSON: &str = "perf/release-scoreboard.json";
-const SCOREBOARD_MD: &str = "perf/release-scoreboard.md";
-const RAW_DIR: &str = "perf/raw/release-gate";
+const DEFAULT_MANIFEST: &str = "bench/perf/v1-corpus.json";
+const SCOREBOARD_JSON: &str = "bench/results/release-gate/release-scoreboard.json";
+const SCOREBOARD_MD: &str = "bench/results/release-gate/release-scoreboard.md";
+const RAW_DIR: &str = "bench/results/release-gate/raw";
 const DEBUG_BENCH_OVERRIDE_ENV: &str = "WSI_ALLOW_DEBUG_BENCH";
 
 #[derive(Debug, Deserialize)]
