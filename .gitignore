@@ -1,17 +1,6 @@
 target/
 /.DS_Store
 **/.DS_Store
-
-
-private-notes.md
-private-notes.md
 bench/results/
 __pycache__/
 *.py[cod]
-paper/
-papers/
-docs/papers/
-docs/benchmarks/paper/
-*.pdf
-*.docx
-*.pptx
