@@ -20,7 +20,7 @@ fn package_metadata_uses_statumen_identity() {
         "crate description must use the Statumen name"
     );
     assert!(
-        manifest.contains("repository = \"https://github.com/jcwal1516/statumen\""),
+        manifest.contains("repository = \"https://github.com/frames-sg/statumen\""),
         "crate repository metadata must point at the renamed Statumen repo"
     );
 }

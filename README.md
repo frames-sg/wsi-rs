@@ -2,7 +2,7 @@
 
 # statumen
 
-[![CI](https://github.com/jcwal1516/statumen/actions/workflows/ci.yml/badge.svg)](https://github.com/jcwal1516/statumen/actions/workflows/ci.yml)
+[![CI](https://github.com/frames-sg/statumen/actions/workflows/ci.yml/badge.svg)](https://github.com/frames-sg/statumen/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/statumen.svg)](https://crates.io/crates/statumen)
 [![docs.rs](https://img.shields.io/docsrs/statumen)](https://docs.rs/statumen)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
