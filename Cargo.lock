@@ -1273,18 +1273,18 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "signinum-core"
-version = "1.0.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a961ac531dbd99a10ccc886964c5a349abc78d1eee5259002f5a1db7ebd4c521"
+checksum = "b5a6ef463d867fb70c3ee6e83eca2f4899405303a82043c91324c98866f6426f"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "signinum-j2k"
-version = "1.2.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93ee6938dcab7f43cb71c3b329b98e2c68cb92c3eb7f9d2b2eb959ea72158608"
+checksum = "00f0729dc3279c5165ef6560065bed5c7bf83447225747ce95b1c16814d2efe8"
 dependencies = [
  "signinum-core",
  "signinum-j2k-native",
@@ -1293,9 +1293,9 @@ dependencies = [
 
 [[package]]
 name = "signinum-j2k-metal"
-version = "0.3.6"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cacb613e6179081217d063da0d3faeec0d084c7e0c00a90d34c8fbd1dd7bbe51"
+checksum = "d6963df6ba4bbbf58f03fc933819a15d40235e8901b99a8daa41de95cc221bd9"
 dependencies = [
  "libc",
  "metal",
@@ -1308,9 +1308,9 @@ dependencies = [
 
 [[package]]
 name = "signinum-j2k-native"
-version = "0.3.4"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c18387d6667133bdd8470a996cf0d0d1b35de0957d3d2b030166b8b6cac9c0b"
+checksum = "20fbccb37f7bafae07cfc9ac59dac42947b0d1ca30cccbf971a3472b9f5b7d9a"
 dependencies = [
  "fearless_simd",
  "libm",
@@ -1319,9 +1319,9 @@ dependencies = [
 
 [[package]]
 name = "signinum-jpeg"
-version = "1.1.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c9e7908bc4e6c9b8b301f538ebf84640d7e764c4f29051fd0a6dfc82d8c7002"
+checksum = "db21160e9c279b027391a8e3c0e1a95fe57f2d246487ceca7a306e50b9159e57"
 dependencies = [
  "memchr",
  "rayon",
@@ -1331,9 +1331,9 @@ dependencies = [
 
 [[package]]
 name = "signinum-jpeg-metal"
-version = "0.2.5"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7e39fcedd212683578e137931cb5b15a2b6e3410127538d1748500249570b7c"
+checksum = "c8090c020feb753e16c598ea13dc376accb17596c1d0836d0014cc93c35b29df"
 dependencies = [
  "metal",
  "signinum-core",
@@ -1343,9 +1343,9 @@ dependencies = [
 
 [[package]]
 name = "signinum-tilecodec"
-version = "1.0.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6e7a1207e94da85d6dc4354c330a8829da49d837a69455f4a479f7d3ead2812"
+checksum = "a2dff52bf3edd72bf13944a58480d9ac69b090c6131d026b13060e5aa6e2457f"
 dependencies = [
  "flate2",
  "signinum-core",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "statumen"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "byteorder",

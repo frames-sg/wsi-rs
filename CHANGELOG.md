@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-12
+
+### Changed
+
+- Moved the public dependency surface to the pre-1.0 `signinum` 0.4 crate
+  family and refreshed repository metadata for the `frames-sg/statumen`
+  transfer.
+
 ## [0.1.5] - 2026-05-06
 
 ### Changed
@@ -78,7 +86,8 @@ Initial public release on crates.io.
 - Bench harness binaries (`wsi_bench`, `openslide_bench`,
   `bench_driver`, `release_gate`) gated behind cargo features.
 
-[Unreleased]: https://github.com/frames-sg/statumen/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/frames-sg/statumen/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/frames-sg/statumen/compare/v0.1.5...v0.3.0
 [0.1.5]: https://github.com/frames-sg/statumen/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/frames-sg/statumen/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/frames-sg/statumen/compare/v0.1.2...v0.1.3

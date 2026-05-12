@@ -17,7 +17,7 @@ use std::ptr;
 use handle::{empty_names, OpenSlideHandle};
 use statumen::{PlaneSelection, RegionRequest};
 
-const VERSION: &[u8] = b"OpenSlide-statumen 4.0.0+statumen-0.2.0\0";
+const VERSION: &[u8] = b"OpenSlide-statumen 4.0.0+statumen-0.3.0\0";
 
 #[repr(C)]
 pub struct openslide_t {
