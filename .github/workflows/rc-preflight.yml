@@ -1,0 +1,35 @@
+name: RC Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+jobs:
+  rc-preflight:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack,cargo-public-api,cargo-semver-checks,cargo-fuzz,cargo-deny,cargo-machete
+      - run: cargo xtask rc-preflight
+        working-directory: statumen

@@ -1,0 +1,25 @@
+[package]
+name = "statumen-openslide-shim"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "OpenSlide-compatible C ABI shim backed by statumen"
+publish = false
+
+[lib]
+name = "statumen_openslide_shim"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libloading = { workspace = true }
+statumen = { path = ".." }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

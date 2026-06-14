@@ -1,0 +1,36 @@
+[package]
+name = "statumen-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+statumen = { path = ".." }
+tempfile = "3"
+
+[[bin]]
+name = "open_wsi_bytes"
+path = "fuzz_targets/open_wsi_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_jp2k_codestream_bytes"
+path = "fuzz_targets/open_jp2k_codestream_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_svcache_bytes"
+path = "fuzz_targets/open_svcache_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

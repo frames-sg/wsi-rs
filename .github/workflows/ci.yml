@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, rust: stable }
+          - { os: macos-latest, rust: stable }
+          - { os: ubuntu-latest, rust: "1.94" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt,clippy
+      - uses: taiki-e/install-action@nextest
+      - run: cargo xtask validate
+        working-directory: statumen
+
+  feature-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo xtask feature-check
+        working-directory: statumen
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo xtask doc
+        working-directory: statumen
+
+  api-stability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api,cargo-semver-checks
+      - run: cargo xtask api-check
+        working-directory: statumen
+
+  fuzz-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - run: cargo xtask fuzz-check
+        working-directory: statumen
+
+  parity-corpus:
+    runs-on: ubuntu-latest
+    env:
+      STATUMEN_PARITY_ALIASES: >-
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/slideviewer/parity-corpus
+          key: statumen-parity-corpus-${{ hashFiles('statumen/tests/fixtures/parity_corpus.public.toml') }}
+      - name: Install OpenSlide runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenslide0
+      - run: >-
+          scripts/parity-corpus-fetch.sh
+          svs-001
+          svs-jp2k-001
+          ndpi-001
+          vms-001
+          leica-001
+          ventana-001
+          mirax-001
+          dicom-jp2k-001
+        working-directory: statumen
+      - run: cargo xtask parity-corpus-test
+        working-directory: statumen
+
+  typos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1
+
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo xtask release-test
+        working-directory: statumen
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo xtask package
+        working-directory: statumen
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - run: cargo xtask deps
+        working-directory: statumen
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: statumen
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo xtask coverage
+        working-directory: statumen
+      - name: Enforce changed-path coverage
+        working-directory: statumen
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ -n "$PR_BASE_SHA" ]; then
+            base="$PR_BASE_SHA"
+          elif [ -n "$PUSH_BEFORE_SHA" ] && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            base="$PUSH_BEFORE_SHA"
+          else
+            base="origin/main"
+          fi
+          cargo xtask coverage-changed --base "$base" --lcov lcov.info --threshold 80
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: statumen-lcov
+          path: statumen/lcov.info
+          if-no-files-found: ignore

@@ -1,0 +1,7 @@
+target/
+/.DS_Store
+**/.DS_Store
+bench/results/
+lcov.info
+__pycache__/
+*.py[cod]
