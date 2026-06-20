@@ -86,6 +86,14 @@ impl FormatRegistry {
         self.register(tiff.clone(), tiff);
     }
 
+    /// Probe all backends and return the best detected format without opening it.
+    ///
+    /// Definite confidence beats Likely. First-registered wins ties.
+    pub fn detect_vendor(&self, path: &Path) -> Result<Option<ProbeResult>, WsiError> {
+        self.best_probe(path)
+            .map(|best| best.map(|(result, _)| result))
+    }
+
     /// Probe all backends, open with best match.
     /// Definite confidence beats Likely. First-registered wins ties.
     pub fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
@@ -93,19 +101,29 @@ impl FormatRegistry {
     }
 
     pub(crate) fn open_exact(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let mut best: Option<(ProbeConfidence, usize)> = None;
+        match self.best_probe(path)? {
+            Some((_, i)) => self.backends[i].reader.open(path),
+            None => Err(WsiError::UnsupportedFormat(path.display().to_string())),
+        }
+    }
+
+    fn best_probe(&self, path: &Path) -> Result<Option<(ProbeResult, usize)>, WsiError> {
+        let mut best: Option<(ProbeResult, usize)> = None;
         let mut first_error: Option<WsiError> = None;
 
         for (i, backend) in self.backends.iter().enumerate() {
             match backend.probe.probe(path) {
                 Ok(result) => {
                     if result.detected {
-                        match (&best, &result.confidence) {
-                            (None, _) => best = Some((result.confidence, i)),
-                            (Some((ProbeConfidence::Likely, _)), ProbeConfidence::Definite) => {
-                                best = Some((result.confidence, i));
+                        let should_replace = match best.as_ref() {
+                            None => true,
+                            Some((existing, _)) => {
+                                existing.confidence == ProbeConfidence::Likely
+                                    && result.confidence == ProbeConfidence::Definite
                             }
-                            _ => {}
+                        };
+                        if should_replace {
+                            best = Some((result, i));
                         }
                     }
                 }
@@ -118,9 +136,14 @@ impl FormatRegistry {
         }
 
         match best {
-            Some((_, i)) => self.backends[i].reader.open(path),
-            None => Err(first_error
-                .unwrap_or_else(|| WsiError::UnsupportedFormat(path.display().to_string()))),
+            Some(best) => Ok(Some(best)),
+            None => {
+                if let Some(err) = first_error {
+                    Err(err)
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 }

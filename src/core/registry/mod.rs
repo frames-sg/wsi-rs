@@ -19,7 +19,7 @@ use crate::formats::zeiss_zvi::ZeissZviBackend;
 
 /// Default maximum region size in pixels. Prevents OOM from unreasonably large
 /// region requests (256 megapixels = ~768 MB for RGB8).
-const DEFAULT_MAX_REGION_PIXELS: u64 = 256 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_REGION_PIXELS: u64 = 256 * 1024 * 1024;
 
 mod composition;
 mod open_options;
@@ -28,7 +28,8 @@ mod slide;
 mod traits;
 
 pub(crate) use composition::{
-    composite_region_from_source, crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
+    check_region_pixel_limit, composite_region_from_source, crop_rgb_interleaved_u8_buffer,
+    read_display_tile_from_source,
 };
 pub use open_options::SlideOpenOptions;
 pub use registry_impl::FormatRegistry;

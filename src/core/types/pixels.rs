@@ -82,18 +82,6 @@ impl PixelFormat {
             }),
         }
     }
-
-    #[cfg(all(test, feature = "metal"))]
-    pub(crate) const fn to_signinum(self) -> signinum_core::PixelFormat {
-        match self {
-            Self::Rgb8 => signinum_core::PixelFormat::Rgb8,
-            Self::Rgba8 => signinum_core::PixelFormat::Rgba8,
-            Self::Gray8 => signinum_core::PixelFormat::Gray8,
-            Self::Rgb16 => signinum_core::PixelFormat::Rgb16,
-            Self::Rgba16 => signinum_core::PixelFormat::Rgba16,
-            Self::Gray16 => signinum_core::PixelFormat::Gray16,
-        }
-    }
 }
 
 /// Typed, aligned sample storage.

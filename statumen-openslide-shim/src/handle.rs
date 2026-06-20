@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use statumen::{IccProfileKey, SceneId, SeriesId, Slide, TileLayout, WsiError};
+use statumen::{FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileLayout, WsiError};
 
 static DETECTED_VENDORS: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
 
@@ -72,13 +72,13 @@ impl OpenSlideHandle {
     }
 
     pub(crate) fn detect_vendor(path: PathBuf) -> *const c_char {
-        let Ok(slide) = Slide::open(path) else {
+        let Ok(Some(probe)) = FormatRegistry::builtin().detect_vendor(&path) else {
             return std::ptr::null();
         };
-        let Some(vendor) = vendor_for_slide(&slide) else {
+        if probe.vendor.is_empty() {
             return std::ptr::null();
-        };
-        intern_detected_vendor(vendor)
+        }
+        intern_detected_vendor(&probe.vendor)
     }
 
     fn from_slide(slide: Slide) -> Self {

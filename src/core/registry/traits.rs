@@ -254,7 +254,8 @@ pub trait SlideReader: Send + Sync {
                     .into(),
             });
         }
-        composite_region_from_source(self, None, req).map(TilePixels::Cpu)
+        composite_region_from_source(self, None, req, DEFAULT_MAX_REGION_PIXELS)
+            .map(TilePixels::Cpu)
     }
     fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
         read_display_tile_from_source(self, None, req, TileOutputPreference::cpu())

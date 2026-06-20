@@ -661,6 +661,76 @@ fn slide_level_source_kind_accepts_plain_indices() {
 }
 
 #[test]
+fn compositor_respects_custom_max_region_pixels_before_tile_reads() {
+    let tile_reads = Arc::new(AtomicUsize::new(0));
+    let source = CountingSource::new(DatasetId::new(55), tile_reads.clone());
+    let req = region_request(0, 0, 0, PlaneSelection::default(), 0, 0, 11, 10);
+
+    let err = composite_region_from_source(&source, None, &req, 100).unwrap_err();
+
+    assert!(
+        err.to_string().contains("exceeds maximum of 100 pixels"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(tile_reads.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn compositor_checks_custom_max_region_pixels_before_empty_region_zero_fill() {
+    let tile_reads = Arc::new(AtomicUsize::new(0));
+    let source = CountingSource::new(DatasetId::new(56), tile_reads.clone());
+    let req = region_request(0, 0, 0, PlaneSelection::default(), 10_000, 10_000, 11, 10);
+
+    let err = composite_region_from_source(&source, None, &req, 100).unwrap_err();
+
+    assert!(
+        err.to_string().contains("exceeds maximum of 100 pixels"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(tile_reads.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn format_registry_detect_vendor_does_not_open_reader() {
+    struct DefiniteProbe;
+    impl FormatProbe for DefiniteProbe {
+        fn probe(&self, _path: &Path) -> Result<ProbeResult, WsiError> {
+            Ok(ProbeResult::detected(
+                "probe-only",
+                ProbeConfidence::Definite,
+            ))
+        }
+    }
+
+    struct CountingReader {
+        opens: Arc<AtomicUsize>,
+    }
+    impl DatasetReader for CountingReader {
+        fn open(&self, _path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(MockSource::new()))
+        }
+    }
+
+    let opens = Arc::new(AtomicUsize::new(0));
+    let mut reg = FormatRegistry::new();
+    reg.register(
+        DefiniteProbe,
+        CountingReader {
+            opens: opens.clone(),
+        },
+    );
+
+    let detected = reg
+        .detect_vendor(Path::new("/ok.slide"))
+        .expect("detect vendor")
+        .expect("detected vendor");
+
+    assert_eq!(detected.vendor, "probe-only");
+    assert_eq!(opens.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn format_registry_returns_probe_error_when_no_backend_matches() {
     let mut reg = FormatRegistry::new();
     reg.register(ErrProbe, MockReader);

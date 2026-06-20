@@ -211,6 +211,7 @@ impl TiffPixelReader {
                         u32::try_from(base.dimensions.1).unwrap_or(u32::MAX),
                     ),
                 },
+                DEFAULT_MAX_REGION_PIXELS,
             )?
         };
 
@@ -237,9 +238,10 @@ impl TiffPixelReader {
         req: &RegionRequest,
         base_level: u32,
         factor: u32,
+        max_region_pixels: u64,
     ) -> Result<CpuTile, WsiError> {
         if !factor.is_power_of_two() || !(2..=8).contains(&factor) {
-            return composite_region_from_source(self, cache, req);
+            return composite_region_from_source(self, cache, req, max_region_pixels);
         }
 
         let (x, y) = req.origin_px;
@@ -257,8 +259,8 @@ impl TiffPixelReader {
                 req,
                 base_level,
                 factor,
-                level.dimensions.0,
-                level.dimensions.1,
+                level.dimensions,
+                max_region_pixels,
             );
         }
 
@@ -302,7 +304,7 @@ impl TiffPixelReader {
             ..
         } = self.tile_source_for(&base_req)?
         else {
-            return composite_region_from_source(self, cache, req);
+            return composite_region_from_source(self, cache, req, max_region_pixels);
         };
 
         let tile_req = TileRequest {
@@ -328,7 +330,7 @@ impl TiffPixelReader {
         };
         let image = Arc::new(fit_synthetic_rgb_tile_to_dimensions(scaled, w, h)?);
         if image.width != w || image.height != h {
-            return composite_region_from_source(self, cache, req);
+            return composite_region_from_source(self, cache, req, max_region_pixels);
         }
         self.put_synthetic_level_cache(synthetic_key, image.clone());
         if let Some(cache) = cache {
@@ -343,9 +345,10 @@ impl TiffPixelReader {
         req: &RegionRequest,
         base_level: u32,
         factor: u32,
-        target_width: u64,
-        target_height: u64,
+        target_dimensions: (u64, u64),
+        max_region_pixels: u64,
     ) -> Result<CpuTile, WsiError> {
+        let (target_width, target_height) = target_dimensions;
         let (x, y) = req.origin_px;
         let (w, h) = req.size_px;
         if w == 0 || h == 0 {
@@ -514,6 +517,7 @@ impl TiffPixelReader {
             &base_source,
             cache,
             &base_req,
+            max_region_pixels,
         )?)?;
         let downsampled = fit_synthetic_rgb_tile_to_dimensions(
             downsample_rgb_pow2_box(&base_region, factor as u32)?,
@@ -595,7 +599,13 @@ impl TiffPixelReader {
                 req.tile_height.min((level_h - origin_y) as u32),
             ),
         };
-        self.read_full_synthetic_region_fastpath(None, &clipped, base_level, factor)
+        self.read_full_synthetic_region_fastpath(
+            None,
+            &clipped,
+            base_level,
+            factor,
+            DEFAULT_MAX_REGION_PIXELS,
+        )
     }
 
     pub(super) fn get_or_decode_synthetic_level(

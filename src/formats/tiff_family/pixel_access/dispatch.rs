@@ -396,7 +396,13 @@ impl SlideReader for TiffPixelReader {
         })?;
         match source {
             TileSource::SyntheticDownsample { base_level, factor } => {
-                Some(self.read_full_synthetic_region_fastpath(cache, req, *base_level, *factor))
+                Some(self.read_full_synthetic_region_fastpath(
+                    cache,
+                    req,
+                    *base_level,
+                    *factor,
+                    ctx.max_region_pixels(),
+                ))
             }
             _ => None,
         }

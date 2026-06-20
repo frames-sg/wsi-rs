@@ -67,7 +67,7 @@ impl Slide {
             options.svcache_policy,
         )?;
         let source = options.registry.open(&resolved_path)?;
-        let decode_runtime = Arc::new(DecodeRuntime::new(options.decode_execution_options)?);
+        let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
         Ok(Self::from_source_with_config_and_runtime(
             source,
             options.cache_config,
@@ -235,6 +235,7 @@ impl Slide {
     /// Only `CpuTileLayout::Interleaved` is supported for compositing. Planar
     /// tiles return `WsiError::DisplayConversion`.
     pub fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
+        check_region_pixel_limit(req.size_px.0, req.size_px.1, self.max_region_pixels)?;
         let mut ctx = SlideReadContext::new(
             Some(self.cache.as_ref()),
             TileOutputPreference::cpu(),
@@ -243,7 +244,12 @@ impl Slide {
         if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
             return result;
         }
-        composite_region_from_source(self.source.as_ref(), Some(self.cache.as_ref()), req)
+        composite_region_from_source(
+            self.source.as_ref(),
+            Some(self.cache.as_ref()),
+            req,
+            self.max_region_pixels,
+        )
     }
 
     pub fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {

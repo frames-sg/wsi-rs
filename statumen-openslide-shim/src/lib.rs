@@ -17,7 +17,11 @@ use std::ptr;
 use handle::{empty_names, OpenSlideHandle};
 use statumen::{LevelIdx, RegionRequest, SceneId, SeriesId};
 
-const VERSION: &[u8] = b"OpenSlide-statumen 4.0.0+statumen-0.3.0\0";
+const VERSION: &str = concat!(
+    "OpenSlide-statumen 4.0.0+statumen-",
+    env!("CARGO_PKG_VERSION"),
+    "\0"
+);
 
 #[repr(C)]
 pub struct openslide_t {

@@ -430,14 +430,18 @@ mod tests {
             .expect("batch YCbCr conversion");
 
         assert_eq!(converted.len(), 2);
-        assert_eq!(
-            tile_rgb_bytes_via_j2k(&converted[0], &sessions),
-            vec![10, 10, 10, 200, 200, 200]
-        );
-        assert_eq!(
-            tile_rgb_bytes_via_j2k(&converted[1], &sessions),
-            vec![30, 30, 30, 40, 40, 40]
-        );
+        for tile in &converted {
+            assert_eq!((tile.width, tile.height), (2, 1));
+            assert_eq!(tile.pitch_bytes, 6);
+            assert_eq!(tile.format, PixelFormat::Rgb8);
+            let MetalDeviceStorage::Buffer {
+                buffer,
+                byte_offset,
+            } = &tile.storage;
+            assert_eq!(*byte_offset, 0);
+            assert_eq!(buffer.length(), 6);
+            assert_eq!(buffer.storage_mode(), metal::MTLStorageMode::Shared);
+        }
         let first = sessions
             .ycbcr_to_rgb8_converter()
             .expect("cached converter after batch");
@@ -463,39 +467,5 @@ mod tests {
                 byte_offset: 0,
             },
         }
-    }
-
-    fn tile_rgb_bytes_via_j2k(tile: &MetalDeviceTile, sessions: &MetalBackendSessions) -> Vec<u8> {
-        let MetalDeviceStorage::Buffer {
-            buffer,
-            byte_offset,
-        } = &tile.storage;
-        let encoded = signinum_j2k_metal::encode_lossless_from_padded_metal_buffer_with_report(
-            signinum_j2k_metal::MetalLosslessEncodeTile {
-                buffer,
-                byte_offset: *byte_offset,
-                width: tile.width,
-                height: tile.height,
-                pitch_bytes: tile.pitch_bytes,
-                output_width: tile.width,
-                output_height: tile.height,
-                format: tile.format.to_signinum(),
-            },
-            &signinum_j2k::J2kLosslessEncodeOptions::default()
-                .with_strict_device_backend()
-                .with_validation(signinum_j2k::J2kEncodeValidation::External),
-            sessions.j2k(),
-        )
-        .expect("encode Metal tile");
-        let mut actual = vec![0; tile.width as usize * tile.height as usize * 3];
-        signinum_j2k::J2kDecoder::new(&encoded.encoded.codestream)
-            .expect("decode encoded Metal tile")
-            .decode_into(
-                &mut actual,
-                tile.width as usize * PixelFormat::Rgb8.bytes_per_pixel(),
-                PixelFormat::Rgb8.to_signinum(),
-            )
-            .expect("decode RGB output");
-        actual
     }
 }

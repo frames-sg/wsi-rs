@@ -6,7 +6,7 @@ use crate::core::types::{
 use crate::error::WsiError;
 use rayon::ThreadPool;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 const DEFAULT_ROUTE_SAMPLE_SIZE: usize = 32;
 const DIRECT_DEVICE_BATCH_THRESHOLD: usize = 8;
 const DEVICE_WIN_RATIO: f64 = 0.85;
+const ROUTE_CACHE_MAX_ENTRIES: usize = 1024;
 
 thread_local! {
     static CURRENT_DECODE_RUNTIME: RefCell<Option<Arc<DecodeRuntime>>> = const { RefCell::new(None) };
@@ -111,26 +112,50 @@ struct MeasuredDecodeRoute {
 #[derive(Debug)]
 pub(crate) struct DecodeRuntime {
     options: DecodeExecutionOptions,
-    jp2k_cpu_pool: ThreadPool,
-    route_cache: Mutex<HashMap<DecodeRouteKey, DecodeRouteDecision>>,
+    jp2k_cpu_pool: Option<ThreadPool>,
+    route_cache: Mutex<DecodeRouteCache>,
 }
 
 impl DecodeRuntime {
     pub(crate) fn new(options: DecodeExecutionOptions) -> Result<Self, WsiError> {
+        Self::build(options, true)
+    }
+
+    pub(crate) fn arc_for_options(options: DecodeExecutionOptions) -> Result<Arc<Self>, WsiError> {
+        if options == DecodeExecutionOptions::default() {
+            Ok(Self::default_arc())
+        } else {
+            Ok(Arc::new(Self::new(options)?))
+        }
+    }
+
+    fn build(options: DecodeExecutionOptions, fail_on_pool_error: bool) -> Result<Self, WsiError> {
         let threads = options
             .jp2k_cpu_threads
             .map_or_else(default_jp2k_cpu_threads, NonZeroUsize::get);
-        let jp2k_cpu_pool = rayon::ThreadPoolBuilder::new()
+        let jp2k_cpu_pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|index| format!("statumen-jp2k-cpu-{index}"))
             .build()
-            .map_err(|err| WsiError::Unsupported {
-                reason: format!("failed to initialize JP2K CPU decode pool: {err}"),
-            })?;
+        {
+            Ok(pool) => Some(pool),
+            Err(err) if fail_on_pool_error => {
+                return Err(WsiError::Unsupported {
+                    reason: format!("failed to initialize JP2K CPU decode pool: {err}"),
+                });
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "failed to initialize default JP2K CPU decode pool; falling back to inline decode"
+                );
+                None
+            }
+        };
         Ok(Self {
             options,
             jp2k_cpu_pool,
-            route_cache: Mutex::new(HashMap::new()),
+            route_cache: Mutex::new(DecodeRouteCache::new()),
         })
     }
 
@@ -138,15 +163,38 @@ impl DecodeRuntime {
         static DEFAULT_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
         DEFAULT_RUNTIME
             .get_or_init(|| {
-                Arc::new(
-                    Self::new(DecodeExecutionOptions::default()).expect("default decode runtime"),
-                )
+                Arc::new(match Self::build(DecodeExecutionOptions::default(), false) {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to initialize default decode runtime; falling back to inline decode"
+                        );
+                        Self::inline(DecodeExecutionOptions::default())
+                    }
+                })
             })
             .clone()
     }
 
-    pub(crate) fn jp2k_cpu_pool(&self) -> &ThreadPool {
-        &self.jp2k_cpu_pool
+    fn inline(options: DecodeExecutionOptions) -> Self {
+        Self {
+            options,
+            jp2k_cpu_pool: None,
+            route_cache: Mutex::new(DecodeRouteCache::new()),
+        }
+    }
+
+    pub(crate) fn install_jp2k_cpu<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
+        if let Some(pool) = &self.jp2k_cpu_pool {
+            pool.install(op)
+        } else {
+            op()
+        }
+    }
+
+    pub(crate) fn has_jp2k_cpu_pool(&self) -> bool {
+        self.jp2k_cpu_pool.is_some()
     }
 
     pub(crate) fn options(&self) -> DecodeExecutionOptions {
@@ -174,7 +222,6 @@ impl DecodeRuntime {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .get(key)
-            .cloned()
     }
 
     fn store_route(&self, key: DecodeRouteKey, decision: DecodeRouteDecision) {
@@ -182,6 +229,43 @@ impl DecodeRuntime {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .insert(key, decision);
+    }
+}
+
+#[derive(Debug)]
+struct DecodeRouteCache {
+    entries: HashMap<DecodeRouteKey, DecodeRouteDecision>,
+    insertion_order: VecDeque<DecodeRouteKey>,
+}
+
+impl DecodeRouteCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: DecodeRouteKey, decision: DecodeRouteDecision) {
+        if !self.entries.contains_key(&key) {
+            while self.entries.len() >= ROUTE_CACHE_MAX_ENTRIES {
+                let Some(evicted) = self.insertion_order.pop_front() else {
+                    break;
+                };
+                self.entries.remove(&evicted);
+            }
+            self.insertion_order.push_back(key.clone());
+        }
+        self.entries.insert(key, decision);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -665,6 +749,64 @@ mod tests {
 
         fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
             Err(WsiError::AssociatedImageNotFound(name.into()))
+        }
+    }
+
+    #[test]
+    fn default_decode_options_reuse_shared_runtime() {
+        let first =
+            DecodeRuntime::arc_for_options(DecodeExecutionOptions::default()).expect("runtime");
+        let second =
+            DecodeRuntime::arc_for_options(DecodeExecutionOptions::default()).expect("runtime");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn route_cache_is_bounded() {
+        let runtime = DecodeRuntime::new(DecodeExecutionOptions::default()).expect("runtime");
+        let first_key = route_key_for_test(0);
+
+        for sequence in 0..ROUTE_CACHE_MAX_ENTRIES + 5 {
+            runtime.store_route(
+                route_key_for_test(sequence),
+                DecodeRouteDecision::measured(
+                    1,
+                    Duration::from_millis(2),
+                    Duration::from_millis(1),
+                    1,
+                ),
+            );
+        }
+
+        let cache_len = runtime
+            .route_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .len();
+        assert_eq!(cache_len, ROUTE_CACHE_MAX_ENTRIES);
+        assert!(runtime.cached_route(&first_key).is_none());
+        assert!(runtime
+            .cached_route(&route_key_for_test(ROUTE_CACHE_MAX_ENTRIES + 4))
+            .is_some());
+    }
+
+    fn route_key_for_test(sequence: usize) -> DecodeRouteKey {
+        DecodeRouteKey {
+            dataset_id: sequence as u128,
+            scene: 0,
+            series: 0,
+            level: 0,
+            tile_grid: RouteTileGrid {
+                tile_width: 128,
+                tile_height: 128,
+                tiles_across: 1,
+                tiles_down: 1,
+            },
+            codec_kind: TileCodecKind::Jp2k,
+            output_backend: OutputBackendRequest::Auto,
+            device_backend_identity: format!("test-{sequence}"),
+            sample_tile_count: 1,
         }
     }
 

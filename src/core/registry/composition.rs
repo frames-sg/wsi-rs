@@ -57,12 +57,14 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
     req: &RegionRequest,
+    max_region_pixels: u64,
 ) -> Result<CpuTile, WsiError> {
     let dataset = source.dataset();
     let (_, series, level) = validate_region_request(dataset, req)?;
     let (x, y) = req.origin_px;
     let (w, h) = req.size_px;
     let plane = req.plane.get();
+    check_region_pixel_limit(w, h, max_region_pixels)?;
 
     let cache_key_for = |col: i64, row: i64| CacheKey {
         dataset_id: dataset.id,
@@ -203,11 +205,11 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     if hits.is_empty() {
         if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
             if let Ok(template) = read_tile_cached(probe_col, probe_row) {
-                return Ok(zero_sample_buffer_from_template(w, h, template.as_ref()));
+                return zero_sample_buffer_from_template(w, h, template.as_ref());
             }
         }
 
-        return Ok(zero_sample_buffer_from_series(w, h, series));
+        return zero_sample_buffer_from_series(w, h, series);
     }
 
     let hit_tiles = read_hit_tiles_cached(&hits)?;
@@ -224,13 +226,6 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     let out_layout = first_tile.layout;
     let out_w = w as usize;
     let out_h = h as usize;
-    let region_pixels = w as u64 * h as u64;
-    if region_pixels > DEFAULT_MAX_REGION_PIXELS {
-        return Err(WsiError::DisplayConversion(format!(
-            "region {}x{} ({} pixels) exceeds maximum of {} pixels",
-            w, h, region_pixels, DEFAULT_MAX_REGION_PIXELS
-        )));
-    }
     if hits.len() == 1 && hit_covers_output(&hits[0], first_tile.as_ref(), w, h) {
         return Ok(first_tile.as_ref().clone());
     }
@@ -245,7 +240,7 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     )? {
         return Ok(tile);
     }
-    let total_samples = out_w * out_h * out_channels as usize;
+    let total_samples = checked_total_samples(w, h, out_channels)?;
     let mut out_data = match &first_tile.data {
         CpuTileData::U8(_) => CpuTileData::u8(vec![0u8; total_samples]),
         CpuTileData::U16(_) => CpuTileData::u16(vec![0u16; total_samples]),
@@ -285,7 +280,8 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     let mut alpha_buffer = matches!(&out_data, CpuTileData::U8(_))
         .then(|| hits.iter().any(needs_fractional_blit))
         .filter(|needed| *needed)
-        .map(|_| vec![0.0f32; out_w * out_h]);
+        .map(|_| checked_region_pixels_usize(w, h).map(|total_pixels| vec![0.0f32; total_pixels]))
+        .transpose()?;
 
     let mark_tile_opaque = |alpha: &mut [f32], tile: &CpuTile, hit: &TileHit| {
         let tw = tile.width as i64;
@@ -611,6 +607,35 @@ fn metadata_probe_coordinate(layout: &TileLayout) -> Option<(i64, i64)> {
     }
 }
 
+pub(crate) fn check_region_pixel_limit(
+    width: u32,
+    height: u32,
+    max_region_pixels: u64,
+) -> Result<(), WsiError> {
+    let region_pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| WsiError::DisplayConversion("region pixel count overflow".into()))?;
+    if region_pixels > max_region_pixels {
+        return Err(WsiError::DisplayConversion(format!(
+            "region {}x{} ({} pixels) exceeds maximum of {} pixels",
+            width, height, region_pixels, max_region_pixels
+        )));
+    }
+    Ok(())
+}
+
+fn checked_region_pixels_usize(width: u32, height: u32) -> Result<usize, WsiError> {
+    (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| WsiError::DisplayConversion("region pixel count overflow".into()))
+}
+
+fn checked_total_samples(width: u32, height: u32, channels: u16) -> Result<usize, WsiError> {
+    checked_region_pixels_usize(width, height)?
+        .checked_mul(usize::from(channels))
+        .ok_or_else(|| WsiError::DisplayConversion("region sample count overflow".into()))
+}
+
 fn zero_sample_data(total_samples: usize, sample_type: SampleType) -> CpuTileData {
     match sample_type {
         SampleType::Uint8 => CpuTileData::u8(vec![0u8; total_samples]),
@@ -619,19 +644,27 @@ fn zero_sample_data(total_samples: usize, sample_type: SampleType) -> CpuTileDat
     }
 }
 
-fn zero_sample_buffer_from_template(width: u32, height: u32, template: &CpuTile) -> CpuTile {
-    let total_samples = width as usize * height as usize * template.channels as usize;
-    CpuTile {
+fn zero_sample_buffer_from_template(
+    width: u32,
+    height: u32,
+    template: &CpuTile,
+) -> Result<CpuTile, WsiError> {
+    let total_samples = checked_total_samples(width, height, template.channels)?;
+    Ok(CpuTile {
         width,
         height,
         channels: template.channels,
         color_space: template.color_space.clone(),
         layout: template.layout,
         data: zero_sample_data(total_samples, template.data.sample_type()),
-    }
+    })
 }
 
-fn zero_sample_buffer_from_series(width: u32, height: u32, series: &Series) -> CpuTile {
+fn zero_sample_buffer_from_series(
+    width: u32,
+    height: u32,
+    series: &Series,
+) -> Result<CpuTile, WsiError> {
     let channels = if series.channels.is_empty() {
         1u16
     } else {
@@ -643,15 +676,15 @@ fn zero_sample_buffer_from_series(width: u32, height: u32, series: &Series) -> C
         4 => ColorSpace::Rgba,
         _ => ColorSpace::Unknown,
     };
-    let total_samples = width as usize * height as usize * channels as usize;
-    CpuTile {
+    let total_samples = checked_total_samples(width, height, channels)?;
+    Ok(CpuTile {
         width,
         height,
         channels,
         color_space,
         layout: CpuTileLayout::Interleaved,
         data: zero_sample_data(total_samples, series.sample_type),
-    }
+    })
 }
 
 pub(crate) fn crop_rgb_interleaved_u8_buffer(
@@ -819,5 +852,5 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
         ),
         ..region_req
     };
-    composite_region_from_source(source, cache, &clipped)
+    composite_region_from_source(source, cache, &clipped, DEFAULT_MAX_REGION_PIXELS)
 }

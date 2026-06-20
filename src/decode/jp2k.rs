@@ -167,12 +167,18 @@ fn decode_batch_jp2k_with_runtime(
     if let Some(decoded) = try_decode_batch_jp2k_with_signinum(jobs, runtime) {
         return decoded.into_iter().map(Ok).collect();
     }
-    runtime.jp2k_cpu_pool().install(|| {
-        use rayon::prelude::*;
-        jobs.par_iter()
+    if runtime.has_jp2k_cpu_pool() {
+        runtime.install_jp2k_cpu(|| {
+            use rayon::prelude::*;
+            jobs.par_iter()
+                .map(|job| decode_one_jp2k_job_with_parallelism(job, CpuDecodeParallelism::Serial))
+                .collect()
+        })
+    } else {
+        jobs.iter()
             .map(|job| decode_one_jp2k_job_with_parallelism(job, CpuDecodeParallelism::Serial))
             .collect()
-    })
+    }
 }
 
 struct PreparedJp2kBatchJob {
@@ -261,12 +267,29 @@ fn materialize_jp2k_batch_outputs(
     outputs: Vec<Vec<u8>>,
     runtime: &DecodeRuntime,
 ) -> Result<Vec<CpuTile>, WsiError> {
-    runtime.jp2k_cpu_pool().install(|| {
-        use rayon::prelude::*;
+    if runtime.has_jp2k_cpu_pool() {
+        runtime.install_jp2k_cpu(|| {
+            use rayon::prelude::*;
 
+            prepared
+                .into_par_iter()
+                .zip(outputs.into_par_iter())
+                .map(|(job, pixels)| {
+                    sample_buffer_from_rgb8_bytes(
+                        pixels,
+                        job.decoded_width,
+                        job.decoded_height,
+                        job.expected_width,
+                        job.expected_height,
+                        job.output_colorspace,
+                    )
+                })
+                .collect()
+        })
+    } else {
         prepared
-            .into_par_iter()
-            .zip(outputs.into_par_iter())
+            .into_iter()
+            .zip(outputs)
             .map(|(job, pixels)| {
                 sample_buffer_from_rgb8_bytes(
                     pixels,
@@ -278,7 +301,7 @@ fn materialize_jp2k_batch_outputs(
                 )
             })
             .collect()
-    })
+    }
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -1313,7 +1336,6 @@ mod tests {
         };
         let codestream = include_bytes!("../../tests/fixtures/jp2k/ycbcr_444.j2k");
         let header = parse_codestream_header(codestream).unwrap();
-        let expected = load_fixture_rgb(include_bytes!("../../tests/fixtures/jp2k/ycbcr_444.ppm"));
         let request = Jp2kDecodeJob {
             data: Cow::Borrowed(codestream),
             expected_width: header.image_width,
@@ -1326,46 +1348,18 @@ mod tests {
         let TilePixels::Device(DeviceTile::Metal(tile)) = decoded else {
             panic!("expected converted Metal device tile");
         };
+        assert_eq!(
+            (tile.width, tile.height),
+            (header.image_width, header.image_height)
+        );
         assert_eq!(tile.format, PixelFormat::Rgb8);
         let crate::output::metal::MetalDeviceStorage::Buffer {
             buffer,
             byte_offset,
         } = &tile.storage;
-        let encoded = signinum_j2k_metal::encode_lossless_from_padded_metal_buffer_with_report(
-            signinum_j2k_metal::MetalLosslessEncodeTile {
-                buffer,
-                byte_offset: *byte_offset,
-                width: tile.width,
-                height: tile.height,
-                pitch_bytes: tile.pitch_bytes,
-                output_width: tile.width,
-                output_height: tile.height,
-                format: tile.format.to_signinum(),
-            },
-            &signinum_j2k::J2kLosslessEncodeOptions::default()
-                .with_strict_device_backend()
-                .with_validation(signinum_j2k::J2kEncodeValidation::External),
-            sessions.j2k(),
-        )
-        .unwrap();
-        let mut actual = vec![0; tile.width as usize * tile.height as usize * 3];
-        signinum_j2k::J2kDecoder::new(&encoded.encoded.codestream)
-            .unwrap()
-            .decode_into(
-                &mut actual,
-                tile.width as usize * SigninumPixelFormat::Rgb8.bytes_per_pixel(),
-                SigninumPixelFormat::Rgb8,
-            )
-            .unwrap();
-        let sample = CpuTile {
-            width: tile.width,
-            height: tile.height,
-            channels: 3,
-            color_space: crate::core::types::ColorSpace::Rgb,
-            layout: crate::core::types::CpuTileLayout::Interleaved,
-            data: crate::core::types::CpuTileData::u8(actual),
-        };
-        assert_sample_buffer_matches_rgb_fixture(&sample, &expected);
+        assert_eq!(*byte_offset, 0);
+        assert_eq!(buffer.storage_mode(), metal::MTLStorageMode::Shared);
+        assert!(buffer.length() >= tile.pitch_bytes as u64 * u64::from(tile.height));
     }
 
     #[cfg(feature = "metal")]

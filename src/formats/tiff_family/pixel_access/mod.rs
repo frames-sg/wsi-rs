@@ -25,7 +25,7 @@ use signinum_tilecodec::{
 use crate::core::cache::CacheKey;
 use crate::core::registry::{
     composite_region_from_source, crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
-    SlideReader,
+    SlideReader, DEFAULT_MAX_REGION_PIXELS,
 };
 use crate::core::types::*;
 #[cfg(any(feature = "metal", feature = "cuda"))]
