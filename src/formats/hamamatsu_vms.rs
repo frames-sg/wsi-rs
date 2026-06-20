@@ -15,12 +15,12 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lru::LruCache;
-use signinum_core::BackendRequest;
-use signinum_jpeg::{
-    Decoder as SigninumJpegDecoder, Downscale as SigninumDownscale,
-    PixelFormat as SigninumPixelFormat, Rect as SigninumRect,
+use j2k_core::BackendRequest;
+use j2k_jpeg::{
+    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, PixelFormat as J2kPixelFormat,
+    Rect as J2kRect,
 };
+use lru::LruCache;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{

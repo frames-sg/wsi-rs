@@ -28,7 +28,7 @@ impl SlideReader for VmsReader {
                 });
             }
         })
-        .to_signinum();
+        .to_j2k();
         reqs.iter()
             .map(|req| {
                 self.read_tile_with_backend(req, backend)
@@ -66,7 +66,7 @@ impl SlideReader for VmsReader {
             tables: None,
             expected_width: 0,
             expected_height: 0,
-            color_transform: signinum_jpeg::ColorTransform::Auto,
+            color_transform: j2k_jpeg::ColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,
         }])

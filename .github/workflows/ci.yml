@@ -27,35 +27,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt,clippy
       - uses: taiki-e/install-action@nextest
       - run: cargo xtask validate
-        working-directory: statumen
+        working-directory: wsi-rs
 
   feature-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-hack
       - run: cargo xtask feature-check
-        working-directory: statumen
+        working-directory: wsi-rs
 
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo xtask doc
-        working-directory: statumen
+        working-directory: wsi-rs
 
   api-stability:
     strategy:
@@ -66,42 +66,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-public-api,cargo-semver-checks
       - run: cargo xtask api-check
-        working-directory: statumen
+        working-directory: wsi-rs
 
   fuzz-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@nightly
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
       - run: cargo xtask fuzz-check
-        working-directory: statumen
+        working-directory: wsi-rs
 
   parity-corpus:
     runs-on: ubuntu-latest
     env:
-      STATUMEN_PARITY_ALIASES: >-
+      WSI_RS_PARITY_ALIASES: >-
         svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
           path: ~/.cache/slideviewer/parity-corpus
-          key: statumen-parity-corpus-${{ hashFiles('statumen/tests/fixtures/parity_corpus.public.toml') }}
+          key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update
@@ -116,9 +116,9 @@ jobs:
           ventana-001
           mirax-001
           dicom-jp2k-001
-        working-directory: statumen
+        working-directory: wsi-rs
       - run: cargo xtask parity-corpus-test
-        working-directory: statumen
+        working-directory: wsi-rs
 
   typos:
     runs-on: ubuntu-latest
@@ -135,20 +135,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo xtask release-test
-        working-directory: statumen
+        working-directory: wsi-rs
 
   package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo xtask package
-        working-directory: statumen
+        working-directory: wsi-rs
 
   supply-chain:
     runs-on: ubuntu-latest
@@ -157,27 +157,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-machete
       - run: cargo xtask deps
-        working-directory: statumen
+        working-directory: wsi-rs
 
   coverage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo xtask coverage
-        working-directory: statumen
+        working-directory: wsi-rs
       - name: Enforce changed-path coverage
-        working-directory: statumen
+        working-directory: wsi-rs
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
@@ -193,6 +193,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: statumen-lcov
-          path: statumen/lcov.info
+          name: wsi-rs-lcov
+          path: wsi-rs/lcov.info
           if-no-files-found: ignore

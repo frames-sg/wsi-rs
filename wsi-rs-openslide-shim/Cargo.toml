@@ -1,18 +1,18 @@
 [package]
-name = "statumen-openslide-shim"
+name = "wsi-rs-openslide-shim"
 version = "0.4.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "OpenSlide-compatible C ABI shim backed by statumen"
+description = "OpenSlide-compatible C ABI shim backed by wsi-rs"
 publish = false
 
 [lib]
-name = "statumen_openslide_shim"
+name = "wsi_rs_openslide_shim"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 libloading = { workspace = true }
-statumen = { path = ".." }
+wsi-rs = { path = ".." }
 
 [dev-dependencies]
 tempfile = { workspace = true }

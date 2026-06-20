@@ -37,7 +37,7 @@ impl SlideReader for ZeissReader {
                 });
             }
         })
-        .to_signinum();
+        .to_j2k();
         reqs.iter()
             .map(|req| {
                 self.read_tile_with_backend(req, backend)

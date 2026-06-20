@@ -8,7 +8,7 @@ use std::sync::Mutex;
 static ZEISS_TEST_GUARD: Mutex<()> = Mutex::new(());
 
 fn zeiss_uncompressed_fixture() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("STATUMEN_ZEISS_CZI_PATH").map(PathBuf::from) {
+    if let Some(path) = env::var_os("WSI_RS_ZEISS_CZI_PATH").map(PathBuf::from) {
         return path.is_file().then_some(path);
     }
 
@@ -26,7 +26,7 @@ fn zeiss_uncompressed_fixture() -> Option<PathBuf> {
 fn zeiss_fixture_or_skip() -> Option<PathBuf> {
     let path = zeiss_uncompressed_fixture();
     if path.is_none() {
-        eprintln!("[zeiss] skipping: set STATUMEN_ZEISS_CZI_PATH to Zeiss-5-Uncompressed.czi");
+        eprintln!("[zeiss] skipping: set WSI_RS_ZEISS_CZI_PATH to Zeiss-5-Uncompressed.czi");
     }
     path
 }

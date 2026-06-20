@@ -1444,8 +1444,8 @@ fn dicom_jpeg_require_device_batch_uses_jpeg_device_route() {
 
 #[cfg(feature = "metal")]
 fn local_htj2k_dicom_device_fixture() -> Option<PathBuf> {
-    let Some(path) = std::env::var_os("STATUMEN_LOCAL_HTJ2K_DICOM").map(PathBuf::from) else {
-        eprintln!("skipping local HTJ2K DICOM device test; STATUMEN_LOCAL_HTJ2K_DICOM unset");
+    let Some(path) = std::env::var_os("WSI_RS_LOCAL_HTJ2K_DICOM").map(PathBuf::from) else {
+        eprintln!("skipping local HTJ2K DICOM device test; WSI_RS_LOCAL_HTJ2K_DICOM unset");
         return None;
     };
     if !path.is_file() {

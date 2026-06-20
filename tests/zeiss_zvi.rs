@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use statumen::{
+use wsi_rs::{
     CpuTileData, LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide,
 };
 
@@ -36,7 +36,7 @@ fn region_request(
 }
 
 fn zeiss_zvi_root() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("STATUMEN_ZVI_ROOT").map(PathBuf::from) {
+    if let Some(path) = env::var_os("WSI_RS_ZVI_ROOT").map(PathBuf::from) {
         return path.is_dir().then_some(path);
     }
 
@@ -83,9 +83,9 @@ fn assert_decodes_u16_region(
 }
 
 #[test]
-#[ignore = "requires STATUMEN_ZVI_ROOT or local Zeiss ZVI testdata"]
+#[ignore = "requires WSI_RS_ZVI_ROOT or local Zeiss ZVI testdata"]
 fn builtin_registry_opens_zeiss_zvi_variants_and_reads_u16_regions() {
-    let paths = fixture_paths().expect("set STATUMEN_ZVI_ROOT to the Zeiss ZVI fixture directory");
+    let paths = fixture_paths().expect("set WSI_RS_ZVI_ROOT to the Zeiss ZVI fixture directory");
 
     for path in paths {
         let slide = Slide::open(&path).expect("open Zeiss ZVI through builtin registry");
@@ -96,7 +96,7 @@ fn builtin_registry_opens_zeiss_zvi_variants_and_reads_u16_regions() {
         assert_eq!(dataset.scenes[0].series.len(), 1);
 
         let series = &dataset.scenes[0].series[0];
-        assert_eq!(series.sample_type, statumen::SampleType::Uint16);
+        assert_eq!(series.sample_type, wsi_rs::SampleType::Uint16);
         assert!(series.axes.c >= 1, "ZVI should expose channel planes");
         assert!(!series.levels.is_empty());
 

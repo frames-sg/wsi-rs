@@ -460,7 +460,7 @@ impl MiraxSlide {
                     tables: None,
                     expected_width,
                     expected_height,
-                    color_transform: signinum_jpeg::ColorTransform::Auto,
+                    color_transform: j2k_jpeg::ColorTransform::Auto,
                     force_dimensions: false,
                     requested_size: None,
                 }])

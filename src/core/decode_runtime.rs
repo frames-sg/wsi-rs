@@ -135,7 +135,7 @@ impl DecodeRuntime {
             .map_or_else(default_jp2k_cpu_threads, NonZeroUsize::get);
         let jp2k_cpu_pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
-            .thread_name(|index| format!("statumen-jp2k-cpu-{index}"))
+            .thread_name(|index| format!("wsi_rs-jp2k-cpu-{index}"))
             .build()
         {
             Ok(pool) => Some(pool),

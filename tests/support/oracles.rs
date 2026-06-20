@@ -1,4 +1,4 @@
-//! Signinum, reference, and OpenSlide oracle helpers.
+//! J2k, reference, and OpenSlide oracle helpers.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jpeg_decoder::{Decoder as ReferenceJpegDecoder, PixelFormat as ReferenceJpegPixelFormat};
-use statumen::{
+use wsi_rs::{
     CpuTile, FormatRegistry, LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId,
     Slide, TileLayout, TileRequest,
 };
@@ -120,15 +120,15 @@ pub fn is_reference_oracle_unsupported(err: &str) -> bool {
     err.starts_with("reference oracle unsupported")
 }
 
-pub struct SigninumOracle;
+pub struct J2kOracle;
 
-impl Oracle for SigninumOracle {
+impl Oracle for J2kOracle {
     fn name(&self) -> &'static str {
-        "signinum"
+        "j2k"
     }
 
     fn open(&self, slide_path: &Path) -> Result<OpenedSlide, String> {
-        open_via_statumen(slide_path, "signinum", false)
+        open_via_wsi_rs(slide_path, "j2k", false)
     }
 }
 
@@ -140,18 +140,18 @@ impl Oracle for ReferenceOracle {
     }
 
     fn open(&self, slide_path: &Path) -> Result<OpenedSlide, String> {
-        open_via_statumen(slide_path, "reference", true)
+        open_via_wsi_rs(slide_path, "reference", true)
     }
 }
 
-fn open_via_statumen(
+fn open_via_wsi_rs(
     slide_path: &Path,
     name: &'static str,
     use_reference_jpeg: bool,
 ) -> Result<OpenedSlide, String> {
     let registry = FormatRegistry::builtin();
     let handle = Slide::open_with_cache_bytes(slide_path, &registry, 64 * 1024 * 1024)
-        .map_err(|e| format!("statumen::open_with({}): {e}", slide_path.display()))?;
+        .map_err(|e| format!("wsi_rs::open_with({}): {e}", slide_path.display()))?;
     let levels = &handle.dataset().scenes[0].series[0].levels;
     let level_count = levels.len() as u32;
     let level_dimensions: Vec<(u64, u64)> = levels.iter().map(|level| level.dimensions).collect();
@@ -924,18 +924,18 @@ pub(crate) fn comparable_openslide_level_dimensions(
 
 #[cfg(feature = "parity-openslide")]
 pub(crate) fn openslide_level_dimensions_match(
-    statumen_dimensions: (u64, u64),
+    wsi_rs_dimensions: (u64, u64),
     openslide_dimensions: (u64, u64),
     openslide_level_dimensions: &[(u64, u64)],
     bounds: Option<super::openslide_shim::OpenSlideBounds>,
 ) -> bool {
-    if statumen_dimensions == openslide_dimensions {
+    if wsi_rs_dimensions == openslide_dimensions {
         return true;
     }
     let comparable = comparable_openslide_level_dimensions(openslide_level_dimensions, bounds);
     comparable
         .iter()
-        .any(|&dims| dimensions_within_one_pixel(statumen_dimensions, dims))
+        .any(|&dims| dimensions_within_one_pixel(wsi_rs_dimensions, dims))
 }
 
 #[cfg(feature = "parity-openslide")]

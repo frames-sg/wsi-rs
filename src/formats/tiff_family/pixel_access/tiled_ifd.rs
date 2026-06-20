@@ -24,7 +24,7 @@ impl TiffPixelReader {
         if self.layout.dataset.properties.vendor() == Some("philips") {
             return TiffJpegDecodeOptions {
                 force_dimensions,
-                color_transform: SigninumColorTransform::Auto,
+                color_transform: J2kColorTransform::Auto,
             };
         }
 

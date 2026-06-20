@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use statumen_openslide_shim::install::{execute_install, execute_restore, PlatformLibraryNames};
+use wsi_rs_openslide_shim::install::{execute_install, execute_restore, PlatformLibraryNames};
 
 fn main() {
     if let Err(err) = run() {
@@ -43,13 +43,13 @@ fn run() -> Result<(), String> {
             let shim = shim.ok_or_else(|| usage("install requires --shim <path>"))?;
             let manifest = execute_install(&prefix, &shim, platform, stamp)?;
             println!(
-                "installed statumen OpenSlide shim; restore manifest: {}",
+                "installed wsi_rs OpenSlide shim; restore manifest: {}",
                 manifest.display()
             );
         }
         "restore" => {
             execute_restore(&prefix, stamp)?;
-            println!("restored OpenSlide libraries from statumen shim manifest");
+            println!("restored OpenSlide libraries from wsi_rs shim manifest");
         }
         other => return Err(usage(&format!("unknown command: {other}"))),
     }
@@ -63,7 +63,7 @@ fn usage(message: &str) -> String {
         format!("{message}\n\n")
     };
     format!(
-        "{prefix}usage:\n  statumen-openslide-install install --shim <path> [--prefix <prefix>]\n  statumen-openslide-install restore [--prefix <prefix>]"
+        "{prefix}usage:\n  wsi-rs-openslide-install install --shim <path> [--prefix <prefix>]\n  wsi-rs-openslide-install restore [--prefix <prefix>]"
     )
 }
 

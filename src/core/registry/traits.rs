@@ -91,7 +91,7 @@ impl<'a> SlideReadContext<'a> {
 /// `read_tile` for free:
 ///
 /// ```
-/// use statumen::{
+/// use wsi_rs::{
 ///     ColorSpace, CpuTile, Dataset, SlideReader, TileOutputPreference, TilePixels, TileRequest,
 ///     WsiError,
 /// };

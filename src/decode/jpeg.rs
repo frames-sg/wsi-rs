@@ -10,8 +10,8 @@ pub(crate) use device::decode_batch_jpeg_pixels;
 pub(crate) use input::jpeg_tile_geometry;
 use input::{
     checked_jpeg_rgb_len, decode_jpeg_rgb_with_color_transform_and_patch,
-    inspect_signinum_jpeg_output_size, prepare_jpeg_input, resize_jpeg_rgb_nearest,
-    signinum_downscale_for_dimensions, try_decode_jpeg_rgb_scaled,
+    inspect_j2k_jpeg_output_size, j2k_downscale_for_dimensions, prepare_jpeg_input,
+    resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
 };
 pub(crate) use input::{decode_jpeg_rgb_with_color_transform, jpeg_dimensions};
 
@@ -21,14 +21,14 @@ use crate::core::types::{ColorSpace, CpuTile};
 use crate::error::WsiError;
 #[cfg(test)]
 use image::RgbaImage;
-use rayon::prelude::*;
-use signinum_jpeg::{
+use j2k_jpeg::{
     decode_tiles_into_with_options, decode_tiles_scaled_into_with_options,
-    ColorTransform as SigninumColorTransform, DecodeOptions as SigninumDecodeOptions,
-    Downscale as SigninumDownscale, PixelFormat as SigninumPixelFormat,
-    TileBatchOptions as SigninumTileBatchOptions, TileDecodeJob as SigninumTileDecodeJob,
-    TileScaledDecodeJob as SigninumTileScaledDecodeJob,
+    ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
+    Downscale as J2kDownscale, PixelFormat as J2kPixelFormat,
+    TileBatchOptions as J2kTileBatchOptions, TileDecodeJob as J2kTileDecodeJob,
+    TileScaledDecodeJob as J2kTileScaledDecodeJob,
 };
+use rayon::prelude::*;
 
 /// Maximum total bytes allowed for a single JPEG decode allocation.
 /// Set to 512 MB to cover large NDPI full-decode levels while preventing
@@ -55,7 +55,7 @@ pub(crate) struct JpegDecodeJob<'a> {
     pub tables: Option<Cow<'a, [u8]>>,
     pub expected_width: u32,
     pub expected_height: u32,
-    pub color_transform: SigninumColorTransform,
+    pub color_transform: J2kColorTransform,
     pub force_dimensions: bool,
     pub requested_size: Option<(u32, u32)>,
 }
@@ -68,7 +68,7 @@ struct ScaledJpegDecode<'a> {
     requested_width: u32,
     requested_height: u32,
     force_dimensions: bool,
-    color_transform: SigninumColorTransform,
+    color_transform: J2kColorTransform,
 }
 
 struct PreparedBatchJpeg<'a> {
@@ -77,7 +77,7 @@ struct PreparedBatchJpeg<'a> {
     output_height: u32,
     output_len: usize,
     stride: usize,
-    scale: SigninumDownscale,
+    scale: J2kDownscale,
 }
 
 /// Decode JPEG data to premultiplied RGBA (alpha=255 for all decoded pixels).
@@ -125,7 +125,7 @@ pub fn decode_jpeg_rgb(
         tables,
         expected_width,
         expected_height,
-        SigninumColorTransform::Auto,
+        J2kColorTransform::Auto,
     )
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
     image_height: u32,
     requested_width: Option<u32>,
     requested_height: Option<u32>,
-    color_transform: SigninumColorTransform,
+    color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
     if image_width == 0
         || image_height == 0
@@ -190,7 +190,7 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
 
 pub(crate) fn decode_batch_jpeg<'a>(jobs: &[JpegDecodeJob<'a>]) -> Vec<Result<CpuTile, WsiError>> {
     if jobs.len() > 1 {
-        if let Some(results) = try_decode_batch_jpeg_with_signinum(jobs) {
+        if let Some(results) = try_decode_batch_jpeg_with_j2k(jobs) {
             return results;
         }
     }
@@ -200,7 +200,7 @@ pub(crate) fn decode_batch_jpeg<'a>(jobs: &[JpegDecodeJob<'a>]) -> Vec<Result<Cp
     jobs.par_iter().map(decode_one_jpeg_job).collect()
 }
 
-fn try_decode_batch_jpeg_with_signinum<'a>(
+fn try_decode_batch_jpeg_with_j2k<'a>(
     jobs: &[JpegDecodeJob<'a>],
 ) -> Option<Vec<Result<CpuTile, WsiError>>> {
     let first = jobs.first()?;
@@ -215,23 +215,23 @@ fn try_decode_batch_jpeg_with_signinum<'a>(
     let mut prepared = Vec::with_capacity(jobs.len());
     let mut needs_scaled_api = false;
     for job in jobs {
-        let prepared_job = prepare_signinum_batch_jpeg_job(job)?;
-        needs_scaled_api |= prepared_job.scale != SigninumDownscale::None;
+        let prepared_job = prepare_j2k_batch_jpeg_job(job)?;
+        needs_scaled_api |= prepared_job.scale != J2kDownscale::None;
         prepared.push(prepared_job);
     }
 
-    let decode_options = SigninumDecodeOptions::default().with_color_transform(color_transform);
+    let decode_options = J2kDecodeOptions::default().with_color_transform(color_transform);
     let mut outputs = prepared
         .iter()
         .map(|job| vec![0u8; job.output_len])
         .collect::<Vec<_>>();
-    let batch_options = SigninumTileBatchOptions::default();
+    let batch_options = J2kTileBatchOptions::default();
 
     if needs_scaled_api {
         let mut batch_jobs = prepared
             .iter()
             .zip(outputs.iter_mut())
-            .map(|(job, output)| SigninumTileScaledDecodeJob {
+            .map(|(job, output)| J2kTileScaledDecodeJob {
                 input: job.input.as_ref(),
                 out: output.as_mut_slice(),
                 stride: job.stride,
@@ -240,7 +240,7 @@ fn try_decode_batch_jpeg_with_signinum<'a>(
             .collect::<Vec<_>>();
         decode_tiles_scaled_into_with_options(
             &mut batch_jobs,
-            SigninumPixelFormat::Rgb8,
+            J2kPixelFormat::Rgb8,
             decode_options,
             batch_options,
         )
@@ -249,7 +249,7 @@ fn try_decode_batch_jpeg_with_signinum<'a>(
         let mut batch_jobs = prepared
             .iter()
             .zip(outputs.iter_mut())
-            .map(|(job, output)| SigninumTileDecodeJob {
+            .map(|(job, output)| J2kTileDecodeJob {
                 input: job.input.as_ref(),
                 out: output.as_mut_slice(),
                 stride: job.stride,
@@ -257,7 +257,7 @@ fn try_decode_batch_jpeg_with_signinum<'a>(
             .collect::<Vec<_>>();
         decode_tiles_into_with_options(
             &mut batch_jobs,
-            SigninumPixelFormat::Rgb8,
+            J2kPixelFormat::Rgb8,
             decode_options,
             batch_options,
         )
@@ -281,9 +281,7 @@ fn try_decode_batch_jpeg_with_signinum<'a>(
     )
 }
 
-fn prepare_signinum_batch_jpeg_job<'j, 'a>(
-    job: &'j JpegDecodeJob<'a>,
-) -> Option<PreparedBatchJpeg<'j>> {
+fn prepare_j2k_batch_jpeg_job<'j, 'a>(job: &'j JpegDecodeJob<'a>) -> Option<PreparedBatchJpeg<'j>> {
     if job.expected_width == 0 || job.expected_height == 0 {
         return None;
     }
@@ -298,7 +296,7 @@ fn prepare_signinum_batch_jpeg_job<'j, 'a>(
             if requested_width == 0 || requested_height == 0 {
                 return None;
             }
-            let scale = signinum_downscale_for_dimensions(
+            let scale = j2k_downscale_for_dimensions(
                 job.expected_width,
                 job.expected_height,
                 requested_width,
@@ -306,11 +304,7 @@ fn prepare_signinum_batch_jpeg_job<'j, 'a>(
             )?;
             (scale, requested_width, requested_height)
         }
-        None => (
-            SigninumDownscale::None,
-            job.expected_width,
-            job.expected_height,
-        ),
+        None => (J2kDownscale::None, job.expected_width, job.expected_height),
     };
 
     let input = prepare_jpeg_input(
@@ -320,7 +314,7 @@ fn prepare_signinum_batch_jpeg_job<'j, 'a>(
         job.expected_height,
         job.force_dimensions,
     );
-    let encoded_dimensions = inspect_signinum_jpeg_output_size(input.as_ref()).ok()?;
+    let encoded_dimensions = inspect_j2k_jpeg_output_size(input.as_ref()).ok()?;
     if encoded_dimensions != (job.expected_width, job.expected_height) {
         return None;
     }

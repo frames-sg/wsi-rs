@@ -72,7 +72,7 @@ fn help_text() -> &'static str {
        release-test run release-mode library and integration tests\n\
        coverage     generate lcov.info with cargo-llvm-cov\n\
        coverage-changed [--base REV] [--lcov lcov.info] enforce changed-path coverage\n\
-       perf-capture <label> [slides...] capture local statumen benchmark JSON\n\
+       perf-capture <label> [slides...] capture local wsi_rs benchmark JSON\n\
        perf-capture-openslide <label> [slides...] capture local OpenSlide benchmark JSON\n\
        perf-compare <before.json> <after.json> compare captures with 5% noise guard\n\
        perf-profile <slide> [workload] print samply/xctrace profiling recipes\n\

@@ -27,7 +27,7 @@ pub(super) fn decode_associated_attachment(
             tables: None,
             expected_width: 0,
             expected_height: 0,
-            color_transform: signinum_jpeg::ColorTransform::Auto,
+            color_transform: j2k_jpeg::ColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,
         }])
@@ -127,7 +127,7 @@ fn read_attachment_prefix(
 fn temp_czi_path(index: usize) -> PathBuf {
     let counter = TEMP_BLOB_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "statumen-zeiss-{}-{}-{}.czi",
+        "wsi_rs-zeiss-{}-{}-{}.czi",
         std::process::id(),
         index,
         counter

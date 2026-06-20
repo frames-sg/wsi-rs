@@ -3,7 +3,7 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use statumen::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
+use wsi_rs::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
 use support::corpus::{
@@ -12,8 +12,8 @@ use support::corpus::{
 };
 use support::oracles::{
     is_reference_oracle_unsupported, read_probe, require_reference_tile, sample_buffer_to_rgba,
-    top_left_probe, OpenedSlide, Oracle, ProbeKind, ProbeRequest, ReferenceOracle,
-    ReferenceTileError, SigninumOracle, TileBuffer,
+    top_left_probe, J2kOracle, OpenedSlide, Oracle, ProbeKind, ProbeRequest, ReferenceOracle,
+    ReferenceTileError, TileBuffer,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -37,7 +37,7 @@ const SAMPLE_MANIFEST: &str = r#"
 
 #[test]
 fn public_prelude_exports_common_reader_types() {
-    use statumen::prelude::{
+    use wsi_rs::prelude::{
         LevelIdx as PreludeLevelIdx, PlaneIdx as PreludePlaneIdx,
         PlaneSelection as PreludePlaneSelection, RegionRequest as PreludeRegionRequest,
         SceneId as PreludeSceneId, SeriesId as PreludeSeriesId, Slide as PreludeSlide,
@@ -106,10 +106,10 @@ fn compare_tolerance_failure_formats_failed_report() {
     let b = vec![12u8, 20, 30, 255, 40, 50, 60, 255];
     let report = compare_rgba(&a, &b, Tolerance::JPEG_TIGHT);
 
-    let failure = tolerance_failure("svs-001 level=0 signinum-vs-reference", &report)
+    let failure = tolerance_failure("svs-001 level=0 j2k-vs-reference", &report)
         .expect("failed report should produce gate failure");
 
-    assert!(failure.contains("svs-001 level=0 signinum-vs-reference"));
+    assert!(failure.contains("svs-001 level=0 j2k-vs-reference"));
     assert!(failure.contains("max_abs=2"));
 }
 
@@ -135,7 +135,7 @@ fn corpus_unknown_format_extension_returns_none() {
 #[test]
 fn corpus_cache_dir_respects_env() {
     let _guard = ENV_LOCK.lock().unwrap();
-    let _env = EnvGuard::set("STATUMEN_PARITY_CORPUS_CACHE", "/tmp/sv-corpus-test");
+    let _env = EnvGuard::set("WSI_RS_PARITY_CORPUS_CACHE", "/tmp/sv-corpus-test");
 
     let path = corpus_cache_dir();
 
@@ -179,14 +179,14 @@ fn corpus_expected_failure_matches_pair_and_level_aliases() {
     let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
     let entry = manifest.slides.first_mut().expect("slide");
     entry.expected_failures = vec![
-        "signinum-vs-reference:base".into(),
+        "j2k-vs-reference:base".into(),
         "reference-vs-openslide:level2".into(),
     ];
 
-    assert!(entry.expected_failure("signinum-vs-reference", 0));
+    assert!(entry.expected_failure("j2k-vs-reference", 0));
     assert!(entry.expected_failure("reference-vs-openslide", 2));
-    assert!(!entry.expected_failure("signinum-vs-reference", 1));
-    assert!(!entry.expected_failure("signinum-vs-openslide", 0));
+    assert!(!entry.expected_failure("j2k-vs-reference", 1));
+    assert!(!entry.expected_failure("j2k-vs-openslide", 0));
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn corpus_alias_filter_keeps_requested_manifest_entries() {
 
 #[test]
 fn oracle_names_are_stable() {
-    assert_eq!(SigninumOracle.name(), "signinum");
+    assert_eq!(J2kOracle.name(), "j2k");
     assert_eq!(ReferenceOracle.name(), "reference");
 }
 

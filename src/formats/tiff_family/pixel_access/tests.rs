@@ -65,11 +65,11 @@ fn jpeg_rgb_component_ids_zero_one_two_follow_tiff_photometric() {
     );
     assert_eq!(
         tiff_jpeg_color_transform(2, 3, jpeg_bitstream_color_hint(&jpeg, None)),
-        SigninumColorTransform::ForceRgb
+        J2kColorTransform::ForceRgb
     );
     assert_eq!(
         tiff_jpeg_color_transform(6, 3, jpeg_bitstream_color_hint(&jpeg, None)),
-        SigninumColorTransform::ForceYCbCr
+        J2kColorTransform::ForceYCbCr
     );
 }
 
@@ -83,7 +83,7 @@ fn jpeg_rgb_component_ids_ascii_force_rgb() {
     );
     assert_eq!(
         tiff_jpeg_color_transform(6, 3, jpeg_bitstream_color_hint(&jpeg, None)),
-        SigninumColorTransform::ForceRgb
+        J2kColorTransform::ForceRgb
     );
 }
 
@@ -97,7 +97,7 @@ fn jpeg_rgb_tiff_with_actual_chroma_subsampling_uses_ycbcr_hint() {
     );
     assert_eq!(
         tiff_jpeg_color_transform(2, 3, jpeg_bitstream_color_hint(&jpeg, None)),
-        SigninumColorTransform::ForceYCbCr
+        J2kColorTransform::ForceYCbCr
     );
 }
 
@@ -105,11 +105,11 @@ fn jpeg_rgb_tiff_with_actual_chroma_subsampling_uses_ycbcr_hint() {
 fn jpeg_unknown_bitstream_falls_back_to_tiff_photometric() {
     assert_eq!(
         tiff_jpeg_color_transform(2, 3, JpegBitstreamColorHint::Unknown),
-        SigninumColorTransform::ForceRgb
+        J2kColorTransform::ForceRgb
     );
     assert_eq!(
         tiff_jpeg_color_transform(6, 3, JpegBitstreamColorHint::Unknown),
-        SigninumColorTransform::ForceYCbCr
+        J2kColorTransform::ForceYCbCr
     );
 }
 
@@ -819,7 +819,7 @@ fn ndpi_raw_compressed_display_tile_retiles_restart_jpeg_segments_without_pixel_
         raw.height(),
         None,
         None,
-        SigninumColorTransform::Auto,
+        J2kColorTransform::Auto,
     )
     .expect("decode retiled NDPI JPEG frame");
     let expected = reader.read_display_tile(&request).unwrap();
@@ -1703,7 +1703,7 @@ fn expected_synthetic_ndpi_region(
         row: 0,
     };
     let full = if let Some(image) = reader
-        .try_decode_synthetic_level_with_signinum(&tile_req, 0, factor)
+        .try_decode_synthetic_level_with_j2k(&tile_req, 0, factor)
         .unwrap()
     {
         image
@@ -1976,7 +1976,7 @@ fn synthetic_ndpi_subregion_fastpath_matches_factor_four_repeated_box_edges() {
 }
 
 #[test]
-fn synthetic_ndpi_tile_path_uses_signinum_downscale_when_dimensions_match() {
+fn synthetic_ndpi_tile_path_uses_j2k_downscale_when_dimensions_match() {
     let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
     let direct_req = TileRequest {
         scene: 0usize.into(),
@@ -1987,9 +1987,9 @@ fn synthetic_ndpi_tile_path_uses_signinum_downscale_when_dimensions_match() {
         row: 0,
     };
     let direct = reader
-        .try_decode_synthetic_level_with_signinum(&direct_req, 0, 2)
-        .expect("signinum synthetic downscale should decode")
-        .expect("matching synthetic dimensions should use signinum downscale");
+        .try_decode_synthetic_level_with_j2k(&direct_req, 0, 2)
+        .expect("j2k synthetic downscale should decode")
+        .expect("matching synthetic dimensions should use j2k downscale");
     assert_eq!((direct.width, direct.height), (4, 4));
 
     let tile = reader
@@ -2007,7 +2007,7 @@ fn synthetic_ndpi_tile_path_uses_signinum_downscale_when_dimensions_match() {
 }
 
 #[test]
-fn synthetic_ndpi_region_fastpath_falls_back_when_signinum_scaled_dims_do_not_match() {
+fn synthetic_ndpi_region_fastpath_falls_back_when_j2k_scaled_dims_do_not_match() {
     let reader = build_synthetic_ndpi_reader(5, 5, &[(2, 2, 2)]);
     let direct_req = TileRequest {
         scene: 0usize.into(),
@@ -2019,10 +2019,10 @@ fn synthetic_ndpi_region_fastpath_falls_back_when_signinum_scaled_dims_do_not_ma
     };
     assert!(
         reader
-            .try_decode_synthetic_level_with_signinum(&direct_req, 0, 2)
-            .expect("signinum synthetic downscale should decode")
+            .try_decode_synthetic_level_with_j2k(&direct_req, 0, 2)
+            .expect("j2k synthetic downscale should decode")
             .is_none(),
-        "odd source dimensions should reject signinum result with mismatched target dimensions"
+        "odd source dimensions should reject j2k result with mismatched target dimensions"
     );
 
     let req = region_request(0, 0, 1, PlaneSelection::default(), 0, 0, 2, 2);
@@ -2034,7 +2034,7 @@ fn synthetic_ndpi_region_fastpath_falls_back_when_signinum_scaled_dims_do_not_ma
     let tile = reader
         .read_region_fastpath(&mut ctx, &req)
         .expect("synthetic fast path should handle whole-level region")
-        .expect("odd-dimension signinum downscale mismatch should fall back");
+        .expect("odd-dimension j2k downscale mismatch should fall back");
 
     assert_eq!((tile.width, tile.height), (2, 2));
 }
@@ -3261,7 +3261,7 @@ fn raw_compressed_tile_returns_standalone_ndpi_restart_jpeg() {
         raw.height(),
         None,
         None,
-        SigninumColorTransform::Auto,
+        J2kColorTransform::Auto,
     )
     .expect("decode raw NDPI JPEG tile");
     assert_eq!((decoded.width, decoded.height), (128, 16));

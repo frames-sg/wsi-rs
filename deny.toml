@@ -34,8 +34,8 @@ wildcards = "deny"
 highlight = "all"
 skip = [
     { crate = "getrandom@0.3.4", reason = "transitive build-dependency chain still uses getrandom 0.3 while tempfile dev tooling has moved to 0.4; revisit after upstream convergence" },
-    { crate = "r-efi@5.3.0", reason = "paired with transitive getrandom 0.3 in build dependencies; no direct Statumen dependency can unify this yet" },
-    { crate = "thiserror@1.0.69", reason = "czi-rs still depends on thiserror 1 while Statumen and Signinum use thiserror 2; revisit on czi-rs upgrade" },
+    { crate = "r-efi@5.3.0", reason = "paired with transitive getrandom 0.3 in build dependencies; no direct wsi-rs dependency can unify this yet" },
+    { crate = "thiserror@1.0.69", reason = "czi-rs still depends on thiserror 1 while wsi-rs and j2k use thiserror 2; revisit on czi-rs upgrade" },
     { crate = "thiserror-impl@1.0.69", reason = "procedural macro pair for the transitive czi-rs thiserror 1 dependency; revisit together with thiserror" },
     { crate = "wit-bindgen@0.51.0", reason = "dev-only tempfile/getrandom WASI transitive path pulls wit-bindgen 0.51 while build dependencies use 0.57" },
 ]

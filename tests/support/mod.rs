@@ -1,4 +1,4 @@
-//! Shared test-support helpers for the statumen parity harness.
+//! Shared test-support helpers for the wsi_rs parity harness.
 
 #![allow(dead_code)]
 

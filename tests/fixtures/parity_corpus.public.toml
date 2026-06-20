@@ -1,6 +1,6 @@
 # Public, redistributable parity corpus.
 # Slides listed here are downloaded by `scripts/parity-corpus-fetch.sh` into
-# `$STATUMEN_PARITY_CORPUS_CACHE` (default `~/.cache/slideviewer/parity-corpus/`).
+# `$WSI_RS_PARITY_CORPUS_CACHE` (default `~/.cache/slideviewer/parity-corpus/`).
 
 [[slide]]
 name             = "aperio_svs_brightfield_he_typical"
@@ -10,11 +10,11 @@ format           = "aperio"
 codecs           = ["jpeg"]
 must_decode      = ["base", "level1", "level2", "label", "macro"]
 expected_failures = [
-  "signinum-vs-reference:base",
-  "signinum-vs-reference:level1",
-  "signinum-vs-reference:level2",
+  "j2k-vs-reference:base",
+  "j2k-vs-reference:level1",
+  "j2k-vs-reference:level2",
   # The independent JPEG oracle intentionally decodes raw TIFF JPEG tiles; it
-  # does not model the OpenSlide-compatible color path that Statumen matches.
+  # does not model the OpenSlide-compatible color path that wsi-rs matches.
   "reference-vs-openslide:base",
   "reference-vs-openslide:level1",
   "reference-vs-openslide:level2",
@@ -28,12 +28,12 @@ phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs"
 
 [slide.expected_failure_rationale]
-"signinum-vs-reference:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. Statumen matches OpenSlide exactly on this base-level probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"signinum-vs-reference:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. Statumen matches OpenSlide exactly on this level-1 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"signinum-vs-reference:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. Statumen matches OpenSlide exactly on this level-2 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"reference-vs-openslide:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the Statumen-vs-reference base-level comparison."
-"reference-vs-openslide:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the Statumen-vs-reference level-1 comparison."
-"reference-vs-openslide:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the Statumen-vs-reference level-2 comparison."
+"j2k-vs-reference:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this base-level probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
+"j2k-vs-reference:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this level-1 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
+"j2k-vs-reference:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this level-2 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
+"reference-vs-openslide:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference base-level comparison."
+"reference-vs-openslide:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference level-1 comparison."
+"reference-vs-openslide:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference level-2 comparison."
 
 [[slide]]
 name             = "aperio_svs_brightfield_jp2k_typical"
@@ -45,8 +45,8 @@ must_decode      = ["base", "level1"]
 expected_failures = [
   # JP2K decode is visually close but outside strict byte tolerance against the
   # system OpenSlide/OpenJPEG stack on this public Aperio sample.
-  "signinum-vs-openslide:base",
-  "signinum-vs-openslide:level1",
+  "j2k-vs-openslide:base",
+  "j2k-vs-openslide:level1",
 ]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
@@ -57,8 +57,8 @@ phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/JP2K-33003-1.svs"
 
 [slide.expected_failure_rationale]
-"signinum-vs-openslide:base" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in Statumen and system OpenSlide. The base-level probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
-"signinum-vs-openslide:level1" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in Statumen and system OpenSlide. The level-1 probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
+"j2k-vs-openslide:base" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in wsi-rs and system OpenSlide. The base-level probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
+"j2k-vs-openslide:level1" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in wsi-rs and system OpenSlide. The level-1 probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
 
 [[slide]]
 name             = "hamamatsu_ndpi_brightfield_typical"
@@ -115,7 +115,7 @@ must_decode      = ["base"]
 expected_failures = [
   # Ventana irregular-region composition is close but not byte-equivalent to
   # OpenSlide on the occupied base-level probe.
-  "signinum-vs-openslide:base",
+  "j2k-vs-openslide:base",
 ]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
@@ -126,7 +126,7 @@ phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Ventana/OS-2.bif"
 
 [slide.expected_failure_rationale]
-"signinum-vs-openslide:base" = "Ventana irregular-region composition reads occupied tissue and is close to OpenSlide but not byte-equivalent on the base-level probe. This is an accepted 0.5 RC limitation for Ventana edge composition, and any additional Ventana parity failures remain release blockers."
+"j2k-vs-openslide:base" = "Ventana irregular-region composition reads occupied tissue and is close to OpenSlide but not byte-equivalent on the base-level probe. This is an accepted 0.5 RC limitation for Ventana edge composition, and any additional Ventana parity failures remain release blockers."
 
 [[slide]]
 name             = "mirax_brightfield_typical"
@@ -157,7 +157,7 @@ sha256           = "f7306843363c08ab86539f52acbe492917c440df50231d06b9b2e1657ac9
 citation         = "OpenSlide testdata, DICOM WSI 3DHISTECH-1 sample."
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/DICOM/3DHISTECH-1.zip"
-notes            = "Public DICOM JPEG provenance row. Non-gating because this sample uses progressive JPEG, which is a signinum JPEG follow-on."
+notes            = "Public DICOM JPEG provenance row. Non-gating because this sample uses progressive JPEG, which is a j2k JPEG follow-on."
 
 [[slide]]
 name             = "dicom_wsi_jp2k_tiled_full"

@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString};
 use std::ptr;
 
-use statumen_openslide_shim::*;
+use wsi_rs_openslide_shim::*;
 
 fn fixture_path() -> CString {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -85,7 +85,7 @@ fn opens_supported_slide_and_exposes_core_metadata() {
         let osr = openslide_open(path.as_ptr());
         assert!(!osr.is_null());
         assert!(openslide_get_error(osr).is_null());
-        assert!(c_string(openslide_get_version()).starts_with("OpenSlide-statumen"));
+        assert!(c_string(openslide_get_version()).starts_with("OpenSlide-wsi-rs"));
 
         assert_eq!(openslide_get_level_count(osr), 1);
         let mut w = 0;

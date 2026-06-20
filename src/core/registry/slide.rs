@@ -166,7 +166,7 @@ impl Slide {
         match &result {
             Ok(TilePixels::Cpu(_)) if device_decode_attempted => {
                 fallback_to_cpu = true;
-                fallback_reason = "signinum_auto_chose_cpu";
+                fallback_reason = "j2k_auto_chose_cpu";
                 span.record("fallback_to_cpu", true);
                 span.record("fallback_reason", fallback_reason);
                 span.record("device_decoded_host_resident", false);

@@ -7,20 +7,19 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-use lru::LruCache;
-use rayon::prelude::*;
-use signinum_core::BackendRequest;
-use signinum_jpeg::transcode::{
+use j2k_core::BackendRequest;
+use j2k_jpeg::transcode::{
     extract_dct_blocks, DctExtractOptions, JpegDctCodingMode, JpegDctComponent, JpegDctImage,
 };
-use signinum_jpeg::{
-    ColorTransform as SigninumColorTransform, DecodeOptions as SigninumDecodeOptions,
-    Decoder as SigninumJpegDecoder, Downscale as SigninumDownscale,
-    PixelFormat as SigninumPixelFormat,
+use j2k_jpeg::{
+    ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
+    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, PixelFormat as J2kPixelFormat,
 };
-use signinum_tilecodec::{
+use j2k_tilecodec::{
     DeflateCodec, DeflatePool, LzwCodec, LzwPool, TileDecompress, ZstdCodec, ZstdPool,
 };
+use lru::LruCache;
+use rayon::prelude::*;
 
 use crate::core::cache::CacheKey;
 use crate::core::registry::{

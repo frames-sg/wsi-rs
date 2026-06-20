@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the statumen audit workload set against an Iris `.iris` slide.
+"""Run the wsi-rs audit workload set against an Iris `.iris` slide.
 
 This script intentionally mirrors `wsi_bench` / `openslide_bench` JSON output so
 `bench_driver` can compare Iris without adding Python dependencies to the Rust
@@ -44,7 +44,7 @@ WORKLOAD_SPECS = [
         "pan_trace_l2",
         256,
         comparability_note=(
-            "Iris consumes the same accepted level-2 tile top-lefts as statumen"
+            "Iris consumes the same accepted level-2 tile top-lefts as wsi-rs"
         ),
     ),
     WorkloadSpec("pan_trace_l2_dense", 16),

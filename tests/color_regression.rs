@@ -8,9 +8,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use statumen::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
 #[cfg(feature = "parity-openslide")]
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
+use wsi_rs::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
 
 #[derive(Clone, Copy, Debug)]
 struct ColorThreshold {
@@ -134,7 +134,7 @@ fn svs_and_ndpi_overview_color_matches_openslide() {
             continue;
         };
         let ours = read_overview_region(&path)
-            .unwrap_or_else(|err| panic!("[color-openslide] {} statumen read: {err}", case.label));
+            .unwrap_or_else(|err| panic!("[color-openslide] {} wsi_rs read: {err}", case.label));
         let openslide = lib
             .open(&path)
             .unwrap_or_else(|err| panic!("[color-openslide] {} OpenSlide open: {err}", case.label));
@@ -162,7 +162,7 @@ fn color_cases() -> Vec<ColorCase> {
         ColorCase {
             label: "svs",
             alias: Some("svs-001"),
-            env_path: Some("STATUMEN_COLOR_SVS_PATH"),
+            env_path: Some("WSI_RS_COLOR_SVS_PATH"),
             relative_paths: &["downloads/openslide-testdata/Aperio/CMU-1.svs"],
             absolute_paths: &[],
             threshold: ColorThreshold {
@@ -174,7 +174,7 @@ fn color_cases() -> Vec<ColorCase> {
         ColorCase {
             label: "ndpi",
             alias: Some("ndpi-001"),
-            env_path: Some("STATUMEN_COLOR_NDPI_PATH"),
+            env_path: Some("WSI_RS_COLOR_NDPI_PATH"),
             relative_paths: &["downloads/openslide-testdata/Hamamatsu/CMU-1.ndpi"],
             absolute_paths: &[],
             threshold: ColorThreshold {
@@ -186,7 +186,7 @@ fn color_cases() -> Vec<ColorCase> {
         ColorCase {
             label: "dicom-jp2k",
             alias: Some("dicom-jp2k-001"),
-            env_path: Some("STATUMEN_COLOR_DICOM_PATH"),
+            env_path: Some("WSI_RS_COLOR_DICOM_PATH"),
             relative_paths: &[
                 "downloads/openslide-testdata-extracted/dicom/dicom-cmu1-jp2k/DCM_0.dcm",
                 "downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005/DCM_0.dcm",
@@ -201,7 +201,7 @@ fn color_cases() -> Vec<ColorCase> {
         ColorCase {
             label: "dicom-htj2k",
             alias: None,
-            env_path: Some("STATUMEN_COLOR_HTJ2K_PATH"),
+            env_path: Some("WSI_RS_COLOR_HTJ2K_PATH"),
             relative_paths: &[],
             absolute_paths: &[
                 "/private/tmp/wsi-dicom-htj2k-cmu1-full/level-0000-z0000-c0000-t0000.dcm",

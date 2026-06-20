@@ -154,7 +154,7 @@ impl ZviSlide {
             tables: None,
             expected_width: plane.width,
             expected_height: plane.height,
-            color_transform: signinum_jpeg::ColorTransform::Auto,
+            color_transform: j2k_jpeg::ColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,
         }])

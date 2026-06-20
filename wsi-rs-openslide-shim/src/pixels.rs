@@ -1,4 +1,4 @@
-use statumen::{CpuTile, WsiError};
+use wsi_rs::{CpuTile, WsiError};
 
 pub(crate) fn tile_to_premultiplied_argb(tile: CpuTile) -> Result<Vec<u32>, WsiError> {
     let rgba = tile.into_rgba()?;
@@ -22,7 +22,7 @@ pub(crate) fn tile_to_premultiplied_argb(tile: CpuTile) -> Result<Vec<u32>, WsiE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use statumen::{ColorSpace, CpuTile};
+    use wsi_rs::{ColorSpace, CpuTile};
 
     #[test]
     fn rgba_converts_to_premultiplied_argb_words() {

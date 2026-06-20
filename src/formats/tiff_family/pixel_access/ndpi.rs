@@ -124,14 +124,14 @@ impl TiffPixelReader {
         let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
             [req.level.get() as usize];
         let (level_w, level_h) = level.dimensions;
-        let options = signinum_decode_options(
+        let options = j2k_decode_options(
             self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, None)
                 .color_transform,
         );
-        let decoder = SigninumJpegDecoder::new_with_options(&data, options)
+        let decoder = J2kJpegDecoder::new_with_options(&data, options)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let (pixels, outcome) = decoder
-            .decode(SigninumPixelFormat::Rgb8)
+            .decode(J2kPixelFormat::Rgb8)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let decoded = cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
         let decoded = if decoded.width > level_w as u32 || decoded.height > level_h as u32 {

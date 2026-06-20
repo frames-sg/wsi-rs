@@ -1,9 +1,7 @@
 use super::*;
 
-pub(super) fn signinum_decode_options(
-    color_transform: SigninumColorTransform,
-) -> SigninumDecodeOptions {
-    SigninumDecodeOptions::default().with_color_transform(color_transform)
+pub(super) fn j2k_decode_options(color_transform: J2kColorTransform) -> J2kDecodeOptions {
+    J2kDecodeOptions::default().with_color_transform(color_transform)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,22 +16,22 @@ pub(super) fn tiff_jpeg_color_transform(
     photometric: u32,
     samples_per_pixel: u32,
     bitstream_hint: JpegBitstreamColorHint,
-) -> SigninumColorTransform {
+) -> J2kColorTransform {
     if samples_per_pixel == 3 {
         match bitstream_hint {
-            JpegBitstreamColorHint::Rgb => return SigninumColorTransform::ForceRgb,
+            JpegBitstreamColorHint::Rgb => return J2kColorTransform::ForceRgb,
             JpegBitstreamColorHint::RgbComponentIds012 if photometric != 6 => {
-                return SigninumColorTransform::ForceRgb;
+                return J2kColorTransform::ForceRgb;
             }
-            JpegBitstreamColorHint::YCbCr => return SigninumColorTransform::ForceYCbCr,
+            JpegBitstreamColorHint::YCbCr => return J2kColorTransform::ForceYCbCr,
             JpegBitstreamColorHint::RgbComponentIds012 | JpegBitstreamColorHint::Unknown => {}
         }
     }
 
     match (photometric, samples_per_pixel) {
-        (2, 3) => SigninumColorTransform::ForceRgb,
-        (6, 3) => SigninumColorTransform::ForceYCbCr,
-        _ => SigninumColorTransform::Auto,
+        (2, 3) => J2kColorTransform::ForceRgb,
+        (6, 3) => J2kColorTransform::ForceYCbCr,
+        _ => J2kColorTransform::Auto,
     }
 }
 
@@ -393,12 +391,12 @@ pub(super) fn next_jpeg_segment(
     Ok(None)
 }
 
-pub(super) fn signinum_downscale_for_factor(factor: u32) -> Option<SigninumDownscale> {
+pub(super) fn j2k_downscale_for_factor(factor: u32) -> Option<J2kDownscale> {
     match factor {
-        1 => Some(SigninumDownscale::None),
-        2 => Some(SigninumDownscale::Half),
-        4 => Some(SigninumDownscale::Quarter),
-        8 => Some(SigninumDownscale::Eighth),
+        1 => Some(J2kDownscale::None),
+        2 => Some(J2kDownscale::Half),
+        4 => Some(J2kDownscale::Quarter),
+        8 => Some(J2kDownscale::Eighth),
         _ => None,
     }
 }
@@ -411,7 +409,7 @@ pub(super) fn cpu_tile_from_rgb_pixels(
     let expected_len = width as usize * height as usize * 3;
     if pixels.len() != expected_len {
         return Err(WsiError::Jpeg(format!(
-            "signinum JPEG decode produced {} bytes, expected {} for {}x{} RGB",
+            "j2k JPEG decode produced {} bytes, expected {} for {}x{} RGB",
             pixels.len(),
             expected_len,
             width,

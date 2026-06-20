@@ -73,13 +73,13 @@ pub fn load_public() -> Result<CorpusManifest, String> {
     let mut manifest = parse_manifest(&text)?;
     apply_alias_filter(
         &mut manifest,
-        std::env::var("STATUMEN_PARITY_ALIASES").ok().as_deref(),
+        std::env::var("WSI_RS_PARITY_ALIASES").ok().as_deref(),
     );
     Ok(manifest)
 }
 
 pub fn load_private() -> Result<Option<CorpusManifest>, String> {
-    let path = if let Some(p) = std::env::var_os("STATUMEN_PARITY_PRIVATE_MANIFEST") {
+    let path = if let Some(p) = std::env::var_os("WSI_RS_PARITY_PRIVATE_MANIFEST") {
         PathBuf::from(p)
     } else {
         private_manifest_path()
@@ -93,7 +93,7 @@ pub fn load_private() -> Result<Option<CorpusManifest>, String> {
 }
 
 pub fn corpus_cache_dir() -> PathBuf {
-    if let Some(p) = std::env::var_os("STATUMEN_PARITY_CORPUS_CACHE") {
+    if let Some(p) = std::env::var_os("WSI_RS_PARITY_CORPUS_CACHE") {
         return PathBuf::from(p);
     }
     let home = std::env::var_os("HOME")

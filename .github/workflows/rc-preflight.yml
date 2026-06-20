@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: statumen
+          path: wsi-rs
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@nightly
       - uses: dtolnay/rust-toolchain@stable
@@ -32,4 +32,4 @@ jobs:
         with:
           tool: cargo-hack,cargo-public-api,cargo-semver-checks,cargo-fuzz,cargo-deny,cargo-machete
       - run: cargo xtask rc-preflight
-        working-directory: statumen
+        working-directory: wsi-rs

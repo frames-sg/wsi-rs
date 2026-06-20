@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
 use support::corpus::{load_public, resolve_entry_path, CorpusEntry};
 use support::oracles::{
-    is_reference_oracle_unsupported, read_probe, top_left_probe, Oracle, ReferenceOracle,
-    SigninumOracle,
+    is_reference_oracle_unsupported, read_probe, top_left_probe, J2kOracle, Oracle, ReferenceOracle,
 };
 
 #[test]
@@ -59,10 +58,10 @@ fn preflight() {
                 continue;
             }
         };
-        let signinum_report = match SigninumOracle.open(&path) {
+        let j2k_report = match J2kOracle.open(&path) {
             Ok(slide) => Some(slide),
             Err(err) => {
-                failures.push(format!("{}: signinum open failed: {err}", entry.alias));
+                failures.push(format!("{}: j2k open failed: {err}", entry.alias));
                 None
             }
         };
@@ -72,7 +71,7 @@ fn preflight() {
             Ok(os_slide) => {
                 if os_slide.level_count != baseline.level_count {
                     failures.push(format!(
-                        "{}: OpenSlide level count mismatch openslide={} statumen={}",
+                        "{}: OpenSlide level count mismatch openslide={} wsi_rs={}",
                         entry.alias, os_slide.level_count, baseline.level_count
                     ));
                 }
@@ -84,7 +83,7 @@ fn preflight() {
                 {
                     if !dimensions_within_one_pixel(*ours, *theirs) {
                         failures.push(format!(
-                            "{}: OpenSlide dimension mismatch at level {level}: statumen={ours:?} openslide={theirs:?}",
+                            "{}: OpenSlide dimension mismatch at level {level}: wsi_rs={ours:?} openslide={theirs:?}",
                             entry.alias
                         ));
                     }
@@ -132,9 +131,9 @@ fn preflight() {
             };
 
             #[cfg(feature = "parity-openslide")]
-            let mut signinum_buf = None;
-            if let Some(ref signinum) = signinum_report {
-                match read_probe(signinum, probe) {
+            let mut j2k_buf = None;
+            if let Some(ref j2k) = j2k_report {
+                match read_probe(j2k, probe) {
                     Ok(sc_buf) => {
                         if let Some(ref baseline_buf) = baseline_buf {
                             let tolerance = tolerance_for_entry(entry);
@@ -155,35 +154,32 @@ fn preflight() {
                             if required {
                                 record_comparison_failure(
                                     entry,
-                                    "signinum-vs-reference",
+                                    "j2k-vs-reference",
                                     level,
-                                    &format!(
-                                        "{} level={level}: signinum vs reference",
-                                        entry.alias
-                                    ),
+                                    &format!("{} level={level}: j2k vs reference", entry.alias),
                                     &report,
                                     &mut failures,
                                 );
                             }
                         } else {
                             eprintln!(
-                                "[preflight] {} level={level}: reference oracle unsupported; signinum read succeeded without sc-vs-ref comparison",
+                                "[preflight] {} level={level}: reference oracle unsupported; j2k read succeeded without sc-vs-ref comparison",
                                 entry.alias
                             );
                         }
                         #[cfg(feature = "parity-openslide")]
                         {
-                            signinum_buf = Some(sc_buf.clone());
+                            j2k_buf = Some(sc_buf.clone());
                         }
                     }
                     Err(err) => {
                         eprintln!(
-                            "[preflight] {} level={level} signinum report read failed: {err}",
+                            "[preflight] {} level={level} j2k report read failed: {err}",
                             entry.alias
                         );
                         if required {
                             failures.push(format!(
-                                "{} level={level}: required signinum read failed: {err}",
+                                "{} level={level}: required j2k read failed: {err}",
                                 entry.alias
                             ));
                         }
@@ -219,22 +215,22 @@ fn preflight() {
                             );
                         }
                     }
-                    if let Some(ref sc_buf) = signinum_buf {
+                    if let Some(ref sc_buf) = j2k_buf {
                         let report = compare_rgba(
                             &sc_buf.pixels_rgba,
                             &os_buf.pixels_rgba,
                             Tolerance::TOLERANT,
                         );
                         eprintln!(
-                            "[preflight] {} level={level} signinum-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
+                            "[preflight] {} level={level} j2k-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
                             entry.alias, report.max_abs, report.mean_abs, report.psnr_db
                         );
                         if required {
                             record_comparison_failure(
                                 entry,
-                                "signinum-vs-openslide",
+                                "j2k-vs-openslide",
                                 level,
-                                &format!("{} level={level}: signinum vs OpenSlide", entry.alias),
+                                &format!("{} level={level}: j2k vs OpenSlide", entry.alias),
                                 &report,
                                 &mut failures,
                             );

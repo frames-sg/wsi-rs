@@ -1,18 +1,18 @@
 #![cfg(all(target_os = "macos", feature = "metal"))]
 
-use signinum_core::{BackendKind, BackendRequest, DeviceSurface, ImageDecodeDevice, PixelFormat};
+use j2k_core::{BackendKind, BackendRequest, DeviceSurface, ImageDecodeDevice, PixelFormat};
 
 const JPEG_FIXTURE: &[u8] = include_bytes!("fixtures/jpeg/baseline_420_16x16.jpg");
 
 const _: () = {
     fn assert_send<T: Send>() {}
-    let _ = assert_send::<signinum_jpeg_metal::Surface>;
-    let _ = assert_send::<signinum_j2k_metal::Surface>;
+    let _ = assert_send::<j2k_jpeg_metal::Surface>;
+    let _ = assert_send::<j2k_metal::Surface>;
 };
 
 #[test]
 fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
-    let mut jpeg_decoder = signinum_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg decoder");
+    let mut jpeg_decoder = j2k_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg decoder");
     let jpeg_surface = jpeg_decoder
         .decode_to_device(PixelFormat::Rgb8, BackendRequest::Metal)
         .expect("jpeg metal surface");
@@ -23,7 +23,7 @@ fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
     assert!(jpeg_buffer.length() as usize >= jpeg_surface.byte_len());
 
     let mut jpeg_cpu_decoder =
-        signinum_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg cpu decoder");
+        j2k_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg cpu decoder");
     let jpeg_cpu_surface = jpeg_cpu_decoder
         .decode_to_device(PixelFormat::Rgb8, BackendRequest::Cpu)
         .expect("jpeg cpu surface");
@@ -32,7 +32,7 @@ fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
     assert!(jpeg_cpu_surface.metal_buffer().is_none());
 
     let j2k_bytes = fixture_gray8_j2k();
-    let mut j2k_decoder = signinum_j2k_metal::J2kDecoder::new(&j2k_bytes).expect("j2k decoder");
+    let mut j2k_decoder = j2k_metal::J2kDecoder::new(&j2k_bytes).expect("j2k decoder");
     let j2k_surface = j2k_decoder
         .decode_to_device(PixelFormat::Gray8, BackendRequest::Metal)
         .expect("j2k metal surface");
@@ -42,8 +42,7 @@ fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
     assert_eq!(j2k_offset, 0);
     assert!(j2k_buffer.length() as usize >= j2k_surface.byte_len());
 
-    let mut j2k_cpu_decoder =
-        signinum_j2k_metal::J2kDecoder::new(&j2k_bytes).expect("j2k cpu decoder");
+    let mut j2k_cpu_decoder = j2k_metal::J2kDecoder::new(&j2k_bytes).expect("j2k cpu decoder");
     let j2k_cpu_surface = j2k_cpu_decoder
         .decode_to_device(PixelFormat::Gray8, BackendRequest::Cpu)
         .expect("j2k cpu surface");
@@ -52,7 +51,7 @@ fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
     assert!(j2k_cpu_surface.metal_buffer().is_none());
 }
 
-fn describe_jpeg_surface(label: &str, surface: &signinum_jpeg_metal::Surface) {
+fn describe_jpeg_surface(label: &str, surface: &j2k_jpeg_metal::Surface) {
     let buffer = surface
         .metal_buffer()
         .map(|(buffer, byte_offset)| (buffer.length(), byte_offset));
@@ -65,7 +64,7 @@ fn describe_jpeg_surface(label: &str, surface: &signinum_jpeg_metal::Surface) {
     );
 }
 
-fn describe_j2k_surface(label: &str, surface: &signinum_j2k_metal::Surface) {
+fn describe_j2k_surface(label: &str, surface: &j2k_metal::Surface) {
     let buffer = surface
         .metal_buffer()
         .map(|(buffer, byte_offset)| (buffer.length(), byte_offset));
@@ -80,11 +79,10 @@ fn describe_j2k_surface(label: &str, surface: &signinum_j2k_metal::Surface) {
 
 fn fixture_gray8_j2k() -> Vec<u8> {
     let pixels: Vec<u8> = (0..16).collect();
-    let options = signinum_j2k_native::EncodeOptions {
+    let options = j2k_native::EncodeOptions {
         reversible: true,
         num_decomposition_levels: 1,
-        ..signinum_j2k_native::EncodeOptions::default()
+        ..j2k_native::EncodeOptions::default()
     };
-    signinum_j2k_native::encode(&pixels, 4, 4, 1, 8, false, &options)
-        .expect("encode gray8 j2k fixture")
+    j2k_native::encode(&pixels, 4, 4, 1, 8, false, &options).expect("encode gray8 j2k fixture")
 }

@@ -11,17 +11,17 @@ fn write_restart_jpeg(path: &Path, width: u32, height: u32) -> Vec<u8> {
             pixels[off + 2] = x.wrapping_add(y) as u8;
         }
     }
-    let encoded = signinum_jpeg::encode_jpeg_baseline(
-        signinum_jpeg::JpegSamples::Rgb8 {
+    let encoded = j2k_jpeg::encode_jpeg_baseline(
+        j2k_jpeg::JpegSamples::Rgb8 {
             data: &pixels,
             width,
             height,
         },
-        signinum_jpeg::JpegEncodeOptions {
+        j2k_jpeg::JpegEncodeOptions {
             quality: 90,
-            subsampling: signinum_jpeg::JpegSubsampling::Ybr444,
+            subsampling: j2k_jpeg::JpegSubsampling::Ybr444,
             restart_interval: Some(8),
-            backend: signinum_jpeg::JpegBackend::Cpu,
+            backend: j2k_jpeg::JpegBackend::Cpu,
         },
     )
     .unwrap();
@@ -55,21 +55,21 @@ fn vms_jpeg_decodes_restart_segment_tile() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tile.jpg");
     let encoded = write_restart_jpeg(&path, 128, 16);
-    let reference = SigninumJpegDecoder::new(&encoded)
+    let reference = J2kJpegDecoder::new(&encoded)
         .unwrap()
         .decode_region_scaled(
-            SigninumPixelFormat::Rgb8,
-            SigninumRect {
+            J2kPixelFormat::Rgb8,
+            J2kRect {
                 x: 64,
                 y: 8,
                 w: 64,
                 h: 8,
             },
-            SigninumDownscale::None,
+            J2kDownscale::None,
         )
         .unwrap()
         .0;
-    let restart_index = SigninumJpegDecoder::new(&encoded)
+    let restart_index = J2kJpegDecoder::new(&encoded)
         .unwrap()
         .restart_index()
         .unwrap()

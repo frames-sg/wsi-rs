@@ -26,7 +26,7 @@ impl SlideReader for DicomReader {
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = output.backend().to_signinum();
+        let backend = output.backend().to_j2k();
 
         #[cfg(any(feature = "metal", feature = "cuda"))]
         if output.prefers_device() {
@@ -553,7 +553,7 @@ impl DicomReader {
                 tables: None,
                 expected_width: meta.image.tile_width,
                 expected_height: meta.image.tile_height,
-                color_transform: signinum_jpeg::ColorTransform::Auto,
+                color_transform: j2k_jpeg::ColorTransform::Auto,
                 force_dimensions: false,
                 requested_size: None,
             })
@@ -721,7 +721,7 @@ impl DicomReader {
                 tables: None,
                 expected_width: meta.image.tile_width,
                 expected_height: meta.image.tile_height,
-                color_transform: signinum_jpeg::ColorTransform::Auto,
+                color_transform: j2k_jpeg::ColorTransform::Auto,
                 force_dimensions: false,
                 requested_size: None,
             })

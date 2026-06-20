@@ -1,9 +1,9 @@
-use signinum_jpeg::adapter::{
+use j2k_jpeg::adapter::{
     assemble_jpeg_baseline_frame, baseline_encode_tables, JpegBaselineHuffmanTable,
     JpegBaselineSampling, JPEG_BASELINE_ZIGZAG,
 };
-use signinum_jpeg::transcode::{JpegDctCodingMode, JpegDctImage};
-use signinum_jpeg::{JpegBackend, JpegEncodeOptions, JpegSubsampling};
+use j2k_jpeg::transcode::{JpegDctCodingMode, JpegDctImage};
+use j2k_jpeg::{JpegBackend, JpegEncodeOptions, JpegSubsampling};
 
 use crate::error::WsiError;
 

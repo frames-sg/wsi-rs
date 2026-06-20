@@ -65,13 +65,13 @@ impl TiffPixelReader {
             >= bytes
     }
 
-    pub(super) fn try_decode_synthetic_level_with_signinum(
+    pub(super) fn try_decode_synthetic_level_with_j2k(
         &self,
         req: &TileRequest,
         base_level: u32,
         factor: u32,
     ) -> Result<Option<CpuTile>, WsiError> {
-        let Some(scale) = signinum_downscale_for_factor(factor) else {
+        let Some(scale) = j2k_downscale_for_factor(factor) else {
             return Ok(None);
         };
         let target = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
@@ -98,18 +98,18 @@ impl TiffPixelReader {
             .container
             .pread(*strip_offset, *strip_byte_count)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
-        let options = signinum_decode_options(
+        let options = j2k_decode_options(
             self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &jpeg, None)
                 .color_transform,
         );
-        let decoder = SigninumJpegDecoder::new_with_options(&jpeg, options)
+        let decoder = J2kJpegDecoder::new_with_options(&jpeg, options)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let source_dims = decoder.info().dimensions;
         let scale_denom = scale.denominator();
         let scaled_width = source_dims.0.div_ceil(scale_denom);
         let scaled_height = source_dims.1.div_ceil(scale_denom);
         let (pixels, _outcome) = decoder
-            .decode_scaled(SigninumPixelFormat::Rgb8, scale)
+            .decode_scaled(J2kPixelFormat::Rgb8, scale)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let scaled = cpu_tile_from_rgb_pixels(scaled_width, scaled_height, pixels)?;
 
@@ -151,7 +151,7 @@ impl TiffPixelReader {
                 continue;
             }
             if let Ok(Some(image)) =
-                self.try_decode_synthetic_level_with_signinum(&req, base_level, factor)
+                self.try_decode_synthetic_level_with_j2k(&req, base_level, factor)
             {
                 self.put_synthetic_level_cache(key, Arc::new(image));
             }
@@ -173,9 +173,7 @@ impl TiffPixelReader {
             });
         }
 
-        if let Some(image) =
-            self.try_decode_synthetic_level_with_signinum(req, base_level, factor)?
-        {
+        if let Some(image) = self.try_decode_synthetic_level_with_j2k(req, base_level, factor)? {
             return Ok(Arc::new(image));
         }
 
@@ -316,7 +314,7 @@ impl TiffPixelReader {
             row: 0,
         };
         let scaled = if let Some(image) =
-            self.try_decode_synthetic_level_with_signinum(&tile_req, base_level, factor)?
+            self.try_decode_synthetic_level_with_j2k(&tile_req, base_level, factor)?
         {
             image
         } else {
@@ -410,7 +408,7 @@ impl TiffPixelReader {
                 row: 0,
             };
             if let Some(scaled) =
-                self.try_decode_synthetic_level_with_signinum(&tile_req, base_level, factor)?
+                self.try_decode_synthetic_level_with_j2k(&tile_req, base_level, factor)?
             {
                 let crop_x0 = u32::try_from(clipped_x0).map_err(|_| {
                     WsiError::DisplayConversion(

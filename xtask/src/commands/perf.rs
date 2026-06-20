@@ -11,10 +11,10 @@ const REGRESSION_RATIO: f64 = 1.05;
 const LATENCY_ABSOLUTE_REGRESSION_FLOOR_US: u64 = 500;
 const P95_MIN_SAMPLE_COUNT: u64 = 20;
 const P99_MIN_SAMPLE_COUNT: u64 = 100;
-const RESULT_DIR_ENV: &str = "STATUMEN_PERF_RESULTS_DIR";
-const SLIDES_ENV: &str = "STATUMEN_PERF_SLIDES";
-const REPEATS_ENV: &str = "STATUMEN_PERF_REPEATS";
-const PROFILE_DIR_ENV: &str = "STATUMEN_PERF_PROFILE_DIR";
+const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
+const SLIDES_ENV: &str = "WSI_RS_PERF_SLIDES";
+const REPEATS_ENV: &str = "WSI_RS_PERF_REPEATS";
+const PROFILE_DIR_ENV: &str = "WSI_RS_PERF_PROFILE_DIR";
 const PROCESS_METRICS_WORKLOAD: &str = "__process__";
 const WORKLOAD_METRICS: [&str; 4] = ["p50_us", "p95_us", "p99_us", "mean_us"];
 const PEAK_RSS_METRIC: &str = "peak_rss_bytes";
@@ -40,18 +40,18 @@ const MACOS_RSS_METHOD: &str = "macos:/usr/bin/time -l";
 const TRACKED_ENV_VARS: [&str; 15] = [
     "RUSTFLAGS",
     "RAYON_NUM_THREADS",
-    "STATUMEN_PERF_RESULTS_DIR",
-    "STATUMEN_PERF_SLIDES",
-    "STATUMEN_PERF_REPEATS",
-    "STATUMEN_TILE_CACHE_BYTES",
-    "STATUMEN_DISPLAY_TILE_CACHE_BYTES",
-    "STATUMEN_FULL_DECODE_CACHE_BYTES",
-    "STATUMEN_NDPI_STRIP_CACHE_BYTES",
-    "STATUMEN_SYNTHETIC_LEVEL_CACHE_BYTES",
-    "STATUMEN_JPEG_DEVICE_DECODE",
-    "STATUMEN_JP2K_DEVICE_DECODE",
-    "STATUMEN_JP2K_DEVICE_BATCH",
-    "STATUMEN_JP2K_CPU_THREADS",
+    "WSI_RS_PERF_RESULTS_DIR",
+    "WSI_RS_PERF_SLIDES",
+    "WSI_RS_PERF_REPEATS",
+    "WSI_RS_TILE_CACHE_BYTES",
+    "WSI_RS_DISPLAY_TILE_CACHE_BYTES",
+    "WSI_RS_FULL_DECODE_CACHE_BYTES",
+    "WSI_RS_NDPI_STRIP_CACHE_BYTES",
+    "WSI_RS_SYNTHETIC_LEVEL_CACHE_BYTES",
+    "WSI_RS_JPEG_DEVICE_DECODE",
+    "WSI_RS_JP2K_DEVICE_DECODE",
+    "WSI_RS_JP2K_DEVICE_BATCH",
+    "WSI_RS_JP2K_CPU_THREADS",
     "WSI_BENCH_ONLY",
 ];
 
@@ -119,39 +119,39 @@ struct ProfileRecipes {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BenchLibrary {
-    Statumen,
+    WsiRs,
     OpenSlide,
 }
 
 impl BenchLibrary {
     fn name(self) -> &'static str {
         match self {
-            Self::Statumen => "statumen",
+            Self::WsiRs => "wsi_rs",
             Self::OpenSlide => "openslide",
         }
     }
 
     fn binary(self) -> &'static str {
         match self {
-            Self::Statumen => "wsi_bench",
+            Self::WsiRs => "wsi_bench",
             Self::OpenSlide => "openslide_bench",
         }
     }
 
     fn features(self) -> &'static [&'static str] {
         match self {
-            Self::Statumen => &["bench"],
+            Self::WsiRs => &["bench"],
             Self::OpenSlide => &["bench", "openslide-bench"],
         }
     }
 
     fn allow_default_fixture(self) -> bool {
-        matches!(self, Self::Statumen)
+        matches!(self, Self::WsiRs)
     }
 }
 
 pub(super) fn capture(args: Vec<String>) -> Result<(), String> {
-    capture_with_library(args, BenchLibrary::Statumen)
+    capture_with_library(args, BenchLibrary::WsiRs)
 }
 
 pub(super) fn capture_openslide(args: Vec<String>) -> Result<(), String> {
@@ -201,7 +201,7 @@ fn capture_with_library(args: Vec<String>, library: BenchLibrary) -> Result<(), 
 
 fn capture_task_name(library: BenchLibrary) -> &'static str {
     match library {
-        BenchLibrary::Statumen => "perf-capture",
+        BenchLibrary::WsiRs => "perf-capture",
         BenchLibrary::OpenSlide => "perf-capture-openslide",
     }
 }
@@ -362,7 +362,7 @@ fn capture_summary(
     let workloads = workload_names(&runs);
     Ok(json!({
         "schema_version": PERF_CAPTURE_SCHEMA_VERSION,
-        "kind": "statumen-perf-capture",
+        "kind": "wsi_rs-perf-capture",
         "label": label,
         "repeat_count": repeats,
         "slides": slides.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
@@ -1011,7 +1011,7 @@ mod tests {
 
         let summary = capture_summary(
             "baseline-public",
-            BenchLibrary::Statumen,
+            BenchLibrary::WsiRs,
             3,
             &[PathBuf::from("tests/fixtures/jp2k/rgb_nomct.j2k")],
             vec![run],
@@ -1019,8 +1019,8 @@ mod tests {
         .expect("capture summary");
 
         assert_eq!(summary["schema_version"], PERF_CAPTURE_SCHEMA_VERSION);
-        assert_eq!(summary["kind"], "statumen-perf-capture");
-        assert_eq!(summary["metadata"]["benchmark"]["library"], "statumen");
+        assert_eq!(summary["kind"], "wsi_rs-perf-capture");
+        assert_eq!(summary["metadata"]["benchmark"]["library"], "wsi_rs");
         assert_eq!(summary["metadata"]["benchmark"]["binary"], "wsi_bench");
         assert_eq!(summary["metadata"]["build"]["features"][0], "bench");
         assert_eq!(

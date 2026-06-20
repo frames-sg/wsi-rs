@@ -8,11 +8,11 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 usage: scripts/parity-corpus-fetch.sh [alias ...]
 
 Downloads public parity-corpus slides from tests/fixtures/parity_corpus.public.toml.
-Files are written to $STATUMEN_PARITY_CORPUS_CACHE, or to
+Files are written to $WSI_RS_PARITY_CORPUS_CACHE, or to
 ~/.cache/slideviewer/parity-corpus when the variable is unset.
 
 Pass one or more aliases such as svs-001 or dicom-jp2k-001 to fetch only those
-slides. Set STATUMEN_PARITY_CORPUS_FORCE=1 to re-extract zip archives.
+slides. Set WSI_RS_PARITY_CORPUS_FORCE=1 to re-extract zip archives.
 USAGE
   exit 0
 fi
@@ -56,12 +56,12 @@ def main() -> int:
 
     cache_dir = Path(
         os.environ.get(
-            "STATUMEN_PARITY_CORPUS_CACHE",
+            "WSI_RS_PARITY_CORPUS_CACHE",
             Path.home() / ".cache" / "slideviewer" / "parity-corpus",
         )
     ).expanduser()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    force_extract = truthy(os.environ.get("STATUMEN_PARITY_CORPUS_FORCE"))
+    force_extract = truthy(os.environ.get("WSI_RS_PARITY_CORPUS_FORCE"))
 
     slides = manifest.get("slide", [])
     selected = [

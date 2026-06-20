@@ -15,10 +15,10 @@ use std::path::PathBuf;
 use std::ptr;
 
 use handle::{empty_names, OpenSlideHandle};
-use statumen::{LevelIdx, RegionRequest, SceneId, SeriesId};
+use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId};
 
 const VERSION: &str = concat!(
-    "OpenSlide-statumen 4.0.0+statumen-",
+    "OpenSlide-wsi-rs 4.0.0+wsi-rs-",
     env!("CARGO_PKG_VERSION"),
     "\0"
 );
@@ -106,7 +106,7 @@ unsafe fn clear_u32(dest: *mut u32, len: usize) {
     }
 }
 
-fn first_series(handle: &OpenSlideHandle) -> Option<&statumen::Series> {
+fn first_series(handle: &OpenSlideHandle) -> Option<&wsi_rs::Series> {
     handle
         .slide()?
         .dataset()

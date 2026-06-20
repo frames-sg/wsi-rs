@@ -33,7 +33,7 @@ fn baseline_cuda_jpeg_job() -> JpegDecodeJob<'static> {
         tables: None,
         expected_width: 16,
         expected_height: 16,
-        color_transform: SigninumColorTransform::Auto,
+        color_transform: J2kColorTransform::Auto,
         force_dimensions: false,
         requested_size: None,
     }
@@ -45,7 +45,7 @@ fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
     let sessions = crate::output::cuda::CudaBackendSessions::new();
     let decoded = decode_one_jpeg_pixels(
         &baseline_cuda_jpeg_job(),
-        SigninumBackendRequest::Cuda,
+        J2kBackendRequest::Cuda,
         true,
         None,
         Some(&sessions),
@@ -55,7 +55,7 @@ fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
         Ok(decoded) => decoded,
         Err(WsiError::Unsupported { reason })
             if cuda_unavailable_reason(&reason)
-                && std::env::var_os("SIGNINUM_REQUIRE_CUDA_RUNTIME").is_none() =>
+                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
         {
             eprintln!("skipping CUDA JPEG decode test: {reason}");
             return;
@@ -71,7 +71,7 @@ fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
     let surface = tile
         .storage
         .jpeg_surface()
-        .expect("CUDA JPEG storage must expose Signinum JPEG surface");
+        .expect("CUDA JPEG storage must expose J2k JPEG surface");
     let cuda = surface.cuda_surface().expect("resident CUDA JPEG surface");
     let stats = cuda.stats();
     assert!(
@@ -90,7 +90,7 @@ fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
 fn require_cuda_jpeg_without_session_returns_unsupported() {
     let err = decode_one_jpeg_pixels(
         &baseline_cuda_jpeg_job(),
-        SigninumBackendRequest::Cuda,
+        J2kBackendRequest::Cuda,
         true,
         None,
         None,
@@ -115,19 +115,13 @@ fn require_cuda_progressive_jpeg_returns_unsupported_without_cpu_fallback() {
         tables: None,
         expected_width: 8,
         expected_height: 8,
-        color_transform: SigninumColorTransform::Auto,
+        color_transform: J2kColorTransform::Auto,
         force_dimensions: false,
         requested_size: None,
     };
 
-    let err = decode_one_jpeg_pixels(
-        &job,
-        SigninumBackendRequest::Cuda,
-        true,
-        None,
-        Some(&sessions),
-    )
-    .unwrap_err();
+    let err = decode_one_jpeg_pixels(&job, J2kBackendRequest::Cuda, true, None, Some(&sessions))
+        .unwrap_err();
 
     let WsiError::Unsupported { reason } = err else {
         panic!("strict CUDA progressive JPEG must be Unsupported, got {err:?}");
@@ -254,7 +248,7 @@ fn progressive_scaled_decode_falls_back_to_full_decode_resize() {
         8,
         Some(4),
         Some(4),
-        SigninumColorTransform::Auto,
+        J2kColorTransform::Auto,
     )
     .unwrap();
 
@@ -267,9 +261,9 @@ fn progressive_scaled_decode_falls_back_to_full_decode_resize() {
 #[test]
 fn progressive_jpeg_device_route_uses_cpu_unless_device_is_required() {
     let jpeg_data = progressive_8x8_jpeg();
-    let view = SigninumJpegView::parse_with_options(
+    let view = J2kJpegView::parse_with_options(
         &jpeg_data,
-        SigninumDecodeOptions::default().with_color_transform(SigninumColorTransform::Auto),
+        J2kDecodeOptions::default().with_color_transform(J2kColorTransform::Auto),
     )
     .unwrap();
 
@@ -304,19 +298,14 @@ fn private_metal_jpeg_decode_returns_private_device_tile() {
         tables: None,
         expected_width: 16,
         expected_height: 16,
-        color_transform: SigninumColorTransform::Auto,
+        color_transform: J2kColorTransform::Auto,
         force_dimensions: false,
         requested_size: None,
     };
 
-    let pixels = decode_one_jpeg_pixels(
-        &job,
-        SigninumBackendRequest::Metal,
-        true,
-        Some(&sessions),
-        None,
-    )
-    .expect("private JPEG Metal tile");
+    let pixels =
+        decode_one_jpeg_pixels(&job, J2kBackendRequest::Metal, true, Some(&sessions), None)
+            .expect("private JPEG Metal tile");
     let TilePixels::Device(DeviceTile::Metal(tile)) = pixels else {
         panic!("expected private Metal tile");
     };
@@ -349,7 +338,7 @@ fn decode_batch_jpeg_pixels_uses_session_backed_device_batch() {
             tables: None,
             expected_width: 16,
             expected_height: 16,
-            color_transform: SigninumColorTransform::Auto,
+            color_transform: J2kColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,
         },
@@ -358,20 +347,15 @@ fn decode_batch_jpeg_pixels_uses_session_backed_device_batch() {
             tables: None,
             expected_width: 16,
             expected_height: 16,
-            color_transform: SigninumColorTransform::Auto,
+            color_transform: J2kColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,
         },
     ];
 
     reset_jpeg_device_batch_attempts_for_test();
-    let pixels = decode_batch_jpeg_pixels(
-        &jobs,
-        SigninumBackendRequest::Metal,
-        true,
-        Some(&sessions),
-        None,
-    );
+    let pixels =
+        decode_batch_jpeg_pixels(&jobs, J2kBackendRequest::Metal, true, Some(&sessions), None);
 
     assert_eq!(jpeg_device_batch_attempts_for_test(), 1);
     assert_eq!(pixels.len(), 2);
@@ -396,10 +380,10 @@ fn decode_jpeg_rgb_scaled_returns_scaled_dimensions() {
         requested_width: 4,
         requested_height: 4,
         force_dimensions: false,
-        color_transform: SigninumColorTransform::Auto,
+        color_transform: J2kColorTransform::Auto,
     })
     .unwrap()
-    .expect("power-of-two downscale should use signinum IDCT scale");
+    .expect("power-of-two downscale should use j2k IDCT scale");
 
     assert_eq!(decoded.width, 4);
     assert_eq!(decoded.height, 4);
@@ -407,7 +391,7 @@ fn decode_jpeg_rgb_scaled_returns_scaled_dimensions() {
 }
 
 #[test]
-fn signinum_batch_fast_path_matches_single_tile_for_forced_color_transform() {
+fn j2k_batch_fast_path_matches_single_tile_for_forced_color_transform() {
     let mut rgb = image::RgbImage::new(16, 16);
     for (idx, pixel) in rgb.pixels_mut().enumerate() {
         *pixel = image::Rgb([idx as u8, 100, 200]);
@@ -419,14 +403,14 @@ fn signinum_batch_fast_path_matches_single_tile_for_forced_color_transform() {
             tables: None,
             expected_width: 16,
             expected_height: 16,
-            color_transform: SigninumColorTransform::ForceRgb,
+            color_transform: J2kColorTransform::ForceRgb,
             force_dimensions: false,
             requested_size: None,
         })
         .collect::<Vec<_>>();
 
-    let fast = try_decode_batch_jpeg_with_signinum(&jobs)
-        .expect("forced color transform should use signinum batch fast path");
+    let fast = try_decode_batch_jpeg_with_j2k(&jobs)
+        .expect("forced color transform should use j2k batch fast path");
     let sequential = jobs.iter().map(decode_one_jpeg_job).collect::<Vec<_>>();
 
     assert_eq!(fast.len(), sequential.len());
@@ -440,7 +424,7 @@ fn signinum_batch_fast_path_matches_single_tile_for_forced_color_transform() {
 }
 
 #[test]
-fn signinum_batch_fast_path_matches_single_tile_for_scaled_decode() {
+fn j2k_batch_fast_path_matches_single_tile_for_scaled_decode() {
     let mut rgb = image::RgbImage::new(16, 16);
     for (idx, pixel) in rgb.pixels_mut().enumerate() {
         *pixel = image::Rgb([idx as u8, 100, 200]);
@@ -452,14 +436,14 @@ fn signinum_batch_fast_path_matches_single_tile_for_scaled_decode() {
             tables: None,
             expected_width: 16,
             expected_height: 16,
-            color_transform: SigninumColorTransform::ForceRgb,
+            color_transform: J2kColorTransform::ForceRgb,
             force_dimensions: false,
             requested_size: Some((4, 4)),
         })
         .collect::<Vec<_>>();
 
-    let fast = try_decode_batch_jpeg_with_signinum(&jobs)
-        .expect("scaled decode should use signinum batch fast path");
+    let fast = try_decode_batch_jpeg_with_j2k(&jobs)
+        .expect("scaled decode should use j2k batch fast path");
     let sequential = jobs.iter().map(decode_one_jpeg_job).collect::<Vec<_>>();
 
     assert_eq!(fast.len(), sequential.len());

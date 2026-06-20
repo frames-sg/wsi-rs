@@ -44,20 +44,20 @@ fn path_matches_package_exclude(path: &str, exclude: &str) -> bool {
 }
 
 #[test]
-fn package_metadata_uses_statumen_identity() {
+fn package_metadata_uses_wsi_rs_identity() {
     let manifest = fs::read_to_string(crate_root().join("Cargo.toml")).expect("read manifest");
 
     assert!(
-        manifest.contains("name = \"statumen\""),
-        "crate package name must be statumen"
+        manifest.contains("name = \"wsi-rs\""),
+        "crate package name must be wsi-rs"
     );
     assert!(
-        manifest.contains("description = \"Statumen whole-slide image reader\""),
-        "crate description must use the Statumen name"
+        manifest.contains("description = \"wsi-rs whole-slide image reader\""),
+        "crate description must use the wsi-rs name"
     );
     assert!(
-        manifest.contains("repository = \"https://github.com/frames-sg/statumen\""),
-        "crate repository metadata must point at the renamed Statumen repo"
+        manifest.contains("repository = \"https://github.com/frames-sg/wsi-rs\""),
+        "crate repository metadata must point at the renamed wsi-rs repo"
     );
 }
 
@@ -132,7 +132,7 @@ fn crate_docs_expose_compile_checked_quickstart() {
     let lib = fs::read_to_string(crate_root().join("src/lib.rs")).expect("read lib");
 
     for required in [
-        "//! # statumen",
+        "//! # wsi-rs",
         "//! ## Quick Start",
         "//! ## Tile Reads",
         "//! ```rust,no_run",
@@ -156,7 +156,7 @@ fn crate_docs_expose_compile_checked_quickstart() {
 fn repository_hygiene_files_match_public_release_policy() {
     assert!(
         crate_root().join("rust-toolchain.toml").is_file(),
-        "statumen should pin the contributor/MSRV toolchain like the sibling repos"
+        "wsi_rs should pin the contributor/MSRV toolchain like the sibling repos"
     );
 
     let gitignore = fs::read_to_string(crate_root().join(".gitignore")).expect("read gitignore");
@@ -182,19 +182,19 @@ fn repository_hygiene_files_match_public_release_policy() {
 }
 
 #[test]
-fn public_docs_use_statumen_entrypoint() {
+fn public_docs_use_wsi_rs_entrypoint() {
     let readme = fs::read_to_string(crate_root().join("README.md")).expect("read README");
 
     assert!(
-        readme.contains("# statumen"),
-        "README must title the crate statumen"
+        readme.contains("# wsi-rs"),
+        "README must title the crate wsi-rs"
     );
     assert!(
-        readme.contains("use statumen::"),
-        "README quick start must import statumen"
+        readme.contains("use wsi_rs::"),
+        "README quick start must import wsi_rs"
     );
     for required in [
-        "cargo add statumen",
+        "cargo add wsi-rs",
         "read_region_rgba",
         "SlideOpenOptions",
         "OpenSlide Compatibility Shim",
@@ -216,21 +216,21 @@ fn public_docs_use_statumen_entrypoint() {
         );
     }
     for stale in [
-        "statumen = \"0.1\"",
+        "wsi_rs = \"0.1\"",
         "version = \"0.2\"",
         "TileOutputPreference::metal()",
         "Phase 7a",
         "sv-slide",
         "`.jp2`, `.jpc`",
         "TBD: replace",
-        "sibling signinum",
+        "sibling j2k",
         "let region = RegionRequest {",
         "let req = TileRequest {",
         "adapter crates they name",
-        "signinum-jpeg-metal",
-        "signinum-j2k-metal",
-        "signinum-jpeg-metal = \"0.4\"",
-        "signinum-j2k-metal = \"0.4\"",
+        "j2k-jpeg-metal",
+        "j2k-metal",
+        "j2k-jpeg-metal = \"0.4\"",
+        "j2k-metal = \"0.4\"",
         "MetalBackendSession::new",
     ] {
         assert!(
@@ -250,8 +250,8 @@ fn public_docs_use_statumen_entrypoint() {
         "pixel_access.rs",
         "TileRequest { scene",
         "RegionRequest { scene",
-        "via signinum_j2k_metal",
-        "MetalDeviceTile + signinum Metal sessions",
+        "via j2k_metal",
+        "MetalDeviceTile + j2k Metal sessions",
     ] {
         assert!(
             !readme.contains(stale),
@@ -344,7 +344,7 @@ fn published_external_targets_use_request_constructors() {
         "examples/extract_jpeg_tiles.rs",
         "examples/fw01_trace_pattern.rs",
         "src/bin/svcache.rs",
-        "statumen-openslide-shim/src/lib.rs",
+        "wsi-rs-openslide-shim/src/lib.rs",
     ] {
         let text = fs::read_to_string(crate_root().join(relative))
             .unwrap_or_else(|err| panic!("read {relative}: {err}"));
@@ -645,10 +645,10 @@ fn public_parity_expected_failures_are_reviewable_release_exceptions() {
 
 #[test]
 fn openslide_shim_has_public_usage_docs() {
-    let readme = fs::read_to_string(crate_root().join("statumen-openslide-shim/README.md"))
+    let readme = fs::read_to_string(crate_root().join("wsi-rs-openslide-shim/README.md"))
         .expect("read OpenSlide shim README");
     for required in [
-        "cargo build -p statumen-openslide-shim --release",
+        "cargo build -p wsi-rs-openslide-shim --release",
         "libopenslide.1.dylib",
         "libopenslide.so.1",
         "private prefix",
@@ -663,7 +663,7 @@ fn openslide_shim_has_public_usage_docs() {
 }
 
 #[test]
-fn environment_knobs_use_statumen_prefix() {
+fn environment_knobs_use_wsi_rs_prefix() {
     for relative in [
         "src/core/cache.rs",
         "src/decode/jp2k.rs",
@@ -674,7 +674,7 @@ fn environment_knobs_use_statumen_prefix() {
         "tests/openslide_parity.rs",
         "tests/openslide_test_support.rs",
         "tests/real_wsi_behavior.rs",
-        "tests/signinum_parity.rs",
+        "tests/j2k_parity.rs",
         "tests/support/corpus.rs",
         "tests/support/openslide_shim.rs",
     ] {
@@ -682,7 +682,7 @@ fn environment_knobs_use_statumen_prefix() {
         let retired_prefix = ["ZIG", "GURAT_"].concat();
         assert!(
             !source.contains(&retired_prefix),
-            "{relative} must use STATUMEN_ environment variable names"
+            "{relative} must use WSI_RS_ environment variable names"
         );
     }
 }
@@ -716,12 +716,12 @@ fn format_registry_does_not_silently_rewrite_svcache_paths() {
 }
 
 #[test]
-fn public_wsi_api_does_not_reexport_signinum_backend_request() {
+fn public_wsi_api_does_not_reexport_j2k_backend_request() {
     let lib = fs::read_to_string(crate_root().join("src/lib.rs")).expect("read lib");
 
     assert!(
-        !lib.contains("pub use signinum_core::BackendRequest"),
-        "statumen public output policy must use OutputBackendRequest"
+        !lib.contains("pub use j2k_core::BackendRequest"),
+        "wsi_rs public output policy must use OutputBackendRequest"
     );
 }
 
@@ -761,7 +761,7 @@ fn api_stability_tooling_is_wired() {
         "public-api",
         "semver-checks",
         "check-release",
-        "STATUMEN_SEMVER_BASELINE_ROOT",
+        "WSI_RS_SEMVER_BASELINE_ROOT",
     ] {
         assert!(
             xtask_checks.contains(required),
@@ -769,12 +769,12 @@ fn api_stability_tooling_is_wired() {
         );
     }
     assert!(
-        xtask_checks.contains("api/statumen-public-api.txt"),
+        xtask_checks.contains("api/wsi-rs-public-api.txt"),
         "xtask api-check must compare against the checked-in public API snapshot"
     );
     for required in [
-        "api/statumen-public-api-metal.txt",
-        "api/statumen-public-api-cuda.txt",
+        "api/wsi-rs-public-api-metal.txt",
+        "api/wsi-rs-public-api-cuda.txt",
         "\"--features\"",
         "\"metal\"",
         "\"cuda\"",
@@ -789,26 +789,26 @@ fn api_stability_tooling_is_wired() {
         );
     }
     assert!(
-        crate_root().join("api/statumen-public-api.txt").is_file(),
+        crate_root().join("api/wsi-rs-public-api.txt").is_file(),
         "public API snapshot must be checked in for reviewable API diffs"
     );
     assert!(
         crate_root()
-            .join("api/statumen-public-api-metal.txt")
+            .join("api/wsi-rs-public-api-metal.txt")
             .is_file(),
         "Metal feature public API snapshot must be checked in for reviewable optional-surface API diffs"
     );
     assert!(
         crate_root()
-            .join("api/statumen-public-api-cuda.txt")
+            .join("api/wsi-rs-public-api-cuda.txt")
             .is_file(),
         "CUDA feature public API snapshot must be checked in for reviewable optional-surface API diffs"
     );
-    let snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api.txt"))
+    let snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api.txt"))
         .expect("read public API snapshot");
-    let cuda_snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api-cuda.txt"))
+    let cuda_snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api-cuda.txt"))
         .expect("read CUDA public API snapshot");
-    let metal_snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api-metal.txt"))
+    let metal_snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api-metal.txt"))
         .expect("read Metal public API snapshot");
     assert!(
         !snapshot.contains("impl core::marker::"),
@@ -822,20 +822,20 @@ fn api_stability_tooling_is_wired() {
         metal_snapshot.contains("MetalDeviceTile")
             && metal_snapshot.contains("MetalDeviceStorage")
             && metal_snapshot
-                .contains("#[non_exhaustive] pub struct statumen::output::metal::MetalDeviceTile")
+                .contains("#[non_exhaustive] pub struct wsi_rs::output::metal::MetalDeviceTile")
             && metal_snapshot
-                .contains("#[non_exhaustive] pub enum statumen::output::metal::MetalDeviceStorage"),
+                .contains("#[non_exhaustive] pub enum wsi_rs::output::metal::MetalDeviceStorage"),
         "Metal public API snapshot must capture future-extensible Metal output types"
     );
     assert!(
         cuda_snapshot.contains("CudaDeviceTile")
             && cuda_snapshot.contains("CudaDeviceStorage")
             && cuda_snapshot
-                .contains("#[non_exhaustive] pub struct statumen::output::cuda::CudaDeviceTile")
+                .contains("#[non_exhaustive] pub struct wsi_rs::output::cuda::CudaDeviceTile")
             && cuda_snapshot
-                .contains("#[non_exhaustive] pub enum statumen::output::cuda::CudaDeviceStorage")
-            && cuda_snapshot.contains("pub statumen::OutputBackendRequest::Cuda")
-            && !cuda_snapshot.contains("pub statumen::OutputBackendRequest::Metal"),
+                .contains("#[non_exhaustive] pub enum wsi_rs::output::cuda::CudaDeviceStorage")
+            && cuda_snapshot.contains("pub wsi_rs::OutputBackendRequest::Cuda")
+            && !cuda_snapshot.contains("pub wsi_rs::OutputBackendRequest::Metal"),
         "CUDA public API snapshot must capture future-extensible CUDA output types without mixing in Metal"
     );
 }
@@ -1065,16 +1065,16 @@ fn fuzzing_tooling_is_wired() {
 #[test]
 fn public_api_snapshot_uses_stable_user_facing_paths() {
     for snapshot_path in [
-        "api/statumen-public-api.txt",
-        "api/statumen-public-api-cuda.txt",
-        "api/statumen-public-api-metal.txt",
+        "api/wsi-rs-public-api.txt",
+        "api/wsi-rs-public-api-cuda.txt",
+        "api/wsi-rs-public-api-metal.txt",
     ] {
         let snapshot = fs::read_to_string(crate_root().join(snapshot_path))
             .unwrap_or_else(|err| panic!("read {snapshot_path}: {err}"));
 
         for forbidden in [
-            "statumen::core::",
-            "statumen::formats::",
+            "wsi_rs::core::",
+            "wsi_rs::formats::",
             "CpuTile::new_for_test",
             "CpuTile::solid_red",
             "SlideReadContext<'a>::new",
@@ -1086,88 +1086,87 @@ fn public_api_snapshot_uses_stable_user_facing_paths() {
         }
     }
 
-    let default_snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api.txt"))
+    let default_snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api.txt"))
         .expect("read default public API snapshot");
     assert!(
-        !default_snapshot.contains("signinum_core::"),
-        "default public API snapshot must not expose Signinum output-policy internals"
+        !default_snapshot.contains("j2k_core::"),
+        "default public API snapshot must not expose J2k output-policy internals"
     );
     assert!(
         default_snapshot.contains(
-            "pub fn statumen::RawCompressedTile::builder(statumen::Compression) -> statumen::RawCompressedTileBuilder"
+            "pub fn wsi_rs::RawCompressedTile::builder(wsi_rs::Compression) -> wsi_rs::RawCompressedTileBuilder"
         ),
         "Raw compressed tile payloads must expose a named-field builder before the release-candidate API freeze"
     );
     assert!(
         default_snapshot.contains(
-            "pub fn statumen::RegionRequest::builder(impl core::convert::Into<statumen::SceneId>, impl core::convert::Into<statumen::SeriesId>, impl core::convert::Into<statumen::LevelIdx>) -> statumen::RegionRequestBuilder"
+            "pub fn wsi_rs::RegionRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::RegionRequestBuilder"
         ),
         "RegionRequest builders must accept the same typed or plain public indices as tile requests in the public API snapshot"
     );
     assert!(
         !default_snapshot.contains(
-            "pub fn statumen::RegionRequest::builder(statumen::SceneId, statumen::SeriesId, statumen::LevelIdx)"
+            "pub fn wsi_rs::RegionRequest::builder(wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx)"
         ),
         "RegionRequest builders must not force manual index newtype construction in the public API snapshot"
     );
     assert!(
         default_snapshot.contains(
-            "pub fn statumen::SvcacheTileSelection::new(impl core::convert::Into<statumen::SceneId>, impl core::convert::Into<statumen::SeriesId>, impl core::convert::Into<statumen::LevelIdx>, i64, i64) -> Self"
+            "pub fn wsi_rs::SvcacheTileSelection::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64) -> Self"
         ),
         "SvcacheTileSelection must accept the same typed or plain public indices as read requests in the public API snapshot"
     );
     assert!(
         !default_snapshot.contains(
-            "pub fn statumen::SvcacheTileSelection::new(statumen::SceneId, statumen::SeriesId, statumen::LevelIdx"
+            "pub fn wsi_rs::SvcacheTileSelection::new(wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx"
         ),
         "SvcacheTileSelection must not force manual index newtype construction in the public API snapshot"
     );
     assert!(
         default_snapshot.contains(
-            "pub fn statumen::Slide::level_source_kind(&self, impl core::convert::Into<statumen::SceneId>, impl core::convert::Into<statumen::SeriesId>, impl core::convert::Into<statumen::LevelIdx>) -> core::result::Result<statumen::LevelSourceKind, statumen::error::WsiError>"
+            "pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>"
         ),
         "Slide::level_source_kind must accept typed or plain public indices in the public API snapshot"
     );
     assert!(
         default_snapshot.contains(
-            "pub fn statumen::SlideReader::level_source_kind(&self, statumen::SceneId, statumen::SeriesId, statumen::LevelIdx)"
+            "pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx)"
         ),
         "SlideReader::level_source_kind must keep object-safe typed index parameters for backend implementations"
     );
     assert!(
         !default_snapshot.contains(
-            "pub fn statumen::Slide::level_source_kind(&self, statumen::SceneId, statumen::SeriesId, statumen::LevelIdx)"
+            "pub fn wsi_rs::Slide::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx)"
         ),
         "Slide::level_source_kind must not force manual index newtype construction in the public API snapshot"
     );
     assert!(
-        !default_snapshot.contains("pub fn statumen::RawCompressedTile::new("),
+        !default_snapshot.contains("pub fn wsi_rs::RawCompressedTile::new("),
         "Raw compressed tile payloads must not advertise a long positional public constructor before the release-candidate API freeze"
     );
 
-    let metal_snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api-metal.txt"))
+    let metal_snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api-metal.txt"))
         .expect("read Metal public API snapshot");
     assert!(
-        metal_snapshot.contains(
-            "pub statumen::output::metal::MetalDeviceTile::format: statumen::PixelFormat"
-        ),
-        "Metal device tiles must expose a Statumen-owned pixel format type"
+        metal_snapshot
+            .contains("pub wsi_rs::output::metal::MetalDeviceTile::format: wsi_rs::PixelFormat"),
+        "Metal device tiles must expose a wsi-rs-owned pixel format type"
     );
     assert!(
         !metal_snapshot.contains(
-            "pub statumen::output::metal::MetalDeviceTile::format: signinum_core::"
+            "pub wsi_rs::output::metal::MetalDeviceTile::format: j2k_core::"
         ),
-        "Metal device tile payloads must not expose Signinum pixel format types as the public field contract"
+        "Metal device tile payloads must not expose J2k pixel format types as the public field contract"
     );
     assert!(
         metal_snapshot.contains(
-            "pub fn statumen::output::metal::MetalBackendSessions::new(metal::device::Device) -> Self"
+            "pub fn wsi_rs::output::metal::MetalBackendSessions::new(metal::device::Device) -> Self"
         ),
         "Metal backend setup should accept a Metal device directly instead of requiring callers to construct codec adapter sessions"
     );
     for forbidden in [
-        "signinum_jpeg_metal::MetalBackendSession",
-        "signinum_j2k_metal::MetalBackendSession",
+        "j2k_jpeg_metal::MetalBackendSession",
+        "j2k_metal::MetalBackendSession",
         "MetalBackendSessions::with_private_jpeg_decode",
     ] {
         assert!(
@@ -1179,9 +1178,9 @@ fn public_api_snapshot_uses_stable_user_facing_paths() {
 
 #[test]
 fn default_output_api_keeps_metal_constructors_feature_gated() {
-    let snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api.txt"))
+    let snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api.txt"))
         .expect("read public API snapshot");
-    let metal_snapshot = fs::read_to_string(crate_root().join("api/statumen-public-api-metal.txt"))
+    let metal_snapshot = fs::read_to_string(crate_root().join("api/wsi-rs-public-api-metal.txt"))
         .expect("read Metal public API snapshot");
     let output = read_repo_text("src/core/types/output.rs");
 
@@ -1194,8 +1193,8 @@ fn default_output_api_keeps_metal_constructors_feature_gated() {
         "default public API must not advertise Metal-specific constructors"
     );
     for forbidden in [
-        "pub statumen::OutputBackendRequest::Metal",
-        "pub statumen::OutputBackendRequest::Cuda",
+        "pub wsi_rs::OutputBackendRequest::Metal",
+        "pub wsi_rs::OutputBackendRequest::Cuda",
     ] {
         assert!(
             !snapshot.contains(forbidden),
@@ -1207,11 +1206,11 @@ fn default_output_api_keeps_metal_constructors_feature_gated() {
         "Metal feature snapshot must retain the Metal-specific require constructor"
     );
     assert!(
-        metal_snapshot.contains("pub statumen::OutputBackendRequest::Metal"),
+        metal_snapshot.contains("pub wsi_rs::OutputBackendRequest::Metal"),
         "Metal feature snapshot must expose the Metal backend request variant"
     );
     assert!(
-        !metal_snapshot.contains("pub statumen::OutputBackendRequest::Cuda"),
+        !metal_snapshot.contains("pub wsi_rs::OutputBackendRequest::Cuda"),
         "Metal feature snapshot must not expose the experimental CUDA backend variant"
     );
 
@@ -1492,15 +1491,15 @@ fn public_display_window_has_constructor_api_before_non_exhaustive_freeze() {
     }
 
     for snapshot_path in [
-        "api/statumen-public-api.txt",
-        "api/statumen-public-api-cuda.txt",
-        "api/statumen-public-api-metal.txt",
+        "api/wsi-rs-public-api.txt",
+        "api/wsi-rs-public-api-cuda.txt",
+        "api/wsi-rs-public-api-metal.txt",
     ] {
         let snapshot = fs::read_to_string(crate_root().join(snapshot_path))
             .unwrap_or_else(|err| panic!("read {snapshot_path}: {err}"));
         for required in [
-            "pub fn statumen::DisplayWindow::min(&self) -> f64",
-            "pub fn statumen::DisplayWindow::max(&self) -> f64",
+            "pub fn wsi_rs::DisplayWindow::min(&self) -> f64",
+            "pub fn wsi_rs::DisplayWindow::max(&self) -> f64",
         ] {
             assert!(
                 snapshot.contains(required),
@@ -1508,8 +1507,8 @@ fn public_display_window_has_constructor_api_before_non_exhaustive_freeze() {
             );
         }
         for forbidden in [
-            "pub statumen::DisplayWindow::min: f64",
-            "pub statumen::DisplayWindow::max: f64",
+            "pub wsi_rs::DisplayWindow::min: f64",
+            "pub wsi_rs::DisplayWindow::max: f64",
         ] {
             assert!(
                 !snapshot.contains(forbidden),
@@ -1573,17 +1572,17 @@ fn public_cpu_tile_has_validated_read_only_api_before_non_exhaustive_freeze() {
     }
 
     for snapshot_path in [
-        "api/statumen-public-api.txt",
-        "api/statumen-public-api-cuda.txt",
-        "api/statumen-public-api-metal.txt",
+        "api/wsi-rs-public-api.txt",
+        "api/wsi-rs-public-api-cuda.txt",
+        "api/wsi-rs-public-api-metal.txt",
     ] {
         let snapshot = fs::read_to_string(crate_root().join(snapshot_path))
             .unwrap_or_else(|err| panic!("read {snapshot_path}: {err}"));
         for required in [
-            "pub fn statumen::CpuTile::channels(&self) -> u16",
-            "pub fn statumen::CpuTile::color_space(&self) -> &statumen::ColorSpace",
-            "pub fn statumen::CpuTile::data(&self) -> &statumen::CpuTileData",
-            "pub fn statumen::CpuTile::layout(&self) -> statumen::CpuTileLayout",
+            "pub fn wsi_rs::CpuTile::channels(&self) -> u16",
+            "pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace",
+            "pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData",
+            "pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout",
         ] {
             assert!(
                 snapshot.contains(required),
@@ -1591,12 +1590,12 @@ fn public_cpu_tile_has_validated_read_only_api_before_non_exhaustive_freeze() {
             );
         }
         for forbidden in [
-            "pub statumen::CpuTile::channels:",
-            "pub statumen::CpuTile::color_space:",
-            "pub statumen::CpuTile::data:",
-            "pub statumen::CpuTile::height:",
-            "pub statumen::CpuTile::layout:",
-            "pub statumen::CpuTile::width:",
+            "pub wsi_rs::CpuTile::channels:",
+            "pub wsi_rs::CpuTile::color_space:",
+            "pub wsi_rs::CpuTile::data:",
+            "pub wsi_rs::CpuTile::height:",
+            "pub wsi_rs::CpuTile::layout:",
+            "pub wsi_rs::CpuTile::width:",
         ] {
             assert!(
                 !snapshot.contains(forbidden),
@@ -1654,21 +1653,21 @@ fn public_raw_compressed_tile_has_validated_read_only_api_before_non_exhaustive_
     }
 
     for snapshot_path in [
-        "api/statumen-public-api.txt",
-        "api/statumen-public-api-cuda.txt",
-        "api/statumen-public-api-metal.txt",
+        "api/wsi-rs-public-api.txt",
+        "api/wsi-rs-public-api-cuda.txt",
+        "api/wsi-rs-public-api-metal.txt",
     ] {
         let snapshot = fs::read_to_string(crate_root().join(snapshot_path))
             .unwrap_or_else(|err| panic!("read {snapshot_path}: {err}"));
         for required in [
-            "pub fn statumen::RawCompressedTile::bits_allocated(&self) -> u16",
-            "pub fn statumen::RawCompressedTile::compression(&self) -> statumen::Compression",
-            "pub fn statumen::RawCompressedTile::data(&self) -> &[u8]",
-            "pub fn statumen::RawCompressedTile::height(&self) -> u32",
-            "pub fn statumen::RawCompressedTile::into_data(self) -> alloc::vec::Vec<u8>",
-            "pub fn statumen::RawCompressedTile::photometric_interpretation(&self) -> statumen::EncodedTilePhotometricInterpretation",
-            "pub fn statumen::RawCompressedTile::samples_per_pixel(&self) -> u16",
-            "pub fn statumen::RawCompressedTile::width(&self) -> u32",
+            "pub fn wsi_rs::RawCompressedTile::bits_allocated(&self) -> u16",
+            "pub fn wsi_rs::RawCompressedTile::compression(&self) -> wsi_rs::Compression",
+            "pub fn wsi_rs::RawCompressedTile::data(&self) -> &[u8]",
+            "pub fn wsi_rs::RawCompressedTile::height(&self) -> u32",
+            "pub fn wsi_rs::RawCompressedTile::into_data(self) -> alloc::vec::Vec<u8>",
+            "pub fn wsi_rs::RawCompressedTile::photometric_interpretation(&self) -> wsi_rs::EncodedTilePhotometricInterpretation",
+            "pub fn wsi_rs::RawCompressedTile::samples_per_pixel(&self) -> u16",
+            "pub fn wsi_rs::RawCompressedTile::width(&self) -> u32",
         ] {
             assert!(
                 snapshot.contains(required),
@@ -1676,13 +1675,13 @@ fn public_raw_compressed_tile_has_validated_read_only_api_before_non_exhaustive_
             );
         }
         for forbidden in [
-            "pub statumen::RawCompressedTile::bits_allocated:",
-            "pub statumen::RawCompressedTile::compression:",
-            "pub statumen::RawCompressedTile::data:",
-            "pub statumen::RawCompressedTile::height:",
-            "pub statumen::RawCompressedTile::photometric_interpretation:",
-            "pub statumen::RawCompressedTile::samples_per_pixel:",
-            "pub statumen::RawCompressedTile::width:",
+            "pub wsi_rs::RawCompressedTile::bits_allocated:",
+            "pub wsi_rs::RawCompressedTile::compression:",
+            "pub wsi_rs::RawCompressedTile::data:",
+            "pub wsi_rs::RawCompressedTile::height:",
+            "pub wsi_rs::RawCompressedTile::photometric_interpretation:",
+            "pub wsi_rs::RawCompressedTile::samples_per_pixel:",
+            "pub wsi_rs::RawCompressedTile::width:",
         ] {
             assert!(
                 !snapshot.contains(forbidden),
@@ -1874,8 +1873,8 @@ fn optional_cuda_public_surface_matches_device_tile_contract() {
         "pub pitch_bytes: usize",
         "pub format: PixelFormat",
         "pub storage: CudaDeviceStorage",
-        "signinum_jpeg_cuda::Surface",
-        "signinum_j2k_cuda::Surface",
+        "j2k_jpeg_cuda::Surface",
+        "j2k_cuda::Surface",
         "cuda_surface()",
     ] {
         assert!(
@@ -1903,17 +1902,17 @@ fn default_manifest_uses_cpu_jp2k_facade_and_optional_metal_adapter() {
         .and_then(toml::Value::as_table)
         .expect("Cargo.toml must define [dependencies]");
     assert!(
-        dependencies.contains_key("signinum-j2k"),
-        "statumen default JP2K decode must depend on signinum-j2k facade"
+        dependencies.contains_key("j2k"),
+        "wsi_rs default JP2K decode must depend on j2k facade"
     );
 
     let j2k_metal = dependencies
-        .get("signinum-j2k-metal")
+        .get("j2k-metal")
         .and_then(toml::Value::as_table)
-        .expect("signinum-j2k-metal dependency must use table syntax");
+        .expect("j2k-metal dependency must use table syntax");
     assert!(
         j2k_metal.get("optional").and_then(toml::Value::as_bool) == Some(true),
-        "signinum-j2k-metal must be optional"
+        "j2k-metal must be optional"
     );
 
     let features = manifest
@@ -1927,8 +1926,8 @@ fn default_manifest_uses_cpu_jp2k_facade_and_optional_metal_adapter() {
     assert!(
         metal_feature
             .iter()
-            .any(|value| value.as_str() == Some("dep:signinum-j2k-metal")),
-        "metal feature must be the only feature that enables signinum-j2k-metal"
+            .any(|value| value.as_str() == Some("dep:j2k-metal")),
+        "metal feature must be the only feature that enables j2k-metal"
     );
 
     let enabling_features = features
@@ -1937,7 +1936,7 @@ fn default_manifest_uses_cpu_jp2k_facade_and_optional_metal_adapter() {
             value.as_array().and_then(|items| {
                 items
                     .iter()
-                    .any(|item| item.as_str() == Some("dep:signinum-j2k-metal"))
+                    .any(|item| item.as_str() == Some("dep:j2k-metal"))
                     .then_some(name.as_str())
             })
         })
@@ -1945,7 +1944,7 @@ fn default_manifest_uses_cpu_jp2k_facade_and_optional_metal_adapter() {
     assert_eq!(
         enabling_features,
         vec!["metal"],
-        "only the metal feature may enable signinum-j2k-metal"
+        "only the metal feature may enable j2k-metal"
     );
 }
 
@@ -2034,7 +2033,7 @@ fn public_docs_use_production_library_language() {
         "README.md",
         "CHANGELOG.md",
         "SECURITY.md",
-        "statumen-openslide-shim/README.md",
+        "wsi-rs-openslide-shim/README.md",
         "tests/fixtures/jp2k/README.md",
         "src/lib.rs",
     ];

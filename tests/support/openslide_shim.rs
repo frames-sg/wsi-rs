@@ -81,7 +81,7 @@ fn discover_lib_paths() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os("OPENSLIDE_LIB_PATH") {
         out.push(PathBuf::from(p));
     }
-    if let Some(p) = std::env::var_os("STATUMEN_OPENSLIDE_LIBRARY") {
+    if let Some(p) = std::env::var_os("WSI_RS_OPENSLIDE_LIBRARY") {
         out.push(PathBuf::from(p));
     }
     #[cfg(target_os = "macos")]

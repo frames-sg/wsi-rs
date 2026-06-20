@@ -17,7 +17,7 @@ impl PlatformLibraryNames {
         } else if cfg!(target_os = "linux") {
             Ok(Self::Linux)
         } else {
-            Err("statumen OpenSlide shim install supports macOS and Linux only".into())
+            Err("wsi_rs OpenSlide shim install supports macOS and Linux only".into())
         }
     }
 
@@ -167,18 +167,15 @@ pub fn execute_restore(prefix: &Path, stamp: u64) -> Result<(), String> {
 pub fn manifest_path(prefix: &Path) -> PathBuf {
     prefix
         .join("lib")
-        .join(".statumen-openslide-shim-install.tsv")
+        .join(".wsi-rs-openslide-shim-install.tsv")
 }
 
 fn backup_path(destination: &Path, stamp: u64) -> PathBuf {
-    PathBuf::from(format!("{}.statumen-backup-{stamp}", destination.display()))
+    PathBuf::from(format!("{}.wsi_rs-backup-{stamp}", destination.display()))
 }
 
 fn removed_path(destination: &Path, stamp: u64) -> PathBuf {
-    PathBuf::from(format!(
-        "{}.statumen-removed-{stamp}",
-        destination.display()
-    ))
+    PathBuf::from(format!("{}.wsi_rs-removed-{stamp}", destination.display()))
 }
 
 fn write_manifest(path: &Path, entries: &[RestoreEntry]) -> Result<(), String> {
@@ -230,7 +227,7 @@ fn verify_library_version(path: &Path) -> Result<(), String> {
             return Err("openslide_get_version returned NULL".into());
         }
         let version = CStr::from_ptr(version).to_string_lossy();
-        if !version.starts_with("OpenSlide-statumen") {
+        if !version.starts_with("OpenSlide-wsi-rs") {
             return Err(format!("unexpected OpenSlide shim version: {version}"));
         }
     }

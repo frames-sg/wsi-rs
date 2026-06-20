@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use statumen_openslide_shim::install::{
+use wsi_rs_openslide_shim::install::{
     install_destinations, plan_install, InstallStep, PlatformLibraryNames,
 };
 
@@ -36,7 +36,7 @@ fn install_destinations_include_all_loader_compatible_names() {
 #[test]
 fn install_plan_backs_up_existing_destinations_before_copying_shim() {
     let prefix = Path::new("/prefix");
-    let shim = Path::new("/build/libstatumen_openslide_shim.dylib");
+    let shim = Path::new("/build/libwsi_rs_openslide_shim.dylib");
     let steps = plan_install(prefix, shim, PlatformLibraryNames::MacOS, 42, |path| {
         path.ends_with("libopenslide.1.dylib")
     });
@@ -46,7 +46,7 @@ fn install_plan_backs_up_existing_destinations_before_copying_shim() {
         vec![
             InstallStep::Backup {
                 from: Path::new("/prefix/lib/libopenslide.1.dylib").to_path_buf(),
-                to: Path::new("/prefix/lib/libopenslide.1.dylib.statumen-backup-42").to_path_buf(),
+                to: Path::new("/prefix/lib/libopenslide.1.dylib.wsi_rs-backup-42").to_path_buf(),
             },
             InstallStep::CopyShim {
                 from: shim.to_path_buf(),

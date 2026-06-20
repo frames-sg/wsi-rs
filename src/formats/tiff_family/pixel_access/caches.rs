@@ -4,25 +4,25 @@ use super::*;
 
 /// Default maximum cache size: 128 MB.
 pub(super) const DEFAULT_FULL_DECODE_CACHE_BYTES: u64 = 128 * 1024 * 1024;
-pub(super) const FULL_DECODE_CACHE_BYTES_ENV: &str = "STATUMEN_FULL_DECODE_CACHE_BYTES";
+pub(super) const FULL_DECODE_CACHE_BYTES_ENV: &str = "WSI_RS_FULL_DECODE_CACHE_BYTES";
 /// Default maximum cache size for decoded NDPI strips: 1 MB.
 ///
 /// Large NDPI display traces are often one-way walks through strip space. Keep
-/// the default tight for predictable RSS and use `STATUMEN_NDPI_STRIP_CACHE_BYTES`
+/// the default tight for predictable RSS and use `WSI_RS_NDPI_STRIP_CACHE_BYTES`
 /// for repeated-region workloads that benefit from a larger working set.
 pub(super) const DEFAULT_NDPI_STRIP_CACHE_BYTES: u64 = 1024 * 1024;
-pub(super) const NDPI_STRIP_CACHE_BYTES_ENV: &str = "STATUMEN_NDPI_STRIP_CACHE_BYTES";
+pub(super) const NDPI_STRIP_CACHE_BYTES_ENV: &str = "WSI_RS_NDPI_STRIP_CACHE_BYTES";
 /// Default maximum cache size for synthetic NDPI tail levels: 16 MB.
 pub(super) const DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES: u64 = 16 * 1024 * 1024;
-pub(super) const SYNTHETIC_LEVEL_CACHE_BYTES_ENV: &str = "STATUMEN_SYNTHETIC_LEVEL_CACHE_BYTES";
+pub(super) const SYNTHETIC_LEVEL_CACHE_BYTES_ENV: &str = "WSI_RS_SYNTHETIC_LEVEL_CACHE_BYTES";
 pub(super) const DEFAULT_JP2K_SHARED_TILE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const DEFAULT_STITCHED_COMPONENT_TILE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_BATCH: usize = 4;
 pub(super) const NDPI_DISPLAY_NARROW_STRIP_BATCH: usize = 8;
 #[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) const JPEG_DEVICE_DECODE_ENV: &str = "STATUMEN_JPEG_DEVICE_DECODE";
+pub(super) const JPEG_DEVICE_DECODE_ENV: &str = "WSI_RS_JPEG_DEVICE_DECODE";
 #[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) const JP2K_DEVICE_DECODE_ENV: &str = "STATUMEN_JP2K_DEVICE_DECODE";
+pub(super) const JP2K_DEVICE_DECODE_ENV: &str = "WSI_RS_JP2K_DEVICE_DECODE";
 
 pub(super) type NdpiMcuStartsCache = HashMap<(IfdId, u16), Arc<Vec<u64>>>;
 pub(super) type SyntheticDeepestKey = (usize, usize, u32, u32, u32);

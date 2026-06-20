@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use openslide_test_support::OpenSlide;
-use statumen::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
+use wsi_rs::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PixelCompareMode {
@@ -46,17 +46,17 @@ fn region_request(
 }
 
 #[test]
-#[ignore = "requires STATUMEN_OPENSLIDE_COMPARE_PATHS and libopenslide"]
+#[ignore = "requires WSI_RS_OPENSLIDE_COMPARE_PATHS and libopenslide"]
 fn compare_against_openslide_for_env_paths() {
-    let raw_paths = env::var_os("STATUMEN_OPENSLIDE_COMPARE_PATHS")
-        .expect("STATUMEN_OPENSLIDE_COMPARE_PATHS is required for OpenSlide comparison");
+    let raw_paths = env::var_os("WSI_RS_OPENSLIDE_COMPARE_PATHS")
+        .expect("WSI_RS_OPENSLIDE_COMPARE_PATHS is required for OpenSlide comparison");
 
     let paths: Vec<PathBuf> = env::split_paths(&raw_paths)
         .map(resolve_compare_path)
         .collect();
     assert!(
         !paths.is_empty(),
-        "STATUMEN_OPENSLIDE_COMPARE_PATHS was set but contained no valid paths"
+        "WSI_RS_OPENSLIDE_COMPARE_PATHS was set but contained no valid paths"
     );
 
     for path in paths {
@@ -65,11 +65,11 @@ fn compare_against_openslide_for_env_paths() {
 }
 
 #[test]
-#[ignore = "requires STATUMEN_APERIO_JPEG_RGB_PATH and libopenslide"]
+#[ignore = "requires WSI_RS_APERIO_JPEG_RGB_PATH and libopenslide"]
 fn aperio_jpeg_rgb_pyramid_levels_match_openslide() {
     let path = aperio_jpeg_rgb_regression_path()
-        .expect("STATUMEN_APERIO_JPEG_RGB_PATH is required for the Aperio RGB regression");
-    let handle = Slide::open(&path).expect("open Aperio RGB regression slide with statumen");
+        .expect("WSI_RS_APERIO_JPEG_RGB_PATH is required for the Aperio RGB regression");
+    let handle = Slide::open(&path).expect("open Aperio RGB regression slide with wsi_rs");
     let openslide = OpenSlide::open(&path)
         .unwrap_or_else(|err| panic!("open Aperio RGB regression with OpenSlide: {err}"));
     let level_count = handle.dataset().scenes[0].series[0].levels.len();
@@ -88,7 +88,7 @@ fn aperio_jpeg_rgb_pyramid_levels_match_openslide() {
         );
         let ours = handle
             .read_region_rgba(&req)
-            .unwrap_or_else(|err| panic!("statumen read level {level} failed: {err}"))
+            .unwrap_or_else(|err| panic!("wsi_rs read level {level} failed: {err}"))
             .into_raw();
         let theirs = openslide
             .read_region_rgba(0, 0, level as i32, 240, 240)
@@ -112,7 +112,7 @@ fn aperio_jpeg_rgb_pyramid_levels_match_openslide() {
 }
 
 fn aperio_jpeg_rgb_regression_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("STATUMEN_APERIO_JPEG_RGB_PATH") {
+    if let Some(path) = env::var_os("WSI_RS_APERIO_JPEG_RGB_PATH") {
         return Some(resolve_compare_path(PathBuf::from(path)));
     }
 
@@ -211,7 +211,7 @@ fn pixel_compare_mode_keeps_exact_for_unclassified_tiff() {
 }
 
 fn compare_slide(path: &Path) {
-    let handle = Slide::open(path).expect("open slide with statumen");
+    let handle = Slide::open(path).expect("open slide with wsi_rs");
     let openslide = OpenSlide::open(path).expect("open slide with OpenSlide");
     let openslide_props = openslide_properties(path);
     let ours = handle.dataset();
@@ -341,7 +341,7 @@ fn compare_level0_regions(
             .read_region_rgba(&req)
             .unwrap_or_else(|err| {
                 panic!(
-                    "statumen read_region_rgba failed for {} {}: {err}",
+                    "wsi_rs read_region_rgba failed for {} {}: {err}",
                     path.display(),
                     region.label
                 )
@@ -656,7 +656,7 @@ fn compare_float_property(
         panic!("missing property for {} key {}", path.display(), key);
     };
 
-    let ours = ours.parse::<f64>().expect("parse statumen float property");
+    let ours = ours.parse::<f64>().expect("parse wsi_rs float property");
     let theirs = theirs
         .parse::<f64>()
         .expect("parse openslide float property");

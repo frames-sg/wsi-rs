@@ -71,13 +71,13 @@ impl VmsJpeg {
         }
 
         let scale = match scale_denom {
-            1 => SigninumDownscale::None,
-            2 => SigninumDownscale::Half,
-            4 => SigninumDownscale::Quarter,
-            8 => SigninumDownscale::Eighth,
+            1 => J2kDownscale::None,
+            2 => J2kDownscale::Half,
+            4 => J2kDownscale::Quarter,
+            8 => J2kDownscale::Eighth,
             other => {
                 return Err(WsiError::Jpeg(format!(
-                    "unsupported VMS signinum downscale denominator {other}"
+                    "unsupported VMS j2k downscale denominator {other}"
                 )));
             }
         };
@@ -90,16 +90,15 @@ impl VmsJpeg {
             .tile_height
             .min(self.height.saturating_sub(tile_row * self.tile_height));
         let data = self.tile_jpeg_bytes(tile_index, width, height)?;
-        let decoder =
-            SigninumJpegDecoder::new(&data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let roi = SigninumRect {
+        let decoder = J2kJpegDecoder::new(&data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+        let roi = J2kRect {
             x: 0,
             y: 0,
             w: width,
             h: height,
         };
         let (pixels, _outcome) = decoder
-            .decode_region_scaled(SigninumPixelFormat::Rgb8, roi, scale)
+            .decode_region_scaled(J2kPixelFormat::Rgb8, roi, scale)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let scale_denom = scale.denominator();
         let width = width.div_ceil(scale_denom);

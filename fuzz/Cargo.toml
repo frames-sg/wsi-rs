@@ -1,5 +1,5 @@
 [package]
-name = "statumen-fuzz"
+name = "wsi-rs-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-statumen = { path = ".." }
+wsi-rs = { path = ".." }
 tempfile = "3"
 
 [[bin]]

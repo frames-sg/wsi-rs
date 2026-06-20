@@ -1,16 +1,16 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# statumen
+# wsi-rs
 
-[![CI](https://github.com/frames-sg/statumen/actions/workflows/ci.yml/badge.svg)](https://github.com/frames-sg/statumen/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/statumen.svg)](https://crates.io/crates/statumen)
-[![docs.rs](https://img.shields.io/docsrs/statumen)](https://docs.rs/statumen)
+[![CI](https://github.com/frames-sg/wsi-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/frames-sg/wsi-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/wsi-rs.svg)](https://crates.io/crates/wsi-rs)
+[![docs.rs](https://img.shields.io/docsrs/wsi-rs)](https://docs.rs/wsi-rs)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`statumen` is a Rust whole-slide image reader. It opens TIFF-family WSI,
+`wsi-rs` is a Rust whole-slide image reader. It opens TIFF-family WSI,
 DICOM VL WSI, Zeiss CZI/ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
 JPEG 2000 codestream fixtures, and `.svcache` containers. JPEG, JPEG 2000,
-and HTJ2K decode is delegated to the `signinum-*` crates.
+and HTJ2K decode is delegated to the `j2k-*` crates.
 
 The main crate forbids `unsafe` code.
 Unsupported or incomplete sources return `WsiError`; they should not silently
@@ -19,13 +19,13 @@ produce black or partial pixels.
 ## Install
 
 ```sh
-cargo add statumen
+cargo add wsi-rs
 ```
 
 ## Quick Start
 
 ```rust,no_run
-use statumen::{RegionRequest, Slide, TileOutputPreference, TilePixels, TileRequest};
+use wsi_rs::{RegionRequest, Slide, TileOutputPreference, TilePixels, TileRequest};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slide = Slide::open("sample.svs")?;
@@ -78,14 +78,14 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 
 ## OpenSlide Compatibility Shim
 
-The workspace includes `statumen-openslide-shim`, a C ABI library that exports
-OpenSlide-compatible symbols and routes reads through Statumen.
+The workspace includes `wsi-rs-openslide-shim`, a C ABI library that exports
+OpenSlide-compatible symbols and routes reads through wsi-rs.
 
 ```sh
-cargo build -p statumen-openslide-shim --release
-cargo run -p statumen-openslide-shim --bin statumen-openslide-install -- \
-  install --shim target/release/libstatumen_openslide_shim.dylib \
-  --prefix /tmp/statumen-openslide
+cargo build -p wsi-rs-openslide-shim --release
+cargo run -p wsi-rs-openslide-shim --bin wsi-rs-openslide-install -- \
+  install --shim target/release/libwsi_rs_openslide_shim.dylib \
+  --prefix /tmp/wsi-rs-openslide
 ```
 
 Use `.so` instead of `.dylib` on Linux. Test in a private prefix before

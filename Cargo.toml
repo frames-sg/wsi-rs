@@ -1,13 +1,13 @@
 [package]
-name = "statumen"
+name = "wsi-rs"
 version = "0.4.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Statumen whole-slide image reader"
-repository = "https://github.com/frames-sg/statumen"
-homepage = "https://github.com/frames-sg/statumen"
-documentation = "https://docs.rs/statumen"
-authors = ["Statumen contributors"]
+description = "wsi-rs whole-slide image reader"
+repository = "https://github.com/frames-sg/wsi-rs"
+homepage = "https://github.com/frames-sg/wsi-rs"
+documentation = "https://docs.rs/wsi-rs"
+authors = ["wsi-rs contributors"]
 keywords = ["whole-slide", "microscopy", "tiff", "pathology"]
 categories = ["multimedia::images", "science"]
 # MSRV policy: track the latest stable Rust release. Bumping `rust-version`
@@ -29,16 +29,16 @@ default = []
 # Enables OpenSlide compatibility-oracle parity tests via libloading.
 # Off by default; CI matrix runs with and without.
 parity-openslide = []
-# Enables Metal-backed parity comparisons (signinum CPU vs Metal).
+# Enables Metal-backed parity comparisons (j2k CPU vs Metal).
 # Off by default; macOS only; CI matrix runs with and without.
 parity-metal = []
 # Enables Metal-backed device payload plumbing for Phase 5.
-metal = ["dep:metal", "dep:signinum-jpeg-metal", "dep:signinum-j2k-metal"]
+metal = ["dep:metal", "dep:j2k-jpeg-metal", "dep:j2k-metal"]
 cuda = [
-    "dep:signinum-jpeg-cuda",
-    "dep:signinum-j2k-cuda",
-    "signinum-jpeg-cuda/cuda-runtime",
-    "signinum-j2k-cuda/cuda-runtime",
+    "dep:j2k-jpeg-cuda",
+    "dep:j2k-cuda",
+    "j2k-jpeg-cuda/cuda-runtime",
+    "j2k-cuda/cuda-runtime",
 ]
 
 [dependencies]
@@ -56,14 +56,14 @@ base64 = "0.22"
 flate2 = "1"
 tempfile = "3"
 zstd = "0.13"
-signinum-jpeg = "0.5.0"
-signinum-core = "0.5.0"
-signinum-tilecodec = "0.5.0"
-signinum-j2k = "0.5.0"
-signinum-jpeg-metal = { version = "0.5.0", optional = true }
-signinum-j2k-metal = { version = "0.5.0", optional = true }
-signinum-jpeg-cuda = { version = "0.5.0", optional = true, default-features = false }
-signinum-j2k-cuda = { version = "0.5.0", optional = true, default-features = false }
+j2k-jpeg = "0.5.0"
+j2k-core = "0.5.0"
+j2k-tilecodec = { package = "signinum-tilecodec", version = "0.5.0" }
+j2k = "0.5.0"
+j2k-jpeg-metal = { package = "signinum-jpeg-metal", version = "0.5.0", optional = true }
+j2k-metal = { version = "0.5.0", optional = true }
+j2k-jpeg-cuda = { package = "signinum-jpeg-cuda", version = "0.5.0", optional = true, default-features = false }
+j2k-cuda = { version = "0.5.0", optional = true, default-features = false }
 metal = { version = "0.33", optional = true }
 dicom-core = "0.9"
 dicom-object = "0.9"
@@ -79,23 +79,23 @@ jpeg-encoder = "0.6"
 tempfile = { workspace = true }
 toml = "0.8"
 libloading = { workspace = true }
-signinum-j2k-native = "0.5.0"
+j2k-native = "0.5.0"
 
 [[bin]]
 name = "svcache"
 path = "src/bin/svcache.rs"
 
 [workspace]
-members = [".", "xtask", "statumen-openslide-shim"]
+members = [".", "xtask", "wsi-rs-openslide-shim"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/frames-sg/statumen"
-homepage = "https://github.com/frames-sg/statumen"
-documentation = "https://docs.rs/statumen"
-authors = ["Statumen contributors"]
+repository = "https://github.com/frames-sg/wsi-rs"
+homepage = "https://github.com/frames-sg/wsi-rs"
+documentation = "https://docs.rs/wsi-rs"
+authors = ["wsi-rs contributors"]
 
 [workspace.dependencies]
 libloading = "0.8"

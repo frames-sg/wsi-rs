@@ -3,11 +3,11 @@
 mod support;
 
 use support::corpus::{load_public, resolve_entry_path};
-use support::oracles::{read_probe, top_left_probe, Oracle, SigninumOracle};
+use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
 #[test]
 #[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
-fn dicom_public_corpus_decodes_with_statumen() {
+fn dicom_public_corpus_decodes_with_wsi_rs() {
     let strict_corpus = strict_corpus_required();
     let manifest = match load_public() {
         Ok(manifest) => manifest,
@@ -45,10 +45,10 @@ fn dicom_public_corpus_decodes_with_statumen() {
             }
             continue;
         }
-        let slide = match SigninumOracle.open(&path) {
+        let slide = match J2kOracle.open(&path) {
             Ok(slide) => slide,
             Err(err) => {
-                failures.push(format!("{}: open statumen DICOM: {err}", entry.alias));
+                failures.push(format!("{}: open wsi_rs DICOM: {err}", entry.alias));
                 continue;
             }
         };
@@ -111,10 +111,10 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
             ));
             continue;
         }
-        let ours = match SigninumOracle.open(&path) {
+        let ours = match J2kOracle.open(&path) {
             Ok(slide) => slide,
             Err(err) => {
-                failures.push(format!("{}: open statumen DICOM: {err}", entry.alias));
+                failures.push(format!("{}: open wsi_rs DICOM: {err}", entry.alias));
                 continue;
             }
         };
@@ -136,10 +136,7 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
             let ours_buf = match read_probe(&ours, probe) {
                 Ok(buf) => buf,
                 Err(err) => {
-                    failures.push(format!(
-                        "{} level={level}: read statumen: {err}",
-                        entry.alias
-                    ));
+                    failures.push(format!("{} level={level}: read wsi_rs: {err}", entry.alias));
                     continue;
                 }
             };
@@ -163,7 +160,7 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
                 entry.alias, report.max_abs, report.mean_abs, report.passed
             );
             if let Some(failure) = tolerance_failure(
-                &format!("{} level={level}: statumen vs OpenSlide", entry.alias),
+                &format!("{} level={level}: wsi_rs vs OpenSlide", entry.alias),
                 &report,
             ) {
                 failures.push(failure);

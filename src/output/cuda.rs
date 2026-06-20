@@ -1,25 +1,25 @@
 use crate::{error::WsiError, PixelFormat};
-use signinum_core::{BackendKind, DeviceSurface};
+use j2k_core::{BackendKind, DeviceSurface};
 use std::sync::{Arc, Mutex};
 
 /// Codec-specific CUDA sessions reused by compressed device decode paths.
 #[derive(Debug, Clone)]
 pub struct CudaBackendSessions {
-    jpeg: Arc<Mutex<signinum_jpeg_cuda::CudaSession>>,
-    j2k: Arc<Mutex<signinum_j2k_cuda::CudaSession>>,
+    jpeg: Arc<Mutex<j2k_jpeg_cuda::CudaSession>>,
+    j2k: Arc<Mutex<j2k_cuda::CudaSession>>,
 }
 
 impl CudaBackendSessions {
     pub fn new() -> Self {
         Self::from_sessions(
-            signinum_jpeg_cuda::CudaSession::default(),
-            signinum_j2k_cuda::CudaSession::default(),
+            j2k_jpeg_cuda::CudaSession::default(),
+            j2k_cuda::CudaSession::default(),
         )
     }
 
     pub(crate) fn from_sessions(
-        jpeg: signinum_jpeg_cuda::CudaSession,
-        j2k: signinum_j2k_cuda::CudaSession,
+        jpeg: j2k_jpeg_cuda::CudaSession,
+        j2k: j2k_cuda::CudaSession,
     ) -> Self {
         Self {
             jpeg: Arc::new(Mutex::new(jpeg)),
@@ -29,7 +29,7 @@ impl CudaBackendSessions {
 
     pub(crate) fn with_jpeg<R>(
         &self,
-        decode: impl FnOnce(&mut signinum_jpeg_cuda::CudaSession) -> Result<R, WsiError>,
+        decode: impl FnOnce(&mut j2k_jpeg_cuda::CudaSession) -> Result<R, WsiError>,
     ) -> Result<R, WsiError> {
         let mut session = self.jpeg.lock().map_err(|_| WsiError::Unsupported {
             reason: "CUDA JPEG session lock is poisoned".into(),
@@ -39,7 +39,7 @@ impl CudaBackendSessions {
 
     pub(crate) fn with_j2k<R>(
         &self,
-        decode: impl FnOnce(&mut signinum_j2k_cuda::CudaSession) -> Result<R, WsiError>,
+        decode: impl FnOnce(&mut j2k_cuda::CudaSession) -> Result<R, WsiError>,
     ) -> Result<R, WsiError> {
         let mut session = self.j2k.lock().map_err(|_| WsiError::Unsupported {
             reason: "CUDA J2K session lock is poisoned".into(),
@@ -74,24 +74,24 @@ pub struct CudaDeviceTile {
 #[derive(Debug, Clone)]
 pub enum CudaDeviceStorage {
     JpegSurface {
-        surface: Arc<signinum_jpeg_cuda::Surface>,
+        surface: Arc<j2k_jpeg_cuda::Surface>,
     },
     J2kSurface {
-        surface: Arc<signinum_j2k_cuda::Surface>,
+        surface: Arc<j2k_cuda::Surface>,
     },
 }
 
 impl CudaDeviceStorage {
-    /// Borrow the Signinum JPEG CUDA surface owner when this storage came from JPEG decode.
-    pub fn jpeg_surface(&self) -> Option<&signinum_jpeg_cuda::Surface> {
+    /// Borrow the J2k JPEG CUDA surface owner when this storage came from JPEG decode.
+    pub fn jpeg_surface(&self) -> Option<&j2k_jpeg_cuda::Surface> {
         match self {
             Self::JpegSurface { surface } => Some(surface.as_ref()),
             Self::J2kSurface { .. } => None,
         }
     }
 
-    /// Borrow the Signinum J2K CUDA surface owner when this storage came from J2K decode.
-    pub fn j2k_surface(&self) -> Option<&signinum_j2k_cuda::Surface> {
+    /// Borrow the J2k J2K CUDA surface owner when this storage came from J2K decode.
+    pub fn j2k_surface(&self) -> Option<&j2k_cuda::Surface> {
         match self {
             Self::JpegSurface { .. } => None,
             Self::J2kSurface { surface } => Some(surface.as_ref()),
@@ -122,22 +122,20 @@ impl CudaDeviceStorage {
 }
 
 impl CudaDeviceTile {
-    pub(crate) fn from_jpeg(
-        surface: signinum_jpeg_cuda::Surface,
-    ) -> Result<Option<Self>, WsiError> {
+    pub(crate) fn from_jpeg(surface: j2k_jpeg_cuda::Surface) -> Result<Option<Self>, WsiError> {
         if surface.backend_kind() != BackendKind::Cuda {
             return Ok(None);
         }
         let Some(cuda_surface) = surface.cuda_surface() else {
             return Ok(None);
         };
-        if cuda_surface.stats().decode_path() == signinum_jpeg_cuda::CudaJpegDecodePath::None {
+        if cuda_surface.stats().decode_path() == j2k_jpeg_cuda::CudaJpegDecodePath::None {
             return Ok(None);
         }
 
         let dimensions = surface.dimensions();
         let pitch_bytes = surface.pitch_bytes();
-        let format = PixelFormat::try_from_signinum(surface.pixel_format())?;
+        let format = PixelFormat::try_from_j2k(surface.pixel_format())?;
         Ok(Some(Self {
             width: dimensions.0,
             height: dimensions.1,
@@ -149,9 +147,9 @@ impl CudaDeviceTile {
         }))
     }
 
-    pub(crate) fn from_j2k(surface: signinum_j2k_cuda::Surface) -> Result<Option<Self>, WsiError> {
+    pub(crate) fn from_j2k(surface: j2k_cuda::Surface) -> Result<Option<Self>, WsiError> {
         if surface.backend_kind() != BackendKind::Cuda
-            || surface.residency() != signinum_j2k_cuda::SurfaceResidency::CudaResidentDecode
+            || surface.residency() != j2k_cuda::SurfaceResidency::CudaResidentDecode
             || surface.cuda_surface().is_none()
         {
             return Ok(None);
@@ -159,7 +157,7 @@ impl CudaDeviceTile {
 
         let dimensions = surface.dimensions();
         let pitch_bytes = surface.pitch_bytes();
-        let format = PixelFormat::try_from_signinum(surface.pixel_format())?;
+        let format = PixelFormat::try_from_j2k(surface.pixel_format())?;
         Ok(Some(Self {
             width: dimensions.0,
             height: dimensions.1,

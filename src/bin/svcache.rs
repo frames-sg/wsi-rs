@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use statumen::{
+use wsi_rs::{
     build_svcache, build_svcache_tiles, default_svcache_path, CacheConfig, LevelIdx,
     PlaneSelection, SceneId, SeriesId, Slide, SlideOpenOptions, SvcacheTileSelection, TileLayout,
 };
@@ -182,7 +182,7 @@ fn parse_build_window_args(args: &[String]) -> Result<WindowArgs, String> {
     })
 }
 
-fn cache_grid(level: &statumen::Level) -> Result<(u32, u32, u64, u64), String> {
+fn cache_grid(level: &wsi_rs::Level) -> Result<(u32, u32, u64, u64), String> {
     match level.tile_layout {
         TileLayout::Regular {
             tile_width,
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn cache_grid_uses_regular_layout_geometry() {
-        let level = statumen::Level::new(
+        let level = wsi_rs::Level::new(
             (1024, 768),
             1.0,
             TileLayout::Regular {
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn cache_grid_uses_virtual_tiles_for_whole_level_layout() {
-        let level = statumen::Level::new(
+        let level = wsi_rs::Level::new(
             (513, 257),
             1.0,
             TileLayout::WholeLevel {
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn cache_grid_uses_level_dimensions_for_irregular_layout() {
-        let level = statumen::Level::new(
+        let level = wsi_rs::Level::new(
             (513, 257),
             1.0,
             TileLayout::Irregular {

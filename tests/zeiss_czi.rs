@@ -1,10 +1,10 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use statumen::{Slide, TileViewRequest};
+use wsi_rs::{Slide, TileViewRequest};
 
 fn zeiss_czi_fixture() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("STATUMEN_ZEISS_CZI_PATH").map(PathBuf::from) {
+    if let Some(path) = env::var_os("WSI_RS_ZEISS_CZI_PATH").map(PathBuf::from) {
         return path.is_file().then_some(path);
     }
 
@@ -20,9 +20,9 @@ fn zeiss_czi_fixture() -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "requires STATUMEN_ZEISS_CZI_PATH or local Zeiss CZI testdata"]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH or local Zeiss CZI testdata"]
 fn builtin_registry_opens_zeiss_czi_and_reads_display_tile() {
-    let path = zeiss_czi_fixture().expect("set STATUMEN_ZEISS_CZI_PATH to a Zeiss CZI fixture");
+    let path = zeiss_czi_fixture().expect("set WSI_RS_ZEISS_CZI_PATH to a Zeiss CZI fixture");
 
     let slide = Slide::open(&path).expect("open Zeiss CZI through builtin registry");
     let dataset = slide.dataset();

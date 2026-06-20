@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use statumen::{LevelIdx, RegionRequest, SceneId, SeriesId, Slide};
+use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, Slide};
 
 const MAX_INPUT_BYTES: usize = 1 << 20;
 const MAX_REGION_SIDE: u64 = 32;
@@ -22,7 +22,7 @@ fn exercise_open(data: &[u8], extension: &str) {
         return;
     }
 
-    let Ok(dir) = tempfile::Builder::new().prefix("statumen-fuzz-").tempdir() else {
+    let Ok(dir) = tempfile::Builder::new().prefix("wsi_rs-fuzz-").tempdir() else {
         return;
     };
     let path = dir.path().join(format!("input.{extension}"));

@@ -69,7 +69,7 @@ struct ChangedCoverageOptions {
 
 impl ChangedCoverageOptions {
     fn parse(args: Vec<String>) -> Result<Self, String> {
-        let mut base = std::env::var("STATUMEN_COVERAGE_BASE")
+        let mut base = std::env::var("WSI_RS_COVERAGE_BASE")
             .ok()
             .or_else(|| {
                 std::env::var("GITHUB_BASE_REF")
@@ -79,9 +79,9 @@ impl ChangedCoverageOptions {
             })
             .unwrap_or_else(|| "origin/main".into());
         let mut lcov_path = PathBuf::from(
-            std::env::var_os("STATUMEN_COVERAGE_LCOV").unwrap_or_else(|| "lcov.info".into()),
+            std::env::var_os("WSI_RS_COVERAGE_LCOV").unwrap_or_else(|| "lcov.info".into()),
         );
-        let mut threshold = std::env::var("STATUMEN_COVERAGE_THRESHOLD")
+        let mut threshold = std::env::var("WSI_RS_COVERAGE_THRESHOLD")
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(DEFAULT_CHANGED_PATH_COVERAGE_THRESHOLD);
@@ -530,7 +530,7 @@ diff --git a/src/lib.rs b/src/lib.rs
     fn coverage_candidates_skip_test_harness_paths() {
         assert!(is_coverage_candidate(Path::new("src/lib.rs")));
         assert!(is_coverage_candidate(Path::new(
-            "statumen-openslide-shim/src/lib.rs"
+            "wsi-rs-openslide-shim/src/lib.rs"
         )));
         assert!(!is_coverage_candidate(Path::new(
             "src/formats/foo/tests.rs"

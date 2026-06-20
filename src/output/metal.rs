@@ -1,12 +1,12 @@
 use crate::{error::WsiError, PixelFormat};
-use signinum_core::DeviceSurface;
+use j2k_core::DeviceSurface;
 use std::sync::{Arc, Mutex};
 
 /// Codec-specific Metal sessions allocated from one renderer-owned device.
 #[derive(Debug, Clone)]
 pub struct MetalBackendSessions {
-    pub(crate) jpeg: Arc<signinum_jpeg_metal::MetalBackendSession>,
-    pub(crate) j2k: Arc<signinum_j2k_metal::MetalBackendSession>,
+    pub(crate) jpeg: Arc<j2k_jpeg_metal::MetalBackendSession>,
+    pub(crate) j2k: Arc<j2k_metal::MetalBackendSession>,
     ycbcr_to_rgb8: Arc<Mutex<Option<Arc<YcbcrToRgb8Converter>>>>,
     private_jpeg_decode: bool,
 }
@@ -14,14 +14,14 @@ pub struct MetalBackendSessions {
 impl MetalBackendSessions {
     pub fn new(device: metal::Device) -> Self {
         Self::from_sessions(
-            signinum_jpeg_metal::MetalBackendSession::new(device.clone()),
-            signinum_j2k_metal::MetalBackendSession::new(device),
+            j2k_jpeg_metal::MetalBackendSession::new(device.clone()),
+            j2k_metal::MetalBackendSession::new(device),
         )
     }
 
     pub(crate) fn from_sessions(
-        jpeg: signinum_jpeg_metal::MetalBackendSession,
-        j2k: signinum_j2k_metal::MetalBackendSession,
+        jpeg: j2k_jpeg_metal::MetalBackendSession,
+        j2k: j2k_metal::MetalBackendSession,
     ) -> Self {
         Self {
             jpeg: Arc::new(jpeg),
@@ -37,7 +37,7 @@ impl MetalBackendSessions {
         self
     }
 
-    pub(crate) fn jpeg(&self) -> &signinum_jpeg_metal::MetalBackendSession {
+    pub(crate) fn jpeg(&self) -> &j2k_jpeg_metal::MetalBackendSession {
         &self.jpeg
     }
 
@@ -45,7 +45,7 @@ impl MetalBackendSessions {
         self.private_jpeg_decode
     }
 
-    pub(crate) fn j2k(&self) -> &signinum_j2k_metal::MetalBackendSession {
+    pub(crate) fn j2k(&self) -> &j2k_metal::MetalBackendSession {
         &self.j2k
     }
 
@@ -106,9 +106,7 @@ pub enum MetalDeviceStorage {
 }
 
 impl MetalDeviceTile {
-    pub(crate) fn from_jpeg(
-        surface: signinum_jpeg_metal::Surface,
-    ) -> Result<Option<Self>, WsiError> {
+    pub(crate) fn from_jpeg(surface: j2k_jpeg_metal::Surface) -> Result<Option<Self>, WsiError> {
         let Some((buffer, byte_offset)) = surface.metal_buffer() else {
             return Ok(None);
         };
@@ -116,7 +114,7 @@ impl MetalDeviceTile {
             width: surface.dimensions().0,
             height: surface.dimensions().1,
             pitch_bytes: surface.pitch_bytes(),
-            format: PixelFormat::try_from_signinum(surface.pixel_format())?,
+            format: PixelFormat::try_from_j2k(surface.pixel_format())?,
             storage: MetalDeviceStorage::Buffer {
                 buffer: buffer.clone(),
                 byte_offset,
@@ -125,13 +123,13 @@ impl MetalDeviceTile {
     }
 
     pub(crate) fn from_private_jpeg(
-        tile: signinum_jpeg_metal::ResidentPrivateJpegTile,
+        tile: j2k_jpeg_metal::ResidentPrivateJpegTile,
     ) -> Result<Self, WsiError> {
         Ok(Self {
             width: tile.dimensions.0,
             height: tile.dimensions.1,
             pitch_bytes: tile.pitch_bytes,
-            format: PixelFormat::try_from_signinum(tile.pixel_format)?,
+            format: PixelFormat::try_from_j2k(tile.pixel_format)?,
             storage: MetalDeviceStorage::Buffer {
                 buffer: tile.buffer,
                 byte_offset: tile.byte_offset,
@@ -139,7 +137,7 @@ impl MetalDeviceTile {
         })
     }
 
-    pub(crate) fn from_j2k(surface: signinum_j2k_metal::Surface) -> Result<Option<Self>, WsiError> {
+    pub(crate) fn from_j2k(surface: j2k_metal::Surface) -> Result<Option<Self>, WsiError> {
         let Some((buffer, byte_offset)) = surface.metal_buffer() else {
             return Ok(None);
         };
@@ -147,7 +145,7 @@ impl MetalDeviceTile {
             width: surface.dimensions().0,
             height: surface.dimensions().1,
             pitch_bytes: surface.pitch_bytes(),
-            format: PixelFormat::try_from_signinum(surface.pixel_format())?,
+            format: PixelFormat::try_from_j2k(surface.pixel_format())?,
             storage: MetalDeviceStorage::Buffer {
                 buffer: buffer.clone(),
                 byte_offset,
@@ -176,7 +174,7 @@ impl core::fmt::Debug for YcbcrToRgb8Converter {
 }
 
 impl YcbcrToRgb8Converter {
-    fn new(session: &signinum_j2k_metal::MetalBackendSession) -> Result<Self, WsiError> {
+    fn new(session: &j2k_metal::MetalBackendSession) -> Result<Self, WsiError> {
         let options = metal::CompileOptions::new();
         let library = session
             .device()
@@ -188,7 +186,7 @@ impl YcbcrToRgb8Converter {
                 ))),
             })?;
         let function = library
-            .get_function("statumen_ycbcr8_to_rgb8", None)
+            .get_function("wsi_rs_ycbcr8_to_rgb8", None)
             .map_err(|message| WsiError::Codec {
                 codec: "j2k",
                 source: Box::new(WsiError::Jp2k(format!(
@@ -365,7 +363,7 @@ static inline uchar clamp_u8_int(int value) {
     return uchar(clamp(value, 0, 255));
 }
 
-kernel void statumen_ycbcr8_to_rgb8(
+kernel void wsi_rs_ycbcr8_to_rgb8(
     device const uchar *src [[buffer(0)]],
     device uchar *dst [[buffer(1)]],
     constant YcbcrToRgb8Params &params [[buffer(2)]],

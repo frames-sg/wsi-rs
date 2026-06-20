@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use statumen::{
+use wsi_rs::{
     Compression, CpuTile, EncodedTilePhotometricInterpretation, FormatRegistry, LevelIdx, PlaneIdx,
     PlaneSelection, RegionRequest, SceneId, SeriesId, Slide, TileLayout, TileOutputPreference,
     TilePixels, TileRequest,
@@ -44,7 +44,7 @@ fn require_corpus_slide(alias: &str) -> PathBuf {
         Some(path) => path,
         None => {
             eprintln!(
-                "[real_wsi] corpus slide '{alias}' not found; run scripts/parity-corpus-fetch.sh or set STATUMEN_PARITY_CORPUS_CACHE"
+                "[real_wsi] corpus slide '{alias}' not found; run scripts/parity-corpus-fetch.sh or set WSI_RS_PARITY_CORPUS_CACHE"
             );
             panic!("corpus slide missing: {alias}");
         }
@@ -60,7 +60,7 @@ fn aperio_jp2k_slide() -> PathBuf {
 }
 
 fn hamamatsu1_ndpi_slide() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("STATUMEN_HAMAMATSU1_NDPI_PATH").map(PathBuf::from) {
+    if let Some(path) = std::env::var_os("WSI_RS_HAMAMATSU1_NDPI_PATH").map(PathBuf::from) {
         return Some(path);
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -235,10 +235,10 @@ fn aperio_jpeg_viewport_pan_populates_and_reuses_distinct_tile_cache_entries() {
 }
 
 #[test]
-#[ignore = "requires STATUMEN_HAMAMATSU1_NDPI_PATH or local Hamamatsu-1.ndpi fixture"]
+#[ignore = "requires WSI_RS_HAMAMATSU1_NDPI_PATH or local Hamamatsu-1.ndpi fixture"]
 fn hamamatsu1_ndpi_tile_read_does_not_fail_on_file_absolute_mcu_starts() {
     let Some(path) = hamamatsu1_ndpi_slide() else {
-        eprintln!("skipping: set STATUMEN_HAMAMATSU1_NDPI_PATH to Hamamatsu-1.ndpi");
+        eprintln!("skipping: set WSI_RS_HAMAMATSU1_NDPI_PATH to Hamamatsu-1.ndpi");
         return;
     };
     let handle = Slide::open(path).expect("open Hamamatsu-1 NDPI");

@@ -11,25 +11,24 @@ use crate::core::types::{DeviceTile, TilePixels};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::error::WsiError;
 #[cfg(any(feature = "metal", feature = "cuda"))]
-use signinum_core::{BackendKind as SigninumBackendKind, BackendRequest as SigninumBackendRequest};
+use j2k_core::{BackendKind as J2kBackendKind, BackendRequest as J2kBackendRequest};
 #[cfg(feature = "cuda")]
-use signinum_core::{
-    DeviceSubmission as SigninumDeviceSubmission, ImageDecode as SigninumImageDecode,
-    ImageDecodeSubmit,
+use j2k_core::{
+    DeviceSubmission as J2kDeviceSubmission, ImageDecode as J2kImageDecode, ImageDecodeSubmit,
 };
 #[cfg(any(feature = "metal", feature = "cuda"))]
-use signinum_jpeg::{
-    DecodeOptions as SigninumDecodeOptions, JpegView as SigninumJpegView,
-    PixelFormat as SigninumPixelFormat, SofKind as SigninumSofKind,
+use j2k_jpeg::{
+    DecodeOptions as J2kDecodeOptions, JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
+    SofKind as J2kSofKind,
 };
 #[cfg(feature = "metal")]
-use signinum_jpeg_metal::SurfaceResidency as SigninumJpegSurfaceResidency;
+use j2k_jpeg_metal::SurfaceResidency as J2kJpegSurfaceResidency;
 
 #[cfg(feature = "metal")]
 use super::input::crop_jpeg_rgb_to_expected;
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use super::input::{
-    inspect_signinum_jpeg_output_size, prepare_jpeg_input, validate_signinum_jpeg_output_size,
+    inspect_j2k_jpeg_output_size, prepare_jpeg_input, validate_j2k_jpeg_output_size,
 };
 #[cfg(feature = "metal")]
 use super::DecodedJpegRgb;
@@ -62,13 +61,13 @@ pub(super) fn jpeg_device_batch_attempts_for_test() -> usize {
 #[cfg(any(feature = "metal", feature = "cuda"))]
 pub(crate) fn decode_batch_jpeg_pixels<'a>(
     jobs: &[JpegDecodeJob<'a>],
-    backend: SigninumBackendRequest,
+    backend: J2kBackendRequest,
     require_device: bool,
     metal_sessions: MetalBackendSessionsRef<'_>,
     cuda_sessions: CudaBackendSessionsRef<'_>,
 ) -> Vec<Result<TilePixels, WsiError>> {
     #[cfg(all(feature = "metal", feature = "cuda"))]
-    let route_cuda = cuda_sessions.is_some() || matches!(backend, SigninumBackendRequest::Cuda);
+    let route_cuda = cuda_sessions.is_some() || matches!(backend, J2kBackendRequest::Cuda);
     #[cfg(all(feature = "metal", not(feature = "cuda")))]
     let route_cuda = false;
 
@@ -105,16 +104,13 @@ pub(crate) fn decode_batch_jpeg_pixels<'a>(
 #[cfg(all(feature = "metal", target_os = "macos"))]
 fn decode_jpeg_tile_batch_to_device_pixels<'a>(
     jobs: &[JpegDecodeJob<'a>],
-    backend: SigninumBackendRequest,
+    backend: J2kBackendRequest,
     require_device: bool,
     metal_sessions: &crate::output::metal::MetalBackendSessions,
 ) -> Option<Vec<Result<TilePixels, WsiError>>> {
     if jobs.len() < 2
         || metal_sessions.private_jpeg_decode()
-        || !matches!(
-            backend,
-            SigninumBackendRequest::Auto | SigninumBackendRequest::Metal
-        )
+        || !matches!(backend, J2kBackendRequest::Auto | J2kBackendRequest::Metal)
     {
         return None;
     }
@@ -123,7 +119,7 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
     for job in jobs {
         if job.force_dimensions
             || job.requested_size.is_some()
-            || !matches!(job.color_transform, SigninumColorTransform::Auto)
+            || !matches!(job.color_transform, J2kColorTransform::Auto)
         {
             return None;
         }
@@ -135,19 +131,19 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
             job.expected_height,
             job.force_dimensions,
         );
-        let Ok(dimensions) = inspect_signinum_jpeg_output_size(input.as_ref()) else {
+        let Ok(dimensions) = inspect_j2k_jpeg_output_size(input.as_ref()) else {
             return None;
         };
         if dimensions != (job.expected_width, job.expected_height) {
             return None;
         }
-        let Ok(view) = SigninumJpegView::parse_with_options(
+        let Ok(view) = J2kJpegView::parse_with_options(
             input.as_ref(),
-            SigninumDecodeOptions::default().with_color_transform(job.color_transform),
+            J2kDecodeOptions::default().with_color_transform(job.color_transform),
         ) else {
             return None;
         };
-        if view.info().sof_kind == SigninumSofKind::Progressive8 {
+        if view.info().sof_kind == J2kSofKind::Progressive8 {
             return None;
         }
         prepared.push(input);
@@ -160,7 +156,7 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
         .iter()
         .map(|input| input.as_ref())
         .collect::<Vec<_>>();
-    let surfaces = match signinum_jpeg_metal::decode_rgb8_batch_to_device_with_session(
+    let surfaces = match j2k_jpeg_metal::decode_rgb8_batch_to_device_with_session(
         &inputs,
         metal_sessions.jpeg(),
     ) {
@@ -215,7 +211,7 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
 #[cfg(any(feature = "metal", feature = "cuda"))]
 fn decode_one_jpeg_pixels(
     job: &JpegDecodeJob<'_>,
-    backend: SigninumBackendRequest,
+    backend: J2kBackendRequest,
     require_device: bool,
     metal_sessions: MetalBackendSessionsRef<'_>,
     cuda_sessions: CudaBackendSessionsRef<'_>,
@@ -225,7 +221,7 @@ fn decode_one_jpeg_pixels(
     #[cfg(not(feature = "cuda"))]
     let _ = (backend, cuda_sessions);
     #[cfg(feature = "cuda")]
-    if cuda_sessions.is_some() || matches!(backend, SigninumBackendRequest::Cuda) {
+    if cuda_sessions.is_some() || matches!(backend, J2kBackendRequest::Cuda) {
         return decode_one_jpeg_pixels_cuda(job, require_device, cuda_sessions);
     }
 
@@ -265,17 +261,17 @@ fn decode_one_jpeg_pixels_metal(
         job.expected_height,
         job.force_dimensions,
     );
-    validate_signinum_jpeg_output_size(input.as_ref())?;
-    let view = SigninumJpegView::parse_with_options(
+    validate_j2k_jpeg_output_size(input.as_ref())?;
+    let view = J2kJpegView::parse_with_options(
         input.as_ref(),
-        SigninumDecodeOptions::default().with_color_transform(job.color_transform),
+        J2kDecodeOptions::default().with_color_transform(job.color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
     if progressive_jpeg_requires_cpu_device_route(&view, require_device, "Metal")? {
         return decode_one_jpeg_job(job).map(TilePixels::Cpu);
     }
-    let mut decoder = signinum_jpeg_metal::Decoder::from_view(view)
-        .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let mut decoder =
+        j2k_jpeg_metal::Decoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     if metal_sessions.private_jpeg_decode() {
         match decoder.decode_private_rgb8_tile_with_session(metal_sessions.jpeg()) {
             Ok(tile) => {
@@ -292,20 +288,20 @@ fn decode_one_jpeg_pixels_metal(
         }
     }
     let surface = decoder
-        .decode_to_device_with_session(SigninumPixelFormat::Rgb8, metal_sessions.jpeg())
-        .map_err(|err| WsiError::Jpeg(format!("signinum JPEG device decode failed: {err}")))?;
+        .decode_to_device_with_session(J2kPixelFormat::Rgb8, metal_sessions.jpeg())
+        .map_err(|err| WsiError::Jpeg(format!("j2k JPEG device decode failed: {err}")))?;
 
     tile_pixels_from_metal_jpeg_surface(surface, job, require_device)
 }
 
 #[cfg(feature = "metal")]
 fn tile_pixels_from_metal_jpeg_surface(
-    surface: signinum_jpeg_metal::Surface,
+    surface: j2k_jpeg_metal::Surface,
     job: &JpegDecodeJob<'_>,
     require_device: bool,
 ) -> Result<TilePixels, WsiError> {
-    if surface.backend_kind() == SigninumBackendKind::Metal {
-        if surface.residency() == SigninumJpegSurfaceResidency::CpuStagedMetalUpload {
+    if surface.backend_kind() == J2kBackendKind::Metal {
+        if surface.residency() == J2kJpegSurfaceResidency::CpuStagedMetalUpload {
             if require_device {
                 return Err(WsiError::Unsupported {
                     reason:
@@ -356,10 +352,10 @@ fn decode_one_jpeg_pixels_cuda(
         job.expected_height,
         job.force_dimensions,
     );
-    validate_signinum_jpeg_output_size(input.as_ref())?;
-    let view = SigninumJpegView::parse_with_options(
+    validate_j2k_jpeg_output_size(input.as_ref())?;
+    let view = J2kJpegView::parse_with_options(
         input.as_ref(),
-        SigninumDecodeOptions::default().with_color_transform(job.color_transform),
+        J2kDecodeOptions::default().with_color_transform(job.color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
     if progressive_jpeg_requires_cpu_device_route(&view, require_device, "CUDA")? {
@@ -367,14 +363,10 @@ fn decode_one_jpeg_pixels_cuda(
     }
 
     let surface = cuda_sessions.with_jpeg(|session| {
-        let mut decoder = signinum_jpeg_cuda::Decoder::from_view(view)
+        let mut decoder = j2k_jpeg_cuda::Decoder::from_view(view)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         decoder
-            .submit_to_device(
-                session,
-                SigninumPixelFormat::Rgb8,
-                SigninumBackendRequest::Cuda,
-            )
+            .submit_to_device(session, J2kPixelFormat::Rgb8, J2kBackendRequest::Cuda)
             .map_err(cuda_jpeg_decode_error)?
             .wait()
             .map_err(cuda_jpeg_decode_error)
@@ -389,11 +381,11 @@ fn decode_one_jpeg_pixels_cuda(
 
 #[cfg(feature = "cuda")]
 fn tile_pixels_from_cuda_jpeg_surface(
-    surface: signinum_jpeg_cuda::Surface,
+    surface: j2k_jpeg_cuda::Surface,
     job: &JpegDecodeJob<'_>,
     require_device: bool,
 ) -> Result<TilePixels, WsiError> {
-    if surface.backend_kind() != SigninumBackendKind::Cuda {
+    if surface.backend_kind() != J2kBackendKind::Cuda {
         if require_device {
             return Err(WsiError::Unsupported {
                 reason: "device backend not available for jpeg".into(),
@@ -413,10 +405,10 @@ fn tile_pixels_from_cuda_jpeg_surface(
     let stats = cuda_surface.stats();
     if require_device && !stats.used_owned_cuda_decode() {
         return Err(WsiError::Unsupported {
-            reason: "strict CUDA JPEG decode requires Signinum-owned CUDA decode; nvJPEG or CPU-staged output is not accepted".into(),
+            reason: "strict CUDA JPEG decode requires J2k-owned CUDA decode; nvJPEG or CPU-staged output is not accepted".into(),
         });
     }
-    if stats.decode_path() == signinum_jpeg_cuda::CudaJpegDecodePath::None {
+    if stats.decode_path() == j2k_jpeg_cuda::CudaJpegDecodePath::None {
         if require_device {
             return Err(WsiError::Unsupported {
                 reason:
@@ -438,7 +430,7 @@ fn tile_pixels_from_cuda_jpeg_surface(
 }
 
 #[cfg(feature = "cuda")]
-fn cuda_jpeg_decode_error(err: signinum_jpeg_cuda::Error) -> WsiError {
+fn cuda_jpeg_decode_error(err: j2k_jpeg_cuda::Error) -> WsiError {
     WsiError::Unsupported {
         reason: format!("JPEG CUDA device decode failed: {err}"),
     }
@@ -446,11 +438,11 @@ fn cuda_jpeg_decode_error(err: signinum_jpeg_cuda::Error) -> WsiError {
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
 fn progressive_jpeg_requires_cpu_device_route(
-    view: &SigninumJpegView<'_>,
+    view: &J2kJpegView<'_>,
     require_device: bool,
     backend_name: &str,
 ) -> Result<bool, WsiError> {
-    if view.info().sof_kind != SigninumSofKind::Progressive8 {
+    if view.info().sof_kind != J2kSofKind::Progressive8 {
         return Ok(false);
     }
     if require_device {
@@ -465,13 +457,13 @@ fn progressive_jpeg_requires_cpu_device_route(
 
 #[cfg(feature = "metal")]
 fn cpu_tile_from_jpeg_surface(
-    surface: signinum_jpeg_metal::Surface,
+    surface: j2k_jpeg_metal::Surface,
     expected_width: u32,
     expected_height: u32,
 ) -> Result<CpuTile, WsiError> {
-    if surface.pixel_format() != SigninumPixelFormat::Rgb8 {
+    if surface.pixel_format() != J2kPixelFormat::Rgb8 {
         return Err(WsiError::Jpeg(format!(
-            "signinum JPEG returned unsupported pixel format {:?}",
+            "j2k JPEG returned unsupported pixel format {:?}",
             surface.pixel_format()
         )));
     }

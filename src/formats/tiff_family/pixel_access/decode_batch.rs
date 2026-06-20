@@ -8,7 +8,7 @@ pub(super) enum CodecBatchJob<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TiffJpegDecodeOptions {
     pub(super) force_dimensions: bool,
-    pub(super) color_transform: SigninumColorTransform,
+    pub(super) color_transform: J2kColorTransform,
 }
 
 pub(super) fn decode_one_jpeg(job: JpegDecodeJob<'_>) -> Result<CpuTile, WsiError> {

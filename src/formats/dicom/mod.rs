@@ -11,8 +11,8 @@ use dicom_object::{meta::FileMetaTable, DefaultDicomObject, OpenFileOptions};
 use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
 use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
+use j2k_core::BackendRequest;
 use lru::LruCache;
-use signinum_core::BackendRequest;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
@@ -75,7 +75,7 @@ const JP2K_TRANSFER_SYNTAXES: &[&str] = &[
     HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
 ];
 #[cfg(any(feature = "metal", feature = "cuda"))]
-const DICOM_JP2K_DEVICE_DECODE_ENV: &str = "STATUMEN_JP2K_DEVICE_DECODE";
+const DICOM_JP2K_DEVICE_DECODE_ENV: &str = "WSI_RS_JP2K_DEVICE_DECODE";
 
 mod backend;
 mod decode;

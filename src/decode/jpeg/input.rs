@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
 use crate::error::WsiError;
-use signinum_jpeg::{
-    ColorTransform as SigninumColorTransform, DecodeOptions as SigninumDecodeOptions,
-    Decoder as SigninumJpegDecoder, Downscale as SigninumDownscale, JpegError as SigninumJpegError,
-    PixelFormat as SigninumPixelFormat, SofKind as SigninumSofKind,
+use j2k_jpeg::{
+    ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
+    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, JpegError as J2kJpegError,
+    PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
 };
 
 #[cfg(test)]
@@ -94,7 +94,7 @@ pub(crate) fn decode_jpeg_rgb_with_color_transform(
     tables: Option<&[u8]>,
     expected_width: u32,
     expected_height: u32,
-    color_transform: SigninumColorTransform,
+    color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
     decode_jpeg_rgb_with_color_transform_and_patch(
         data,
@@ -112,7 +112,7 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
     expected_width: u32,
     expected_height: u32,
     force_dimensions: bool,
-    color_transform: SigninumColorTransform,
+    color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
     let input = prepare_jpeg_input(
         data,
@@ -121,14 +121,14 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_height,
         force_dimensions,
     );
-    validate_signinum_jpeg_output_size(input.as_ref())?;
-    let decoder = SigninumJpegDecoder::new_with_options(
+    validate_j2k_jpeg_output_size(input.as_ref())?;
+    let decoder = J2kJpegDecoder::new_with_options(
         input.as_ref(),
-        SigninumDecodeOptions::default().with_color_transform(color_transform),
+        J2kDecodeOptions::default().with_color_transform(color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let (pixels, outcome) = decoder
-        .decode(SigninumPixelFormat::Rgb8)
+        .decode(J2kPixelFormat::Rgb8)
         .map_err(|err| WsiError::Jpeg(err.to_string()))?;
     crop_jpeg_rgb_to_expected(
         DecodedJpegRgb {
@@ -141,19 +141,19 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
     )
 }
 
-pub(super) fn signinum_downscale_for_dimensions(
+pub(super) fn j2k_downscale_for_dimensions(
     expected_width: u32,
     expected_height: u32,
     requested_width: u32,
     requested_height: u32,
-) -> Option<SigninumDownscale> {
+) -> Option<J2kDownscale> {
     if expected_width == requested_width && expected_height == requested_height {
-        return Some(SigninumDownscale::None);
+        return Some(J2kDownscale::None);
     }
     for (scale, denom) in [
-        (SigninumDownscale::Half, 2),
-        (SigninumDownscale::Quarter, 4),
-        (SigninumDownscale::Eighth, 8),
+        (J2kDownscale::Half, 2),
+        (J2kDownscale::Quarter, 4),
+        (J2kDownscale::Eighth, 8),
     ] {
         if expected_width.is_multiple_of(denom)
             && expected_height.is_multiple_of(denom)
@@ -169,7 +169,7 @@ pub(super) fn signinum_downscale_for_dimensions(
 pub(super) fn try_decode_jpeg_rgb_scaled(
     req: ScaledJpegDecode<'_>,
 ) -> Result<Option<DecodedJpegRgb>, WsiError> {
-    let Some(scale) = signinum_downscale_for_dimensions(
+    let Some(scale) = j2k_downscale_for_dimensions(
         req.expected_width,
         req.expected_height,
         req.requested_width,
@@ -185,23 +185,23 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         req.expected_height,
         req.force_dimensions,
     );
-    validate_signinum_jpeg_output_size(input.as_ref())?;
-    let decoder = SigninumJpegDecoder::new_with_options(
+    validate_j2k_jpeg_output_size(input.as_ref())?;
+    let decoder = J2kJpegDecoder::new_with_options(
         input.as_ref(),
-        SigninumDecodeOptions::default().with_color_transform(req.color_transform),
+        J2kDecodeOptions::default().with_color_transform(req.color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-    let decode_result = if scale == SigninumDownscale::None {
-        decoder.decode(SigninumPixelFormat::Rgb8)
+    let decode_result = if scale == J2kDownscale::None {
+        decoder.decode(J2kPixelFormat::Rgb8)
     } else {
-        decoder.decode_scaled(SigninumPixelFormat::Rgb8, scale)
+        decoder.decode_scaled(J2kPixelFormat::Rgb8, scale)
     };
     let (pixels, outcome) = match decode_result {
         Ok(decoded) => decoded,
         Err(err) if should_retry_scaled_jpeg_as_full_decode(&err) => return Ok(None),
         Err(err) => return Err(WsiError::Jpeg(err.to_string())),
     };
-    let decoded = if scale == SigninumDownscale::None {
+    let decoded = if scale == J2kDownscale::None {
         DecodedJpegRgb {
             width: outcome.decoded.w,
             height: outcome.decoded.h,
@@ -221,18 +221,18 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
     )?))
 }
 
-fn should_retry_scaled_jpeg_as_full_decode(err: &SigninumJpegError) -> bool {
+fn should_retry_scaled_jpeg_as_full_decode(err: &J2kJpegError) -> bool {
     matches!(
         err,
-        SigninumJpegError::DownscaleUnsupported { .. }
-            | SigninumJpegError::NotImplemented {
-                sof: SigninumSofKind::Progressive8
+        J2kJpegError::DownscaleUnsupported { .. }
+            | J2kJpegError::NotImplemented {
+                sof: J2kSofKind::Progressive8
             }
     )
 }
 
 pub(crate) fn jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), WsiError> {
-    let info = SigninumJpegDecoder::inspect(data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let info = J2kJpegDecoder::inspect(data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     Ok(info.dimensions)
 }
 
@@ -388,13 +388,12 @@ pub(super) fn ensure_jpeg_eoi<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
     Cow::Owned(repaired)
 }
 
-pub(super) fn validate_signinum_jpeg_output_size(input: &[u8]) -> Result<(), WsiError> {
-    inspect_signinum_jpeg_output_size(input).map(|_| ())
+pub(super) fn validate_j2k_jpeg_output_size(input: &[u8]) -> Result<(), WsiError> {
+    inspect_j2k_jpeg_output_size(input).map(|_| ())
 }
 
-pub(super) fn inspect_signinum_jpeg_output_size(input: &[u8]) -> Result<(u32, u32), WsiError> {
-    let info =
-        SigninumJpegDecoder::inspect(input).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+pub(super) fn inspect_j2k_jpeg_output_size(input: &[u8]) -> Result<(u32, u32), WsiError> {
+    let info = J2kJpegDecoder::inspect(input).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let _ = checked_jpeg_rgb_len(info.dimensions.0, info.dimensions.1)?;
     Ok(info.dimensions)
 }

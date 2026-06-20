@@ -1,4 +1,4 @@
-Raw JPEG 2000 fixtures for the subset covered by Statumen tests:
+Raw JPEG 2000 fixtures for the subset covered by wsi-rs tests:
 
 - `.j2k` raw codestreams
 - 3 components

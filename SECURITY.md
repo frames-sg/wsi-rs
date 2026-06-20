@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-`statumen` reads whole-slide image containers and passes compressed tile
+`wsi-rs` reads whole-slide image containers and passes compressed tile
 payloads into codec backends. If you find a crash, memory-safety issue,
 malformed-output bug, metadata leak, or unexpected file-system behavior, please
 report it privately rather than opening a public issue.

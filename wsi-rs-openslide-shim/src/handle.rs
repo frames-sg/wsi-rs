@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use statumen::{FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileLayout, WsiError};
+use wsi_rs::{FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileLayout, WsiError};
 
 static DETECTED_VENDORS: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
 

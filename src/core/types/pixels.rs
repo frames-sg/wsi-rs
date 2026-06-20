@@ -69,14 +69,14 @@ impl PixelFormat {
     }
 
     #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(crate) fn try_from_signinum(format: signinum_core::PixelFormat) -> Result<Self, WsiError> {
+    pub(crate) fn try_from_j2k(format: j2k_core::PixelFormat) -> Result<Self, WsiError> {
         match format {
-            signinum_core::PixelFormat::Rgb8 => Ok(Self::Rgb8),
-            signinum_core::PixelFormat::Rgba8 => Ok(Self::Rgba8),
-            signinum_core::PixelFormat::Gray8 => Ok(Self::Gray8),
-            signinum_core::PixelFormat::Rgb16 => Ok(Self::Rgb16),
-            signinum_core::PixelFormat::Rgba16 => Ok(Self::Rgba16),
-            signinum_core::PixelFormat::Gray16 => Ok(Self::Gray16),
+            j2k_core::PixelFormat::Rgb8 => Ok(Self::Rgb8),
+            j2k_core::PixelFormat::Rgba8 => Ok(Self::Rgba8),
+            j2k_core::PixelFormat::Gray8 => Ok(Self::Gray8),
+            j2k_core::PixelFormat::Rgb16 => Ok(Self::Rgb16),
+            j2k_core::PixelFormat::Rgba16 => Ok(Self::Rgba16),
+            j2k_core::PixelFormat::Gray16 => Ok(Self::Gray16),
             _ => Err(WsiError::Unsupported {
                 reason: format!("device decode returned unsupported pixel format {format:?}"),
             }),
@@ -317,7 +317,7 @@ impl CpuTile {
         );
         assert_eq!(
             stride_bytes, row_min,
-            "CpuTile::new_for_test currently stores packed interleaved data; use sv_tile::SlideCpuTile for padded test storage until statumen CpuTile is reshaped"
+            "CpuTile::new_for_test currently stores packed interleaved data; use sv_tile::SlideCpuTile for padded test storage until wsi_rs CpuTile is reshaped"
         );
         let expected = stride_bytes
             .checked_mul(height as usize)

@@ -497,7 +497,7 @@ impl SlideReader for TiffPixelReader {
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = output.backend().to_signinum();
+        let backend = output.backend().to_j2k();
         let require_device = output.requires_device();
         #[cfg(any(feature = "metal", feature = "cuda"))]
         let prefer_device = output.prefers_device();
@@ -598,7 +598,7 @@ impl SlideReader for TiffPixelReader {
                         tracing::debug!(
                             error = %err,
                             fallback_to_cpu = true,
-                            fallback_reason = "signinum_auto_chose_cpu",
+                            fallback_reason = "j2k_auto_chose_cpu",
                             "device tile path failed; retrying through CPU output"
                         );
                     }
@@ -773,14 +773,14 @@ impl SlideReader for TiffPixelReader {
                     .get(name)
                     .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
 
-                let options = signinum_decode_options(
+                let options = j2k_decode_options(
                     self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &data, None)
                         .color_transform,
                 );
-                let decoder = SigninumJpegDecoder::new_with_options(&data, options)
+                let decoder = J2kJpegDecoder::new_with_options(&data, options)
                     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
                 let (pixels, outcome) = decoder
-                    .decode(SigninumPixelFormat::Rgb8)
+                    .decode(J2kPixelFormat::Rgb8)
                     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
                 let decoded =
                     cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
@@ -828,7 +828,7 @@ impl SlideReader for TiffPixelReader {
                     tables: None,
                     expected_width: 0,
                     expected_height: 0,
-                    color_transform: SigninumColorTransform::Auto,
+                    color_transform: J2kColorTransform::Auto,
                     force_dimensions: false,
                     requested_size: None,
                 })

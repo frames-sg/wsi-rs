@@ -20,8 +20,8 @@ use czi_rs::{
     IntRect, PixelType as CziPixelType,
 };
 use image::imageops::{self, FilterType};
+use j2k_core::BackendRequest;
 use lru::LruCache;
-use signinum_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
 use crate::core::hash::Quickhash1;

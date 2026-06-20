@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use statumen::{Slide, TileOutputPreference, TileRequest};
+use wsi_rs::{Slide, TileOutputPreference, TileRequest};
 
 const MAX_INPUT_BYTES: usize = 1 << 20;
 
@@ -10,7 +10,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let Ok(dir) = tempfile::Builder::new().prefix("statumen-fuzz-").tempdir() else {
+    let Ok(dir) = tempfile::Builder::new().prefix("wsi_rs-fuzz-").tempdir() else {
         return;
     };
     let path = dir.path().join("input.j2k");

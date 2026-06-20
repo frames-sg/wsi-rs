@@ -115,7 +115,7 @@ impl DicomImage {
     ) -> Result<CpuTile, WsiError> {
         let span = tracing::info_span!(
             "dicom_read_tile",
-            reader = "statumen",
+            reader = "wsi_rs",
             transfer_syntax = %self.transfer_syntax_uid,
         );
         let _guard = span.enter();
@@ -347,7 +347,7 @@ impl DicomImage {
                 tables: None,
                 expected_width: self.tile_width,
                 expected_height: self.tile_height,
-                color_transform: signinum_jpeg::ColorTransform::Auto,
+                color_transform: j2k_jpeg::ColorTransform::Auto,
                 force_dimensions: false,
                 requested_size: None,
             }])

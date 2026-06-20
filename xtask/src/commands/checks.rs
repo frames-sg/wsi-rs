@@ -4,10 +4,10 @@ use super::process::{
     ensure_clean_worktree, run_cargo, run_cargo_capture, run_cargo_with_env, run_program,
 };
 
-const PUBLIC_API_SNAPSHOT_PATH: &str = "api/statumen-public-api.txt";
-const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/statumen-public-api-cuda.txt";
-const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/statumen-public-api-metal.txt";
-const SEMVER_BASELINE_ROOT_ENV: &str = "STATUMEN_SEMVER_BASELINE_ROOT";
+const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
+const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
+const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
+const SEMVER_BASELINE_ROOT_ENV: &str = "WSI_RS_SEMVER_BASELINE_ROOT";
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
@@ -133,8 +133,8 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
     run_cargo(&[
         "test",
         "--test",
-        "signinum_parity",
-        "signinum_cpu_vs_reference_within_tolerance",
+        "j2k_parity",
+        "j2k_cpu_vs_reference_within_tolerance",
         "--",
         "--exact",
         "--ignored",
@@ -143,7 +143,7 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
         "test",
         "--test",
         "dicom_parity",
-        "dicom_public_corpus_decodes_with_statumen",
+        "dicom_public_corpus_decodes_with_wsi_rs",
         "--",
         "--exact",
         "--ignored",
@@ -190,14 +190,14 @@ pub(super) fn deps() -> Result<(), String> {
 pub(super) fn api_check() -> Result<(), String> {
     check_public_api_snapshot_for(
         PUBLIC_API_SNAPSHOT_PATH,
-        &["public-api", "-p", "statumen", "-sss", "--color", "never"],
+        &["public-api", "-p", "wsi_rs", "-sss", "--color", "never"],
     )?;
     check_public_api_snapshot_for(
         PUBLIC_API_CUDA_SNAPSHOT_PATH,
         &[
             "public-api",
             "-p",
-            "statumen",
+            "wsi_rs",
             "--features",
             "cuda",
             "-sss",
@@ -211,7 +211,7 @@ pub(super) fn api_check() -> Result<(), String> {
             &[
                 "public-api",
                 "-p",
-                "statumen",
+                "wsi_rs",
                 "--features",
                 "metal",
                 "-sss",
@@ -273,7 +273,7 @@ fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<S
         "semver-checks".to_string(),
         "check-release".to_string(),
         "-p".to_string(),
-        "statumen".to_string(),
+        "wsi_rs".to_string(),
     ];
     args.extend(extra_args.iter().map(|arg| (*arg).to_string()));
     if let Some(baseline_root) = baseline_root {
@@ -286,7 +286,7 @@ fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<S
 fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), String> {
     let snapshot_path = Path::new(snapshot_path);
     let normalized_actual = normalize_snapshot(actual);
-    if env::var("STATUMEN_UPDATE_PUBLIC_API").as_deref() == Ok("1") {
+    if env::var("WSI_RS_UPDATE_PUBLIC_API").as_deref() == Ok("1") {
         if let Some(parent) = snapshot_path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 format!(
@@ -306,7 +306,7 @@ fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), St
 
     let expected = fs::read_to_string(snapshot_path).map_err(|err| {
         format!(
-            "failed to read public API snapshot {}: {err}\nrun `STATUMEN_UPDATE_PUBLIC_API=1 cargo xtask api-check` to create or refresh it",
+            "failed to read public API snapshot {}: {err}\nrun `WSI_RS_UPDATE_PUBLIC_API=1 cargo xtask api-check` to create or refresh it",
             snapshot_path.display()
         )
     })?;
@@ -315,7 +315,7 @@ fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), St
         Ok(())
     } else {
         Err(format!(
-            "public API snapshot is stale: {}\nrun `STATUMEN_UPDATE_PUBLIC_API=1 cargo xtask api-check` and review the snapshot diff",
+            "public API snapshot is stale: {}\nrun `WSI_RS_UPDATE_PUBLIC_API=1 cargo xtask api-check` and review the snapshot diff",
             snapshot_path.display()
         ))
     }
@@ -362,7 +362,7 @@ mod tests {
                 "semver-checks",
                 "check-release",
                 "-p",
-                "statumen",
+                "wsi_rs",
                 "--features",
                 "cuda",
                 "--baseline-root",

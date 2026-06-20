@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! # statumen
+//! # wsi-rs
 //!
-//! `statumen` is a whole-slide image reader focused on deterministic public
+//! `wsi-rs` is a whole-slide image reader focused on deterministic public
 //! APIs for TIFF-family WSI, DICOM VL WSI, selected vendor containers, and
 //! explicit failure behavior for unsupported inputs.
 //!
@@ -11,7 +11,7 @@
 //! Read a region in level coordinates as an `image::RgbaImage`:
 //!
 //! ```rust,no_run
-//! use statumen::{LevelIdx, RegionRequest, SceneId, SeriesId, Slide};
+//! use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, Slide};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let slide = Slide::open("sample.svs")?;
@@ -32,7 +32,7 @@
 //! exact tile coordinates:
 //!
 //! ```rust,no_run
-//! use statumen::{LevelIdx, SceneId, SeriesId, Slide, TileOutputPreference, TilePixels, TileRequest};
+//! use wsi_rs::{LevelIdx, SceneId, SeriesId, Slide, TileOutputPreference, TilePixels, TileRequest};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let slide = Slide::open("sample.svs")?;
@@ -90,7 +90,7 @@ pub use core::types::{
 };
 
 pub mod prelude {
-    //! Common imports for applications using `statumen`.
+    //! Common imports for applications using `wsi-rs`.
 
     pub use crate::{
         AssociatedImage, CacheConfig, ColorSpace, CpuTile, Dataset, IccProfileKey, Level, LevelIdx,

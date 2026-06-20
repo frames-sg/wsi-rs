@@ -1,0 +1,947 @@
+pub mod wsi_rs
+pub mod wsi_rs::error
+#[non_exhaustive] pub enum wsi_rs::error::WsiError
+pub wsi_rs::error::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::error::WsiError::Codec
+pub wsi_rs::error::WsiError::Codec::codec: &'static str
+pub wsi_rs::error::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub wsi_rs::error::WsiError::DisplayConversion(alloc::string::String)
+pub wsi_rs::error::WsiError::InvalidSlide
+pub wsi_rs::error::WsiError::InvalidSlide::message: alloc::string::String
+pub wsi_rs::error::WsiError::InvalidSlide::path: std::path::PathBuf
+pub wsi_rs::error::WsiError::Io(std::io::error::Error)
+pub wsi_rs::error::WsiError::IoWithPath
+pub wsi_rs::error::WsiError::IoWithPath::path: std::path::PathBuf
+pub wsi_rs::error::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::error::WsiError::Jp2k(alloc::string::String)
+pub wsi_rs::error::WsiError::Jpeg(alloc::string::String)
+pub wsi_rs::error::WsiError::LevelOutOfRange
+pub wsi_rs::error::WsiError::LevelOutOfRange::count: u32
+pub wsi_rs::error::WsiError::LevelOutOfRange::level: u32
+pub wsi_rs::error::WsiError::PlaneOutOfRange
+pub wsi_rs::error::WsiError::PlaneOutOfRange::axis: alloc::string::String
+pub wsi_rs::error::WsiError::PlaneOutOfRange::max: u32
+pub wsi_rs::error::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::error::WsiError::SceneOutOfRange
+pub wsi_rs::error::WsiError::SceneOutOfRange::count: usize
+pub wsi_rs::error::WsiError::SceneOutOfRange::index: usize
+pub wsi_rs::error::WsiError::SeriesOutOfRange
+pub wsi_rs::error::WsiError::SeriesOutOfRange::count: usize
+pub wsi_rs::error::WsiError::SeriesOutOfRange::index: usize
+pub wsi_rs::error::WsiError::Tiff
+pub wsi_rs::error::WsiError::Tiff::message: alloc::string::String
+pub wsi_rs::error::WsiError::Tiff::path: std::path::PathBuf
+pub wsi_rs::error::WsiError::TileRead
+pub wsi_rs::error::WsiError::TileRead::col: i64
+pub wsi_rs::error::WsiError::TileRead::level: u32
+pub wsi_rs::error::WsiError::TileRead::reason: alloc::string::String
+pub wsi_rs::error::WsiError::TileRead::row: i64
+pub wsi_rs::error::WsiError::Unsupported
+pub wsi_rs::error::WsiError::Unsupported::reason: alloc::string::String
+pub wsi_rs::error::WsiError::UnsupportedFormat(alloc::string::String)
+pub wsi_rs::error::WsiError::Xml(alloc::string::String)
+impl core::convert::From<wsi_rs::RawCompressedTileBuildError> for wsi_rs::error::WsiError
+pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Self
+pub mod wsi_rs::output
+pub mod wsi_rs::output::cuda
+#[non_exhaustive] pub enum wsi_rs::output::cuda::CudaDeviceStorage
+pub wsi_rs::output::cuda::CudaDeviceStorage::J2kSurface
+pub wsi_rs::output::cuda::CudaDeviceStorage::J2kSurface::surface: alloc::sync::Arc<j2k_cuda::surface::Surface>
+pub wsi_rs::output::cuda::CudaDeviceStorage::JpegSurface
+pub wsi_rs::output::cuda::CudaDeviceStorage::JpegSurface::surface: alloc::sync::Arc<j2k_jpeg_cuda::surface::Surface>
+impl wsi_rs::output::cuda::CudaDeviceStorage
+pub fn wsi_rs::output::cuda::CudaDeviceStorage::byte_len(&self) -> usize
+pub fn wsi_rs::output::cuda::CudaDeviceStorage::device_ptr(&self) -> u64
+pub fn wsi_rs::output::cuda::CudaDeviceStorage::j2k_surface(&self) -> core::option::Option<&j2k_cuda::surface::Surface>
+pub fn wsi_rs::output::cuda::CudaDeviceStorage::jpeg_surface(&self) -> core::option::Option<&j2k_jpeg_cuda::surface::Surface>
+pub struct wsi_rs::output::cuda::CudaBackendSessions
+impl wsi_rs::output::cuda::CudaBackendSessions
+pub fn wsi_rs::output::cuda::CudaBackendSessions::new() -> Self
+impl core::default::Default for wsi_rs::output::cuda::CudaBackendSessions
+pub fn wsi_rs::output::cuda::CudaBackendSessions::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::output::cuda::CudaDeviceTile
+pub wsi_rs::output::cuda::CudaDeviceTile::format: wsi_rs::PixelFormat
+pub wsi_rs::output::cuda::CudaDeviceTile::height: u32
+pub wsi_rs::output::cuda::CudaDeviceTile::pitch_bytes: usize
+pub wsi_rs::output::cuda::CudaDeviceTile::storage: wsi_rs::output::cuda::CudaDeviceStorage
+pub wsi_rs::output::cuda::CudaDeviceTile::width: u32
+pub mod wsi_rs::prelude
+#[non_exhaustive] pub enum wsi_rs::prelude::ColorSpace
+pub wsi_rs::prelude::ColorSpace::Cmyk
+pub wsi_rs::prelude::ColorSpace::Grayscale
+pub wsi_rs::prelude::ColorSpace::Palette(alloc::sync::Arc<alloc::vec::Vec<[u8; 3]>>)
+pub wsi_rs::prelude::ColorSpace::Rgb
+pub wsi_rs::prelude::ColorSpace::Rgba
+pub wsi_rs::prelude::ColorSpace::Unknown
+pub wsi_rs::prelude::ColorSpace::YCbCr
+#[non_exhaustive] pub enum wsi_rs::prelude::PixelFormat
+pub wsi_rs::prelude::PixelFormat::Gray16
+pub wsi_rs::prelude::PixelFormat::Gray8
+pub wsi_rs::prelude::PixelFormat::Rgb16
+pub wsi_rs::prelude::PixelFormat::Rgb8
+pub wsi_rs::prelude::PixelFormat::Rgba16
+pub wsi_rs::prelude::PixelFormat::Rgba8
+impl wsi_rs::PixelFormat
+pub const fn wsi_rs::PixelFormat::bytes_per_pixel(self) -> usize
+pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
+pub const fn wsi_rs::PixelFormat::channels(self) -> usize
+pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
+pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+#[non_exhaustive] pub enum wsi_rs::prelude::RequestBuildError
+pub wsi_rs::prelude::RequestBuildError::MissingColumn
+pub wsi_rs::prelude::RequestBuildError::MissingOrigin
+pub wsi_rs::prelude::RequestBuildError::MissingRow
+pub wsi_rs::prelude::RequestBuildError::MissingSize
+pub wsi_rs::prelude::RequestBuildError::MissingTileHeight
+pub wsi_rs::prelude::RequestBuildError::MissingTileWidth
+impl core::error::Error for wsi_rs::RequestBuildError
+impl core::fmt::Display for wsi_rs::RequestBuildError
+pub fn wsi_rs::RequestBuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum wsi_rs::prelude::TileOutputPreference
+pub wsi_rs::prelude::TileOutputPreference::Cpu
+pub wsi_rs::prelude::TileOutputPreference::Cpu::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::prelude::TileOutputPreference::PreferDevice
+pub wsi_rs::prelude::TileOutputPreference::PreferDevice::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::prelude::TileOutputPreference::PreferDevice::context: wsi_rs::DeviceOutputContext
+pub wsi_rs::prelude::TileOutputPreference::RequireDevice
+pub wsi_rs::prelude::TileOutputPreference::RequireDevice::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::prelude::TileOutputPreference::RequireDevice::context: wsi_rs::DeviceOutputContext
+impl wsi_rs::TileOutputPreference
+pub fn wsi_rs::TileOutputPreference::adaptive_decode_route_enabled(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::backend(&self) -> wsi_rs::OutputBackendRequest
+pub fn wsi_rs::TileOutputPreference::compressed_device_decode_enabled(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::cpu() -> Self
+pub fn wsi_rs::TileOutputPreference::cpu_only() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_compressed_decode() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_cuda(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_cuda_and_compressed_decode(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::prefers_device(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::require_cuda() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto_with_compressed_decode() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto_with_cuda_and_compressed_decode(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::requires_device(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::without_adaptive_decode_route(self) -> Self
+#[non_exhaustive] pub enum wsi_rs::prelude::TilePixels
+pub wsi_rs::prelude::TilePixels::Cpu(wsi_rs::CpuTile)
+pub wsi_rs::prelude::TilePixels::Device(wsi_rs::DeviceTile)
+#[non_exhaustive] pub enum wsi_rs::prelude::WsiError
+pub wsi_rs::prelude::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::prelude::WsiError::Codec
+pub wsi_rs::prelude::WsiError::Codec::codec: &'static str
+pub wsi_rs::prelude::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub wsi_rs::prelude::WsiError::DisplayConversion(alloc::string::String)
+pub wsi_rs::prelude::WsiError::InvalidSlide
+pub wsi_rs::prelude::WsiError::InvalidSlide::message: alloc::string::String
+pub wsi_rs::prelude::WsiError::InvalidSlide::path: std::path::PathBuf
+pub wsi_rs::prelude::WsiError::Io(std::io::error::Error)
+pub wsi_rs::prelude::WsiError::IoWithPath
+pub wsi_rs::prelude::WsiError::IoWithPath::path: std::path::PathBuf
+pub wsi_rs::prelude::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::prelude::WsiError::Jp2k(alloc::string::String)
+pub wsi_rs::prelude::WsiError::Jpeg(alloc::string::String)
+pub wsi_rs::prelude::WsiError::LevelOutOfRange
+pub wsi_rs::prelude::WsiError::LevelOutOfRange::count: u32
+pub wsi_rs::prelude::WsiError::LevelOutOfRange::level: u32
+pub wsi_rs::prelude::WsiError::PlaneOutOfRange
+pub wsi_rs::prelude::WsiError::PlaneOutOfRange::axis: alloc::string::String
+pub wsi_rs::prelude::WsiError::PlaneOutOfRange::max: u32
+pub wsi_rs::prelude::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::prelude::WsiError::SceneOutOfRange
+pub wsi_rs::prelude::WsiError::SceneOutOfRange::count: usize
+pub wsi_rs::prelude::WsiError::SceneOutOfRange::index: usize
+pub wsi_rs::prelude::WsiError::SeriesOutOfRange
+pub wsi_rs::prelude::WsiError::SeriesOutOfRange::count: usize
+pub wsi_rs::prelude::WsiError::SeriesOutOfRange::index: usize
+pub wsi_rs::prelude::WsiError::Tiff
+pub wsi_rs::prelude::WsiError::Tiff::message: alloc::string::String
+pub wsi_rs::prelude::WsiError::Tiff::path: std::path::PathBuf
+pub wsi_rs::prelude::WsiError::TileRead
+pub wsi_rs::prelude::WsiError::TileRead::col: i64
+pub wsi_rs::prelude::WsiError::TileRead::level: u32
+pub wsi_rs::prelude::WsiError::TileRead::reason: alloc::string::String
+pub wsi_rs::prelude::WsiError::TileRead::row: i64
+pub wsi_rs::prelude::WsiError::Unsupported
+pub wsi_rs::prelude::WsiError::Unsupported::reason: alloc::string::String
+pub wsi_rs::prelude::WsiError::UnsupportedFormat(alloc::string::String)
+pub wsi_rs::prelude::WsiError::Xml(alloc::string::String)
+impl core::convert::From<wsi_rs::RawCompressedTileBuildError> for wsi_rs::error::WsiError
+pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::AssociatedImage
+pub wsi_rs::prelude::AssociatedImage::channels: u16
+pub wsi_rs::prelude::AssociatedImage::dimensions: (u32, u32)
+pub wsi_rs::prelude::AssociatedImage::sample_type: wsi_rs::SampleType
+impl wsi_rs::AssociatedImage
+pub const fn wsi_rs::AssociatedImage::new((u32, u32), wsi_rs::SampleType, u16) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::CacheConfig
+pub wsi_rs::prelude::CacheConfig::display_tile_bytes: core::option::Option<u64>
+pub wsi_rs::prelude::CacheConfig::shared_tile_bytes: core::option::Option<u64>
+impl wsi_rs::CacheConfig
+pub const fn wsi_rs::CacheConfig::deterministic() -> Self
+pub const fn wsi_rs::CacheConfig::with_display_tile_bytes(self, u64) -> Self
+pub const fn wsi_rs::CacheConfig::with_shared_tile_bytes(self, u64) -> Self
+impl core::default::Default for wsi_rs::CacheConfig
+pub fn wsi_rs::CacheConfig::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::CpuTile
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::as_u8(&self) -> core::option::Option<&[u8]>
+pub fn wsi_rs::CpuTile::channels(&self) -> u16
+pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
+pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
+pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::height(&self) -> u32
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
+pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+#[non_exhaustive] pub struct wsi_rs::prelude::Dataset
+pub wsi_rs::prelude::Dataset::associated_images: std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>
+pub wsi_rs::prelude::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>
+pub wsi_rs::prelude::Dataset::id: wsi_rs::DatasetId
+pub wsi_rs::prelude::Dataset::properties: wsi_rs::properties::Properties
+pub wsi_rs::prelude::Dataset::scenes: alloc::vec::Vec<wsi_rs::Scene>
+pub wsi_rs::prelude::Dataset::source_icc_profiles: alloc::vec::Vec<wsi_rs::SourceIccProfile>
+impl wsi_rs::Dataset
+pub fn wsi_rs::Dataset::new(wsi_rs::DatasetId, alloc::vec::Vec<wsi_rs::Scene>) -> Self
+pub fn wsi_rs::Dataset::push_source_icc_profile(&mut self, wsi_rs::SourceIccProfile) -> core::result::Result<(), wsi_rs::SourceIccProfileConflict>
+pub fn wsi_rs::Dataset::source_icc_profiles_for_series(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>) -> impl core::iter::traits::iterator::Iterator<Item = &wsi_rs::SourceIccProfile>
+pub fn wsi_rs::Dataset::with_associated_images(self, std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>) -> Self
+pub fn wsi_rs::Dataset::with_icc_profiles(self, std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>) -> Self
+pub fn wsi_rs::Dataset::with_properties(self, wsi_rs::properties::Properties) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::IccProfileKey
+pub wsi_rs::prelude::IccProfileKey::scene: wsi_rs::SceneId
+pub wsi_rs::prelude::IccProfileKey::series: wsi_rs::SeriesId
+impl wsi_rs::IccProfileKey
+pub const fn wsi_rs::IccProfileKey::new(wsi_rs::SceneId, wsi_rs::SeriesId) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::Level
+pub wsi_rs::prelude::Level::dimensions: (u64, u64)
+pub wsi_rs::prelude::Level::downsample: f64
+pub wsi_rs::prelude::Level::tile_layout: wsi_rs::TileLayout
+impl wsi_rs::Level
+pub fn wsi_rs::Level::new((u64, u64), f64, wsi_rs::TileLayout) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::LevelIdx(_)
+impl wsi_rs::LevelIdx
+pub const fn wsi_rs::LevelIdx::get(self) -> u32
+pub const fn wsi_rs::LevelIdx::new(u32) -> Self
+impl core::convert::From<u32> for wsi_rs::LevelIdx
+pub fn wsi_rs::LevelIdx::from(u32) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::PlaneIdx(_)
+impl wsi_rs::PlaneIdx
+pub const fn wsi_rs::PlaneIdx::get(self) -> wsi_rs::PlaneSelection
+pub const fn wsi_rs::PlaneIdx::new(wsi_rs::PlaneSelection) -> Self
+impl core::convert::From<wsi_rs::PlaneSelection> for wsi_rs::PlaneIdx
+pub fn wsi_rs::PlaneIdx::from(wsi_rs::PlaneSelection) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::PlaneSelection
+pub wsi_rs::prelude::PlaneSelection::c: u32
+pub wsi_rs::prelude::PlaneSelection::t: u32
+pub wsi_rs::prelude::PlaneSelection::z: u32
+impl wsi_rs::PlaneSelection
+pub const fn wsi_rs::PlaneSelection::new(u32, u32, u32) -> Self
+impl core::convert::From<wsi_rs::PlaneSelection> for wsi_rs::PlaneIdx
+pub fn wsi_rs::PlaneIdx::from(wsi_rs::PlaneSelection) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::RegionRequest
+pub wsi_rs::prelude::RegionRequest::level: wsi_rs::LevelIdx
+pub wsi_rs::prelude::RegionRequest::origin_px: (i64, i64)
+pub wsi_rs::prelude::RegionRequest::plane: wsi_rs::PlaneIdx
+pub wsi_rs::prelude::RegionRequest::scene: wsi_rs::SceneId
+pub wsi_rs::prelude::RegionRequest::series: wsi_rs::SeriesId
+pub wsi_rs::prelude::RegionRequest::size_px: (u32, u32)
+impl wsi_rs::RegionRequest
+pub fn wsi_rs::RegionRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::RegionRequestBuilder
+pub fn wsi_rs::RegionRequest::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, (i64, i64), (u32, u32)) -> Self
+pub fn wsi_rs::RegionRequest::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::Scene
+pub wsi_rs::prelude::Scene::id: alloc::string::String
+pub wsi_rs::prelude::Scene::name: core::option::Option<alloc::string::String>
+pub wsi_rs::prelude::Scene::series: alloc::vec::Vec<wsi_rs::Series>
+impl wsi_rs::Scene
+pub fn wsi_rs::Scene::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<wsi_rs::Series>) -> Self
+pub fn wsi_rs::Scene::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::SceneId(_)
+impl wsi_rs::SceneId
+pub const fn wsi_rs::SceneId::get(self) -> usize
+pub const fn wsi_rs::SceneId::new(usize) -> Self
+impl core::convert::From<usize> for wsi_rs::SceneId
+pub fn wsi_rs::SceneId::from(usize) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::Series
+pub wsi_rs::prelude::Series::axes: wsi_rs::AxesShape
+pub wsi_rs::prelude::Series::channels: alloc::vec::Vec<wsi_rs::ChannelInfo>
+pub wsi_rs::prelude::Series::id: alloc::string::String
+pub wsi_rs::prelude::Series::levels: alloc::vec::Vec<wsi_rs::Level>
+pub wsi_rs::prelude::Series::sample_type: wsi_rs::SampleType
+impl wsi_rs::Series
+pub fn wsi_rs::Series::new(impl core::convert::Into<alloc::string::String>, wsi_rs::AxesShape, alloc::vec::Vec<wsi_rs::Level>, wsi_rs::SampleType, alloc::vec::Vec<wsi_rs::ChannelInfo>) -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::SeriesId(_)
+impl wsi_rs::SeriesId
+pub const fn wsi_rs::SeriesId::get(self) -> usize
+pub const fn wsi_rs::SeriesId::new(usize) -> Self
+impl core::convert::From<usize> for wsi_rs::SeriesId
+pub fn wsi_rs::SeriesId::from(usize) -> Self
+pub struct wsi_rs::prelude::Slide
+impl wsi_rs::Slide
+pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
+pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
+pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
+pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open_with_cache_bytes(impl core::convert::AsRef<std::path::Path>, &wsi_rs::FormatRegistry, u64) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open_with_options(impl core::convert::AsRef<std::path::Path>, wsi_rs::SlideOpenOptions) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_display_tile_with_output(&self, &wsi_rs::TileViewRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_raw_compressed_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_raw_compressed_tile(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
+pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+impl core::fmt::Debug for wsi_rs::Slide
+pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct wsi_rs::prelude::SlideOpenOptions
+impl wsi_rs::SlideOpenOptions
+pub fn wsi_rs::SlideOpenOptions::cache_config(&self) -> wsi_rs::CacheConfig
+pub fn wsi_rs::SlideOpenOptions::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::SlideOpenOptions::deterministic() -> Self
+pub fn wsi_rs::SlideOpenOptions::max_region_pixels(&self) -> u64
+pub fn wsi_rs::SlideOpenOptions::svcache_policy(&self) -> wsi_rs::SvcachePolicy
+pub fn wsi_rs::SlideOpenOptions::with_cache_config(self, wsi_rs::CacheConfig) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_decode_execution_options(self, wsi_rs::DecodeExecutionOptions) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_max_region_pixels(self, u64) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_registry(self, wsi_rs::FormatRegistry) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_svcache_policy(self, wsi_rs::SvcachePolicy) -> Self
+impl core::default::Default for wsi_rs::SlideOpenOptions
+pub fn wsi_rs::SlideOpenOptions::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::prelude::TileRequest
+pub wsi_rs::prelude::TileRequest::col: i64
+pub wsi_rs::prelude::TileRequest::level: wsi_rs::LevelIdx
+pub wsi_rs::prelude::TileRequest::plane: wsi_rs::PlaneIdx
+pub wsi_rs::prelude::TileRequest::row: i64
+pub wsi_rs::prelude::TileRequest::scene: wsi_rs::SceneId
+pub wsi_rs::prelude::TileRequest::series: wsi_rs::SeriesId
+impl wsi_rs::TileRequest
+pub fn wsi_rs::TileRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::TileRequestBuilder
+pub fn wsi_rs::TileRequest::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64) -> Self
+pub fn wsi_rs::TileRequest::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub mod wsi_rs::properties
+#[non_exhaustive] pub struct wsi_rs::properties::Properties
+impl wsi_rs::properties::Properties
+pub fn wsi_rs::properties::Properties::background_color(&self) -> [u8; 3]
+pub fn wsi_rs::properties::Properties::get(&self, &str) -> core::option::Option<&str>
+pub fn wsi_rs::properties::Properties::insert(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
+pub fn wsi_rs::properties::Properties::is_empty(&self) -> bool
+pub fn wsi_rs::properties::Properties::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &str)>
+pub fn wsi_rs::properties::Properties::len(&self) -> usize
+pub fn wsi_rs::properties::Properties::mpp(&self) -> core::option::Option<(f64, f64)>
+pub fn wsi_rs::properties::Properties::names(&self) -> alloc::vec::Vec<&str>
+pub fn wsi_rs::properties::Properties::new() -> Self
+pub fn wsi_rs::properties::Properties::objective_power(&self) -> core::option::Option<f64>
+pub fn wsi_rs::properties::Properties::quickhash1(&self) -> core::option::Option<&str>
+pub fn wsi_rs::properties::Properties::vendor(&self) -> core::option::Option<&str>
+#[non_exhaustive] pub enum wsi_rs::ColorSpace
+pub wsi_rs::ColorSpace::Cmyk
+pub wsi_rs::ColorSpace::Grayscale
+pub wsi_rs::ColorSpace::Palette(alloc::sync::Arc<alloc::vec::Vec<[u8; 3]>>)
+pub wsi_rs::ColorSpace::Rgb
+pub wsi_rs::ColorSpace::Rgba
+pub wsi_rs::ColorSpace::Unknown
+pub wsi_rs::ColorSpace::YCbCr
+#[non_exhaustive] pub enum wsi_rs::Compression
+pub wsi_rs::Compression::Deflate
+pub wsi_rs::Compression::Jp2kRgb
+pub wsi_rs::Compression::Jp2kYcbcr
+pub wsi_rs::Compression::Jpeg
+pub wsi_rs::Compression::JpegLs
+pub wsi_rs::Compression::Lzw
+pub wsi_rs::Compression::None
+pub wsi_rs::Compression::Other(u16)
+pub wsi_rs::Compression::Zstd
+#[non_exhaustive] pub enum wsi_rs::CpuTileData
+pub wsi_rs::CpuTileData::F32(alloc::sync::Arc<alloc::vec::Vec<f32>>)
+pub wsi_rs::CpuTileData::U16(alloc::sync::Arc<alloc::vec::Vec<u16>>)
+pub wsi_rs::CpuTileData::U8(alloc::sync::Arc<alloc::vec::Vec<u8>>)
+impl wsi_rs::CpuTileData
+pub fn wsi_rs::CpuTileData::as_f32(&self) -> core::option::Option<&[f32]>
+pub fn wsi_rs::CpuTileData::as_u16(&self) -> core::option::Option<&[u16]>
+pub fn wsi_rs::CpuTileData::as_u8(&self) -> core::option::Option<&[u8]>
+pub fn wsi_rs::CpuTileData::byte_size(&self) -> usize
+pub fn wsi_rs::CpuTileData::f32(alloc::vec::Vec<f32>) -> Self
+pub fn wsi_rs::CpuTileData::make_mut_f32(&mut self) -> core::option::Option<&mut alloc::vec::Vec<f32>>
+pub fn wsi_rs::CpuTileData::make_mut_u16(&mut self) -> core::option::Option<&mut alloc::vec::Vec<u16>>
+pub fn wsi_rs::CpuTileData::make_mut_u8(&mut self) -> core::option::Option<&mut alloc::vec::Vec<u8>>
+pub fn wsi_rs::CpuTileData::sample_type(&self) -> wsi_rs::SampleType
+pub fn wsi_rs::CpuTileData::u16(alloc::vec::Vec<u16>) -> Self
+pub fn wsi_rs::CpuTileData::u8(alloc::vec::Vec<u8>) -> Self
+#[non_exhaustive] pub enum wsi_rs::CpuTileLayout
+pub wsi_rs::CpuTileLayout::Interleaved
+pub wsi_rs::CpuTileLayout::Planar
+#[non_exhaustive] pub enum wsi_rs::DecodeRoute
+pub wsi_rs::DecodeRoute::Cpu
+pub wsi_rs::DecodeRoute::Device
+#[non_exhaustive] pub enum wsi_rs::DeviceTile
+pub wsi_rs::DeviceTile::Cuda(wsi_rs::output::cuda::CudaDeviceTile)
+#[non_exhaustive] pub enum wsi_rs::EncodedTilePhotometricInterpretation
+pub wsi_rs::EncodedTilePhotometricInterpretation::Monochrome2
+pub wsi_rs::EncodedTilePhotometricInterpretation::Rgb
+pub wsi_rs::EncodedTilePhotometricInterpretation::YbrFull422
+#[non_exhaustive] pub enum wsi_rs::IccProfileProvenance
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath::optical_path_identifier: core::option::Option<alloc::string::String>
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath::sop_instance_uid: alloc::string::String
+pub wsi_rs::IccProfileProvenance::ReaderMetadata
+pub wsi_rs::IccProfileProvenance::ReaderMetadata::source: alloc::string::String
+pub wsi_rs::IccProfileProvenance::TiffTag
+pub wsi_rs::IccProfileProvenance::TiffTag::ifd_id: u64
+pub wsi_rs::IccProfileProvenance::TiffTag::tag: u16
+#[non_exhaustive] pub enum wsi_rs::LevelSourceKind
+pub wsi_rs::LevelSourceKind::Physical
+pub wsi_rs::LevelSourceKind::SyntheticDownsample
+#[non_exhaustive] pub enum wsi_rs::OutputBackendRequest
+pub wsi_rs::OutputBackendRequest::Auto
+pub wsi_rs::OutputBackendRequest::Cpu
+pub wsi_rs::OutputBackendRequest::Cuda
+#[non_exhaustive] pub enum wsi_rs::PixelFormat
+pub wsi_rs::PixelFormat::Gray16
+pub wsi_rs::PixelFormat::Gray8
+pub wsi_rs::PixelFormat::Rgb16
+pub wsi_rs::PixelFormat::Rgb8
+pub wsi_rs::PixelFormat::Rgba16
+pub wsi_rs::PixelFormat::Rgba8
+impl wsi_rs::PixelFormat
+pub const fn wsi_rs::PixelFormat::bytes_per_pixel(self) -> usize
+pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
+pub const fn wsi_rs::PixelFormat::channels(self) -> usize
+pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
+pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+#[non_exhaustive] pub enum wsi_rs::ProbeConfidence
+pub wsi_rs::ProbeConfidence::Definite
+pub wsi_rs::ProbeConfidence::Likely
+#[non_exhaustive] pub enum wsi_rs::RawCompressedTileBuildError
+pub wsi_rs::RawCompressedTileBuildError::EmptyData
+pub wsi_rs::RawCompressedTileBuildError::InvalidBitsAllocated
+pub wsi_rs::RawCompressedTileBuildError::InvalidDimensions
+pub wsi_rs::RawCompressedTileBuildError::InvalidSamplesPerPixel
+pub wsi_rs::RawCompressedTileBuildError::MissingBitsAllocated
+pub wsi_rs::RawCompressedTileBuildError::MissingData
+pub wsi_rs::RawCompressedTileBuildError::MissingDimensions
+pub wsi_rs::RawCompressedTileBuildError::MissingPhotometricInterpretation
+pub wsi_rs::RawCompressedTileBuildError::MissingSamplesPerPixel
+impl core::convert::From<wsi_rs::RawCompressedTileBuildError> for wsi_rs::error::WsiError
+pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Self
+impl core::error::Error for wsi_rs::RawCompressedTileBuildError
+impl core::fmt::Display for wsi_rs::RawCompressedTileBuildError
+pub fn wsi_rs::RawCompressedTileBuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum wsi_rs::RequestBuildError
+pub wsi_rs::RequestBuildError::MissingColumn
+pub wsi_rs::RequestBuildError::MissingOrigin
+pub wsi_rs::RequestBuildError::MissingRow
+pub wsi_rs::RequestBuildError::MissingSize
+pub wsi_rs::RequestBuildError::MissingTileHeight
+pub wsi_rs::RequestBuildError::MissingTileWidth
+impl core::error::Error for wsi_rs::RequestBuildError
+impl core::fmt::Display for wsi_rs::RequestBuildError
+pub fn wsi_rs::RequestBuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum wsi_rs::SampleType
+pub wsi_rs::SampleType::Float32
+pub wsi_rs::SampleType::Uint16
+pub wsi_rs::SampleType::Uint8
+impl wsi_rs::SampleType
+pub fn wsi_rs::SampleType::byte_size(&self) -> usize
+#[non_exhaustive] pub enum wsi_rs::SvcachePolicy
+pub wsi_rs::SvcachePolicy::Off
+pub wsi_rs::SvcachePolicy::PreferFresh
+pub wsi_rs::SvcachePolicy::RequireFresh
+impl wsi_rs::SvcachePolicy
+pub fn wsi_rs::SvcachePolicy::from_env_value(core::option::Option<&str>) -> Self
+#[non_exhaustive] pub enum wsi_rs::TileCodecKind
+pub wsi_rs::TileCodecKind::Htj2k
+pub wsi_rs::TileCodecKind::Jp2k
+pub wsi_rs::TileCodecKind::Jpeg
+pub wsi_rs::TileCodecKind::Other
+impl wsi_rs::TileCodecKind
+pub fn wsi_rs::TileCodecKind::from_compression(wsi_rs::Compression) -> Self
+#[non_exhaustive] pub enum wsi_rs::TileLayout
+pub wsi_rs::TileLayout::Irregular
+pub wsi_rs::TileLayout::Irregular::extra_tiles: (u32, u32, u32, u32)
+pub wsi_rs::TileLayout::Irregular::tile_advance: (f64, f64)
+pub wsi_rs::TileLayout::Irregular::tiles: std::collections::hash::map::HashMap<(i64, i64), wsi_rs::TileEntry>
+pub wsi_rs::TileLayout::Regular
+pub wsi_rs::TileLayout::Regular::tile_height: u32
+pub wsi_rs::TileLayout::Regular::tile_width: u32
+pub wsi_rs::TileLayout::Regular::tiles_across: u64
+pub wsi_rs::TileLayout::Regular::tiles_down: u64
+pub wsi_rs::TileLayout::WholeLevel
+pub wsi_rs::TileLayout::WholeLevel::height: u64
+pub wsi_rs::TileLayout::WholeLevel::virtual_tile_height: u32
+pub wsi_rs::TileLayout::WholeLevel::virtual_tile_width: u32
+pub wsi_rs::TileLayout::WholeLevel::width: u64
+impl wsi_rs::TileLayout
+pub fn wsi_rs::TileLayout::tiles_for_region(&self, i64, i64, u32, u32) -> alloc::vec::Vec<wsi_rs::TileHit>
+#[non_exhaustive] pub enum wsi_rs::TileOutputPreference
+pub wsi_rs::TileOutputPreference::Cpu
+pub wsi_rs::TileOutputPreference::Cpu::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::TileOutputPreference::PreferDevice
+pub wsi_rs::TileOutputPreference::PreferDevice::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::TileOutputPreference::PreferDevice::context: wsi_rs::DeviceOutputContext
+pub wsi_rs::TileOutputPreference::RequireDevice
+pub wsi_rs::TileOutputPreference::RequireDevice::backend: wsi_rs::OutputBackendRequest
+pub wsi_rs::TileOutputPreference::RequireDevice::context: wsi_rs::DeviceOutputContext
+impl wsi_rs::TileOutputPreference
+pub fn wsi_rs::TileOutputPreference::adaptive_decode_route_enabled(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::backend(&self) -> wsi_rs::OutputBackendRequest
+pub fn wsi_rs::TileOutputPreference::compressed_device_decode_enabled(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::cpu() -> Self
+pub fn wsi_rs::TileOutputPreference::cpu_only() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_compressed_decode() -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_cuda(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::prefer_device_auto_with_cuda_and_compressed_decode(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::prefers_device(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::require_cuda() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto_with_compressed_decode() -> Self
+pub fn wsi_rs::TileOutputPreference::require_device_auto_with_cuda_and_compressed_decode(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::TileOutputPreference::requires_device(&self) -> bool
+pub fn wsi_rs::TileOutputPreference::without_adaptive_decode_route(self) -> Self
+#[non_exhaustive] pub enum wsi_rs::TilePixels
+pub wsi_rs::TilePixels::Cpu(wsi_rs::CpuTile)
+pub wsi_rs::TilePixels::Device(wsi_rs::DeviceTile)
+#[non_exhaustive] pub enum wsi_rs::WsiError
+pub wsi_rs::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::WsiError::Codec
+pub wsi_rs::WsiError::Codec::codec: &'static str
+pub wsi_rs::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub wsi_rs::WsiError::DisplayConversion(alloc::string::String)
+pub wsi_rs::WsiError::InvalidSlide
+pub wsi_rs::WsiError::InvalidSlide::message: alloc::string::String
+pub wsi_rs::WsiError::InvalidSlide::path: std::path::PathBuf
+pub wsi_rs::WsiError::Io(std::io::error::Error)
+pub wsi_rs::WsiError::IoWithPath
+pub wsi_rs::WsiError::IoWithPath::path: std::path::PathBuf
+pub wsi_rs::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::WsiError::Jp2k(alloc::string::String)
+pub wsi_rs::WsiError::Jpeg(alloc::string::String)
+pub wsi_rs::WsiError::LevelOutOfRange
+pub wsi_rs::WsiError::LevelOutOfRange::count: u32
+pub wsi_rs::WsiError::LevelOutOfRange::level: u32
+pub wsi_rs::WsiError::PlaneOutOfRange
+pub wsi_rs::WsiError::PlaneOutOfRange::axis: alloc::string::String
+pub wsi_rs::WsiError::PlaneOutOfRange::max: u32
+pub wsi_rs::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::WsiError::SceneOutOfRange
+pub wsi_rs::WsiError::SceneOutOfRange::count: usize
+pub wsi_rs::WsiError::SceneOutOfRange::index: usize
+pub wsi_rs::WsiError::SeriesOutOfRange
+pub wsi_rs::WsiError::SeriesOutOfRange::count: usize
+pub wsi_rs::WsiError::SeriesOutOfRange::index: usize
+pub wsi_rs::WsiError::Tiff
+pub wsi_rs::WsiError::Tiff::message: alloc::string::String
+pub wsi_rs::WsiError::Tiff::path: std::path::PathBuf
+pub wsi_rs::WsiError::TileRead
+pub wsi_rs::WsiError::TileRead::col: i64
+pub wsi_rs::WsiError::TileRead::level: u32
+pub wsi_rs::WsiError::TileRead::reason: alloc::string::String
+pub wsi_rs::WsiError::TileRead::row: i64
+pub wsi_rs::WsiError::Unsupported
+pub wsi_rs::WsiError::Unsupported::reason: alloc::string::String
+pub wsi_rs::WsiError::UnsupportedFormat(alloc::string::String)
+pub wsi_rs::WsiError::Xml(alloc::string::String)
+impl core::convert::From<wsi_rs::RawCompressedTileBuildError> for wsi_rs::error::WsiError
+pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Self
+#[non_exhaustive] pub struct wsi_rs::AssociatedImage
+pub wsi_rs::AssociatedImage::channels: u16
+pub wsi_rs::AssociatedImage::dimensions: (u32, u32)
+pub wsi_rs::AssociatedImage::sample_type: wsi_rs::SampleType
+impl wsi_rs::AssociatedImage
+pub const fn wsi_rs::AssociatedImage::new((u32, u32), wsi_rs::SampleType, u16) -> Self
+#[non_exhaustive] pub struct wsi_rs::AxesShape
+pub wsi_rs::AxesShape::c: u32
+pub wsi_rs::AxesShape::t: u32
+pub wsi_rs::AxesShape::z: u32
+impl wsi_rs::AxesShape
+pub const fn wsi_rs::AxesShape::new(u32, u32, u32) -> Self
+impl core::default::Default for wsi_rs::AxesShape
+pub fn wsi_rs::AxesShape::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::CacheConfig
+pub wsi_rs::CacheConfig::display_tile_bytes: core::option::Option<u64>
+pub wsi_rs::CacheConfig::shared_tile_bytes: core::option::Option<u64>
+impl wsi_rs::CacheConfig
+pub const fn wsi_rs::CacheConfig::deterministic() -> Self
+pub const fn wsi_rs::CacheConfig::with_display_tile_bytes(self, u64) -> Self
+pub const fn wsi_rs::CacheConfig::with_shared_tile_bytes(self, u64) -> Self
+impl core::default::Default for wsi_rs::CacheConfig
+pub fn wsi_rs::CacheConfig::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::ChannelInfo
+pub wsi_rs::ChannelInfo::color: core::option::Option<[u8; 3]>
+pub wsi_rs::ChannelInfo::emission_nm: core::option::Option<f64>
+pub wsi_rs::ChannelInfo::excitation_nm: core::option::Option<f64>
+pub wsi_rs::ChannelInfo::name: core::option::Option<alloc::string::String>
+impl wsi_rs::ChannelInfo
+pub fn wsi_rs::ChannelInfo::new() -> Self
+pub fn wsi_rs::ChannelInfo::with_color(self, [u8; 3]) -> Self
+pub fn wsi_rs::ChannelInfo::with_emission_nm(self, f64) -> Self
+pub fn wsi_rs::ChannelInfo::with_excitation_nm(self, f64) -> Self
+pub fn wsi_rs::ChannelInfo::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::default::Default for wsi_rs::ChannelInfo
+pub fn wsi_rs::ChannelInfo::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::CpuTile
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::as_u8(&self) -> core::option::Option<&[u8]>
+pub fn wsi_rs::CpuTile::channels(&self) -> u16
+pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
+pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
+pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::height(&self) -> u32
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
+pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+#[non_exhaustive] pub struct wsi_rs::CudaDeviceTile
+pub wsi_rs::CudaDeviceTile::format: wsi_rs::PixelFormat
+pub wsi_rs::CudaDeviceTile::height: u32
+pub wsi_rs::CudaDeviceTile::pitch_bytes: usize
+pub wsi_rs::CudaDeviceTile::storage: wsi_rs::output::cuda::CudaDeviceStorage
+pub wsi_rs::CudaDeviceTile::width: u32
+#[non_exhaustive] pub struct wsi_rs::Dataset
+pub wsi_rs::Dataset::associated_images: std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>
+pub wsi_rs::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>
+pub wsi_rs::Dataset::id: wsi_rs::DatasetId
+pub wsi_rs::Dataset::properties: wsi_rs::properties::Properties
+pub wsi_rs::Dataset::scenes: alloc::vec::Vec<wsi_rs::Scene>
+pub wsi_rs::Dataset::source_icc_profiles: alloc::vec::Vec<wsi_rs::SourceIccProfile>
+impl wsi_rs::Dataset
+pub fn wsi_rs::Dataset::new(wsi_rs::DatasetId, alloc::vec::Vec<wsi_rs::Scene>) -> Self
+pub fn wsi_rs::Dataset::push_source_icc_profile(&mut self, wsi_rs::SourceIccProfile) -> core::result::Result<(), wsi_rs::SourceIccProfileConflict>
+pub fn wsi_rs::Dataset::source_icc_profiles_for_series(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>) -> impl core::iter::traits::iterator::Iterator<Item = &wsi_rs::SourceIccProfile>
+pub fn wsi_rs::Dataset::with_associated_images(self, std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>) -> Self
+pub fn wsi_rs::Dataset::with_icc_profiles(self, std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>) -> Self
+pub fn wsi_rs::Dataset::with_properties(self, wsi_rs::properties::Properties) -> Self
+#[non_exhaustive] pub struct wsi_rs::DatasetId(_)
+impl wsi_rs::DatasetId
+pub const fn wsi_rs::DatasetId::get(self) -> u128
+pub const fn wsi_rs::DatasetId::new(u128) -> Self
+#[non_exhaustive] pub struct wsi_rs::DecodeExecutionOptions
+impl wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::DecodeExecutionOptions::jp2k_cpu_threads(&self) -> core::option::Option<core::num::nonzero::NonZeroUsize>
+pub fn wsi_rs::DecodeExecutionOptions::route_sample_size(&self) -> usize
+pub fn wsi_rs::DecodeExecutionOptions::with_jp2k_cpu_threads(self, core::num::nonzero::NonZeroUsize) -> Self
+pub fn wsi_rs::DecodeExecutionOptions::with_route_sample_size(self, usize) -> Self
+impl core::default::Default for wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::DecodeExecutionOptions::default() -> Self
+#[non_exhaustive] pub struct wsi_rs::DecodeRouteDecision
+pub wsi_rs::DecodeRouteDecision::cpu_elapsed: core::time::Duration
+pub wsi_rs::DecodeRouteDecision::device_elapsed: core::time::Duration
+pub wsi_rs::DecodeRouteDecision::device_tile_count: usize
+pub wsi_rs::DecodeRouteDecision::sample_tile_count: usize
+pub wsi_rs::DecodeRouteDecision::winner: wsi_rs::DecodeRoute
+impl wsi_rs::DecodeRouteDecision
+pub fn wsi_rs::DecodeRouteDecision::measured(usize, core::time::Duration, core::time::Duration, usize) -> Self
+pub fn wsi_rs::DecodeRouteDecision::winner_for_measurement(core::time::Duration, core::time::Duration, usize) -> wsi_rs::DecodeRoute
+#[non_exhaustive] pub struct wsi_rs::DeviceOutputContext
+impl wsi_rs::DeviceOutputContext
+pub fn wsi_rs::DeviceOutputContext::none() -> Self
+pub fn wsi_rs::DeviceOutputContext::with_compressed_device_decode(self) -> Self
+pub fn wsi_rs::DeviceOutputContext::with_cuda(wsi_rs::output::cuda::CudaBackendSessions) -> Self
+pub fn wsi_rs::DeviceOutputContext::without_adaptive_decode_route(self) -> Self
+#[non_exhaustive] pub struct wsi_rs::DisplayWindow
+impl wsi_rs::DisplayWindow
+pub fn wsi_rs::DisplayWindow::max(&self) -> f64
+pub fn wsi_rs::DisplayWindow::min(&self) -> f64
+pub fn wsi_rs::DisplayWindow::new(f64, f64) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub struct wsi_rs::FormatRegistry
+impl wsi_rs::FormatRegistry
+pub fn wsi_rs::FormatRegistry::builtin() -> Self
+pub fn wsi_rs::FormatRegistry::new() -> Self
+pub fn wsi_rs::FormatRegistry::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
+pub fn wsi_rs::FormatRegistry::register(&mut self, impl wsi_rs::FormatProbe + 'static, impl wsi_rs::DatasetReader + 'static)
+impl core::fmt::Debug for wsi_rs::FormatRegistry
+pub fn wsi_rs::FormatRegistry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct wsi_rs::IccProfileKey
+pub wsi_rs::IccProfileKey::scene: wsi_rs::SceneId
+pub wsi_rs::IccProfileKey::series: wsi_rs::SeriesId
+impl wsi_rs::IccProfileKey
+pub const fn wsi_rs::IccProfileKey::new(wsi_rs::SceneId, wsi_rs::SeriesId) -> Self
+#[non_exhaustive] pub struct wsi_rs::Level
+pub wsi_rs::Level::dimensions: (u64, u64)
+pub wsi_rs::Level::downsample: f64
+pub wsi_rs::Level::tile_layout: wsi_rs::TileLayout
+impl wsi_rs::Level
+pub fn wsi_rs::Level::new((u64, u64), f64, wsi_rs::TileLayout) -> Self
+#[non_exhaustive] pub struct wsi_rs::LevelIdx(_)
+impl wsi_rs::LevelIdx
+pub const fn wsi_rs::LevelIdx::get(self) -> u32
+pub const fn wsi_rs::LevelIdx::new(u32) -> Self
+impl core::convert::From<u32> for wsi_rs::LevelIdx
+pub fn wsi_rs::LevelIdx::from(u32) -> Self
+#[non_exhaustive] pub struct wsi_rs::PlaneIdx(_)
+impl wsi_rs::PlaneIdx
+pub const fn wsi_rs::PlaneIdx::get(self) -> wsi_rs::PlaneSelection
+pub const fn wsi_rs::PlaneIdx::new(wsi_rs::PlaneSelection) -> Self
+impl core::convert::From<wsi_rs::PlaneSelection> for wsi_rs::PlaneIdx
+pub fn wsi_rs::PlaneIdx::from(wsi_rs::PlaneSelection) -> Self
+#[non_exhaustive] pub struct wsi_rs::PlaneSelection
+pub wsi_rs::PlaneSelection::c: u32
+pub wsi_rs::PlaneSelection::t: u32
+pub wsi_rs::PlaneSelection::z: u32
+impl wsi_rs::PlaneSelection
+pub const fn wsi_rs::PlaneSelection::new(u32, u32, u32) -> Self
+impl core::convert::From<wsi_rs::PlaneSelection> for wsi_rs::PlaneIdx
+pub fn wsi_rs::PlaneIdx::from(wsi_rs::PlaneSelection) -> Self
+#[non_exhaustive] pub struct wsi_rs::ProbeResult
+pub wsi_rs::ProbeResult::confidence: wsi_rs::ProbeConfidence
+pub wsi_rs::ProbeResult::detected: bool
+pub wsi_rs::ProbeResult::vendor: alloc::string::String
+impl wsi_rs::ProbeResult
+pub fn wsi_rs::ProbeResult::detected(impl core::convert::Into<alloc::string::String>, wsi_rs::ProbeConfidence) -> Self
+pub fn wsi_rs::ProbeResult::not_detected(impl core::convert::Into<alloc::string::String>) -> Self
+#[non_exhaustive] pub struct wsi_rs::Properties
+impl wsi_rs::properties::Properties
+pub fn wsi_rs::properties::Properties::background_color(&self) -> [u8; 3]
+pub fn wsi_rs::properties::Properties::get(&self, &str) -> core::option::Option<&str>
+pub fn wsi_rs::properties::Properties::insert(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
+pub fn wsi_rs::properties::Properties::is_empty(&self) -> bool
+pub fn wsi_rs::properties::Properties::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &str)>
+pub fn wsi_rs::properties::Properties::len(&self) -> usize
+pub fn wsi_rs::properties::Properties::mpp(&self) -> core::option::Option<(f64, f64)>
+pub fn wsi_rs::properties::Properties::names(&self) -> alloc::vec::Vec<&str>
+pub fn wsi_rs::properties::Properties::new() -> Self
+pub fn wsi_rs::properties::Properties::objective_power(&self) -> core::option::Option<f64>
+pub fn wsi_rs::properties::Properties::quickhash1(&self) -> core::option::Option<&str>
+pub fn wsi_rs::properties::Properties::vendor(&self) -> core::option::Option<&str>
+#[non_exhaustive] pub struct wsi_rs::RawCompressedTile
+impl wsi_rs::RawCompressedTile
+pub fn wsi_rs::RawCompressedTile::bits_allocated(&self) -> u16
+pub fn wsi_rs::RawCompressedTile::builder(wsi_rs::Compression) -> wsi_rs::RawCompressedTileBuilder
+pub fn wsi_rs::RawCompressedTile::compression(&self) -> wsi_rs::Compression
+pub fn wsi_rs::RawCompressedTile::data(&self) -> &[u8]
+pub fn wsi_rs::RawCompressedTile::height(&self) -> u32
+pub fn wsi_rs::RawCompressedTile::into_data(self) -> alloc::vec::Vec<u8>
+pub fn wsi_rs::RawCompressedTile::photometric_interpretation(&self) -> wsi_rs::EncodedTilePhotometricInterpretation
+pub fn wsi_rs::RawCompressedTile::samples_per_pixel(&self) -> u16
+pub fn wsi_rs::RawCompressedTile::width(&self) -> u32
+pub struct wsi_rs::RawCompressedTileBuilder
+impl wsi_rs::RawCompressedTileBuilder
+pub fn wsi_rs::RawCompressedTileBuilder::bits_allocated(self, u16) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::build(self) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::RawCompressedTileBuildError>
+pub fn wsi_rs::RawCompressedTileBuilder::data(self, alloc::vec::Vec<u8>) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::dimensions(self, u32, u32) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::photometric_interpretation(self, wsi_rs::EncodedTilePhotometricInterpretation) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::samples_per_pixel(self, u16) -> Self
+#[non_exhaustive] pub struct wsi_rs::RegionRequest
+pub wsi_rs::RegionRequest::level: wsi_rs::LevelIdx
+pub wsi_rs::RegionRequest::origin_px: (i64, i64)
+pub wsi_rs::RegionRequest::plane: wsi_rs::PlaneIdx
+pub wsi_rs::RegionRequest::scene: wsi_rs::SceneId
+pub wsi_rs::RegionRequest::series: wsi_rs::SeriesId
+pub wsi_rs::RegionRequest::size_px: (u32, u32)
+impl wsi_rs::RegionRequest
+pub fn wsi_rs::RegionRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::RegionRequestBuilder
+pub fn wsi_rs::RegionRequest::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, (i64, i64), (u32, u32)) -> Self
+pub fn wsi_rs::RegionRequest::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub struct wsi_rs::RegionRequestBuilder
+impl wsi_rs::RegionRequestBuilder
+pub fn wsi_rs::RegionRequestBuilder::build(self) -> core::result::Result<wsi_rs::RegionRequest, wsi_rs::RequestBuildError>
+pub fn wsi_rs::RegionRequestBuilder::origin_px(self, (i64, i64)) -> Self
+pub fn wsi_rs::RegionRequestBuilder::plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub fn wsi_rs::RegionRequestBuilder::size_px(self, (u32, u32)) -> Self
+#[non_exhaustive] pub struct wsi_rs::Scene
+pub wsi_rs::Scene::id: alloc::string::String
+pub wsi_rs::Scene::name: core::option::Option<alloc::string::String>
+pub wsi_rs::Scene::series: alloc::vec::Vec<wsi_rs::Series>
+impl wsi_rs::Scene
+pub fn wsi_rs::Scene::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<wsi_rs::Series>) -> Self
+pub fn wsi_rs::Scene::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+#[non_exhaustive] pub struct wsi_rs::SceneId(_)
+impl wsi_rs::SceneId
+pub const fn wsi_rs::SceneId::get(self) -> usize
+pub const fn wsi_rs::SceneId::new(usize) -> Self
+impl core::convert::From<usize> for wsi_rs::SceneId
+pub fn wsi_rs::SceneId::from(usize) -> Self
+#[non_exhaustive] pub struct wsi_rs::Series
+pub wsi_rs::Series::axes: wsi_rs::AxesShape
+pub wsi_rs::Series::channels: alloc::vec::Vec<wsi_rs::ChannelInfo>
+pub wsi_rs::Series::id: alloc::string::String
+pub wsi_rs::Series::levels: alloc::vec::Vec<wsi_rs::Level>
+pub wsi_rs::Series::sample_type: wsi_rs::SampleType
+impl wsi_rs::Series
+pub fn wsi_rs::Series::new(impl core::convert::Into<alloc::string::String>, wsi_rs::AxesShape, alloc::vec::Vec<wsi_rs::Level>, wsi_rs::SampleType, alloc::vec::Vec<wsi_rs::ChannelInfo>) -> Self
+#[non_exhaustive] pub struct wsi_rs::SeriesId(_)
+impl wsi_rs::SeriesId
+pub const fn wsi_rs::SeriesId::get(self) -> usize
+pub const fn wsi_rs::SeriesId::new(usize) -> Self
+impl core::convert::From<usize> for wsi_rs::SeriesId
+pub fn wsi_rs::SeriesId::from(usize) -> Self
+pub struct wsi_rs::Slide
+impl wsi_rs::Slide
+pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
+pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
+pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
+pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open_with_cache_bytes(impl core::convert::AsRef<std::path::Path>, &wsi_rs::FormatRegistry, u64) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::open_with_options(impl core::convert::AsRef<std::path::Path>, wsi_rs::SlideOpenOptions) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_display_tile_with_output(&self, &wsi_rs::TileViewRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_raw_compressed_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_raw_compressed_tile(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
+pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+impl core::fmt::Debug for wsi_rs::Slide
+pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct wsi_rs::SlideOpenOptions
+impl wsi_rs::SlideOpenOptions
+pub fn wsi_rs::SlideOpenOptions::cache_config(&self) -> wsi_rs::CacheConfig
+pub fn wsi_rs::SlideOpenOptions::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
+pub fn wsi_rs::SlideOpenOptions::deterministic() -> Self
+pub fn wsi_rs::SlideOpenOptions::max_region_pixels(&self) -> u64
+pub fn wsi_rs::SlideOpenOptions::svcache_policy(&self) -> wsi_rs::SvcachePolicy
+pub fn wsi_rs::SlideOpenOptions::with_cache_config(self, wsi_rs::CacheConfig) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_decode_execution_options(self, wsi_rs::DecodeExecutionOptions) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_max_region_pixels(self, u64) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_registry(self, wsi_rs::FormatRegistry) -> Self
+pub fn wsi_rs::SlideOpenOptions::with_svcache_policy(self, wsi_rs::SvcachePolicy) -> Self
+impl core::default::Default for wsi_rs::SlideOpenOptions
+pub fn wsi_rs::SlideOpenOptions::default() -> Self
+pub struct wsi_rs::SlideReadContext<'a>
+impl<'a> wsi_rs::SlideReadContext<'a>
+pub fn wsi_rs::SlideReadContext<'a>::max_region_pixels(&self) -> u64
+pub fn wsi_rs::SlideReadContext<'a>::output(&self) -> &wsi_rs::TileOutputPreference
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfile
+pub wsi_rs::SourceIccProfile::bytes: alloc::vec::Vec<u8>
+pub wsi_rs::SourceIccProfile::key: wsi_rs::SourceIccProfileKey
+pub wsi_rs::SourceIccProfile::provenance: wsi_rs::IccProfileProvenance
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfileConflict
+pub wsi_rs::SourceIccProfileConflict::scene: wsi_rs::SceneId
+pub wsi_rs::SourceIccProfileConflict::series: wsi_rs::SeriesId
+impl core::error::Error for wsi_rs::SourceIccProfileConflict
+impl core::fmt::Display for wsi_rs::SourceIccProfileConflict
+pub fn wsi_rs::SourceIccProfileConflict::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfileKey
+pub wsi_rs::SourceIccProfileKey::channel: core::option::Option<usize>
+pub wsi_rs::SourceIccProfileKey::optical_path: core::option::Option<usize>
+pub wsi_rs::SourceIccProfileKey::scene: wsi_rs::SceneId
+pub wsi_rs::SourceIccProfileKey::series: wsi_rs::SeriesId
+#[non_exhaustive] pub struct wsi_rs::SvcacheTileSelection
+pub wsi_rs::SvcacheTileSelection::col: i64
+pub wsi_rs::SvcacheTileSelection::level: wsi_rs::LevelIdx
+pub wsi_rs::SvcacheTileSelection::plane: wsi_rs::PlaneIdx
+pub wsi_rs::SvcacheTileSelection::row: i64
+pub wsi_rs::SvcacheTileSelection::scene: wsi_rs::SceneId
+pub wsi_rs::SvcacheTileSelection::series: wsi_rs::SeriesId
+impl wsi_rs::SvcacheTileSelection
+pub fn wsi_rs::SvcacheTileSelection::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64) -> Self
+pub fn wsi_rs::SvcacheTileSelection::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+#[non_exhaustive] pub struct wsi_rs::TileEntry
+pub wsi_rs::TileEntry::dimensions: (u32, u32)
+pub wsi_rs::TileEntry::offset: (f64, f64)
+pub wsi_rs::TileEntry::tiff_tile_index: core::option::Option<usize>
+impl wsi_rs::TileEntry
+pub fn wsi_rs::TileEntry::new((f64, f64), (u32, u32)) -> Self
+pub fn wsi_rs::TileEntry::with_tiff_tile_index(self, usize) -> Self
+#[non_exhaustive] pub struct wsi_rs::TileHit
+pub wsi_rs::TileHit::col: i64
+pub wsi_rs::TileHit::dest_x: i64
+pub wsi_rs::TileHit::dest_x_f64: f64
+pub wsi_rs::TileHit::dest_y: i64
+pub wsi_rs::TileHit::dest_y_f64: f64
+pub wsi_rs::TileHit::row: i64
+#[non_exhaustive] pub struct wsi_rs::TileRequest
+pub wsi_rs::TileRequest::col: i64
+pub wsi_rs::TileRequest::level: wsi_rs::LevelIdx
+pub wsi_rs::TileRequest::plane: wsi_rs::PlaneIdx
+pub wsi_rs::TileRequest::row: i64
+pub wsi_rs::TileRequest::scene: wsi_rs::SceneId
+pub wsi_rs::TileRequest::series: wsi_rs::SeriesId
+impl wsi_rs::TileRequest
+pub fn wsi_rs::TileRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::TileRequestBuilder
+pub fn wsi_rs::TileRequest::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64) -> Self
+pub fn wsi_rs::TileRequest::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub struct wsi_rs::TileRequestBuilder
+impl wsi_rs::TileRequestBuilder
+pub fn wsi_rs::TileRequestBuilder::build(self) -> core::result::Result<wsi_rs::TileRequest, wsi_rs::RequestBuildError>
+pub fn wsi_rs::TileRequestBuilder::col(self, i64) -> Self
+pub fn wsi_rs::TileRequestBuilder::plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub fn wsi_rs::TileRequestBuilder::row(self, i64) -> Self
+pub fn wsi_rs::TileRequestBuilder::tile(self, i64, i64) -> Self
+#[non_exhaustive] pub struct wsi_rs::TileViewRequest
+pub wsi_rs::TileViewRequest::col: i64
+pub wsi_rs::TileViewRequest::level: wsi_rs::LevelIdx
+pub wsi_rs::TileViewRequest::plane: wsi_rs::PlaneIdx
+pub wsi_rs::TileViewRequest::row: i64
+pub wsi_rs::TileViewRequest::scene: wsi_rs::SceneId
+pub wsi_rs::TileViewRequest::series: wsi_rs::SeriesId
+pub wsi_rs::TileViewRequest::tile_height: u32
+pub wsi_rs::TileViewRequest::tile_width: u32
+impl wsi_rs::TileViewRequest
+pub fn wsi_rs::TileViewRequest::builder(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> wsi_rs::TileViewRequestBuilder
+pub fn wsi_rs::TileViewRequest::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64, u32, u32) -> Self
+pub fn wsi_rs::TileViewRequest::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub struct wsi_rs::TileViewRequestBuilder
+impl wsi_rs::TileViewRequestBuilder
+pub fn wsi_rs::TileViewRequestBuilder::build(self) -> core::result::Result<wsi_rs::TileViewRequest, wsi_rs::RequestBuildError>
+pub fn wsi_rs::TileViewRequestBuilder::col(self, i64) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::row(self, i64) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::tile(self, i64, i64) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::tile_height(self, u32) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::tile_size(self, u32, u32) -> Self
+pub fn wsi_rs::TileViewRequestBuilder::tile_width(self, u32) -> Self
+pub trait wsi_rs::DatasetReader: core::marker::Send + core::marker::Sync
+pub fn wsi_rs::DatasetReader::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
+impl<T: wsi_rs::DatasetReader> wsi_rs::DatasetReader for alloc::sync::Arc<T>
+pub fn alloc::sync::Arc<T>::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
+pub trait wsi_rs::FormatProbe: core::marker::Send + core::marker::Sync
+pub fn wsi_rs::FormatProbe::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
+impl<T: wsi_rs::FormatProbe> wsi_rs::FormatProbe for alloc::sync::Arc<T>
+pub fn alloc::sync::Arc<T>::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
+pub trait wsi_rs::SlideReader: core::marker::Send + core::marker::Sync
+pub fn wsi_rs::SlideReader::associated_image(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
+pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_raw_compressed_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_raw_compressed_tile(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_region(&self, &wsi_rs::RegionRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_region_fastpath(&self, &mut wsi_rs::SlideReadContext<'_>, &wsi_rs::RegionRequest) -> core::option::Option<core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>>
+pub fn wsi_rs::SlideReader::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_tile_cpu(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_tiles_cpu(&self, &[wsi_rs::TileRequest]) -> core::result::Result<alloc::vec::Vec<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::recommended_shared_cache_bytes(&self) -> core::option::Option<u64>
+pub fn wsi_rs::SlideReader::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+pub fn wsi_rs::SlideReader::use_display_tile_cache(&self, &wsi_rs::TileViewRequest) -> bool
+pub fn wsi_rs::build_svcache(&std::path::Path, &std::path::Path) -> core::result::Result<(), wsi_rs::error::WsiError>
+pub fn wsi_rs::build_svcache_tile_payloads_merge(&std::path::Path, &std::path::Path, &[(wsi_rs::SvcacheTileSelection, wsi_rs::CpuTile)]) -> core::result::Result<usize, wsi_rs::error::WsiError>
+pub fn wsi_rs::build_svcache_tile_payloads_replace(&std::path::Path, &std::path::Path, &[(wsi_rs::SvcacheTileSelection, wsi_rs::CpuTile)]) -> core::result::Result<usize, wsi_rs::error::WsiError>
+pub fn wsi_rs::build_svcache_tiles(&std::path::Path, &std::path::Path, &[wsi_rs::SvcacheTileSelection]) -> core::result::Result<usize, wsi_rs::error::WsiError>
+pub fn wsi_rs::build_svcache_tiles_replace(&std::path::Path, &std::path::Path, &[wsi_rs::SvcacheTileSelection]) -> core::result::Result<usize, wsi_rs::error::WsiError>
+pub fn wsi_rs::cache_dir_svcache_path(&std::path::Path) -> std::path::PathBuf
+pub fn wsi_rs::default_svcache_path(&std::path::Path) -> std::path::PathBuf
+pub fn wsi_rs::svcache_candidate_paths(&std::path::Path) -> [std::path::PathBuf; 2]
+pub fn wsi_rs::svcache_matches_source(&std::path::Path, &std::path::Path) -> core::result::Result<bool, wsi_rs::error::WsiError>

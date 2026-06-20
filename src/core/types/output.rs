@@ -86,14 +86,14 @@ pub enum OutputBackendRequest {
 }
 
 impl OutputBackendRequest {
-    pub(crate) fn to_signinum(self) -> signinum_core::BackendRequest {
+    pub(crate) fn to_j2k(self) -> j2k_core::BackendRequest {
         match self {
-            Self::Auto => signinum_core::BackendRequest::Auto,
-            Self::Cpu => signinum_core::BackendRequest::Cpu,
+            Self::Auto => j2k_core::BackendRequest::Auto,
+            Self::Cpu => j2k_core::BackendRequest::Cpu,
             #[cfg(feature = "metal")]
-            Self::Metal => signinum_core::BackendRequest::Metal,
+            Self::Metal => j2k_core::BackendRequest::Metal,
             #[cfg(feature = "cuda")]
-            Self::Cuda => signinum_core::BackendRequest::Cuda,
+            Self::Cuda => j2k_core::BackendRequest::Cuda,
         }
     }
 }
