@@ -106,6 +106,30 @@ pub enum MetalDeviceStorage {
 }
 
 impl MetalDeviceTile {
+    /// Build a Metal device tile backed by an `MTLBuffer`.
+    ///
+    /// This lets downstream crates construct device-resident tiles while the
+    /// struct remains non-exhaustive for future storage metadata.
+    pub fn from_buffer(
+        buffer: metal::Buffer,
+        byte_offset: usize,
+        width: u32,
+        height: u32,
+        pitch_bytes: usize,
+        format: PixelFormat,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            pitch_bytes,
+            format,
+            storage: MetalDeviceStorage::Buffer {
+                buffer,
+                byte_offset,
+            },
+        }
+    }
+
     pub(crate) fn from_jpeg(surface: j2k_jpeg_metal::Surface) -> Result<Option<Self>, WsiError> {
         let Some((buffer, byte_offset)) = surface.metal_buffer() else {
             return Ok(None);

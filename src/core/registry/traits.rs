@@ -1,4 +1,5 @@
 use super::*;
+use j2k_core::BackendRequest;
 
 // ── Probe traits ───────────────────────────────────────────────────
 
@@ -51,6 +52,26 @@ pub trait DatasetReader: Send + Sync {
 }
 
 // ── Read interface ─────────────────────────────────────────────────
+
+pub(crate) fn read_cpu_tiles_with_backend(
+    reqs: &[TileRequest],
+    output: TileOutputPreference,
+    require_device_reason: &'static str,
+    mut read_tile: impl FnMut(&TileRequest, BackendRequest) -> Result<CpuTile, WsiError>,
+) -> Result<Vec<TilePixels>, WsiError> {
+    let backend = match output {
+        TileOutputPreference::Cpu { backend }
+        | TileOutputPreference::PreferDevice { backend, .. } => backend.to_j2k(),
+        TileOutputPreference::RequireDevice { .. } => {
+            return Err(WsiError::Unsupported {
+                reason: require_device_reason.into(),
+            });
+        }
+    };
+    reqs.iter()
+        .map(|req| read_tile(req, backend).map(TilePixels::Cpu))
+        .collect()
+}
 
 pub struct SlideReadContext<'a> {
     tile_cache: Option<&'a TileCache>,

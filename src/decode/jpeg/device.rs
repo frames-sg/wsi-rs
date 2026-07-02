@@ -5,31 +5,33 @@ use std::cell::Cell;
 use rayon::prelude::*;
 
 #[cfg(feature = "metal")]
-use crate::core::types::CpuTile;
+use crate::core::types::{ColorSpace, CpuTile};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::core::types::{DeviceTile, TilePixels};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::error::WsiError;
 #[cfg(any(feature = "metal", feature = "cuda"))]
-use j2k_core::{BackendKind as J2kBackendKind, BackendRequest as J2kBackendRequest};
+use j2k_core::{
+    BackendKind as J2kBackendKind, BackendRequest as J2kBackendRequest, DeviceSurface as _,
+};
 #[cfg(feature = "cuda")]
 use j2k_core::{
     DeviceSubmission as J2kDeviceSubmission, ImageDecode as J2kImageDecode, ImageDecodeSubmit,
 };
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use j2k_jpeg::{
-    DecodeOptions as J2kDecodeOptions, JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
-    SofKind as J2kSofKind,
+    ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
+    JpegView as J2kJpegView, PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
 };
 #[cfg(feature = "metal")]
 use j2k_jpeg_metal::SurfaceResidency as J2kJpegSurfaceResidency;
 
 #[cfg(feature = "metal")]
 use super::input::crop_jpeg_rgb_to_expected;
+#[cfg(feature = "metal")]
+use super::input::inspect_j2k_jpeg_output_size;
 #[cfg(any(feature = "metal", feature = "cuda"))]
-use super::input::{
-    inspect_j2k_jpeg_output_size, prepare_jpeg_input, validate_j2k_jpeg_output_size,
-};
+use super::input::{prepare_jpeg_input, validate_j2k_jpeg_output_size};
 #[cfg(feature = "metal")]
 use super::DecodedJpegRgb;
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -209,7 +211,7 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
-fn decode_one_jpeg_pixels(
+pub(super) fn decode_one_jpeg_pixels(
     job: &JpegDecodeJob<'_>,
     backend: J2kBackendRequest,
     require_device: bool,
@@ -437,7 +439,7 @@ fn cuda_jpeg_decode_error(err: j2k_jpeg_cuda::Error) -> WsiError {
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
-fn progressive_jpeg_requires_cpu_device_route(
+pub(super) fn progressive_jpeg_requires_cpu_device_route(
     view: &J2kJpegView<'_>,
     require_device: bool,
     backend_name: &str,

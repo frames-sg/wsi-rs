@@ -650,8 +650,7 @@ fn device_backend_identity(output: &TileOutputPreference) -> String {
 mod tests {
     use super::*;
     use crate::core::types::*;
-    use crate::properties::Properties;
-    use std::collections::HashMap;
+    use crate::test_support::{regular_rgb_dataset_for_test, RegularLevelForTest};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountingAdaptiveSource {
@@ -663,52 +662,18 @@ mod tests {
     impl CountingAdaptiveSource {
         fn new(batch_reads: Arc<AtomicUsize>, requested_tiles: Arc<AtomicUsize>) -> Self {
             Self {
-                dataset: Dataset {
-                    id: DatasetId::new(42),
-                    scenes: vec![Scene {
-                        id: "scene".into(),
-                        name: None,
-                        series: vec![Series {
-                            id: "series".into(),
-                            axes: AxesShape::default(),
-                            levels: vec![Level {
-                                dimensions: (128, 128),
-                                downsample: 1.0,
-                                tile_layout: TileLayout::Regular {
-                                    tile_width: 128,
-                                    tile_height: 128,
-                                    tiles_across: 1,
-                                    tiles_down: 1,
-                                },
-                            }],
-                            sample_type: SampleType::Uint8,
-                            channels: vec![
-                                ChannelInfo {
-                                    name: Some("R".into()),
-                                    color: None,
-                                    excitation_nm: None,
-                                    emission_nm: None,
-                                },
-                                ChannelInfo {
-                                    name: Some("G".into()),
-                                    color: None,
-                                    excitation_nm: None,
-                                    emission_nm: None,
-                                },
-                                ChannelInfo {
-                                    name: Some("B".into()),
-                                    color: None,
-                                    excitation_nm: None,
-                                    emission_nm: None,
-                                },
-                            ],
-                        }],
-                    }],
-                    associated_images: HashMap::new(),
-                    properties: Properties::new(),
-                    icc_profiles: HashMap::new(),
-                    source_icc_profiles: Vec::new(),
-                },
+                dataset: regular_rgb_dataset_for_test(
+                    DatasetId::new(42),
+                    "scene",
+                    "series",
+                    RegularLevelForTest {
+                        dimensions: (128, 128),
+                        tile_width: 128,
+                        tile_height: 128,
+                        tiles_across: 1,
+                        tiles_down: 1,
+                    },
+                ),
                 batch_reads,
                 requested_tiles,
             }
@@ -810,13 +775,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn adaptive_route_reuses_device_cpu_fallback_sample_for_first_read() {
+    struct AdaptiveRouteFixture {
+        batch_reads: Arc<AtomicUsize>,
+        requested_tiles: Arc<AtomicUsize>,
+        runtime: Arc<DecodeRuntime>,
+        reader: AdaptiveDecodeReader,
+        req: TileRequest,
+    }
+
+    fn adaptive_route_fixture(route_sample_size: usize) -> AdaptiveRouteFixture {
         let batch_reads = Arc::new(AtomicUsize::new(0));
         let requested_tiles = Arc::new(AtomicUsize::new(0));
         let runtime = Arc::new(
-            DecodeRuntime::new(DecodeExecutionOptions::default().with_route_sample_size(4))
-                .expect("decode runtime"),
+            DecodeRuntime::new(
+                DecodeExecutionOptions::default().with_route_sample_size(route_sample_size),
+            )
+            .expect("decode runtime"),
         );
         let reader = AdaptiveDecodeReader::new(
             Box::new(CountingAdaptiveSource::new(
@@ -834,68 +808,70 @@ mod tests {
             row: 0,
         };
 
-        let tiles = reader
+        AdaptiveRouteFixture {
+            batch_reads,
+            requested_tiles,
+            runtime,
+            reader,
+            req,
+        }
+    }
+
+    #[test]
+    fn adaptive_route_reuses_device_cpu_fallback_sample_for_first_read() {
+        let fixture = adaptive_route_fixture(4);
+
+        let tiles = fixture
+            .reader
             .read_tiles(
-                &[req],
+                &[fixture.req],
                 TileOutputPreference::prefer_device_auto_with_compressed_decode(),
             )
             .expect("adaptive read");
 
         assert_eq!(tiles.len(), 1);
-        assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
-        assert_eq!(requested_tiles.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.batch_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.requested_tiles.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn adaptive_route_keys_subsampled_batches_separately() {
-        let batch_reads = Arc::new(AtomicUsize::new(0));
-        let requested_tiles = Arc::new(AtomicUsize::new(0));
-        let runtime = Arc::new(
-            DecodeRuntime::new(DecodeExecutionOptions::default().with_route_sample_size(4))
-                .expect("decode runtime"),
-        );
-        let reader = AdaptiveDecodeReader::new(
-            Box::new(CountingAdaptiveSource::new(
-                batch_reads.clone(),
-                requested_tiles.clone(),
-            )),
-            runtime.clone(),
-        );
-        let req = TileRequest {
-            scene: 0usize.into(),
-            series: 0usize.into(),
-            level: 0u32.into(),
-            plane: PlaneSelection::default().into(),
-            col: 0,
-            row: 0,
-        };
+        let fixture = adaptive_route_fixture(4);
         let output = TileOutputPreference::prefer_device_auto_with_compressed_decode();
         let single_key = route_key_for_batch(
-            reader.inner.as_ref(),
-            std::slice::from_ref(&req),
+            fixture.reader.inner.as_ref(),
+            std::slice::from_ref(&fixture.req),
             &output,
             4,
         )
         .expect("route key is available for one-tile JP2K regular batch");
         let full_sample_key = route_key_for_batch(
-            reader.inner.as_ref(),
-            &[req.clone(), req.clone(), req.clone(), req.clone()],
+            fixture.reader.inner.as_ref(),
+            &[
+                fixture.req.clone(),
+                fixture.req.clone(),
+                fixture.req.clone(),
+                fixture.req.clone(),
+            ],
             &output,
             4,
         )
         .expect("route key is available for JP2K regular tile");
 
-        let tiles = reader.read_tiles(&[req], output).expect("adaptive read");
+        let tiles = fixture
+            .reader
+            .read_tiles(&[fixture.req], output)
+            .expect("adaptive read");
 
         assert_eq!(tiles.len(), 1);
-        assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
-        assert_eq!(requested_tiles.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.batch_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.requested_tiles.load(Ordering::SeqCst), 1);
         assert!(
-            runtime.cached_route(&single_key).is_some(),
+            fixture.runtime.cached_route(&single_key).is_some(),
             "a one-tile read should cache its own route"
         );
         assert!(
-            runtime.cached_route(&full_sample_key).is_none(),
+            fixture.runtime.cached_route(&full_sample_key).is_none(),
             "a one-tile read must not poison the route for four-plus-tile batches"
         );
     }

@@ -1,30 +1,10 @@
 use super::*;
 use crate::properties::Properties;
+use crate::test_support::{region_request, regular_rgb_dataset_for_test, RegularLevelForTest};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest {
-        scene: SceneId::new(scene),
-        series: SeriesId::new(series),
-        level: LevelIdx::new(level),
-        plane: PlaneIdx::new(plane),
-        origin_px: (x, y),
-        size_px: (w, h),
-    }
-}
 
 struct ErrProbe;
 
@@ -70,52 +50,18 @@ struct MockSource {
 impl MockSource {
     fn new() -> Self {
         Self {
-            ds: Dataset {
-                id: DatasetId::new(1),
-                scenes: vec![Scene {
-                    id: "s0".into(),
-                    name: None,
-                    series: vec![Series {
-                        id: "ser0".into(),
-                        axes: AxesShape::default(),
-                        levels: vec![Level {
-                            dimensions: (512, 512),
-                            downsample: 1.0,
-                            tile_layout: TileLayout::Regular {
-                                tile_width: 256,
-                                tile_height: 256,
-                                tiles_across: 2,
-                                tiles_down: 2,
-                            },
-                        }],
-                        sample_type: SampleType::Uint8,
-                        channels: vec![
-                            ChannelInfo {
-                                name: Some("R".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("G".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("B".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                        ],
-                    }],
-                }],
-                associated_images: HashMap::new(),
-                properties: Properties::new(),
-                icc_profiles: HashMap::new(),
-                source_icc_profiles: Vec::new(),
-            },
+            ds: regular_rgb_dataset_for_test(
+                DatasetId::new(1),
+                "s0",
+                "ser0",
+                RegularLevelForTest {
+                    dimensions: (512, 512),
+                    tile_width: 256,
+                    tile_height: 256,
+                    tiles_across: 2,
+                    tiles_down: 2,
+                },
+            ),
         }
     }
 
@@ -164,52 +110,18 @@ struct CountingSource {
 impl CountingSource {
     fn new(dataset_id: DatasetId, tile_reads: Arc<AtomicUsize>) -> Self {
         Self {
-            ds: Dataset {
-                id: dataset_id,
-                scenes: vec![Scene {
-                    id: "s0".into(),
-                    name: None,
-                    series: vec![Series {
-                        id: "ser0".into(),
-                        axes: AxesShape::default(),
-                        levels: vec![Level {
-                            dimensions: (256, 256),
-                            downsample: 1.0,
-                            tile_layout: TileLayout::Regular {
-                                tile_width: 256,
-                                tile_height: 256,
-                                tiles_across: 1,
-                                tiles_down: 1,
-                            },
-                        }],
-                        sample_type: SampleType::Uint8,
-                        channels: vec![
-                            ChannelInfo {
-                                name: Some("R".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("G".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("B".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                        ],
-                    }],
-                }],
-                associated_images: HashMap::new(),
-                properties: Properties::new(),
-                icc_profiles: HashMap::new(),
-                source_icc_profiles: Vec::new(),
-            },
+            ds: regular_rgb_dataset_for_test(
+                dataset_id,
+                "s0",
+                "ser0",
+                RegularLevelForTest {
+                    dimensions: (256, 256),
+                    tile_width: 256,
+                    tile_height: 256,
+                    tiles_across: 1,
+                    tiles_down: 1,
+                },
+            ),
             tile_reads,
         }
     }
@@ -1116,52 +1028,18 @@ struct FailingTileSource {
 impl FailingTileSource {
     fn new() -> Self {
         Self {
-            ds: Dataset {
-                id: DatasetId::new(9),
-                scenes: vec![Scene {
-                    id: "s0".into(),
-                    name: None,
-                    series: vec![Series {
-                        id: "ser0".into(),
-                        axes: AxesShape::default(),
-                        levels: vec![Level {
-                            dimensions: (128, 128),
-                            downsample: 1.0,
-                            tile_layout: TileLayout::Regular {
-                                tile_width: 128,
-                                tile_height: 128,
-                                tiles_across: 1,
-                                tiles_down: 1,
-                            },
-                        }],
-                        sample_type: SampleType::Uint8,
-                        channels: vec![
-                            ChannelInfo {
-                                name: Some("R".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("G".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                            ChannelInfo {
-                                name: Some("B".into()),
-                                color: None,
-                                excitation_nm: None,
-                                emission_nm: None,
-                            },
-                        ],
-                    }],
-                }],
-                associated_images: HashMap::new(),
-                properties: Properties::new(),
-                icc_profiles: HashMap::new(),
-                source_icc_profiles: Vec::new(),
-            },
+            ds: regular_rgb_dataset_for_test(
+                DatasetId::new(9),
+                "s0",
+                "ser0",
+                RegularLevelForTest {
+                    dimensions: (128, 128),
+                    tile_width: 128,
+                    tile_height: 128,
+                    tiles_across: 1,
+                    tiles_down: 1,
+                },
+            ),
         }
     }
 }

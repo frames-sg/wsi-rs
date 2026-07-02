@@ -34,6 +34,7 @@ pub(crate) use composition::{
 pub use open_options::SlideOpenOptions;
 pub use registry_impl::FormatRegistry;
 pub use slide::Slide;
+pub(crate) use traits::read_cpu_tiles_with_backend;
 pub use traits::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReadContext, SlideReader,
 };

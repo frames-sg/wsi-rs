@@ -6,37 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jpeg_decoder::{Decoder as ReferenceJpegDecoder, PixelFormat as ReferenceJpegPixelFormat};
-use wsi_rs::{
-    CpuTile, FormatRegistry, LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId,
-    Slide, TileLayout, TileRequest,
-};
+use wsi_rs::{CpuTile, FormatRegistry, PlaneSelection, Slide, TileLayout, TileRequest};
 
 #[derive(Debug, Clone)]
 pub struct TileBuffer {
     pub pixels_rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest::new(
-        SceneId::new(scene),
-        SeriesId::new(series),
-        LevelIdx::new(level),
-        (x, y),
-        (w, h),
-    )
-    .with_plane(PlaneIdx::new(plane))
 }
 
 pub trait Oracle {
@@ -263,7 +239,8 @@ fn open_via_wsi_rs(
                 region_path.display()
             ));
         }
-        let req = region_request(0, 0, level, PlaneSelection::default(), x, y, width, height);
+        let req =
+            super::region_request(0, 0, level, PlaneSelection::default(), x, y, width, height);
         let buf = region_handle
             .read_region(&req)
             .map_err(|e| format!("read_region: {e}"))?;

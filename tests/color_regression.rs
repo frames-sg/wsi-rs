@@ -10,34 +10,13 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "parity-openslide")]
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
-use wsi_rs::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
+use wsi_rs::{PlaneSelection, Slide};
 
 #[derive(Clone, Copy, Debug)]
 struct ColorThreshold {
     min_tissue_fraction: f64,
     min_tissue_chroma: f64,
     min_red_green_gap: f64,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest::new(
-        SceneId::new(scene),
-        SeriesId::new(series),
-        LevelIdx::new(level),
-        (x, y),
-        (w, h),
-    )
-    .with_plane(PlaneIdx::new(plane))
 }
 
 #[derive(Debug)]
@@ -276,7 +255,7 @@ fn read_overview_region(path: &Path) -> Result<RgbaRegion, String> {
         .ok_or_else(|| "slide has no levels".to_string())?;
     let width = u32::try_from(dimensions.0.min(1024)).map_err(|_| "overview width overflow")?;
     let height = u32::try_from(dimensions.1.min(1024)).map_err(|_| "overview height overflow")?;
-    let req = region_request(0, 0, level, PlaneSelection::default(), 0, 0, width, height);
+    let req = support::region_request(0, 0, level, PlaneSelection::default(), 0, 0, width, height);
     let pixels_rgba = slide
         .read_region_rgba(&req)
         .map_err(|err| format!("read overview level {level}: {err}"))?

@@ -1,9 +1,19 @@
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use super::device::decode_one_jpeg_pixels;
+#[cfg(feature = "metal")]
+use super::device::progressive_jpeg_requires_cpu_device_route;
 #[cfg(all(feature = "metal", target_os = "macos"))]
 use super::device::{
     jpeg_device_batch_attempts_for_test, reset_jpeg_device_batch_attempts_for_test,
 };
 use super::input::{ensure_jpeg_eoi, patch_jpeg_dimensions, try_decode_jpeg_rgb_scaled};
 use super::*;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use crate::core::types::{DeviceTile, TilePixels};
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use j2k_core::BackendRequest as J2kBackendRequest;
+#[cfg(feature = "metal")]
+use j2k_jpeg::{DecodeOptions as J2kDecodeOptions, JpegView as J2kJpegView};
 use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 
 fn encode_test_jpeg(img: &image::RgbImage) -> Vec<u8> {
@@ -28,7 +38,7 @@ fn cuda_unavailable_reason(reason: &str) -> bool {
 fn baseline_cuda_jpeg_job() -> JpegDecodeJob<'static> {
     JpegDecodeJob {
         data: Cow::Borrowed(include_bytes!(
-            "../../tests/fixtures/jpeg/baseline_420_16x16.jpg"
+            "../../../tests/fixtures/jpeg/baseline_420_16x16.jpg"
         )),
         tables: None,
         expected_width: 16,

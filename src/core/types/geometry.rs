@@ -55,6 +55,57 @@ fn i64_exclusive_tile_bound(count: u64) -> i128 {
     i128::from(count).min(i128::from(i64::MAX) + 1)
 }
 
+#[derive(Clone, Copy)]
+struct GridRegion {
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+struct GridTileBounds {
+    tile_width: i128,
+    tile_height: i128,
+    max_col: i128,
+    max_row: i128,
+}
+
+fn grid_tiles_for_region(region: GridRegion, bounds: GridTileBounds) -> Vec<TileHit> {
+    let region_x = i128::from(region.x);
+    let region_y = i128::from(region.y);
+    let region_x2 = region_x + i128::from(region.width);
+    let region_y2 = region_y + i128::from(region.height);
+    let start_col = floor_div_i128(region_x, bounds.tile_width).clamp(0, bounds.max_col);
+    let start_row = floor_div_i128(region_y, bounds.tile_height).clamp(0, bounds.max_row);
+    let end_col = ceil_div_i128(region_x2, bounds.tile_width).clamp(0, bounds.max_col);
+    let end_row = ceil_div_i128(region_y2, bounds.tile_height).clamp(0, bounds.max_row);
+
+    let mut hits = Vec::new();
+    for row in start_row..end_row {
+        for col in start_col..end_col {
+            let dest_x = col * bounds.tile_width - region_x;
+            let dest_y = row * bounds.tile_height - region_y;
+            if let (Ok(col), Ok(row), Ok(dest_x), Ok(dest_y)) = (
+                i64::try_from(col),
+                i64::try_from(row),
+                i64::try_from(dest_x),
+                i64::try_from(dest_y),
+            ) {
+                hits.push(TileHit {
+                    col,
+                    row,
+                    dest_x,
+                    dest_y,
+                    dest_x_f64: dest_x as f64,
+                    dest_y_f64: dest_y as f64,
+                });
+            }
+        }
+    }
+    hits
+}
+
 /// Result of tile intersection computation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -85,40 +136,22 @@ impl TileLayout {
 
                 let tw = i128::from(*tile_width);
                 let th = i128::from(*tile_height);
-                let region_x = i128::from(x);
-                let region_y = i128::from(y);
-                let region_x2 = region_x + i128::from(w);
-                let region_y2 = region_y + i128::from(h);
                 let max_col = i64_exclusive_tile_bound(*tiles_across);
                 let max_row = i64_exclusive_tile_bound(*tiles_down);
-                let start_col = floor_div_i128(region_x, tw).clamp(0, max_col);
-                let start_row = floor_div_i128(region_y, th).clamp(0, max_row);
-                let end_col = ceil_div_i128(region_x2, tw).clamp(0, max_col);
-                let end_row = ceil_div_i128(region_y2, th).clamp(0, max_row);
-
-                let mut hits = Vec::new();
-                for row in start_row..end_row {
-                    for col in start_col..end_col {
-                        let dest_x = col * tw - region_x;
-                        let dest_y = row * th - region_y;
-                        if let (Ok(col), Ok(row), Ok(dest_x), Ok(dest_y)) = (
-                            i64::try_from(col),
-                            i64::try_from(row),
-                            i64::try_from(dest_x),
-                            i64::try_from(dest_y),
-                        ) {
-                            hits.push(TileHit {
-                                col,
-                                row,
-                                dest_x,
-                                dest_y,
-                                dest_x_f64: dest_x as f64,
-                                dest_y_f64: dest_y as f64,
-                            });
-                        }
-                    }
-                }
-                hits
+                grid_tiles_for_region(
+                    GridRegion {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                    },
+                    GridTileBounds {
+                        tile_width: tw,
+                        tile_height: th,
+                        max_col,
+                        max_row,
+                    },
+                )
             }
             TileLayout::WholeLevel {
                 width,
@@ -138,38 +171,20 @@ impl TileLayout {
                 let vth = i128::from(*virtual_tile_height);
                 let max_col = ceil_div_i128(i128::from(*width), vtw).min(i128::from(i64::MAX) + 1);
                 let max_row = ceil_div_i128(i128::from(*height), vth).min(i128::from(i64::MAX) + 1);
-                let region_x = i128::from(x);
-                let region_y = i128::from(y);
-                let region_x2 = region_x + i128::from(w);
-                let region_y2 = region_y + i128::from(h);
-                let start_col = floor_div_i128(region_x, vtw).clamp(0, max_col);
-                let start_row = floor_div_i128(region_y, vth).clamp(0, max_row);
-                let end_col = ceil_div_i128(region_x2, vtw).clamp(0, max_col);
-                let end_row = ceil_div_i128(region_y2, vth).clamp(0, max_row);
-
-                let mut hits = Vec::new();
-                for row in start_row..end_row {
-                    for col in start_col..end_col {
-                        let dest_x = col * vtw - region_x;
-                        let dest_y = row * vth - region_y;
-                        if let (Ok(col), Ok(row), Ok(dest_x), Ok(dest_y)) = (
-                            i64::try_from(col),
-                            i64::try_from(row),
-                            i64::try_from(dest_x),
-                            i64::try_from(dest_y),
-                        ) {
-                            hits.push(TileHit {
-                                col,
-                                row,
-                                dest_x,
-                                dest_y,
-                                dest_x_f64: dest_x as f64,
-                                dest_y_f64: dest_y as f64,
-                            });
-                        }
-                    }
-                }
-                hits
+                grid_tiles_for_region(
+                    GridRegion {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                    },
+                    GridTileBounds {
+                        tile_width: vtw,
+                        tile_height: vth,
+                        max_col,
+                        max_row,
+                    },
+                )
             }
             TileLayout::Irregular {
                 tile_advance,

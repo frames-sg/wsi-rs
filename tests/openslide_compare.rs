@@ -1,4 +1,5 @@
 mod openslide_test_support;
+mod support;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
@@ -6,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use openslide_test_support::OpenSlide;
-use wsi_rs::{LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide};
+use wsi_rs::{PlaneSelection, Slide};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PixelCompareMode {
@@ -22,27 +23,6 @@ struct RegionCase {
     y: i64,
     w: u32,
     h: u32,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest::new(
-        SceneId::new(scene),
-        SeriesId::new(series),
-        LevelIdx::new(level),
-        (x, y),
-        (w, h),
-    )
-    .with_plane(PlaneIdx::new(plane))
 }
 
 #[test]
@@ -76,7 +56,7 @@ fn aperio_jpeg_rgb_pyramid_levels_match_openslide() {
     let max_level = level_count.saturating_sub(1).min(3);
 
     for level in 1..=max_level {
-        let req = region_request(
+        let req = support::region_request(
             0,
             0,
             level as u32,
@@ -327,7 +307,7 @@ fn compare_level0_regions(
     let level0 = &handle.dataset().scenes[0].series[0].levels[0];
     let mode = pixel_compare_mode(path, openslide_props);
     for region in representative_regions(level0.dimensions) {
-        let req = region_request(
+        let req = support::region_request(
             0,
             0,
             0,

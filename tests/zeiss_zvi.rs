@@ -1,9 +1,9 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use wsi_rs::{
-    CpuTileData, LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SceneId, SeriesId, Slide,
-};
+use wsi_rs::{CpuTileData, PlaneSelection, Slide};
+
+mod support;
 
 const ZVI_FIXTURES: &[&str] = &[
     "Zeiss-1-Merged.zvi",
@@ -13,27 +13,6 @@ const ZVI_FIXTURES: &[&str] = &[
     "Zeiss-3-Mosaic.zvi",
     "Zeiss-4-Mosaic.zvi",
 ];
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest::new(
-        SceneId::new(scene),
-        SeriesId::new(series),
-        LevelIdx::new(level),
-        (x, y),
-        (w, h),
-    )
-    .with_plane(PlaneIdx::new(plane))
-}
 
 fn zeiss_zvi_root() -> Option<PathBuf> {
     if let Some(path) = env::var_os("WSI_RS_ZVI_ROOT").map(PathBuf::from) {
@@ -66,7 +45,7 @@ fn assert_decodes_u16_region(
     require_nonzero: bool,
 ) {
     let region = slide
-        .read_region(&region_request(0, 0, 0, plane, 0, 0, 64, 64))
+        .read_region(&support::region_request(0, 0, 0, plane, 0, 0, 64, 64))
         .expect("read Zeiss ZVI region");
     assert_eq!((region.width(), region.height()), (64, 64));
     assert_eq!(region.channels(), 1);

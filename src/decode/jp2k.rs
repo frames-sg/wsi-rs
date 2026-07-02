@@ -975,6 +975,7 @@ fn sample_buffer_to_rgba(buffer: CpuTile) -> Result<RgbaImage, WsiError> {
 mod tests {
     use super::*;
     use crate::decode::jp2k_codestream::parse_codestream_header;
+    use crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance;
     use image::{DynamicImage, ImageFormat, RgbaImage};
     use std::io::Cursor;
 
@@ -1147,35 +1148,12 @@ mod tests {
     }
 
     fn assert_sample_buffer_matches_rgb_fixture(image: &CpuTile, expected_rgb: &image::RgbImage) {
-        assert_eq!(image.width, expected_rgb.width());
-        assert_eq!(image.height, expected_rgb.height());
-        let actual = image.data.as_u8().unwrap();
-        let expected = expected_rgb.as_raw();
-        assert_eq!(actual.len(), expected.len());
-
-        let mut total_delta = 0u64;
-        let mut max_delta = 0u8;
-        for (actual, expected) in actual.iter().zip(expected.iter()) {
-            let delta = actual.abs_diff(*expected);
-            total_delta += u64::from(delta);
-            max_delta = max_delta.max(delta);
-        }
-
-        let avg_delta_x100 = if actual.is_empty() {
-            0
-        } else {
-            (total_delta * 100) / actual.len() as u64
-        };
-
-        assert!(
-            max_delta <= MAX_CHANNEL_DELTA,
-            "JP2K decode drift too large: max channel delta {max_delta} > {MAX_CHANNEL_DELTA}",
-        );
-        assert!(
-            avg_delta_x100 <= MAX_AVG_CHANNEL_DELTA_X100,
-            "JP2K decode drift too large: average channel delta {:.2} > {:.2}",
-            avg_delta_x100 as f64 / 100.0,
-            MAX_AVG_CHANNEL_DELTA_X100 as f64 / 100.0,
+        assert_cpu_tile_matches_rgb_fixture_with_tolerance(
+            image,
+            expected_rgb,
+            MAX_CHANNEL_DELTA,
+            MAX_AVG_CHANNEL_DELTA_X100,
+            "JP2K decode",
         );
     }
 

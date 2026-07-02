@@ -754,6 +754,17 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
     }
 
     let dataset = source.dataset();
+    let cache_key_for = |col: i64, row: i64| CacheKey {
+        dataset_id: dataset.id,
+        scene: req.scene.get() as u32,
+        series: req.series.get() as u32,
+        level: req.level.get(),
+        z: req.plane.get().z,
+        c: req.plane.get().c,
+        t: req.plane.get().t,
+        tile_col: col,
+        tile_row: row,
+    };
     let read_tile_uncached = |col: i64, row: i64| -> Result<CpuTile, WsiError> {
         let tile = source.read_tile(
             &TileRequest {
@@ -772,31 +783,6 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
                 reason: "display tile read requires CPU pixels".into(),
             }),
         }
-    };
-    let read_tile_cached = |col: i64, row: i64| -> Result<Arc<CpuTile>, WsiError> {
-        let key = CacheKey {
-            dataset_id: dataset.id,
-            scene: req.scene.get() as u32,
-            series: req.series.get() as u32,
-            level: req.level.get(),
-            z: req.plane.get().z,
-            c: req.plane.get().c,
-            t: req.plane.get().t,
-            tile_col: col,
-            tile_row: row,
-        };
-
-        if let Some(cache) = cache {
-            if let Some(cached) = cache.get(&key) {
-                return Ok(cached);
-            }
-        }
-
-        let tile = Arc::new(read_tile_uncached(col, row)?);
-        if let Some(cache) = cache {
-            cache.put(key, tile.clone());
-        }
-        Ok(tile)
     };
     let region_req = RegionRequest {
         scene: req.scene,
@@ -825,10 +811,71 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
             && req.col < *tiles_across as i64
             && req.row < *tiles_down as i64
         {
-            if cache.is_none() {
-                return read_tile_uncached(req.col, req.row);
+            let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
+            let Some(cache) = cache else {
+                let tile = read_tile_uncached(req.col, req.row)?;
+                if let Some(started) = started.as_ref() {
+                    tracing::debug!(
+                        scene = req.scene.get(),
+                        series = req.series.get(),
+                        level = req.level.get(),
+                        col = req.col,
+                        row = req.row,
+                        tile_width = req.tile_width,
+                        tile_height = req.tile_height,
+                        cache_enabled = false,
+                        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                        "wsi display tile read exact native tile"
+                    );
+                }
+                return Ok(tile);
+            };
+            let key = cache_key_for(req.col, req.row);
+            if let Some(cached) = cache.get(&key) {
+                if let Some(started) = started.as_ref() {
+                    let stats = cache.stats();
+                    tracing::debug!(
+                        scene = req.scene.get(),
+                        series = req.series.get(),
+                        level = req.level.get(),
+                        col = req.col,
+                        row = req.row,
+                        tile_width = req.tile_width,
+                        tile_height = req.tile_height,
+                        cache_hit = true,
+                        cache_entries = stats.entries,
+                        cache_current_bytes = stats.current_bytes,
+                        cache_capacity_bytes = stats.capacity_bytes,
+                        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                        "wsi display tile read exact native tile"
+                    );
+                }
+                return Ok(cached.as_ref().clone());
             }
-            return Ok(read_tile_cached(req.col, req.row)?.as_ref().clone());
+
+            let tile = Arc::new(read_tile_uncached(req.col, req.row)?);
+            cache.put(key, tile.clone());
+            if let Some(started) = started.as_ref() {
+                let stats = cache.stats();
+                tracing::debug!(
+                    scene = req.scene.get(),
+                    series = req.series.get(),
+                    level = req.level.get(),
+                    col = req.col,
+                    row = req.row,
+                    tile_width = req.tile_width,
+                    tile_height = req.tile_height,
+                    cache_hit = false,
+                    cache_entries = stats.entries,
+                    cache_current_bytes = stats.current_bytes,
+                    cache_capacity_bytes = stats.capacity_bytes,
+                    cache_evictions = stats.evictions,
+                    cache_rejected_oversize = stats.rejected_oversize,
+                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "wsi display tile read exact native tile"
+                );
+            }
+            return Ok(tile.as_ref().clone());
         }
     }
 
@@ -852,5 +899,40 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
         ),
         ..region_req
     };
-    composite_region_from_source(source, cache, &clipped, DEFAULT_MAX_REGION_PIXELS)
+    let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
+    let result = composite_region_from_source(source, cache, &clipped, DEFAULT_MAX_REGION_PIXELS);
+    if let Some(started) = started.as_ref() {
+        match &result {
+            Ok(tile) => {
+                tracing::debug!(
+                    scene = req.scene.get(),
+                    series = req.series.get(),
+                    level = req.level.get(),
+                    col = req.col,
+                    row = req.row,
+                    tile_width = req.tile_width,
+                    tile_height = req.tile_height,
+                    output_width = tile.width,
+                    output_height = tile.height,
+                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "wsi display tile composed from source tiles"
+                );
+            }
+            Err(err) => {
+                tracing::debug!(
+                    scene = req.scene.get(),
+                    series = req.series.get(),
+                    level = req.level.get(),
+                    col = req.col,
+                    row = req.row,
+                    tile_width = req.tile_width,
+                    tile_height = req.tile_height,
+                    error = %err,
+                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "wsi display tile composition failed"
+                );
+            }
+        }
+    }
+    result
 }

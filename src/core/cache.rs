@@ -5,9 +5,21 @@ use crate::core::types::{CpuTile, DatasetId};
 
 // ── TileCache (axis-aware) ────────────────────────────────────────
 
-pub(crate) const DEFAULT_TILE_CACHE_SIZE: u64 = 8 * 1024 * 1024; // 8 MB
+/// Default shared decoded tile cache.
+///
+/// Standard Aperio SVS JPEG tiles are commonly 240x240 RGB, or about 170 KiB
+/// per decoded tile. A 64 MiB budget keeps a few hundred such source tiles
+/// resident, which is enough for normal viewport overlap during quick zooms
+/// without forcing users to tune cache options before the viewer is usable.
+pub(crate) const DEFAULT_TILE_CACHE_SIZE: u64 = 64 * 1024 * 1024;
 const TILE_CACHE_BYTES_ENV: &str = "WSI_RS_TILE_CACHE_BYTES";
-pub(crate) const DEFAULT_DISPLAY_TILE_CACHE_SIZE: u64 = 1024 * 1024; // 1 MB
+/// Default display-tile cache.
+///
+/// Display-tile reads on regular tiled slides cache the decoded source tiles
+/// used for composition. Keep enough room for at least a dense viewport plus
+/// adjacent zoom/pan overlap; 1 MiB only held a handful of SVS tiles and caused
+/// immediate churn during zoom-out bursts.
+pub(crate) const DEFAULT_DISPLAY_TILE_CACHE_SIZE: u64 = 32 * 1024 * 1024;
 const DISPLAY_TILE_CACHE_BYTES_ENV: &str = "WSI_RS_DISPLAY_TILE_CACHE_BYTES";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +238,9 @@ mod tile_cache_tests {
     use super::*;
     use crate::core::types::*;
 
+    const SVS_RGB_240_TILE_BYTES: usize = 240 * 240 * 3;
+    const COMMON_ZOOM_VIEWPORT_TILE_COUNT: i64 = 96;
+
     fn make_sample_buffer(size: usize) -> CpuTile {
         CpuTile {
             width: 256,
@@ -322,6 +337,22 @@ mod tile_cache_tests {
         });
         handle.join().unwrap();
         assert!(cache.get(&make_key(1, 0, 5, 5)).is_some());
+    }
+
+    #[test]
+    fn display_default_holds_common_svs_zoom_viewport_working_set() {
+        let cache = TileCache::new(DEFAULT_DISPLAY_TILE_CACHE_SIZE);
+        for col in 0..COMMON_ZOOM_VIEWPORT_TILE_COUNT {
+            cache.put(
+                make_key(1, 0, col, 0),
+                Arc::new(make_sample_buffer(SVS_RGB_240_TILE_BYTES)),
+            );
+        }
+
+        let stats = cache.stats();
+        assert_eq!(stats.entries, COMMON_ZOOM_VIEWPORT_TILE_COUNT as usize);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.rejected_oversize, 0);
     }
 
     #[test]
