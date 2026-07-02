@@ -487,7 +487,6 @@ fn supply_chain_policy_documents_duplicate_allowances() {
         "r-efi@5.3.0",
         "thiserror@1.0.69",
         "thiserror-impl@1.0.69",
-        "wit-bindgen@0.51.0",
     ] {
         let reason = skip
             .iter()

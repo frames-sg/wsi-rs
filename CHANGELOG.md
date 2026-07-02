@@ -1,8 +1,24 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
 # Changelog
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-06-21
+
+### Changed
+
+- Renamed the public crate and repository identity from `statumen` to `wsi-rs`.
+- Raised the public `j2k` crate family dependency floor to 0.6.0 and removed
+  the yanked pre-rename `signinum-*` 0.5 dependency aliases.
+- Refreshed public API snapshots for source ICC profile metadata and format
+  vendor detection surfaces.
+
+### Fixed
+
+- Fixed API stability tooling package selection after the crate rename.
+- Fixed CUDA feature matrix compilation after the j2k dependency rename.
+- Removed stale cargo-deny duplicate skip configuration.
 
 ### Removed
 
@@ -47,7 +63,8 @@
 
 - Initial public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/frames-sg/wsi-rs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/frames-sg/wsi-rs/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/frames-sg/wsi-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/frames-sg/wsi-rs/compare/v0.1.5...v0.3.0

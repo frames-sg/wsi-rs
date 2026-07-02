@@ -182,8 +182,11 @@ pub wsi_rs::prelude::Dataset::icc_profiles: std::collections::hash::map::HashMap
 pub wsi_rs::prelude::Dataset::id: wsi_rs::DatasetId
 pub wsi_rs::prelude::Dataset::properties: wsi_rs::properties::Properties
 pub wsi_rs::prelude::Dataset::scenes: alloc::vec::Vec<wsi_rs::Scene>
+pub wsi_rs::prelude::Dataset::source_icc_profiles: alloc::vec::Vec<wsi_rs::SourceIccProfile>
 impl wsi_rs::Dataset
 pub fn wsi_rs::Dataset::new(wsi_rs::DatasetId, alloc::vec::Vec<wsi_rs::Scene>) -> Self
+pub fn wsi_rs::Dataset::push_source_icc_profile(&mut self, wsi_rs::SourceIccProfile) -> core::result::Result<(), wsi_rs::SourceIccProfileConflict>
+pub fn wsi_rs::Dataset::source_icc_profiles_for_series(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>) -> impl core::iter::traits::iterator::Iterator<Item = &wsi_rs::SourceIccProfile>
 pub fn wsi_rs::Dataset::with_associated_images(self, std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>) -> Self
 pub fn wsi_rs::Dataset::with_icc_profiles(self, std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>) -> Self
 pub fn wsi_rs::Dataset::with_properties(self, wsi_rs::properties::Properties) -> Self
@@ -365,6 +368,15 @@ pub wsi_rs::DecodeRoute::Device
 pub wsi_rs::EncodedTilePhotometricInterpretation::Monochrome2
 pub wsi_rs::EncodedTilePhotometricInterpretation::Rgb
 pub wsi_rs::EncodedTilePhotometricInterpretation::YbrFull422
+#[non_exhaustive] pub enum wsi_rs::IccProfileProvenance
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath::optical_path_identifier: core::option::Option<alloc::string::String>
+pub wsi_rs::IccProfileProvenance::DicomOpticalPath::sop_instance_uid: alloc::string::String
+pub wsi_rs::IccProfileProvenance::ReaderMetadata
+pub wsi_rs::IccProfileProvenance::ReaderMetadata::source: alloc::string::String
+pub wsi_rs::IccProfileProvenance::TiffTag
+pub wsi_rs::IccProfileProvenance::TiffTag::ifd_id: u64
+pub wsi_rs::IccProfileProvenance::TiffTag::tag: u16
 #[non_exhaustive] pub enum wsi_rs::LevelSourceKind
 pub wsi_rs::LevelSourceKind::Physical
 pub wsi_rs::LevelSourceKind::SyntheticDownsample
@@ -576,8 +588,11 @@ pub wsi_rs::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::
 pub wsi_rs::Dataset::id: wsi_rs::DatasetId
 pub wsi_rs::Dataset::properties: wsi_rs::properties::Properties
 pub wsi_rs::Dataset::scenes: alloc::vec::Vec<wsi_rs::Scene>
+pub wsi_rs::Dataset::source_icc_profiles: alloc::vec::Vec<wsi_rs::SourceIccProfile>
 impl wsi_rs::Dataset
 pub fn wsi_rs::Dataset::new(wsi_rs::DatasetId, alloc::vec::Vec<wsi_rs::Scene>) -> Self
+pub fn wsi_rs::Dataset::push_source_icc_profile(&mut self, wsi_rs::SourceIccProfile) -> core::result::Result<(), wsi_rs::SourceIccProfileConflict>
+pub fn wsi_rs::Dataset::source_icc_profiles_for_series(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>) -> impl core::iter::traits::iterator::Iterator<Item = &wsi_rs::SourceIccProfile>
 pub fn wsi_rs::Dataset::with_associated_images(self, std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>) -> Self
 pub fn wsi_rs::Dataset::with_icc_profiles(self, std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>) -> Self
 pub fn wsi_rs::Dataset::with_properties(self, wsi_rs::properties::Properties) -> Self
@@ -615,6 +630,7 @@ pub fn wsi_rs::DisplayWindow::new(f64, f64) -> core::result::Result<Self, wsi_rs
 pub struct wsi_rs::FormatRegistry
 impl wsi_rs::FormatRegistry
 pub fn wsi_rs::FormatRegistry::builtin() -> Self
+pub fn wsi_rs::FormatRegistry::detect_vendor(&self, &std::path::Path) -> core::result::Result<core::option::Option<wsi_rs::ProbeResult>, wsi_rs::error::WsiError>
 pub fn wsi_rs::FormatRegistry::new() -> Self
 pub fn wsi_rs::FormatRegistry::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
 pub fn wsi_rs::FormatRegistry::register(&mut self, impl wsi_rs::FormatProbe + 'static, impl wsi_rs::DatasetReader + 'static)
@@ -777,6 +793,21 @@ pub struct wsi_rs::SlideReadContext<'a>
 impl<'a> wsi_rs::SlideReadContext<'a>
 pub fn wsi_rs::SlideReadContext<'a>::max_region_pixels(&self) -> u64
 pub fn wsi_rs::SlideReadContext<'a>::output(&self) -> &wsi_rs::TileOutputPreference
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfile
+pub wsi_rs::SourceIccProfile::bytes: alloc::vec::Vec<u8>
+pub wsi_rs::SourceIccProfile::key: wsi_rs::SourceIccProfileKey
+pub wsi_rs::SourceIccProfile::provenance: wsi_rs::IccProfileProvenance
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfileConflict
+pub wsi_rs::SourceIccProfileConflict::scene: wsi_rs::SceneId
+pub wsi_rs::SourceIccProfileConflict::series: wsi_rs::SeriesId
+impl core::error::Error for wsi_rs::SourceIccProfileConflict
+impl core::fmt::Display for wsi_rs::SourceIccProfileConflict
+pub fn wsi_rs::SourceIccProfileConflict::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct wsi_rs::SourceIccProfileKey
+pub wsi_rs::SourceIccProfileKey::channel: core::option::Option<usize>
+pub wsi_rs::SourceIccProfileKey::optical_path: core::option::Option<usize>
+pub wsi_rs::SourceIccProfileKey::scene: wsi_rs::SceneId
+pub wsi_rs::SourceIccProfileKey::series: wsi_rs::SeriesId
 #[non_exhaustive] pub struct wsi_rs::SvcacheTileSelection
 pub wsi_rs::SvcacheTileSelection::col: i64
 pub wsi_rs::SvcacheTileSelection::level: wsi_rs::LevelIdx

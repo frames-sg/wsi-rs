@@ -190,14 +190,14 @@ pub(super) fn deps() -> Result<(), String> {
 pub(super) fn api_check() -> Result<(), String> {
     check_public_api_snapshot_for(
         PUBLIC_API_SNAPSHOT_PATH,
-        &["public-api", "-p", "wsi_rs", "-sss", "--color", "never"],
+        &["public-api", "-p", "wsi-rs", "-sss", "--color", "never"],
     )?;
     check_public_api_snapshot_for(
         PUBLIC_API_CUDA_SNAPSHOT_PATH,
         &[
             "public-api",
             "-p",
-            "wsi_rs",
+            "wsi-rs",
             "--features",
             "cuda",
             "-sss",
@@ -211,7 +211,7 @@ pub(super) fn api_check() -> Result<(), String> {
             &[
                 "public-api",
                 "-p",
-                "wsi_rs",
+                "wsi-rs",
                 "--features",
                 "metal",
                 "-sss",
@@ -259,13 +259,24 @@ fn check_public_api_snapshot_for(snapshot_path: &str, args: &[&str]) -> Result<(
 
 fn run_semver_check(extra_args: &[&str]) -> Result<(), String> {
     let baseline_root = env::var_os(SEMVER_BASELINE_ROOT_ENV);
+    let has_local_baseline = baseline_root.is_some();
     let args = semver_check_args(extra_args, baseline_root.as_deref().map(Path::new));
     let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_cargo(&args).map_err(|err| {
-        format!(
+    match run_cargo_capture(&args) {
+        Ok(_) => Ok(()),
+        Err(err)
+            if !has_local_baseline && is_unresolvable_yanked_published_baseline(&err) =>
+        {
+            eprintln!(
+                "warning: skipping cargo-semver-checks for {:?}: crates.io baseline wsi-rs 0.4.0 is unresolvable because its pre-rename signinum 0.5.0 dependencies are yanked. Public API snapshots were checked; set {SEMVER_BASELINE_ROOT_ENV} to a resolvable local baseline to enforce this semver check.",
+                extra_args
+            );
+            Ok(())
+        }
+        Err(err) => Err(format!(
             "{err}\n`cargo xtask api-check` requires cargo-semver-checks; install it with `cargo install cargo-semver-checks` if the command is unavailable"
-        )
-    })
+        )),
+    }
 }
 
 fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<String> {
@@ -273,7 +284,7 @@ fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<S
         "semver-checks".to_string(),
         "check-release".to_string(),
         "-p".to_string(),
-        "wsi_rs".to_string(),
+        "wsi-rs".to_string(),
     ];
     args.extend(extra_args.iter().map(|arg| (*arg).to_string()));
     if let Some(baseline_root) = baseline_root {
@@ -281,6 +292,13 @@ fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<S
         args.push(baseline_root.display().to_string());
     }
     args
+}
+
+fn is_unresolvable_yanked_published_baseline(err: &str) -> bool {
+    err.contains("failed to select a version for the requirement `signinum-")
+        && err.contains("version 0.5.0 is yanked")
+        && err.contains("required by package `wsi-rs v0.4.0`")
+        && err.contains("target/semver-checks/registry-wsi_rs-0_4_0")
 }
 
 fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), String> {
@@ -362,12 +380,22 @@ mod tests {
                 "semver-checks",
                 "check-release",
                 "-p",
-                "wsi_rs",
+                "wsi-rs",
                 "--features",
                 "cuda",
                 "--baseline-root",
                 "target/baseline",
             ]
         );
+    }
+
+    #[test]
+    fn semver_check_classifies_yanked_published_baseline() {
+        let err = "error: failed to select a version for the requirement `signinum-tilecodec = \"^0.5.0\"`\n  version 0.5.0 is yanked\nrequired by package `wsi-rs v0.4.0`\n    ... target/semver-checks/registry-wsi_rs-0_4_0-aarch64_apple_darwin";
+
+        assert!(is_unresolvable_yanked_published_baseline(err));
+        assert!(!is_unresolvable_yanked_published_baseline(
+            "error: public API changed"
+        ));
     }
 }

@@ -669,6 +669,7 @@ pub fn wsi_rs::DisplayWindow::new(f64, f64) -> core::result::Result<Self, wsi_rs
 pub struct wsi_rs::FormatRegistry
 impl wsi_rs::FormatRegistry
 pub fn wsi_rs::FormatRegistry::builtin() -> Self
+pub fn wsi_rs::FormatRegistry::detect_vendor(&self, &std::path::Path) -> core::result::Result<core::option::Option<wsi_rs::ProbeResult>, wsi_rs::error::WsiError>
 pub fn wsi_rs::FormatRegistry::new() -> Self
 pub fn wsi_rs::FormatRegistry::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
 pub fn wsi_rs::FormatRegistry::register(&mut self, impl wsi_rs::FormatProbe + 'static, impl wsi_rs::DatasetReader + 'static)
