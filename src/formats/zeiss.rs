@@ -26,8 +26,8 @@ use std::collections::HashMap as StdHashMap;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
-    SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, DatasetReader, FormatProbe,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};

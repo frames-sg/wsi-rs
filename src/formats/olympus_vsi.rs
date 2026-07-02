@@ -11,7 +11,8 @@ use j2k_core::BackendRequest;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    read_cpu_tiles_with_backend, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
+    SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
@@ -65,21 +66,12 @@ impl SlideReader for OlympusVsiReader {
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = match output {
-            TileOutputPreference::Cpu { backend }
-            | TileOutputPreference::PreferDevice { backend, .. } => backend.to_j2k(),
-            TileOutputPreference::RequireDevice { .. } => {
-                return Err(WsiError::Unsupported {
-                    reason: "RequireDevice not supported for Olympus VSI".into(),
-                });
-            }
-        };
-        reqs.iter()
-            .map(|req| {
-                self.read_tile_with_backend(req, backend)
-                    .map(TilePixels::Cpu)
-            })
-            .collect()
+        read_cpu_tiles_with_backend(
+            reqs,
+            output,
+            "RequireDevice not supported for Olympus VSI",
+            |req, backend| self.read_tile_with_backend(req, backend),
+        )
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {

@@ -298,20 +298,8 @@ impl DicomLevel {
         level: u32,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        if col < 0 || row < 0 || col >= self.tiles_across as i64 || row >= self.tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    self.tiles_across, self.tiles_down
-                ),
-            });
-        }
-
-        let col_u32 = col as u32;
-        let row_u32 = row as u32;
+        let (col_u32, row_u32) =
+            checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         if let Some(image) = self.image_for_tile(col_u32, row_u32) {
             return image.read_tile(col, row, level, backend);
         }
@@ -326,20 +314,8 @@ impl DicomLevel {
         row: i64,
         level: u32,
     ) -> Result<RawCompressedTile, WsiError> {
-        if col < 0 || row < 0 || col >= self.tiles_across as i64 || row >= self.tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    self.tiles_across, self.tiles_down
-                ),
-            });
-        }
-
-        let col_u32 = col as u32;
-        let row_u32 = row as u32;
+        let (col_u32, row_u32) =
+            checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         for image in &self.parts {
             if image.frame_index(col_u32, row_u32).is_some() {
                 return image.read_raw_compressed_tile(col, row, level);
@@ -354,11 +330,14 @@ impl DicomLevel {
     }
 
     pub(super) fn actual_tile_dimensions(&self, col: u32, row: u32) -> (u32, u32) {
-        let tile_x = col * self.tile_width;
-        let tile_y = row * self.tile_height;
-        let width = self.width.saturating_sub(tile_x).min(self.tile_width);
-        let height = self.height.saturating_sub(tile_y).min(self.tile_height);
-        (width, height)
+        dicom_actual_tile_dimensions(
+            self.width,
+            self.height,
+            self.tile_width,
+            self.tile_height,
+            col,
+            row,
+        )
     }
 }
 

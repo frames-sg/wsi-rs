@@ -1,47 +1,15 @@
 use super::helpers::*;
 use super::*;
+use crate::formats::geometry::irregular_extra_tiles;
+use crate::formats::ini::parse_ini_file;
 
 pub(super) fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
-    let metadata = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if metadata.len() > SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE) {
-        return Err(invalid_slide(path, "MIRAX key file too large"));
-    }
-    let text = std::fs::read_to_string(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let mut parsed = ParsedIni::default();
-    let mut current_group: Option<String> = None;
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-        if let Some(group) = line
-            .strip_prefix('[')
-            .and_then(|line| line.strip_suffix(']'))
-        {
-            current_group = Some(group.to_string());
-            parsed.groups.entry(group.to_string()).or_default();
-            continue;
-        }
-        let Some(group) = current_group.as_ref() else {
-            continue;
-        };
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        parsed
-            .groups
-            .entry(group.clone())
-            .or_default()
-            .insert(key.trim().to_string(), value.trim().to_string());
-    }
-    Ok(parsed)
+    parse_ini_file(
+        path,
+        SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE),
+        |path| invalid_slide(path, "MIRAX key file too large"),
+        true,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

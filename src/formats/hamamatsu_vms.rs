@@ -24,7 +24,8 @@ use lru::LruCache;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    read_cpu_tiles_with_backend, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
+    SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};

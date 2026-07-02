@@ -1,5 +1,7 @@
 pub(crate) mod dicom;
+mod geometry;
 pub(crate) mod hamamatsu_vms;
+mod ini;
 pub(crate) mod mirax;
 pub(crate) mod olympus_vsi;
 pub(crate) mod raw_jp2k;

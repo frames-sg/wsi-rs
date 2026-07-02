@@ -23,13 +23,14 @@ use lru::LruCache;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
-    SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, DatasetReader, FormatProbe,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
+use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
 
 const MRXS_EXT: &str = "mrxs";
@@ -179,22 +180,12 @@ impl SlideReader for MiraxReader {
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = (match output {
-            TileOutputPreference::Cpu { backend }
-            | TileOutputPreference::PreferDevice { backend, .. } => backend,
-            TileOutputPreference::RequireDevice { .. } => {
-                return Err(WsiError::Unsupported {
-                    reason: "RequireDevice not supported for MIRAX in Phase 2".into(),
-                });
-            }
-        })
-        .to_j2k();
-        reqs.iter()
-            .map(|req| {
-                self.read_tile_with_backend(req, backend)
-                    .map(TilePixels::Cpu)
-            })
-            .collect()
+        read_cpu_tiles_with_backend(
+            reqs,
+            output,
+            "RequireDevice not supported for MIRAX in Phase 2",
+            |req, backend| self.read_tile_with_backend(req, backend),
+        )
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -354,11 +345,6 @@ enum MiraxImageFormat {
     Jpeg,
     Png,
     Bmp24,
-}
-
-#[derive(Default)]
-struct ParsedIni {
-    groups: HashMap<String, HashMap<String, String>>,
 }
 
 fn not_detected() -> ProbeResult {

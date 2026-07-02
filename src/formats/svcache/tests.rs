@@ -6,6 +6,42 @@ use super::storage::{fingerprint_source, is_fresh_svcache, read_svcache};
 use super::*;
 use crate::core::types::CpuTile;
 
+fn single_level_svcache_metadata(
+    source_path: &std::path::Path,
+    complete: bool,
+    tiles_across: u64,
+    tiles_down: u64,
+    tiles: Vec<Option<TileMeta>>,
+) -> SvcacheMetadata {
+    SvcacheMetadata {
+        schema_version: SCHEMA_VERSION,
+        complete,
+        source: fingerprint_source(source_path).unwrap(),
+        properties: Vec::new(),
+        scenes: vec![SceneMeta {
+            id: "scene-0".into(),
+            name: None,
+            series: vec![SeriesMeta {
+                id: "series-0".into(),
+                axes: AxesMeta { z: 1, c: 1, t: 1 },
+                sample_type: SampleTypeMeta::Uint8,
+                channels: Vec::new(),
+                levels: vec![LevelMeta {
+                    dimensions: (tiles_across, tiles_down),
+                    downsample: 1.0,
+                    tile_width: 1,
+                    tile_height: 1,
+                    tiles_across,
+                    tiles_down,
+                    tiles,
+                    sparse_tiles: Vec::new(),
+                }],
+            }],
+        }],
+        associated: Vec::new(),
+    }
+}
+
 #[test]
 fn svcache_tile_selection_constructor_defaults_to_origin_plane() {
     let selection = SvcacheTileSelection::new(1usize, 2usize, 3u32, 4, 5)
@@ -28,33 +64,7 @@ fn svcache_round_trips_single_tile() {
     let source = tempfile::NamedTempFile::new().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
     let out_path = out_dir.path().join("roundtrip.svcache");
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: true,
-        source: fingerprint_source(source.path()).unwrap(),
-        properties: Vec::new(),
-        scenes: vec![SceneMeta {
-            id: "scene-0".into(),
-            name: None,
-            series: vec![SeriesMeta {
-                id: "series-0".into(),
-                axes: AxesMeta { z: 1, c: 1, t: 1 },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: Vec::new(),
-                levels: vec![LevelMeta {
-                    dimensions: (1, 1),
-                    downsample: 1.0,
-                    tile_width: 1,
-                    tile_height: 1,
-                    tiles_across: 1,
-                    tiles_down: 1,
-                    tiles: vec![Some(tile_meta)],
-                    sparse_tiles: Vec::new(),
-                }],
-            }],
-        }],
-        associated: Vec::new(),
-    };
+    let metadata = single_level_svcache_metadata(source.path(), true, 1, 1, vec![Some(tile_meta)]);
     write_svcache_file(&out_path, &metadata, payload).unwrap();
 
     let backend = SvcacheBackend::new();
@@ -79,33 +89,7 @@ fn svcache_sparse_level_reports_missing_tile() {
     let source = tempfile::NamedTempFile::new().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
     let out_path = out_dir.path().join("sparse.svcache");
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: false,
-        source: fingerprint_source(source.path()).unwrap(),
-        properties: Vec::new(),
-        scenes: vec![SceneMeta {
-            id: "scene-0".into(),
-            name: None,
-            series: vec![SeriesMeta {
-                id: "series-0".into(),
-                axes: AxesMeta { z: 1, c: 1, t: 1 },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: Vec::new(),
-                levels: vec![LevelMeta {
-                    dimensions: (2, 1),
-                    downsample: 1.0,
-                    tile_width: 1,
-                    tile_height: 1,
-                    tiles_across: 2,
-                    tiles_down: 1,
-                    tiles: vec![None, None],
-                    sparse_tiles: Vec::new(),
-                }],
-            }],
-        }],
-        associated: Vec::new(),
-    };
+    let metadata = single_level_svcache_metadata(source.path(), false, 2, 1, vec![None, None]);
     write_svcache_file(&out_path, &metadata, payload).unwrap();
 
     let backend = SvcacheBackend::new();
@@ -233,33 +217,8 @@ fn sparse_svcache_merge_preserves_existing_tiles() {
     let source = tempfile::NamedTempFile::new().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
     let out_path = out_dir.path().join("merge.svcache");
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: false,
-        source: fingerprint_source(source.path()).unwrap(),
-        properties: Vec::new(),
-        scenes: vec![SceneMeta {
-            id: "scene-0".into(),
-            name: None,
-            series: vec![SeriesMeta {
-                id: "series-0".into(),
-                axes: AxesMeta { z: 1, c: 1, t: 1 },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: Vec::new(),
-                levels: vec![LevelMeta {
-                    dimensions: (2, 1),
-                    downsample: 1.0,
-                    tile_width: 1,
-                    tile_height: 1,
-                    tiles_across: 2,
-                    tiles_down: 1,
-                    tiles: vec![Some(existing_tile), None],
-                    sparse_tiles: Vec::new(),
-                }],
-            }],
-        }],
-        associated: Vec::new(),
-    };
+    let metadata =
+        single_level_svcache_metadata(source.path(), false, 2, 1, vec![Some(existing_tile), None]);
     write_svcache_file(&out_path, &metadata, existing_payload).unwrap();
 
     let mut merged_payload = tempfile::tempfile().unwrap();
@@ -284,33 +243,8 @@ fn sparse_svcache_replace_does_not_copy_existing_tiles() {
     let source = tempfile::NamedTempFile::new().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
     let out_path = out_dir.path().join("replace.svcache");
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: false,
-        source: fingerprint_source(source.path()).unwrap(),
-        properties: Vec::new(),
-        scenes: vec![SceneMeta {
-            id: "scene-0".into(),
-            name: None,
-            series: vec![SeriesMeta {
-                id: "series-0".into(),
-                axes: AxesMeta { z: 1, c: 1, t: 1 },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: Vec::new(),
-                levels: vec![LevelMeta {
-                    dimensions: (2, 1),
-                    downsample: 1.0,
-                    tile_width: 1,
-                    tile_height: 1,
-                    tiles_across: 2,
-                    tiles_down: 1,
-                    tiles: vec![Some(existing_tile), None],
-                    sparse_tiles: Vec::new(),
-                }],
-            }],
-        }],
-        associated: Vec::new(),
-    };
+    let metadata =
+        single_level_svcache_metadata(source.path(), false, 2, 1, vec![Some(existing_tile), None]);
     write_svcache_file(&out_path, &metadata, existing_payload).unwrap();
 
     let mut replacement_payload = tempfile::tempfile().unwrap();

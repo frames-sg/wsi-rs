@@ -49,30 +49,9 @@ pub fn build_svcache(source_path: &Path, out_path: &Path) -> Result<(), WsiError
                     sparse_tiles: Vec::new(),
                 });
             }
-            series_meta.push(SeriesMeta {
-                id: series.id.clone(),
-                axes: AxesMeta {
-                    z: series.axes.z,
-                    c: series.axes.c,
-                    t: series.axes.t,
-                },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: series
-                    .channels
-                    .iter()
-                    .map(|channel| ChannelMeta {
-                        name: channel.name.clone(),
-                        color: channel.color,
-                    })
-                    .collect(),
-                levels: levels_meta,
-            });
+            series_meta.push(series_metadata(series, levels_meta));
         }
-        scenes.push(SceneMeta {
-            id: scene.id.clone(),
-            name: scene.name.clone(),
-            series: series_meta,
-        });
+        scenes.push(scene_metadata(scene, series_meta));
     }
 
     let associated = build_associated_payloads(&slide, &mut payload)?;
@@ -80,12 +59,7 @@ pub fn build_svcache(source_path: &Path, out_path: &Path) -> Result<(), WsiError
         schema_version: SCHEMA_VERSION,
         complete: true,
         source: source_fingerprint,
-        properties: slide
-            .dataset()
-            .properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
+        properties: dataset_properties(slide.dataset()),
         scenes,
         associated,
     };
@@ -150,109 +124,86 @@ fn build_svcache_tile_payloads_with_existing_policy(
     tiles: &[(SvcacheTileSelection, CpuTile)],
     existing_tile_policy: ExistingTilePolicy,
 ) -> Result<usize, WsiError> {
-    let registry = FormatRegistry::builtin_native();
-    let source = registry.open_exact(source_path)?;
-    let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
-    let source_fingerprint = fingerprint_source(source_path)?;
-
-    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut payload = tempfile::tempfile()?;
-    let mut scenes = metadata_shell(slide.dataset())?;
-    let _copied = copy_existing_svcache_tiles_with_policy(
-        out_path,
-        source_path,
-        &mut scenes,
-        &mut payload,
-        existing_tile_policy,
-    )?;
-
-    let mut unique = tiles
+    let inputs = tiles
         .iter()
-        .map(|(selection, tile)| (*selection, tile))
-        .collect::<Vec<_>>();
-    unique.sort_by_key(|(selection, _)| {
-        let plane = selection.plane.get();
-        (
-            selection.scene.get(),
-            selection.series.get(),
-            selection.level.get(),
-            plane.z,
-            plane.c,
-            plane.t,
-            selection.row,
-            selection.col,
-        )
-    });
-    unique.dedup_by_key(|(selection, _)| *selection);
-
-    let mut written = 0usize;
-    for (selection, tile) in unique {
-        let (_, _, tiles_across, tiles_down) =
-            level_grid_for_selection(slide.dataset(), selection)?;
-        if selection.col < 0 || selection.row < 0 {
-            return Err(WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection has negative tile coordinate".into(),
-            });
-        }
-        let col = selection.col as u64;
-        let row = selection.row as u64;
-        if col >= tiles_across || row >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection tile coordinate out of range".into(),
-            });
-        }
-        let idx = row
-            .checked_mul(tiles_across)
-            .and_then(|base| base.checked_add(col))
-            .ok_or_else(|| WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection tile index overflow".into(),
-            })?;
-        let scene_idx = selection.scene.get();
-        let series_idx = selection.series.get();
-        let level_idx = selection.level.get() as usize;
-        if scenes[scene_idx].series[series_idx].levels[level_idx]
-            .tile_meta_for_index(idx)
-            .is_some()
-        {
-            continue;
-        }
-        let tile_meta = write_tile_payload(&mut payload, tile)?;
-        scenes[scene_idx].series[series_idx].levels[level_idx]
-            .insert_tile_for_index(idx, tile_meta);
-        written += 1;
-    }
-
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: false,
-        source: source_fingerprint,
-        properties: slide
-            .dataset()
-            .properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-        scenes,
-        associated: Vec::new(),
-    };
-    write_svcache_file(out_path, &metadata, payload)?;
-    Ok(written)
+        .map(|(selection, tile)| PartialTileInput::Provided {
+            selection: *selection,
+            tile,
+        })
+        .collect();
+    build_partial_svcache_with_existing_policy(source_path, out_path, inputs, existing_tile_policy)
 }
 
 fn build_svcache_tiles_with_existing_policy(
     source_path: &Path,
     out_path: &Path,
     selections: &[SvcacheTileSelection],
+    existing_tile_policy: ExistingTilePolicy,
+) -> Result<usize, WsiError> {
+    let inputs = selections
+        .iter()
+        .copied()
+        .map(PartialTileInput::ReadFromSource)
+        .collect();
+    build_partial_svcache_with_existing_policy(source_path, out_path, inputs, existing_tile_policy)
+}
+
+enum PartialTileInput<'a> {
+    ReadFromSource(SvcacheTileSelection),
+    Provided {
+        selection: SvcacheTileSelection,
+        tile: &'a CpuTile,
+    },
+}
+
+impl PartialTileInput<'_> {
+    fn selection(&self) -> SvcacheTileSelection {
+        match self {
+            Self::ReadFromSource(selection) => *selection,
+            Self::Provided { selection, .. } => *selection,
+        }
+    }
+
+    fn write_payload(
+        &self,
+        slide: &Slide,
+        payload: &mut File,
+        tile_width: u32,
+        tile_height: u32,
+    ) -> Result<TileMeta, WsiError> {
+        match self {
+            Self::ReadFromSource(selection) => {
+                let request = TileViewRequest {
+                    scene: selection.scene,
+                    series: selection.series,
+                    level: selection.level,
+                    plane: selection.plane,
+                    col: selection.col,
+                    row: selection.row,
+                    tile_width,
+                    tile_height,
+                };
+                let tile = slide.read_display_tile(&request)?;
+                write_tile_payload(payload, &tile)
+            }
+            Self::Provided { tile, .. } => write_tile_payload(payload, tile),
+        }
+    }
+}
+
+struct PartialTileSlot {
+    tile_width: u32,
+    tile_height: u32,
+    index: u64,
+    scene_idx: usize,
+    series_idx: usize,
+    level_idx: usize,
+}
+
+fn build_partial_svcache_with_existing_policy(
+    source_path: &Path,
+    out_path: &Path,
+    inputs: Vec<PartialTileInput<'_>>,
     existing_tile_policy: ExistingTilePolicy,
 ) -> Result<usize, WsiError> {
     let registry = FormatRegistry::builtin_native();
@@ -271,99 +222,145 @@ fn build_svcache_tiles_with_existing_policy(
         &mut payload,
         existing_tile_policy,
     )?;
-    let mut seen = HashSet::new();
-    let mut unique = Vec::with_capacity(selections.len());
-    for &selection in selections {
-        if seen.insert(selection) {
-            unique.push(selection);
-        }
-    }
-    unique.sort_by_key(|selection| {
-        let plane = selection.plane.get();
-        (
-            selection.scene.get(),
-            selection.series.get(),
-            selection.level.get(),
-            plane.z,
-            plane.c,
-            plane.t,
-            selection.row,
-            selection.col,
-        )
-    });
 
     let mut written = 0usize;
-    for selection in unique {
-        let (tile_width, tile_height, tiles_across, tiles_down) =
-            level_grid_for_selection(slide.dataset(), selection)?;
-        if selection.col < 0 || selection.row < 0 {
-            return Err(WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection has negative tile coordinate".into(),
-            });
-        }
-        let col = selection.col as u64;
-        let row = selection.row as u64;
-        if col >= tiles_across || row >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection tile coordinate out of range".into(),
-            });
-        }
-        let idx = row
-            .checked_mul(tiles_across)
-            .and_then(|base| base.checked_add(col))
-            .ok_or_else(|| WsiError::TileRead {
-                col: selection.col,
-                row: selection.row,
-                level: selection.level.get(),
-                reason: ".svcache selection tile index overflow".into(),
-            })?;
-        let scene_idx = selection.scene.get();
-        let series_idx = selection.series.get();
-        let level_idx = selection.level.get() as usize;
-        if scenes[scene_idx].series[series_idx].levels[level_idx]
-            .tile_meta_for_index(idx)
+    for input in unique_partial_tile_inputs(inputs) {
+        let selection = input.selection();
+        let slot = partial_tile_slot(slide.dataset(), selection)?;
+        if scenes[slot.scene_idx].series[slot.series_idx].levels[slot.level_idx]
+            .tile_meta_for_index(slot.index)
             .is_some()
         {
             continue;
         }
-        let request = TileViewRequest {
-            scene: selection.scene,
-            series: selection.series,
-            level: selection.level,
-            plane: selection.plane,
-            col: selection.col,
-            row: selection.row,
-            tile_width,
-            tile_height,
-        };
-        let tile = slide.read_display_tile(&request)?;
-        let tile_meta = write_tile_payload(&mut payload, &tile)?;
-        scenes[scene_idx].series[series_idx].levels[level_idx]
-            .insert_tile_for_index(idx, tile_meta);
+        let tile_meta =
+            input.write_payload(&slide, &mut payload, slot.tile_width, slot.tile_height)?;
+        scenes[slot.scene_idx].series[slot.series_idx].levels[slot.level_idx]
+            .insert_tile_for_index(slot.index, tile_meta);
         written += 1;
     }
 
-    let metadata = SvcacheMetadata {
-        schema_version: SCHEMA_VERSION,
-        complete: false,
-        source: source_fingerprint,
-        properties: slide
-            .dataset()
-            .properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-        scenes,
-        associated: Vec::new(),
-    };
+    let metadata = partial_svcache_metadata(source_fingerprint, slide.dataset(), scenes);
     write_svcache_file(out_path, &metadata, payload)?;
     Ok(written)
+}
+
+fn unique_partial_tile_inputs(mut inputs: Vec<PartialTileInput<'_>>) -> Vec<PartialTileInput<'_>> {
+    inputs.sort_by_key(|input| partial_tile_selection_sort_key(input.selection()));
+    inputs.dedup_by_key(|input| input.selection());
+    inputs
+}
+
+fn partial_tile_selection_sort_key(
+    selection: SvcacheTileSelection,
+) -> (usize, usize, u32, u32, u32, u32, i64, i64) {
+    let plane = selection.plane.get();
+    (
+        selection.scene.get(),
+        selection.series.get(),
+        selection.level.get(),
+        plane.z,
+        plane.c,
+        plane.t,
+        selection.row,
+        selection.col,
+    )
+}
+
+fn partial_tile_slot(
+    dataset: &Dataset,
+    selection: SvcacheTileSelection,
+) -> Result<PartialTileSlot, WsiError> {
+    let (tile_width, tile_height, tiles_across, tiles_down) =
+        level_grid_for_selection(dataset, selection)?;
+    if selection.col < 0 || selection.row < 0 {
+        return Err(WsiError::TileRead {
+            col: selection.col,
+            row: selection.row,
+            level: selection.level.get(),
+            reason: ".svcache selection has negative tile coordinate".into(),
+        });
+    }
+    let col = selection.col as u64;
+    let row = selection.row as u64;
+    if col >= tiles_across || row >= tiles_down {
+        return Err(WsiError::TileRead {
+            col: selection.col,
+            row: selection.row,
+            level: selection.level.get(),
+            reason: ".svcache selection tile coordinate out of range".into(),
+        });
+    }
+    let index = row
+        .checked_mul(tiles_across)
+        .and_then(|base| base.checked_add(col))
+        .ok_or_else(|| WsiError::TileRead {
+            col: selection.col,
+            row: selection.row,
+            level: selection.level.get(),
+            reason: ".svcache selection tile index overflow".into(),
+        })?;
+
+    Ok(PartialTileSlot {
+        tile_width,
+        tile_height,
+        index,
+        scene_idx: selection.scene.get(),
+        series_idx: selection.series.get(),
+        level_idx: selection.level.get() as usize,
+    })
+}
+
+fn partial_svcache_metadata(
+    source: SourceFingerprint,
+    dataset: &Dataset,
+    scenes: Vec<SceneMeta>,
+) -> SvcacheMetadata {
+    SvcacheMetadata {
+        schema_version: SCHEMA_VERSION,
+        complete: false,
+        source,
+        properties: dataset_properties(dataset),
+        scenes,
+        associated: Vec::new(),
+    }
+}
+
+fn dataset_properties(dataset: &Dataset) -> Vec<(String, String)> {
+    dataset
+        .properties
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+fn scene_metadata(scene: &Scene, series: Vec<SeriesMeta>) -> SceneMeta {
+    SceneMeta {
+        id: scene.id.clone(),
+        name: scene.name.clone(),
+        series,
+    }
+}
+
+fn series_metadata(series: &Series, levels: Vec<LevelMeta>) -> SeriesMeta {
+    SeriesMeta {
+        id: series.id.clone(),
+        axes: AxesMeta {
+            z: series.axes.z,
+            c: series.axes.c,
+            t: series.axes.t,
+        },
+        sample_type: SampleTypeMeta::Uint8,
+        channels: series
+            .channels
+            .iter()
+            .map(|channel| ChannelMeta {
+                name: channel.name.clone(),
+                color: channel.color,
+            })
+            .collect(),
+        levels,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,30 +505,9 @@ pub(super) fn metadata_shell(dataset: &Dataset) -> Result<Vec<SceneMeta>, WsiErr
                     sparse_tiles: Vec::new(),
                 });
             }
-            series_meta.push(SeriesMeta {
-                id: series.id.clone(),
-                axes: AxesMeta {
-                    z: series.axes.z,
-                    c: series.axes.c,
-                    t: series.axes.t,
-                },
-                sample_type: SampleTypeMeta::Uint8,
-                channels: series
-                    .channels
-                    .iter()
-                    .map(|channel| ChannelMeta {
-                        name: channel.name.clone(),
-                        color: channel.color,
-                    })
-                    .collect(),
-                levels: levels_meta,
-            });
+            series_meta.push(series_metadata(series, levels_meta));
         }
-        scenes.push(SceneMeta {
-            id: scene.id.clone(),
-            name: scene.name.clone(),
-            series: series_meta,
-        });
+        scenes.push(scene_metadata(scene, series_meta));
     }
     Ok(scenes)
 }

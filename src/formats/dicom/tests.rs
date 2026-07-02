@@ -103,6 +103,43 @@ fn test_rgb_pixel_data() -> Vec<u8> {
     vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]
 }
 
+fn write_optical_path_icc_instance(
+    path: &Path,
+    sop_instance_uid: &'static str,
+    optical_path_icc_profiles: Vec<TestOpticalPathIccProfile>,
+) {
+    let mut options = TestDicomOptions::native(test_rgb_pixel_data());
+    options.sop_instance_uid = sop_instance_uid;
+    options.optical_path_icc_profiles = optical_path_icc_profiles;
+    write_test_dicom(path, options);
+}
+
+fn write_two_optical_path_icc_instances(
+    dir: &Path,
+    first_profiles: Vec<TestOpticalPathIccProfile>,
+    second_profiles: Vec<TestOpticalPathIccProfile>,
+) {
+    write_optical_path_icc_instance(
+        &dir.join("first.dcm"),
+        "1.2.826.0.1.3680043.10.777.1",
+        first_profiles,
+    );
+    write_optical_path_icc_instance(
+        &dir.join("second.dcm"),
+        "1.2.826.0.1.3680043.10.777.2",
+        second_profiles,
+    );
+}
+
+fn assert_two_optical_path_source_icc_profiles(dataset: &Dataset) {
+    assert!(!dataset.icc_profiles.contains_key(&icc_key(0, 0)));
+    assert_eq!(dataset.source_icc_profiles.len(), 2);
+    assert_eq!(dataset.source_icc_profiles[0].key.optical_path, Some(0));
+    assert_eq!(dataset.source_icc_profiles[0].bytes, vec![1, 2, 3, 4]);
+    assert_eq!(dataset.source_icc_profiles[1].key.optical_path, Some(1));
+    assert_eq!(dataset.source_icc_profiles[1].bytes, vec![5, 8, 13, 21]);
+}
+
 fn write_test_dicom(path: &Path, options: TestDicomOptions) {
     let mut object = InMemDicomObject::new_empty();
     object.put(DataElement::new(
@@ -308,6 +345,33 @@ fn read_first_raw_compressed_tile(path: &Path) -> RawCompressedTile {
         .expect("read first raw compressed tile")
 }
 
+fn assert_ybr_full_raw_compressed_frame_is_ycbcr(file_name: &str, transfer_syntax: &'static str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(file_name);
+    let codestream = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax,
+            samples_per_pixel: 3,
+            photometric_interpretation: "YBR_FULL",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(codestream.clone()),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+
+    let raw = read_first_raw_compressed_tile(&path);
+    assert_eq!(raw.compression(), Compression::Jp2kYcbcr);
+    assert_eq!(
+        raw.photometric_interpretation(),
+        EncodedTilePhotometricInterpretation::YbrFull422
+    );
+    assert_eq!(raw.data(), codestream);
+}
+
 #[test]
 fn dicom_manifest_preserves_optical_path_icc_profile() {
     let dir = tempfile::tempdir().unwrap();
@@ -450,61 +514,40 @@ fn dicom_manifest_rejects_conflicting_icc_profiles_across_volume_instances() {
 #[test]
 fn dicom_manifest_dedupes_matching_multi_optical_path_icc_profiles_across_volume_instances() {
     let dir = tempfile::tempdir().unwrap();
-    let first_path = dir.path().join("first.dcm");
-    let mut first_options = TestDicomOptions::native(test_rgb_pixel_data());
-    first_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.1";
-    first_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-        test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
-    ];
-    write_test_dicom(&first_path, first_options);
-    let second_path = dir.path().join("second.dcm");
-    let mut second_options = TestDicomOptions::native(test_rgb_pixel_data());
-    second_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.2";
-    second_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-        test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
-    ];
-    write_test_dicom(&second_path, second_options);
+    write_two_optical_path_icc_instances(
+        dir.path(),
+        vec![
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+            test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
+        ],
+        vec![
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+            test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
+        ],
+    );
 
     let slide = Slide::open(dir.path()).expect("open DICOM directory");
-    let dataset = slide.dataset();
-    assert!(!dataset.icc_profiles.contains_key(&icc_key(0, 0)));
-    assert_eq!(dataset.source_icc_profiles.len(), 2);
-    assert_eq!(dataset.source_icc_profiles[0].key.optical_path, Some(0));
-    assert_eq!(dataset.source_icc_profiles[0].bytes, vec![1, 2, 3, 4]);
-    assert_eq!(dataset.source_icc_profiles[1].key.optical_path, Some(1));
-    assert_eq!(dataset.source_icc_profiles[1].bytes, vec![5, 8, 13, 21]);
+    assert_two_optical_path_source_icc_profiles(slide.dataset());
 }
 
 #[test]
 fn dicom_manifest_matches_optical_path_icc_profiles_by_identifier_across_reordered_instances() {
     let dir = tempfile::tempdir().unwrap();
-    let first_path = dir.path().join("first.dcm");
-    let mut first_options = TestDicomOptions::native(test_rgb_pixel_data());
-    first_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.1";
-    first_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-        test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
-    ];
-    write_test_dicom(&first_path, first_options);
-    let second_path = dir.path().join("second.dcm");
-    let mut second_options = TestDicomOptions::native(test_rgb_pixel_data());
-    second_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.2";
-    second_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-    ];
-    write_test_dicom(&second_path, second_options);
+    write_two_optical_path_icc_instances(
+        dir.path(),
+        vec![
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+            test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
+        ],
+        vec![
+            test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+        ],
+    );
 
     let slide = Slide::open(dir.path()).expect("open DICOM directory");
     let dataset = slide.dataset();
-    assert!(!dataset.icc_profiles.contains_key(&icc_key(0, 0)));
-    assert_eq!(dataset.source_icc_profiles.len(), 2);
-    assert_eq!(dataset.source_icc_profiles[0].key.optical_path, Some(0));
-    assert_eq!(dataset.source_icc_profiles[0].bytes, vec![1, 2, 3, 4]);
-    assert_eq!(dataset.source_icc_profiles[1].key.optical_path, Some(1));
-    assert_eq!(dataset.source_icc_profiles[1].bytes, vec![5, 8, 13, 21]);
+    assert_two_optical_path_source_icc_profiles(dataset);
     match &dataset.source_icc_profiles[0].provenance {
         IccProfileProvenance::DicomOpticalPath {
             optical_path_identifier,
@@ -524,31 +567,20 @@ fn dicom_manifest_matches_optical_path_icc_profiles_by_identifier_across_reorder
 #[test]
 fn dicom_manifest_drops_unqualified_icc_when_qualified_profiles_exist_for_series() {
     let dir = tempfile::tempdir().unwrap();
-    let first_path = dir.path().join("first.dcm");
-    let mut first_options = TestDicomOptions::native(test_rgb_pixel_data());
-    first_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.1";
-    first_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-        test_optical_path_icc_with_identifier("path-b", vec![1, 2, 3, 4]),
-    ];
-    write_test_dicom(&first_path, first_options);
-    let second_path = dir.path().join("second.dcm");
-    let mut second_options = TestDicomOptions::native(test_rgb_pixel_data());
-    second_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.2";
-    second_options.optical_path_icc_profiles = vec![
-        test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
-        test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
-    ];
-    write_test_dicom(&second_path, second_options);
+    write_two_optical_path_icc_instances(
+        dir.path(),
+        vec![
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+            test_optical_path_icc_with_identifier("path-b", vec![1, 2, 3, 4]),
+        ],
+        vec![
+            test_optical_path_icc_with_identifier("path-a", vec![1, 2, 3, 4]),
+            test_optical_path_icc_with_identifier("path-b", vec![5, 8, 13, 21]),
+        ],
+    );
 
     let slide = Slide::open(dir.path()).expect("open DICOM directory");
-    let dataset = slide.dataset();
-    assert!(!dataset.icc_profiles.contains_key(&icc_key(0, 0)));
-    assert_eq!(dataset.source_icc_profiles.len(), 2);
-    assert_eq!(dataset.source_icc_profiles[0].key.optical_path, Some(0));
-    assert_eq!(dataset.source_icc_profiles[0].bytes, vec![1, 2, 3, 4]);
-    assert_eq!(dataset.source_icc_profiles[1].key.optical_path, Some(1));
-    assert_eq!(dataset.source_icc_profiles[1].bytes, vec![5, 8, 13, 21]);
+    assert_two_optical_path_source_icc_profiles(slide.dataset());
 }
 
 fn test_dicom_image(sop_instance_uid: &str, grid: DicomGrid) -> Arc<DicomImage> {
@@ -973,7 +1005,7 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
 }
 
 #[test]
-fn compressed_dicom_recommends_cache_for_common_read_region_working_set() {
+fn compressed_dicom_default_cache_covers_common_read_region_working_set() {
     let levels = build_levels(
         Path::new("cache-hint.dcm"),
         vec![test_dicom_image_with_transfer_syntax(
@@ -983,6 +1015,12 @@ fn compressed_dicom_recommends_cache_for_common_read_region_working_set() {
         )],
     )
     .expect("level should build");
+    let working_set_bytes = levels[0]
+        .cache_bytes_for_target_region()
+        .expect("compressed DICOM working set should be computable");
+    assert_eq!(working_set_bytes, 12 * 1024 * 1024);
+    assert!(crate::core::cache::DEFAULT_TILE_CACHE_SIZE >= working_set_bytes);
+
     let reader = DicomReader {
         slide: Arc::new(DicomSlide {
             dataset: empty_dataset(),
@@ -991,10 +1029,7 @@ fn compressed_dicom_recommends_cache_for_common_read_region_working_set() {
         }),
     };
 
-    assert_eq!(
-        reader.recommended_shared_cache_bytes(),
-        Some(12 * 1024 * 1024)
-    );
+    assert_eq!(reader.recommended_shared_cache_bytes(), None);
 }
 
 #[test]
@@ -1621,58 +1656,18 @@ fn reads_htj2k_rpcl_raw_compressed_frame_without_dicom_padding() {
 
 #[test]
 fn reads_htj2k_rpcl_ybr_full_raw_compressed_frame_as_ycbcr() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("htj2k-rpcl-ybr-full.dcm");
-    let codestream = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
-    write_test_dicom(
-        &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "YBR_FULL",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(codestream.clone()),
-            ..TestDicomOptions::native(Vec::new())
-        },
+    assert_ybr_full_raw_compressed_frame_is_ycbcr(
+        "htj2k-rpcl-ybr-full.dcm",
+        HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
     );
-
-    let raw = read_first_raw_compressed_tile(&path);
-    assert_eq!(raw.compression(), Compression::Jp2kYcbcr);
-    assert_eq!(
-        raw.photometric_interpretation(),
-        EncodedTilePhotometricInterpretation::YbrFull422
-    );
-    assert_eq!(raw.data(), codestream);
 }
 
 #[test]
 fn reads_general_htj2k_ybr_full_raw_compressed_frame_as_ycbcr() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("htj2k-general-ybr-full.dcm");
-    let codestream = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
-    write_test_dicom(
-        &path,
-        TestDicomOptions {
-            transfer_syntax: "1.2.840.10008.1.2.4.203",
-            samples_per_pixel: 3,
-            photometric_interpretation: "YBR_FULL",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(codestream.clone()),
-            ..TestDicomOptions::native(Vec::new())
-        },
+    assert_ybr_full_raw_compressed_frame_is_ycbcr(
+        "htj2k-general-ybr-full.dcm",
+        "1.2.840.10008.1.2.4.203",
     );
-
-    let raw = read_first_raw_compressed_tile(&path);
-    assert_eq!(raw.compression(), Compression::Jp2kYcbcr);
-    assert_eq!(
-        raw.photometric_interpretation(),
-        EncodedTilePhotometricInterpretation::YbrFull422
-    );
-    assert_eq!(raw.data(), codestream);
 }
 
 #[test]

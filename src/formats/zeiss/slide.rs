@@ -28,22 +28,12 @@ impl SlideReader for ZeissReader {
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = (match output {
-            TileOutputPreference::Cpu { backend }
-            | TileOutputPreference::PreferDevice { backend, .. } => backend,
-            TileOutputPreference::RequireDevice { .. } => {
-                return Err(WsiError::Unsupported {
-                    reason: "RequireDevice not supported for Zeiss in Phase 2".into(),
-                });
-            }
-        })
-        .to_j2k();
-        reqs.iter()
-            .map(|req| {
-                self.read_tile_with_backend(req, backend)
-                    .map(TilePixels::Cpu)
-            })
-            .collect()
+        read_cpu_tiles_with_backend(
+            reqs,
+            output,
+            "RequireDevice not supported for Zeiss in Phase 2",
+            |req, backend| self.read_tile_with_backend(req, backend),
+        )
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! # wsi-rs
 //!
@@ -59,6 +59,8 @@ pub mod error;
 pub(crate) mod formats;
 pub mod output;
 pub mod properties;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use core::cache::CacheConfig;
 pub use core::decode_runtime::{DecodeExecutionOptions, DecodeRoute, DecodeRouteDecision};

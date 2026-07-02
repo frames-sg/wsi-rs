@@ -1,6 +1,7 @@
 use super::jpeg::read_vms_jpeg_header;
 use super::model::invalid_slide;
 use super::*;
+use crate::formats::ini::{parse_ini_file, ParsedIni};
 
 pub(super) const GROUP_VMS: &str = "Virtual Microscope Specimen";
 pub(super) const KEY_MAP_FILE: &str = "MapFile";
@@ -14,51 +15,13 @@ pub(super) const KEY_PHYSICAL_HEIGHT: &str = "PhysicalHeight";
 pub(super) const KEY_SOURCE_LENS: &str = "SourceLens";
 const KEY_FILE_MAX_SIZE: u64 = 64 << 10;
 
-#[derive(Default)]
-pub(super) struct ParsedIni {
-    pub(super) groups: HashMap<String, HashMap<String, String>>,
-}
-
 pub(super) fn parse_vms_ini(path: &Path) -> Result<ParsedIni, WsiError> {
-    let metadata = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if metadata.len() > KEY_FILE_MAX_SIZE {
-        return Err(invalid_slide(path, "VMS key file too large"));
-    }
-    let text = std::fs::read_to_string(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let mut parsed = ParsedIni::default();
-    let mut current_group: Option<String> = None;
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-        if let Some(group) = line
-            .strip_prefix('[')
-            .and_then(|line| line.strip_suffix(']'))
-        {
-            current_group = Some(group.to_string());
-            parsed.groups.entry(group.to_string()).or_default();
-            continue;
-        }
-        let Some(group) = current_group.as_ref() else {
-            continue;
-        };
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        parsed
-            .groups
-            .entry(group.clone())
-            .or_default()
-            .insert(key.trim().to_string(), value.trim().to_string());
-    }
-    Ok(parsed)
+    parse_ini_file(
+        path,
+        KEY_FILE_MAX_SIZE,
+        |path| invalid_slide(path, "VMS key file too large"),
+        false,
+    )
 }
 
 pub(super) fn parse_u32(

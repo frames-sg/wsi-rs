@@ -119,20 +119,8 @@ impl DicomImage {
             transfer_syntax = %self.transfer_syntax_uid,
         );
         let _guard = span.enter();
-        if col < 0 || row < 0 || col >= self.tiles_across as i64 || row >= self.tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    self.tiles_across, self.tiles_down
-                ),
-            });
-        }
-
-        let col_u32 = col as u32;
-        let row_u32 = row as u32;
+        let (col_u32, row_u32) =
+            checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         let Some(frame_index) = self.frame_index(col_u32, row_u32) else {
             let (width, height) = self.actual_tile_dimensions(col_u32, row_u32);
             return Ok(black_sample_buffer(width, height));
@@ -149,20 +137,8 @@ impl DicomImage {
         row: i64,
         level: u32,
     ) -> Result<RawCompressedTile, WsiError> {
-        if col < 0 || row < 0 || col >= self.tiles_across as i64 || row >= self.tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    self.tiles_across, self.tiles_down
-                ),
-            });
-        }
-
-        let col_u32 = col as u32;
-        let row_u32 = row as u32;
+        let (col_u32, row_u32) =
+            checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         let Some(frame_index) = self.frame_index(col_u32, row_u32) else {
             return Err(WsiError::Unsupported {
                 reason: format!(
@@ -215,11 +191,14 @@ impl DicomImage {
     }
 
     pub(super) fn actual_tile_dimensions(&self, col: u32, row: u32) -> (u32, u32) {
-        let tile_x = col * self.tile_width;
-        let tile_y = row * self.tile_height;
-        let width = self.width.saturating_sub(tile_x).min(self.tile_width);
-        let height = self.height.saturating_sub(tile_y).min(self.tile_height);
-        (width, height)
+        dicom_actual_tile_dimensions(
+            self.width,
+            self.height,
+            self.tile_width,
+            self.tile_height,
+            col,
+            row,
+        )
     }
 
     pub(super) fn cached_decoded_frame(&self, frame_index: u32) -> Option<Arc<CpuTile>> {

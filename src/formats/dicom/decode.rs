@@ -212,6 +212,40 @@ pub(super) fn decode_rle_segment(segment: &[u8], expected_len: usize) -> Result<
     Ok(output)
 }
 
+pub(super) fn checked_dicom_tile_coordinates(
+    col: i64,
+    row: i64,
+    level: u32,
+    tiles_across: u32,
+    tiles_down: u32,
+) -> Result<(u32, u32), WsiError> {
+    if col < 0 || row < 0 || col >= tiles_across as i64 || row >= tiles_down as i64 {
+        return Err(WsiError::TileRead {
+            col,
+            row,
+            level,
+            reason: format!("tile ({col},{row}) out of range ({tiles_across}x{tiles_down})"),
+        });
+    }
+
+    Ok((col as u32, row as u32))
+}
+
+pub(super) fn dicom_actual_tile_dimensions(
+    width: u32,
+    height: u32,
+    tile_width: u32,
+    tile_height: u32,
+    col: u32,
+    row: u32,
+) -> (u32, u32) {
+    let tile_x = col * tile_width;
+    let tile_y = row * tile_height;
+    let width = width.saturating_sub(tile_x).min(tile_width);
+    let height = height.saturating_sub(tile_y).min(tile_height);
+    (width, height)
+}
+
 pub(super) fn crop_sample_buffer_rgb(
     buffer: &CpuTile,
     width: u32,
