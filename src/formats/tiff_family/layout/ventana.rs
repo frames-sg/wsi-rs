@@ -8,13 +8,14 @@ use std::collections::HashMap;
 
 use crate::core::types::*;
 use crate::decode::xml;
+use crate::formats::geometry::irregular_extra_tiles;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 // ── VentanaInterpreter ──────────────────────────────────────────────
@@ -308,47 +309,18 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             .ok_or_else(|| {
                 TiffParseError::Structure("Ventana BIF: no pyramid IFDs found".into())
             })?;
-        let identity = compute_tiff_dataset_identity(
+        finish_single_scene_uint8_tiff_layout(
             container,
             pyramid_ifds.last().unwrap().ifd_id,
             property_ifd,
-        )?;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
-        let dataset_id = identity.dataset_id;
-
-        let mut dataset = Dataset {
-            id: dataset_id,
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape { z: 1, c: 1, t: 1 },
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
+            AxesShape::default(),
+            levels,
             associated_images,
             properties,
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        };
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        )
     }
 }
 
@@ -478,19 +450,6 @@ fn classify_associated_image(desc: &str) -> Option<String> {
         Some("macro".to_string())
     } else {
         None
-    }
-}
-
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        7 | 6 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        _ => Compression::Other(val as u16),
     }
 }
 
@@ -824,41 +783,6 @@ fn parse_level0_xml(
         tile_advance_x,
         tile_advance_y,
     })
-}
-
-fn irregular_extra_tiles(
-    offset_x: f64,
-    offset_y: f64,
-    tile_advance_x: f64,
-    tile_advance_y: f64,
-    tile_width: f64,
-    tile_height: f64,
-) -> (u32, u32, u32, u32) {
-    let extra_right = if offset_x < 0.0 {
-        (-offset_x / tile_advance_x).ceil() as u32
-    } else {
-        0
-    };
-    let offset_xr = offset_x + (tile_width - tile_advance_x);
-    let extra_left = if offset_xr > 0.0 {
-        (offset_xr / tile_advance_x).ceil() as u32
-    } else {
-        0
-    };
-
-    let extra_bottom = if offset_y < 0.0 {
-        (-offset_y / tile_advance_y).ceil() as u32
-    } else {
-        0
-    };
-    let offset_yr = offset_y + (tile_height - tile_advance_y);
-    let extra_top = if offset_yr > 0.0 {
-        (offset_yr / tile_advance_y).ceil() as u32
-    } else {
-        0
-    };
-
-    (extra_top, extra_bottom, extra_left, extra_right)
 }
 
 fn parse_area_tile_positions(
@@ -1449,22 +1373,7 @@ mod tests {
 
     // ── Tile grid building ──────────────────────────────────────────
 
-    #[test]
-    fn tile_grid_single_area() {
-        let bif = BifInfo {
-            areas: vec![BifArea {
-                x: 0,
-                y: 0,
-                start_col: 0,
-                start_row: 0,
-                tiles_across: 3,
-                tiles_down: 2,
-            }],
-            tiles: vec![],
-            tile_advance_x: 250.0,
-            tile_advance_y: 248.0,
-        };
-
+    fn test_tiles_from_bif_areas(bif: &BifInfo) -> HashMap<(i64, i64), TileEntry> {
         let mut tiles: HashMap<(i64, i64), TileEntry> = HashMap::new();
         let mut tiff_idx: usize = 0;
         for area in &bif.areas {
@@ -1484,6 +1393,26 @@ mod tests {
                 }
             }
         }
+        tiles
+    }
+
+    #[test]
+    fn tile_grid_single_area() {
+        let bif = BifInfo {
+            areas: vec![BifArea {
+                x: 0,
+                y: 0,
+                start_col: 0,
+                start_row: 0,
+                tiles_across: 3,
+                tiles_down: 2,
+            }],
+            tiles: vec![],
+            tile_advance_x: 250.0,
+            tile_advance_y: 248.0,
+        };
+
+        let tiles = test_tiles_from_bif_areas(&bif);
 
         assert_eq!(tiles.len(), 6);
         assert_eq!(tiles[&(0, 0)].tiff_tile_index, Some(0));
@@ -1520,25 +1449,7 @@ mod tests {
             tile_advance_y: 256.0,
         };
 
-        let mut tiles: HashMap<(i64, i64), TileEntry> = HashMap::new();
-        let mut tiff_idx: usize = 0;
-        for area in &bif.areas {
-            let offset_x = area.x as f64 - area.start_col as f64 * bif.tile_advance_x;
-            let offset_y = area.y as f64 - area.start_row as f64 * bif.tile_advance_y;
-            for row in area.start_row..area.start_row + area.tiles_down {
-                for col in area.start_col..area.start_col + area.tiles_across {
-                    tiles.insert(
-                        (col, row),
-                        TileEntry {
-                            offset: (offset_x, offset_y),
-                            dimensions: (256, 256),
-                            tiff_tile_index: Some(tiff_idx),
-                        },
-                    );
-                    tiff_idx += 1;
-                }
-            }
-        }
+        let tiles = test_tiles_from_bif_areas(&bif);
 
         assert_eq!(tiles.len(), 4);
         // First area: (0,0)=0, (1,0)=1

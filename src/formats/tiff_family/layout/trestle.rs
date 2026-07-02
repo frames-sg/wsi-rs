@@ -9,7 +9,9 @@ use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, compute_tiff_dataset_id_and_record_quickhash,
+    single_scene_uint8_pyramid_dataset, DatasetLayout, TiffLayoutInterpreter, TileSource,
+    TileSourceKey,
 };
 
 const TAG_SOFTWARE: u16 = 305;
@@ -228,29 +230,20 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             }
         }
 
-        let identity = compute_tiff_dataset_identity(container, lowest_ifd, first_ifd)?;
-        if let Some(quickhash) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash);
-        }
+        let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
+            container,
+            lowest_ifd,
+            first_ifd,
+            &mut properties,
+        )?;
 
-        let mut dataset = Dataset {
-            id: identity.dataset_id,
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
+        let mut dataset = single_scene_uint8_pyramid_dataset(
+            dataset_id,
+            AxesShape::default(),
+            levels,
             associated_images,
             properties,
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        };
+        );
         attach_source_icc_profile(&mut dataset, container, top_ifds.iter().copied(), 0, 0)?;
 
         Ok(DatasetLayout {
@@ -258,19 +251,6 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             tile_sources,
             associated_sources,
         })
-    }
-}
-
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        6 | 7 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        _ => Compression::Other(val as u16),
     }
 }
 

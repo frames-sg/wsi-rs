@@ -9,27 +9,14 @@ use std::collections::HashMap;
 use crate::core::types::*;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, regular_tiff_level, DatasetLayout,
+    TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        7 | 6 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        _ => Compression::Other(val as u16),
-    }
-}
 
 // ── Interpreter ──────────────────────────────────────────────────────
 
@@ -150,15 +137,6 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
         let mut tile_sources = HashMap::new();
 
         for (level_idx, tifd) in tiled_ifds.iter().enumerate() {
-            if tifd.tile_width == 0 || tifd.tile_height == 0 {
-                return Err(TiffParseError::Structure(format!(
-                    "Generic TIFF: tile dimensions must be > 0 (got {}x{})",
-                    tifd.tile_width, tifd.tile_height
-                )));
-            }
-            let tiles_across = tifd.width.div_ceil(tifd.tile_width as u64);
-            let tiles_down = tifd.height.div_ceil(tifd.tile_height as u64);
-
             let downsample = if level_idx == 0 {
                 1.0
             } else {
@@ -167,16 +145,14 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 (dw + dh) / 2.0
             };
 
-            levels.push(Level {
-                dimensions: (tifd.width, tifd.height),
+            levels.push(regular_tiff_level(
+                "Generic TIFF",
+                tifd.width,
+                tifd.height,
+                tifd.tile_width,
+                tifd.tile_height,
                 downsample,
-                tile_layout: TileLayout::Regular {
-                    tile_width: tifd.tile_width,
-                    tile_height: tifd.tile_height,
-                    tiles_across,
-                    tiles_down,
-                },
-            });
+            )?);
 
             let key = TileSourceKey {
                 scene: 0usize,
@@ -262,48 +238,19 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             .top_ifds()
             .first()
             .ok_or_else(|| TiffParseError::Structure("No IFDs in generic TIFF container".into()))?;
-        let identity = compute_tiff_dataset_identity(
+        // Phase 8: Assemble Dataset with single Scene, single Series.
+        finish_single_scene_uint8_tiff_layout(
             container,
             tiled_ifds.last().unwrap().ifd_id,
             property_ifd,
-        )?;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
-        let dataset_id = identity.dataset_id;
-
-        // Phase 8: Assemble Dataset with single Scene, single Series.
-        let mut dataset = Dataset {
-            id: dataset_id,
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
+            AxesShape::default(),
+            levels,
             associated_images,
             properties,
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        };
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
+        )
     }
 }
 

@@ -80,37 +80,18 @@ impl TiffPixelReader {
                 }
             };
 
-            let (tile_idx, width, height) =
-                self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
-            let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(*ifd_id)?;
-            if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
-                        "tile index {} out of range (offsets={}, byte_counts={})",
-                        tile_idx,
-                        offsets.len(),
-                        byte_counts.len()
-                    ),
-                });
-            }
-            let byte_count = byte_counts[tile_idx];
-            if byte_count == 0 {
+            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+            if span.byte_count == 0 {
                 return reqs
                     .iter()
                     .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
                     .collect();
             }
-            let data = self
-                .container
-                .pread(offsets[tile_idx], byte_count)
-                .map_err(|err| err.into_wsi_error(self.container.path()))?;
+            let data = self.read_tiled_ifd_tile_span(span)?;
             decode_reqs.push(Jp2kDecodeJob {
                 data: Cow::Owned(data),
-                expected_width: width,
-                expected_height: height,
+                expected_width: span.width,
+                expected_height: span.height,
                 rgb_color_space: matches!(colorspace, Jp2kColorSpace::Rgb),
                 backend,
             });

@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct TiledIfdTileSpan {
+    pub(super) offset: u64,
+    pub(super) byte_count: u64,
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
 impl TiffPixelReader {
     pub(super) fn tiff_jpeg_decode_options_for_data(
         &self,
@@ -249,6 +257,43 @@ impl TiffPixelReader {
         Ok((offsets, byte_counts))
     }
 
+    pub(super) fn tiled_ifd_tile_span(
+        &self,
+        req: &TileRequest,
+        ifd_id: IfdId,
+    ) -> Result<TiledIfdTileSpan, WsiError> {
+        let (tile_idx, width, height) = self.tiled_ifd_tile_index_and_dimensions(req, ifd_id)?;
+        let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(ifd_id)?;
+        if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
+            return Err(WsiError::TileRead {
+                col: req.col,
+                row: req.row,
+                level: req.level.get(),
+                reason: format!(
+                    "tile index {} out of range (offsets={}, byte_counts={})",
+                    tile_idx,
+                    offsets.len(),
+                    byte_counts.len()
+                ),
+            });
+        }
+        Ok(TiledIfdTileSpan {
+            offset: offsets[tile_idx],
+            byte_count: byte_counts[tile_idx],
+            width,
+            height,
+        })
+    }
+
+    pub(super) fn read_tiled_ifd_tile_span(
+        &self,
+        span: TiledIfdTileSpan,
+    ) -> Result<Vec<u8>, WsiError> {
+        self.container
+            .pread(span.offset, span.byte_count)
+            .map_err(|err| err.into_wsi_error(self.container.path()))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn decode_tiled_ifd_tile_index(
         &self,
@@ -338,31 +383,13 @@ impl TiffPixelReader {
         ifd_id: IfdId,
         jpeg_tables: Option<&[u8]>,
     ) -> Result<RawCompressedTile, WsiError> {
-        let (tile_idx, _, _) = self.tiled_ifd_tile_index_and_dimensions(req, ifd_id)?;
-        let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(ifd_id)?;
-        if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "tile index {} out of range (offsets={}, byte_counts={})",
-                    tile_idx,
-                    offsets.len(),
-                    byte_counts.len()
-                ),
-            });
-        }
-        let byte_count = byte_counts[tile_idx];
-        if byte_count == 0 {
+        let span = self.tiled_ifd_tile_span(req, ifd_id)?;
+        if span.byte_count == 0 {
             return Err(WsiError::Unsupported {
                 reason: "JPEG passthrough does not support empty TIFF tiles".into(),
             });
         }
-        let tile_data = self
-            .container
-            .pread(offsets[tile_idx], byte_count)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?;
+        let tile_data = self.read_tiled_ifd_tile_span(span)?;
         let (data, info) = standalone_jpeg_frame_owned(tile_data, jpeg_tables)?;
         Ok(RawCompressedTile::builder(Compression::Jpeg)
             .dimensions(info.width, info.height)
@@ -379,32 +406,14 @@ impl TiffPixelReader {
         ifd_id: IfdId,
         compression: Compression,
     ) -> Result<RawCompressedTile, WsiError> {
-        let (tile_idx, width, height) = self.tiled_ifd_tile_index_and_dimensions(req, ifd_id)?;
-        let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(ifd_id)?;
-        if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "tile index {} out of range (offsets={}, byte_counts={})",
-                    tile_idx,
-                    offsets.len(),
-                    byte_counts.len()
-                ),
-            });
-        }
-        let byte_count = byte_counts[tile_idx];
-        if byte_count == 0 {
+        let span = self.tiled_ifd_tile_span(req, ifd_id)?;
+        if span.byte_count == 0 {
             return Err(WsiError::Unsupported {
                 reason: "J2K passthrough does not support empty TIFF tiles".into(),
             });
         }
 
-        let data = self
-            .container
-            .pread(offsets[tile_idx], byte_count)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?;
+        let data = self.read_tiled_ifd_tile_span(span)?;
         let samples_per_pixel = self
             .container
             .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
@@ -457,7 +466,7 @@ impl TiffPixelReader {
         };
 
         Ok(RawCompressedTile::builder(compression)
-            .dimensions(width, height)
+            .dimensions(span.width, span.height)
             .bits_allocated(bits_allocated as u16)
             .samples_per_pixel(samples_per_pixel as u16)
             .photometric_interpretation(photometric_interpretation)
@@ -533,30 +542,11 @@ impl TiffPixelReader {
                 return Ok(None);
             }
 
-            let (tile_idx, width, height) =
-                self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
-            let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(*ifd_id)?;
-            if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
-                        "tile index {} out of range (offsets={}, byte_counts={})",
-                        tile_idx,
-                        offsets.len(),
-                        byte_counts.len()
-                    ),
-                });
-            }
-            let byte_count = byte_counts[tile_idx];
-            if byte_count == 0 {
+            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+            if span.byte_count == 0 {
                 return Ok(None);
             }
-            let data = self
-                .container
-                .pread(offsets[tile_idx], byte_count)
-                .map_err(|err| err.into_wsi_error(self.container.path()))?;
+            let data = self.read_tiled_ifd_tile_span(span)?;
 
             let job = match compression {
                 Compression::Jpeg => {
@@ -569,8 +559,8 @@ impl TiffPixelReader {
                     CodecBatchJob::Jpeg(JpegDecodeJob {
                         data: Cow::Owned(data),
                         tables: jpeg_tables.as_deref().map(Cow::Borrowed),
-                        expected_width: width,
-                        expected_height: height,
+                        expected_width: span.width,
+                        expected_height: span.height,
                         color_transform: options.color_transform,
                         force_dimensions: options.force_dimensions,
                         requested_size: None,
@@ -579,8 +569,8 @@ impl TiffPixelReader {
                 Compression::Jp2kRgb | Compression::Jp2kYcbcr => {
                     CodecBatchJob::Jp2k(Jp2kDecodeJob {
                         data: Cow::Owned(data),
-                        expected_width: width,
-                        expected_height: height,
+                        expected_width: span.width,
+                        expected_height: span.height,
                         rgb_color_space: matches!(compression, Compression::Jp2kRgb),
                         backend,
                     })
@@ -610,7 +600,9 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         _backend: BackendRequest,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        reqs.par_iter()
+        let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
+        let result: Result<Vec<CpuTile>, WsiError> = reqs
+            .par_iter()
             .map(|req| {
                 let source = self.tile_source_for(req)?;
                 let TileSource::TiledIfd {
@@ -627,32 +619,12 @@ impl TiffPixelReader {
                     });
                 };
 
-                let (tile_idx, width, height) =
-                    self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
-                let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(*ifd_id)?;
-                if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-                    return Err(WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: format!(
-                            "tile index {} out of range (offsets={}, byte_counts={})",
-                            tile_idx,
-                            offsets.len(),
-                            byte_counts.len()
-                        ),
-                    });
+                let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+                if span.byte_count == 0 {
+                    return Self::empty_rgb_tile(span.width, span.height);
                 }
 
-                let byte_count = byte_counts[tile_idx];
-                if byte_count == 0 {
-                    return Self::empty_rgb_tile(width, height);
-                }
-
-                let tile_data = self
-                    .container
-                    .pread(offsets[tile_idx], byte_count)
-                    .map_err(|err| err.into_wsi_error(self.container.path()))?;
+                let tile_data = self.read_tiled_ifd_tile_span(span)?;
                 let options = self.tiff_jpeg_decode_options_for_data(
                     *ifd_id,
                     false,
@@ -662,8 +634,8 @@ impl TiffPixelReader {
                 decode_one_jpeg(JpegDecodeJob {
                     data: Cow::Borrowed(&tile_data),
                     tables: jpeg_tables.as_deref().map(Cow::Borrowed),
-                    expected_width: width,
-                    expected_height: height,
+                    expected_width: span.width,
+                    expected_height: span.height,
                     color_transform: options.color_transform,
                     force_dimensions: options.force_dimensions,
                     requested_size: None,
@@ -678,7 +650,28 @@ impl TiffPixelReader {
                     },
                 })
             })
-            .collect()
+            .collect();
+        if let Some(started) = started.as_ref() {
+            match &result {
+                Ok(tiles) => {
+                    tracing::debug!(
+                        requested_tiles = reqs.len(),
+                        decoded_tiles = tiles.len(),
+                        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                        "wsi tiff tiled-ifd jpeg batch decoded"
+                    );
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        requested_tiles = reqs.len(),
+                        error = %err,
+                        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                        "wsi tiff tiled-ifd jpeg batch failed"
+                    );
+                }
+            }
+        }
+        result
     }
 
     #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -733,33 +726,14 @@ impl TiffPixelReader {
                 });
             };
 
-            let (tile_idx, width, height) =
-                self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
-            let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(*ifd_id)?;
-            if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
-                        "tile index {} out of range (offsets={}, byte_counts={})",
-                        tile_idx,
-                        offsets.len(),
-                        byte_counts.len()
-                    ),
-                });
-            }
-            let byte_count = byte_counts[tile_idx];
-            if byte_count == 0 {
+            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+            if span.byte_count == 0 {
                 return Err(WsiError::Unsupported {
                     reason: "device backend not available for empty jpeg tile".into(),
                 });
             }
 
-            let tile_data = self
-                .container
-                .pread(offsets[tile_idx], byte_count)
-                .map_err(|err| err.into_wsi_error(self.container.path()))?;
+            let tile_data = self.read_tiled_ifd_tile_span(span)?;
             let options = self.tiff_jpeg_decode_options_for_data(
                 *ifd_id,
                 false,
@@ -769,8 +743,8 @@ impl TiffPixelReader {
             jobs.push(JpegDecodeJob {
                 data: Cow::Owned(tile_data),
                 tables: jpeg_tables.as_deref().map(Cow::Borrowed),
-                expected_width: width,
-                expected_height: height,
+                expected_width: span.width,
+                expected_height: span.height,
                 color_transform: options.color_transform,
                 force_dimensions: options.force_dimensions,
                 requested_size: None,
@@ -814,36 +788,17 @@ impl TiffPixelReader {
                 });
             }
 
-            let (tile_idx, width, height) =
-                self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
-            let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(*ifd_id)?;
-            if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
-                        "tile index {} out of range (offsets={}, byte_counts={})",
-                        tile_idx,
-                        offsets.len(),
-                        byte_counts.len()
-                    ),
-                });
-            }
-            let byte_count = byte_counts[tile_idx];
-            if byte_count == 0 {
+            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+            if span.byte_count == 0 {
                 return Err(WsiError::Unsupported {
                     reason: "device backend not available for empty jp2k tile".into(),
                 });
             }
-            let data = self
-                .container
-                .pread(offsets[tile_idx], byte_count)
-                .map_err(|err| err.into_wsi_error(self.container.path()))?;
+            let data = self.read_tiled_ifd_tile_span(span)?;
             jobs.push(Jp2kDecodeJob {
                 data: Cow::Owned(data),
-                expected_width: width,
-                expected_height: height,
+                expected_width: span.width,
+                expected_height: span.height,
                 rgb_color_space: matches!(compression, Compression::Jp2kRgb),
                 backend,
             });

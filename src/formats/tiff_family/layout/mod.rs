@@ -8,10 +8,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::core::hash::Quickhash1;
-use crate::core::types::{Compression, Dataset, DatasetId};
+use crate::core::types::{
+    AssociatedImage, AxesShape, Compression, Dataset, DatasetId, Level, SampleType, Scene, Series,
+};
 use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
+use crate::formats::tiff_family::icc::attach_source_icc_profile;
+use crate::properties::Properties;
 
 pub(crate) mod aperio;
 pub(crate) mod generic;
@@ -30,6 +34,117 @@ const TAG_DATETIME: u16 = 306;
 const TAG_ARTIST: u16 = 315;
 const TAG_HOST_COMPUTER: u16 = 316;
 const TAG_COPYRIGHT: u16 = 33432;
+
+fn compression_from_tag(val: u32) -> Compression {
+    match val {
+        1 => Compression::None,
+        5 => Compression::Lzw,
+        8 | 32946 => Compression::Deflate,
+        6 | 7 => Compression::Jpeg,
+        50000 => Compression::Zstd,
+        33003 | 33005 => Compression::Jp2kYcbcr,
+        33004 => Compression::Jp2kRgb,
+        _ => Compression::Other(val as u16),
+    }
+}
+
+fn single_scene_uint8_pyramid_dataset(
+    dataset_id: DatasetId,
+    axes: AxesShape,
+    levels: Vec<Level>,
+    associated_images: HashMap<String, AssociatedImage>,
+    properties: Properties,
+) -> Dataset {
+    Dataset::new(
+        dataset_id,
+        vec![Scene::new(
+            "s0",
+            vec![Series::new(
+                "ser0",
+                axes,
+                levels,
+                SampleType::Uint8,
+                Vec::new(),
+            )],
+        )],
+    )
+    .with_associated_images(associated_images)
+    .with_properties(properties)
+}
+
+fn regular_tiff_level(
+    vendor: &str,
+    width: u64,
+    height: u64,
+    tile_width: u32,
+    tile_height: u32,
+    downsample: f64,
+) -> Result<Level, TiffParseError> {
+    if tile_width == 0 || tile_height == 0 {
+        return Err(TiffParseError::Structure(format!(
+            "{vendor}: tile dimensions must be > 0 (got {tile_width}x{tile_height})"
+        )));
+    }
+    let tiles_across = width.div_ceil(tile_width as u64);
+    let tiles_down = height.div_ceil(tile_height as u64);
+
+    Ok(Level {
+        dimensions: (width, height),
+        downsample,
+        tile_layout: crate::core::types::TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        },
+    })
+}
+
+fn compute_tiff_dataset_id_and_record_quickhash(
+    container: &TiffContainer,
+    lowest_resolution_ifd: IfdId,
+    property_ifd: IfdId,
+    properties: &mut Properties,
+) -> Result<DatasetId, TiffParseError> {
+    let identity = compute_tiff_dataset_identity(container, lowest_resolution_ifd, property_ifd)?;
+    if let Some(quickhash1) = identity.quickhash1.as_deref() {
+        properties.insert("openslide.quickhash-1", quickhash1);
+    }
+    Ok(identity.dataset_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_single_scene_uint8_tiff_layout<I>(
+    container: &TiffContainer,
+    lowest_resolution_ifd: IfdId,
+    property_ifd: IfdId,
+    axes: AxesShape,
+    levels: Vec<Level>,
+    associated_images: HashMap<String, AssociatedImage>,
+    mut properties: Properties,
+    tile_sources: HashMap<TileSourceKey, TileSource>,
+    associated_sources: HashMap<String, TileSource>,
+    source_icc_ifds: I,
+) -> Result<DatasetLayout, TiffParseError>
+where
+    I: IntoIterator<Item = IfdId>,
+{
+    let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
+        container,
+        lowest_resolution_ifd,
+        property_ifd,
+        &mut properties,
+    )?;
+    let mut dataset =
+        single_scene_uint8_pyramid_dataset(dataset_id, axes, levels, associated_images, properties);
+    attach_source_icc_profile(&mut dataset, container, source_icc_ifds, 0, 0)?;
+
+    Ok(DatasetLayout {
+        dataset,
+        tile_sources,
+        associated_sources,
+    })
+}
 
 pub(crate) struct DatasetIdentity {
     pub dataset_id: DatasetId,

@@ -16,11 +16,11 @@ use crate::core::types::*;
 use crate::decode::xml;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -212,54 +212,25 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
         }
 
         // Phase 4: Parse properties from XML.
-        let mut properties = parse_properties(container, base_spacing)?;
+        let properties = parse_properties(container, base_spacing)?;
 
         // Phase 5: Compute dataset ID.
         let property_ifd = *container
             .top_ifds()
             .first()
             .ok_or_else(|| TiffParseError::Structure("No IFDs in Philips TIFF container".into()))?;
-        let identity = compute_tiff_dataset_identity(
+        finish_single_scene_uint8_tiff_layout(
             container,
             tiled_ifds.last().unwrap().ifd_id,
             property_ifd,
-        )?;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
-        let dataset_id = identity.dataset_id;
-
-        let mut dataset = Dataset {
-            id: dataset_id,
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape { z: 1, c: 1, t: 1 },
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
+            AxesShape::default(),
+            levels,
             associated_images,
             properties,
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        };
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
+        )
     }
 }
 
@@ -282,19 +253,6 @@ struct TiledIfdInfo {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
-
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        7 | 6 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        _ => Compression::Other(val as u16),
-    }
-}
 
 /// Classify a stripped IFD as "label", "macro", or None.
 /// Checks ImageDescription for case-insensitive match.

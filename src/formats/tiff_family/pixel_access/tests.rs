@@ -2,6 +2,7 @@ use super::*;
 use crate::formats::tiff_family::container::TiffContainer;
 use crate::formats::tiff_family::layout::DatasetLayout;
 use crate::properties::Properties;
+use crate::test_support::{assert_cpu_tile_matches_rgb_fixture_with_tolerance, region_request};
 use flate2::write::ZlibEncoder;
 use flate2::Compression as DeflateCompression;
 use image::{DynamicImage, ImageFormat};
@@ -10,27 +11,6 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::io::Write;
 use tempfile::NamedTempFile;
-
-#[allow(clippy::too_many_arguments)]
-fn region_request(
-    scene: usize,
-    series: usize,
-    level: u32,
-    plane: PlaneSelection,
-    x: i64,
-    y: i64,
-    w: u32,
-    h: u32,
-) -> RegionRequest {
-    RegionRequest {
-        scene: SceneId::new(scene),
-        series: SeriesId::new(series),
-        level: LevelIdx::new(level),
-        plane: PlaneIdx::new(plane),
-        origin_px: (x, y),
-        size_px: (w, h),
-    }
-}
 
 fn make_sample_buffer(size: usize) -> CpuTile {
     CpuTile {
@@ -203,6 +183,114 @@ fn clamp_ndpi_strip_crop_limits_edge_requests_to_strip_bounds() {
     );
 }
 
+fn whole_level(dimensions: (u64, u64), downsample: f64, virtual_tile: (u32, u32)) -> Level {
+    Level {
+        dimensions,
+        downsample,
+        tile_layout: TileLayout::WholeLevel {
+            width: dimensions.0,
+            height: dimensions.1,
+            virtual_tile_width: virtual_tile.0,
+            virtual_tile_height: virtual_tile.1,
+        },
+    }
+}
+
+fn regular_level(width: u32, height: u32, tile_width: u32, tile_height: u32) -> Level {
+    Level {
+        dimensions: (u64::from(width), u64::from(height)),
+        downsample: 1.0,
+        tile_layout: TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across: u64::from(width.div_ceil(tile_width)),
+            tiles_down: u64::from(height.div_ceil(tile_height)),
+        },
+    }
+}
+
+fn tile_source_key(level: u32) -> TileSourceKey {
+    TileSourceKey {
+        scene: 0usize,
+        series: 0usize,
+        level,
+        z: 0,
+        c: 0,
+        t: 0,
+    }
+}
+
+fn single_series_dataset(dataset_id: DatasetId, levels: Vec<Level>) -> Dataset {
+    Dataset {
+        id: dataset_id,
+        scenes: vec![Scene {
+            id: "s0".into(),
+            name: None,
+            series: vec![Series {
+                id: "ser0".into(),
+                axes: AxesShape::default(),
+                levels,
+                sample_type: SampleType::Uint8,
+                channels: vec![],
+            }],
+        }],
+        associated_images: HashMap::new(),
+        properties: Properties::new(),
+        icc_profiles: HashMap::new(),
+        source_icc_profiles: Vec::new(),
+    }
+}
+
+fn single_series_layout(
+    dataset_id: DatasetId,
+    levels: Vec<Level>,
+    tile_sources: HashMap<TileSourceKey, TileSource>,
+) -> DatasetLayout {
+    DatasetLayout {
+        dataset: single_series_dataset(dataset_id, levels),
+        tile_sources,
+        associated_sources: HashMap::new(),
+    }
+}
+
+fn associated_image_layout(
+    dataset_id: DatasetId,
+    image_name: &str,
+    dimensions: (u32, u32),
+    channels: u16,
+    source: TileSource,
+) -> DatasetLayout {
+    DatasetLayout {
+        dataset: Dataset {
+            id: dataset_id,
+            scenes: vec![],
+            associated_images: HashMap::from([(
+                image_name.to_string(),
+                AssociatedImage::new(dimensions, SampleType::Uint8, channels),
+            )]),
+            properties: Properties::new(),
+            icc_profiles: HashMap::new(),
+            source_icc_profiles: Vec::new(),
+        },
+        tile_sources: HashMap::new(),
+        associated_sources: HashMap::from([(image_name.to_string(), source)]),
+    }
+}
+
+fn stripped_associated_source(
+    container: &TiffContainer,
+    ifd_id: IfdId,
+    compression: Compression,
+) -> TileSource {
+    TileSource::Stripped {
+        ifd_id,
+        jpeg_tables: None,
+        compression,
+        strip_offsets: vec![container.get_u64(ifd_id, tags::STRIP_OFFSETS).unwrap()],
+        strip_byte_counts: vec![container.get_u64(ifd_id, tags::STRIP_BYTE_COUNTS).unwrap()],
+    }
+}
+
 fn build_test_ndpi_reader_for_strip_cache(
     width: u32,
     height: u32,
@@ -220,55 +308,15 @@ fn build_test_ndpi_reader_for_strip_cache(
         build_ndpi_full_jpeg_tiff(width, height, &jpeg, (tiles_across * tiles_down) as usize);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(12),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![
-                        Level {
-                            dimensions: (width as u64, height as u64),
-                            downsample: 1.0,
-                            tile_layout: TileLayout::WholeLevel {
-                                width: width as u64,
-                                height: height as u64,
-                                virtual_tile_width: 128,
-                                virtual_tile_height: 16,
-                            },
-                        },
-                        Level {
-                            dimensions: (width as u64, height as u64),
-                            downsample: 2.0,
-                            tile_layout: TileLayout::WholeLevel {
-                                width: width as u64,
-                                height: height as u64,
-                                virtual_tile_width: 128,
-                                virtual_tile_height: 16,
-                            },
-                        },
-                    ],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 1u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+    let dimensions = (u64::from(width), u64::from(height));
+    let layout = single_series_layout(
+        DatasetId::new(12),
+        vec![
+            whole_level(dimensions, 1.0, (128, 16)),
+            whole_level(dimensions, 2.0, (128, 16)),
+        ],
+        HashMap::from([(
+            tile_source_key(1),
             TileSource::NdpiJpeg {
                 ifd_id,
                 jpeg_header,
@@ -280,8 +328,7 @@ fn build_test_ndpi_reader_for_strip_cache(
                 strip_byte_count: jpeg.len() as u64,
             },
         )]),
-        associated_sources: HashMap::new(),
-    };
+    );
     (TiffPixelReader::new(container, layout), ifd_id)
 }
 
@@ -294,6 +341,42 @@ struct TestNdpiJpegLayout {
     strip_byte_count: u64,
 }
 
+const TEST_NDPI_RESTART_COLORS: [[u8; 3]; 4] =
+    [[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]];
+
+fn build_test_ndpi_restart_reader(zero_sof_dimensions: bool) -> TiffPixelReader {
+    let (file, jpeg_header, strip_byte_count) = build_ndpi_scan_data_tiff_from_blobs(
+        128,
+        16,
+        &TEST_NDPI_RESTART_COLORS,
+        zero_sof_dimensions,
+    );
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = *container.top_ifds().first().unwrap();
+    let layout = build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
+        ifd_id,
+        dimensions: (128, 16),
+        virtual_tile: (64, 8),
+        tile_grid: (2, 2),
+        jpeg_header,
+        strip_byte_count,
+    });
+    TiffPixelReader::new(container, layout)
+}
+
+fn read_test_ndpi_level0_tile(reader: &TiffPixelReader, col: i64, row: i64) -> CpuTile {
+    reader
+        .read_tile_cpu(&TileRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: PlaneSelection::default().into(),
+            col,
+            row,
+        })
+        .unwrap()
+}
+
 fn build_test_ndpi_layout_from_header(spec: TestNdpiJpegLayout) -> DatasetLayout {
     build_test_ndpi_layout_from_header_with_strip_offset(spec, 8)
 }
@@ -302,59 +385,38 @@ fn build_test_ndpi_layout_from_header_with_strip_offset(
     spec: TestNdpiJpegLayout,
     strip_offset: u64,
 ) -> DatasetLayout {
+    build_test_ndpi_layout_from_header_with_restart_interval(spec, strip_offset, 8)
+}
+
+fn build_test_ndpi_layout_from_header_with_restart_interval(
+    spec: TestNdpiJpegLayout,
+    strip_offset: u64,
+    restart_interval: u16,
+) -> DatasetLayout {
     let (width, height) = spec.dimensions;
     let (virtual_tile_width, virtual_tile_height) = spec.virtual_tile;
     let (tiles_across, tiles_down) = spec.tile_grid;
-    DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(12),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![Level {
-                        dimensions: (width as u64, height as u64),
-                        downsample: 1.0,
-                        tile_layout: TileLayout::WholeLevel {
-                            width: width as u64,
-                            height: height as u64,
-                            virtual_tile_width,
-                            virtual_tile_height,
-                        },
-                    }],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+    single_series_layout(
+        DatasetId::new(12),
+        vec![whole_level(
+            (u64::from(width), u64::from(height)),
+            1.0,
+            (virtual_tile_width, virtual_tile_height),
+        )],
+        HashMap::from([(
+            tile_source_key(0),
             TileSource::NdpiJpeg {
                 ifd_id: spec.ifd_id,
                 jpeg_header: spec.jpeg_header,
                 mcu_starts_tag: 65426,
                 tiles_across,
                 tiles_down,
-                restart_interval: 8,
+                restart_interval,
                 strip_offset,
                 strip_byte_count: spec.strip_byte_count,
             },
         )]),
-        associated_sources: HashMap::new(),
-    }
+    )
 }
 
 fn make_ndpi_strip(width: u32, height: u32, rgb: [u8; 3]) -> Arc<CpuTile> {
@@ -541,34 +603,8 @@ fn ndpi_display_tile_composites_across_multiple_strip_rows_and_columns() {
 
 #[test]
 fn ndpi_restart_tile_decodes_target_strip_via_public_read_path() {
-    let (file, jpeg_header, strip_byte_count) = build_ndpi_scan_data_tiff_from_blobs(
-        128,
-        16,
-        &[[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]],
-        false,
-    );
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
-        ifd_id,
-        dimensions: (128, 16),
-        virtual_tile: (64, 8),
-        tile_grid: (2, 2),
-        jpeg_header,
-        strip_byte_count,
-    });
-    let reader = TiffPixelReader::new(container, layout);
-
-    let tile = reader
-        .read_tile_cpu(&TileRequest {
-            scene: 0usize.into(),
-            series: 0usize.into(),
-            level: 0u32.into(),
-            plane: PlaneSelection::default().into(),
-            col: 1,
-            row: 1,
-        })
-        .unwrap();
+    let reader = build_test_ndpi_restart_reader(false);
+    let tile = read_test_ndpi_level0_tile(&reader, 1, 1);
 
     assert_eq!(tile.width, 64);
     assert_eq!(tile.height, 8);
@@ -589,6 +625,7 @@ fn ndpi_restart_tile_decodes_target_strip_via_public_read_path() {
         "expected blue channel to stay lower, got {pixel:?}"
     );
 
+    let ifd_id = *reader.container.top_ifds().first().unwrap();
     let mut cache = reader.ndpi_strip_cache.lock().unwrap();
     assert!(cache
         .get(&NdpiStripKey {
@@ -667,56 +704,18 @@ fn ndpi_restart_tile_does_not_silently_fallback_to_full_decode_on_bad_mcu_table(
     let file = build_stripped_jpeg_tiff(8, 8, &jpeg);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(3),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![Level {
-                        dimensions: (8, 8),
-                        downsample: 1.0,
-                        tile_layout: TileLayout::WholeLevel {
-                            width: 8,
-                            height: 8,
-                            virtual_tile_width: 8,
-                            virtual_tile_height: 8,
-                        },
-                    }],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
+    let layout = build_test_ndpi_layout_from_header_with_restart_interval(
+        TestNdpiJpegLayout {
+            ifd_id,
+            dimensions: (8, 8),
+            virtual_tile: (8, 8),
+            tile_grid: (1, 1),
+            jpeg_header: Vec::new(),
+            strip_byte_count: jpeg.len() as u64,
         },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
-            TileSource::NdpiJpeg {
-                ifd_id,
-                jpeg_header: Vec::new(),
-                mcu_starts_tag: 65426,
-                tiles_across: 1,
-                tiles_down: 1,
-                restart_interval: 1,
-                strip_offset: 8,
-                strip_byte_count: jpeg.len() as u64,
-            },
-        )]),
-        associated_sources: HashMap::new(),
-    };
+        8,
+        1,
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let err = reader
@@ -737,34 +736,8 @@ fn ndpi_restart_tile_does_not_silently_fallback_to_full_decode_on_bad_mcu_table(
 
 #[test]
 fn ndpi_restart_tile_decodes_zero_sof_segment_from_mcu_table() {
-    let (file, jpeg_header, strip_byte_count) = build_ndpi_scan_data_tiff_from_blobs(
-        128,
-        16,
-        &[[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]],
-        true,
-    );
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
-        ifd_id,
-        dimensions: (128, 16),
-        virtual_tile: (64, 8),
-        tile_grid: (2, 2),
-        jpeg_header,
-        strip_byte_count,
-    });
-    let reader = TiffPixelReader::new(container, layout);
-
-    let tile = reader
-        .read_tile_cpu(&TileRequest {
-            scene: 0usize.into(),
-            series: 0usize.into(),
-            level: 0u32.into(),
-            plane: PlaneSelection::default().into(),
-            col: 0,
-            row: 0,
-        })
-        .unwrap();
+    let reader = build_test_ndpi_restart_reader(true);
+    let tile = read_test_ndpi_level0_tile(&reader, 0, 0);
 
     assert_eq!(tile.width, 64);
     assert_eq!(tile.height, 8);
@@ -1479,66 +1452,16 @@ fn synthetic_ndpi_levels_downsample_smallest_physical_level() {
     let file = build_stripped_jpeg_tiff(4, 4, &jpeg);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(99),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![
-                        Level {
-                            dimensions: (4, 4),
-                            downsample: 1.0,
-                            tile_layout: TileLayout::WholeLevel {
-                                width: 4,
-                                height: 4,
-                                virtual_tile_width: 4,
-                                virtual_tile_height: 4,
-                            },
-                        },
-                        Level {
-                            dimensions: (2, 2),
-                            downsample: 2.0,
-                            tile_layout: TileLayout::WholeLevel {
-                                width: 2,
-                                height: 2,
-                                virtual_tile_width: 2,
-                                virtual_tile_height: 2,
-                            },
-                        },
-                        Level {
-                            dimensions: (1, 1),
-                            downsample: 4.0,
-                            tile_layout: TileLayout::WholeLevel {
-                                width: 1,
-                                height: 1,
-                                virtual_tile_width: 1,
-                                virtual_tile_height: 1,
-                            },
-                        },
-                    ],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([
+    let layout = single_series_layout(
+        DatasetId::new(99),
+        vec![
+            whole_level((4, 4), 1.0, (4, 4)),
+            whole_level((2, 2), 2.0, (2, 2)),
+            whole_level((1, 1), 4.0, (1, 1)),
+        ],
+        HashMap::from([
             (
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: 0u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                tile_source_key(0),
                 TileSource::NdpiFullDecode {
                     ifd_id,
                     jpeg_header: Vec::new(),
@@ -1547,36 +1470,21 @@ fn synthetic_ndpi_levels_downsample_smallest_physical_level() {
                 },
             ),
             (
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: 1u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                tile_source_key(1),
                 TileSource::SyntheticDownsample {
                     base_level: 0u32,
                     factor: 2,
                 },
             ),
             (
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: 2u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                tile_source_key(2),
                 TileSource::SyntheticDownsample {
                     base_level: 0u32,
                     factor: 4,
                 },
             ),
         ]),
-        associated_sources: HashMap::new(),
-    };
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let level1 = reader
@@ -1779,25 +1687,13 @@ fn build_synthetic_ndpi_reader(
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
 
-    let mut levels = vec![Level {
-        dimensions: (u64::from(width), u64::from(height)),
-        downsample: 1.0,
-        tile_layout: TileLayout::WholeLevel {
-            width: u64::from(width),
-            height: u64::from(height),
-            virtual_tile_width: width,
-            virtual_tile_height: height,
-        },
-    }];
+    let mut levels = vec![whole_level(
+        (u64::from(width), u64::from(height)),
+        1.0,
+        (width, height),
+    )];
     let mut tile_sources = HashMap::from([(
-        TileSourceKey {
-            scene: 0usize,
-            series: 0usize,
-            level: 0u32,
-            z: 0,
-            c: 0,
-            t: 0,
-        },
+        tile_source_key(0),
         TileSource::NdpiFullDecode {
             ifd_id,
             jpeg_header: Vec::new(),
@@ -1808,25 +1704,13 @@ fn build_synthetic_ndpi_reader(
 
     for (idx, (level_width, level_height, factor)) in synthetic.iter().copied().enumerate() {
         let level_idx = (idx + 1) as u32;
-        levels.push(Level {
-            dimensions: (level_width, level_height),
-            downsample: f64::from(factor),
-            tile_layout: TileLayout::WholeLevel {
-                width: level_width,
-                height: level_height,
-                virtual_tile_width: level_width as u32,
-                virtual_tile_height: level_height as u32,
-            },
-        });
+        levels.push(whole_level(
+            (level_width, level_height),
+            f64::from(factor),
+            (level_width as u32, level_height as u32),
+        ));
         tile_sources.insert(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: level_idx,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+            tile_source_key(level_idx),
             TileSource::SyntheticDownsample {
                 base_level: 0u32,
                 factor,
@@ -1834,28 +1718,7 @@ fn build_synthetic_ndpi_reader(
         );
     }
 
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(100),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources,
-        associated_sources: HashMap::new(),
-    };
+    let layout = single_series_layout(DatasetId::new(100), levels, tile_sources);
     TiffPixelReader::new(container, layout)
 }
 
@@ -2053,76 +1916,27 @@ fn short_in_u32(v: u16) -> [u8; 4] {
     bytes
 }
 
-fn build_tiled_associated_tiff(
-    width: u32,
-    height: u32,
-    tile_width: u32,
-    tile_height: u32,
-    tiles: &[Vec<u8>],
-) -> NamedTempFile {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"II");
-    buf.extend_from_slice(&le_u16(42));
-    let first_ifd_pos = buf.len();
-    buf.extend_from_slice(&le_u32(0));
+type TiffTagForTest = (u16, u16, u32, [u8; 4]);
 
-    let mut tile_offsets = Vec::with_capacity(tiles.len());
-    let mut tile_byte_counts = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        tile_offsets.push(buf.len() as u32);
-        tile_byte_counts.push(tile.len() as u32);
-        buf.extend_from_slice(tile);
+fn append_u32_array(buf: &mut Vec<u8>, values: &[u32]) -> u32 {
+    let offset = buf.len() as u32;
+    for value in values {
+        buf.extend_from_slice(&le_u32(*value));
     }
+    offset
+}
 
-    let tile_offsets_array_offset = if tile_offsets.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_offsets {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
+fn append_optional_u32_array(buf: &mut Vec<u8>, values: &[u32]) -> Option<u32> {
+    (values.len() > 1).then(|| append_u32_array(buf, values))
+}
 
-    let tile_byte_counts_array_offset = if tile_byte_counts.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_byte_counts {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
+fn u32_array_offset_or_inline_value(values: &[u32], array_offset: Option<u32>) -> [u8; 4] {
+    array_offset
+        .map(le_u32)
+        .unwrap_or_else(|| le_u32(values[0]))
+}
 
-    let ifd_offset = buf.len() as u32;
-    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
-
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (258u16, 3u16, 1u32, short_in_u32(8)),
-        (259u16, 3u16, 1u32, short_in_u32(1)),
-        (262u16, 3u16, 1u32, short_in_u32(1)),
-        (277u16, 3u16, 1u32, short_in_u32(1)),
-        (322u16, 4u16, 1u32, le_u32(tile_width)),
-        (323u16, 4u16, 1u32, le_u32(tile_height)),
-        (
-            324u16,
-            4u16,
-            tile_offsets.len() as u32,
-            tile_offsets_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_offsets[0])),
-        ),
-        (
-            325u16,
-            4u16,
-            tile_byte_counts.len() as u32,
-            tile_byte_counts_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_byte_counts[0])),
-        ),
-    ];
+fn append_ifd_tags(buf: &mut Vec<u8>, mut tags: Vec<TiffTagForTest>) {
     tags.sort_by_key(|tag| tag.0);
 
     buf.extend_from_slice(&le_u16(tags.len() as u16));
@@ -2133,11 +1947,23 @@ fn build_tiled_associated_tiff(
         buf.extend_from_slice(value);
     }
     buf.extend_from_slice(&le_u32(0));
+}
 
+fn temp_tiff_from_buffer(buf: &[u8]) -> NamedTempFile {
     let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
+    file.write_all(buf).unwrap();
     file.flush().unwrap();
     file
+}
+
+fn build_tiled_associated_tiff(
+    width: u32,
+    height: u32,
+    tile_width: u32,
+    tile_height: u32,
+    tiles: &[Vec<u8>],
+) -> NamedTempFile {
+    build_tiled_encoded_tiff(width, height, tile_width, tile_height, tiles, 1, 1, 1)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2165,70 +1991,39 @@ fn build_tiled_encoded_tiff(
         buf.extend_from_slice(tile);
     }
 
-    let tile_offsets_array_offset = if tile_offsets.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_offsets {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
-
-    let tile_byte_counts_array_offset = if tile_byte_counts.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_byte_counts {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
+    let tile_offsets_array_offset = append_optional_u32_array(&mut buf, &tile_offsets);
+    let tile_byte_counts_array_offset = append_optional_u32_array(&mut buf, &tile_byte_counts);
 
     let ifd_offset = buf.len() as u32;
     buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
 
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (258u16, 3u16, 1u32, short_in_u32(8)),
-        (259u16, 3u16, 1u32, short_in_u32(compression_tag)),
-        (262u16, 3u16, 1u32, short_in_u32(photometric)),
-        (277u16, 3u16, 1u32, short_in_u32(samples_per_pixel)),
-        (322u16, 4u16, 1u32, le_u32(tile_width)),
-        (323u16, 4u16, 1u32, le_u32(tile_height)),
-        (
-            324u16,
-            4u16,
-            tile_offsets.len() as u32,
-            tile_offsets_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_offsets[0])),
-        ),
-        (
-            325u16,
-            4u16,
-            tile_byte_counts.len() as u32,
-            tile_byte_counts_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_byte_counts[0])),
-        ),
-    ];
-    tags.sort_by_key(|tag| tag.0);
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256u16, 4u16, 1u32, le_u32(width)),
+            (257u16, 4u16, 1u32, le_u32(height)),
+            (258u16, 3u16, 1u32, short_in_u32(8)),
+            (259u16, 3u16, 1u32, short_in_u32(compression_tag)),
+            (262u16, 3u16, 1u32, short_in_u32(photometric)),
+            (277u16, 3u16, 1u32, short_in_u32(samples_per_pixel)),
+            (322u16, 4u16, 1u32, le_u32(tile_width)),
+            (323u16, 4u16, 1u32, le_u32(tile_height)),
+            (
+                324u16,
+                4u16,
+                tile_offsets.len() as u32,
+                u32_array_offset_or_inline_value(&tile_offsets, tile_offsets_array_offset),
+            ),
+            (
+                325u16,
+                4u16,
+                tile_byte_counts.len() as u32,
+                u32_array_offset_or_inline_value(&tile_byte_counts, tile_byte_counts_array_offset),
+            ),
+        ],
+    );
 
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    temp_tiff_from_buffer(&buf)
 }
 
 fn build_stripped_jpeg_tiff(width: u32, height: u32, jpeg_data: &[u8]) -> NamedTempFile {
@@ -2245,30 +2040,20 @@ fn build_stripped_jpeg_tiff(width: u32, height: u32, jpeg_data: &[u8]) -> NamedT
     let ifd_offset = buf.len() as u32;
     buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
 
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (259u16, 3u16, 1u32, short_in_u32(7)),
-        (262u16, 3u16, 1u32, short_in_u32(6)),
-        (273u16, 4u16, 1u32, le_u32(strip_offset)),
-        (277u16, 3u16, 1u32, short_in_u32(3)),
-        (279u16, 4u16, 1u32, le_u32(strip_byte_count)),
-    ];
-    tags.sort_by_key(|tag| tag.0);
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256u16, 4u16, 1u32, le_u32(width)),
+            (257u16, 4u16, 1u32, le_u32(height)),
+            (259u16, 3u16, 1u32, short_in_u32(7)),
+            (262u16, 3u16, 1u32, short_in_u32(6)),
+            (273u16, 4u16, 1u32, le_u32(strip_offset)),
+            (277u16, 3u16, 1u32, short_in_u32(3)),
+            (279u16, 4u16, 1u32, le_u32(strip_byte_count)),
+        ],
+    );
 
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    temp_tiff_from_buffer(&buf)
 }
 
 fn build_stripped_uncompressed_tiff(
@@ -2344,21 +2129,9 @@ fn build_stripped_tiff(
     if let Some(value) = predictor {
         tags.push((317u16, 3u16, 1u32, short_in_u32(value)));
     }
-    tags.sort_by_key(|tag| tag.0);
+    append_ifd_tags(&mut buf, tags);
 
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    temp_tiff_from_buffer(&buf)
 }
 
 fn build_multi_stripped_jpeg_tiff(
@@ -2381,53 +2154,37 @@ fn build_multi_stripped_jpeg_tiff(
         strip_byte_counts.push(strip.len() as u32);
     }
 
-    let strip_offsets_array_offset = buf.len() as u32;
-    for value in &strip_offsets {
-        buf.extend_from_slice(&le_u32(*value));
-    }
-    let strip_byte_counts_array_offset = buf.len() as u32;
-    for value in &strip_byte_counts {
-        buf.extend_from_slice(&le_u32(*value));
-    }
+    let strip_offsets_array_offset = append_u32_array(&mut buf, &strip_offsets);
+    let strip_byte_counts_array_offset = append_u32_array(&mut buf, &strip_byte_counts);
 
     let ifd_offset = buf.len() as u32;
     buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
 
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (259u16, 3u16, 1u32, short_in_u32(7)),
-        (262u16, 3u16, 1u32, short_in_u32(6)),
-        (
-            273u16,
-            4u16,
-            strip_offsets.len() as u32,
-            le_u32(strip_offsets_array_offset),
-        ),
-        (277u16, 3u16, 1u32, short_in_u32(3)),
-        (278u16, 4u16, 1u32, le_u32(rows_per_strip)),
-        (
-            279u16,
-            4u16,
-            strip_byte_counts.len() as u32,
-            le_u32(strip_byte_counts_array_offset),
-        ),
-    ];
-    tags.sort_by_key(|tag| tag.0);
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256u16, 4u16, 1u32, le_u32(width)),
+            (257u16, 4u16, 1u32, le_u32(height)),
+            (259u16, 3u16, 1u32, short_in_u32(7)),
+            (262u16, 3u16, 1u32, short_in_u32(6)),
+            (
+                273u16,
+                4u16,
+                strip_offsets.len() as u32,
+                le_u32(strip_offsets_array_offset),
+            ),
+            (277u16, 3u16, 1u32, short_in_u32(3)),
+            (278u16, 4u16, 1u32, le_u32(rows_per_strip)),
+            (
+                279u16,
+                4u16,
+                strip_byte_counts.len() as u32,
+                le_u32(strip_byte_counts_array_offset),
+            ),
+        ],
+    );
 
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    temp_tiff_from_buffer(&buf)
 }
 
 fn encode_solid_rgb_jpeg(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
@@ -2516,55 +2273,16 @@ fn build_tiled_jpeg_reader(
     tiles: &[Vec<u8>],
 ) -> TiffPixelReader {
     let file = build_tiled_associated_tiff(width, height, tile_width, tile_height, tiles);
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let level = Level {
-        dimensions: (u64::from(width), u64::from(height)),
-        downsample: 1.0,
-        tile_layout: TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across: u64::from(width.div_ceil(tile_width)),
-            tiles_down: u64::from(height.div_ceil(tile_height)),
-        },
-    };
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(31),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![level],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::Jpeg,
-            },
-        )]),
-        associated_sources: HashMap::new(),
-    };
-    TiffPixelReader::new(container, layout)
+    build_tiled_reader_from_file(
+        file,
+        width,
+        height,
+        tile_width,
+        tile_height,
+        DatasetId::new(31),
+        Compression::Jpeg,
+        None,
+    )
 }
 
 fn build_tiled_jpeg_reader_with_tables(
@@ -2583,55 +2301,16 @@ fn build_tiled_jpeg_reader_with_tables(
         tiles,
         &jpeg_tables,
     );
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let level = Level {
-        dimensions: (u64::from(width), u64::from(height)),
-        downsample: 1.0,
-        tile_layout: TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across: u64::from(width.div_ceil(tile_width)),
-            tiles_down: u64::from(height.div_ceil(tile_height)),
-        },
-    };
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(32),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![level],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: Some(jpeg_tables),
-                compression: Compression::Jpeg,
-            },
-        )]),
-        associated_sources: HashMap::new(),
-    };
-    TiffPixelReader::new(container, layout)
+    build_tiled_reader_from_file(
+        file,
+        width,
+        height,
+        tile_width,
+        tile_height,
+        DatasetId::new(32),
+        Compression::Jpeg,
+        Some(jpeg_tables),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2656,54 +2335,43 @@ fn build_tiled_encoded_reader(
         samples_per_pixel,
         photometric,
     );
+    build_tiled_reader_from_file(
+        file,
+        width,
+        height,
+        tile_width,
+        tile_height,
+        DatasetId::new(33),
+        compression,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_tiled_reader_from_file(
+    file: NamedTempFile,
+    width: u32,
+    height: u32,
+    tile_width: u32,
+    tile_height: u32,
+    dataset_id: DatasetId,
+    compression: Compression,
+    jpeg_tables: Option<Vec<u8>>,
+) -> TiffPixelReader {
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let level = Level {
-        dimensions: (u64::from(width), u64::from(height)),
-        downsample: 1.0,
-        tile_layout: TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across: u64::from(width.div_ceil(tile_width)),
-            tiles_down: u64::from(height.div_ceil(tile_height)),
-        },
-    };
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(33),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![level],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+    let layout = single_series_layout(
+        dataset_id,
+        vec![regular_level(width, height, tile_width, tile_height)],
+        HashMap::from([(
+            tile_source_key(0),
             TileSource::TiledIfd {
                 ifd_id,
-                jpeg_tables: None,
+                jpeg_tables,
                 compression,
             },
         )]),
-        associated_sources: HashMap::new(),
-    };
+    );
     TiffPixelReader::new(container, layout)
 }
 
@@ -2729,25 +2397,8 @@ fn build_tiled_jpeg_tiff_with_tables(
         buf.extend_from_slice(tile);
     }
 
-    let tile_offsets_array_offset = if tile_offsets.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_offsets {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
-
-    let tile_byte_counts_array_offset = if tile_byte_counts.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &tile_byte_counts {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
+    let tile_offsets_array_offset = append_optional_u32_array(&mut buf, &tile_offsets);
+    let tile_byte_counts_array_offset = append_optional_u32_array(&mut buf, &tile_byte_counts);
 
     let jpeg_tables_offset = buf.len() as u32;
     buf.extend_from_slice(jpeg_tables);
@@ -2755,53 +2406,39 @@ fn build_tiled_jpeg_tiff_with_tables(
     let ifd_offset = buf.len() as u32;
     buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
 
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (258u16, 3u16, 1u32, short_in_u32(8)),
-        (259u16, 3u16, 1u32, short_in_u32(7)),
-        (262u16, 3u16, 1u32, short_in_u32(6)),
-        (277u16, 3u16, 1u32, short_in_u32(3)),
-        (322u16, 4u16, 1u32, le_u32(tile_width)),
-        (323u16, 4u16, 1u32, le_u32(tile_height)),
-        (
-            324u16,
-            4u16,
-            tile_offsets.len() as u32,
-            tile_offsets_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_offsets[0])),
-        ),
-        (
-            325u16,
-            4u16,
-            tile_byte_counts.len() as u32,
-            tile_byte_counts_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(tile_byte_counts[0])),
-        ),
-        (
-            347u16,
-            7u16,
-            jpeg_tables.len() as u32,
-            le_u32(jpeg_tables_offset),
-        ),
-    ];
-    tags.sort_by_key(|tag| tag.0);
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256u16, 4u16, 1u32, le_u32(width)),
+            (257u16, 4u16, 1u32, le_u32(height)),
+            (258u16, 3u16, 1u32, short_in_u32(8)),
+            (259u16, 3u16, 1u32, short_in_u32(7)),
+            (262u16, 3u16, 1u32, short_in_u32(6)),
+            (277u16, 3u16, 1u32, short_in_u32(3)),
+            (322u16, 4u16, 1u32, le_u32(tile_width)),
+            (323u16, 4u16, 1u32, le_u32(tile_height)),
+            (
+                324u16,
+                4u16,
+                tile_offsets.len() as u32,
+                u32_array_offset_or_inline_value(&tile_offsets, tile_offsets_array_offset),
+            ),
+            (
+                325u16,
+                4u16,
+                tile_byte_counts.len() as u32,
+                u32_array_offset_or_inline_value(&tile_byte_counts, tile_byte_counts_array_offset),
+            ),
+            (
+                347u16,
+                7u16,
+                jpeg_tables.len() as u32,
+                le_u32(jpeg_tables_offset),
+            ),
+        ],
+    );
 
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    temp_tiff_from_buffer(&buf)
 }
 
 fn split_test_jpeg_tables(jpeg: &[u8]) -> (Vec<u8>, Vec<u8>) {
@@ -2830,6 +2467,42 @@ fn split_test_jpeg_tables(jpeg: &[u8]) -> (Vec<u8>, Vec<u8>) {
     panic!("test JPEG did not contain SOS marker");
 }
 
+fn finish_ndpi_mcu_tiff(
+    mut buf: Vec<u8>,
+    first_ifd_pos: usize,
+    width: u32,
+    height: u32,
+    strip_offset: u32,
+    strip_byte_count: u32,
+    mcu_starts: &[u32],
+) -> NamedTempFile {
+    let mcu_starts_array_offset = append_optional_u32_array(&mut buf, mcu_starts);
+
+    let ifd_offset = buf.len() as u32;
+    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
+
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256u16, 4u16, 1u32, le_u32(width)),
+            (257u16, 4u16, 1u32, le_u32(height)),
+            (259u16, 3u16, 1u32, short_in_u32(7)),
+            (262u16, 3u16, 1u32, short_in_u32(6)),
+            (273u16, 4u16, 1u32, le_u32(strip_offset)),
+            (277u16, 3u16, 1u32, short_in_u32(3)),
+            (279u16, 4u16, 1u32, le_u32(strip_byte_count)),
+            (
+                65426u16,
+                4u16,
+                mcu_starts.len() as u32,
+                u32_array_offset_or_inline_value(mcu_starts, mcu_starts_array_offset),
+            ),
+        ],
+    );
+
+    temp_tiff_from_buffer(&buf)
+}
+
 fn build_ndpi_full_jpeg_tiff(
     width: u32,
     height: u32,
@@ -2852,51 +2525,15 @@ fn build_ndpi_full_jpeg_tiff(
     buf.extend_from_slice(jpeg_data);
     let strip_byte_count = buf.len() as u32 - strip_offset;
 
-    let mcu_starts_array_offset = if mcu_starts.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &mcu_starts {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
-
-    let ifd_offset = buf.len() as u32;
-    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
-
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (259u16, 3u16, 1u32, short_in_u32(7)),
-        (262u16, 3u16, 1u32, short_in_u32(6)),
-        (273u16, 4u16, 1u32, le_u32(strip_offset)),
-        (277u16, 3u16, 1u32, short_in_u32(3)),
-        (279u16, 4u16, 1u32, le_u32(strip_byte_count)),
-        (
-            65426u16,
-            4u16,
-            mcu_starts.len() as u32,
-            mcu_starts_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(mcu_starts[0])),
-        ),
-    ];
-    tags.sort_by_key(|tag| tag.0);
-
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
-    file
+    finish_ndpi_mcu_tiff(
+        buf,
+        first_ifd_pos,
+        width,
+        height,
+        strip_offset,
+        strip_byte_count,
+        &mcu_starts,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -3002,50 +2639,15 @@ fn build_ndpi_scan_data_tiff_from_blobs_with_mcu_mode_and_offset(
         }
     }
 
-    let mcu_starts_array_offset = if mcu_starts.len() > 1 {
-        let offset = buf.len() as u32;
-        for value in &mcu_starts {
-            buf.extend_from_slice(&le_u32(*value));
-        }
-        Some(offset)
-    } else {
-        None
-    };
-
-    let ifd_offset = buf.len() as u32;
-    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
-
-    let mut tags = vec![
-        (256u16, 4u16, 1u32, le_u32(width)),
-        (257u16, 4u16, 1u32, le_u32(height)),
-        (259u16, 3u16, 1u32, short_in_u32(7)),
-        (262u16, 3u16, 1u32, short_in_u32(6)),
-        (273u16, 4u16, 1u32, le_u32(strip_offset)),
-        (277u16, 3u16, 1u32, short_in_u32(3)),
-        (279u16, 4u16, 1u32, le_u32(strip_byte_count)),
-        (
-            65426u16,
-            4u16,
-            mcu_starts.len() as u32,
-            mcu_starts_array_offset
-                .map(le_u32)
-                .unwrap_or_else(|| le_u32(mcu_starts[0])),
-        ),
-    ];
-    tags.sort_by_key(|tag| tag.0);
-
-    buf.extend_from_slice(&le_u16(tags.len() as u16));
-    for (tag, typ, count, value) in &tags {
-        buf.extend_from_slice(&le_u16(*tag));
-        buf.extend_from_slice(&le_u16(*typ));
-        buf.extend_from_slice(&le_u32(*count));
-        buf.extend_from_slice(value);
-    }
-    buf.extend_from_slice(&le_u32(0));
-
-    let mut file = NamedTempFile::new().unwrap();
-    file.write_all(&buf).unwrap();
-    file.flush().unwrap();
+    let file = finish_ndpi_mcu_tiff(
+        buf,
+        first_ifd_pos,
+        width,
+        height,
+        strip_offset,
+        strip_byte_count,
+        &mcu_starts,
+    );
     (
         file,
         jpeg_header,
@@ -3068,32 +2670,17 @@ fn read_associated_composites_tiled_ifd_images() {
     let file = build_tiled_associated_tiff(4, 4, 2, 2, &tiles);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(1),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "label".to_string(),
-                AssociatedImage {
-                    dimensions: (4, 4),
-                    sample_type: SampleType::Uint8,
-                    channels: 1,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
+    let layout = associated_image_layout(
+        DatasetId::new(1),
+        "label",
+        (4, 4),
+        1,
+        TileSource::TiledIfd {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::None,
         },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "label".to_string(),
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::None,
-            },
-        )]),
-    };
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("label").unwrap();
@@ -3301,32 +2888,17 @@ fn read_associated_thumbnail_assembly_matches_expected_rgb_bytes_with_edge_tiles
     let file = build_tiled_associated_tiff(5, 3, 2, 2, &tiles);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(1),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "label".to_string(),
-                AssociatedImage {
-                    dimensions: (5, 3),
-                    sample_type: SampleType::Uint8,
-                    channels: 1,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
+    let layout = associated_image_layout(
+        DatasetId::new(1),
+        "label",
+        (5, 3),
+        1,
+        TileSource::TiledIfd {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::None,
         },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "label".to_string(),
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::None,
-            },
-        )]),
-    };
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("label").unwrap();
@@ -3383,34 +2955,19 @@ fn read_associated_composes_multi_strip_jpeg_image() {
     let strip_byte_counts = container
         .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)
         .unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(17),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "label".to_string(),
-                AssociatedImage {
-                    dimensions: (width, height),
-                    sample_type: SampleType::Uint8,
-                    channels: 3,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
+    let layout = associated_image_layout(
+        DatasetId::new(17),
+        "label",
+        (width, height),
+        3,
+        TileSource::Stripped {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::Jpeg,
+            strip_offsets: strip_offsets.to_vec(),
+            strip_byte_counts: strip_byte_counts.to_vec(),
         },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "label".to_string(),
-            TileSource::Stripped {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::Jpeg,
-                strip_offsets: strip_offsets.to_vec(),
-                strip_byte_counts: strip_byte_counts.to_vec(),
-            },
-        )]),
-    };
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("label").unwrap();
@@ -3458,36 +3015,13 @@ fn read_associated_decodes_single_strip_jpeg_image() {
     let file = build_stripped_jpeg_tiff(width, height, &jpeg);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(18),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "thumbnail".to_string(),
-                AssociatedImage {
-                    dimensions: (width, height),
-                    sample_type: SampleType::Uint8,
-                    channels: 3,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "thumbnail".to_string(),
-            TileSource::Stripped {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::Jpeg,
-                strip_offsets: vec![container.get_u64(ifd_id, tags::STRIP_OFFSETS).unwrap()],
-                strip_byte_counts: vec![container
-                    .get_u64(ifd_id, tags::STRIP_BYTE_COUNTS)
-                    .unwrap()],
-            },
-        )]),
-    };
+    let layout = associated_image_layout(
+        DatasetId::new(18),
+        "thumbnail",
+        (width, height),
+        3,
+        stripped_associated_source(&container, ifd_id, Compression::Jpeg),
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("thumbnail").unwrap();
@@ -3514,36 +3048,13 @@ fn read_associated_uncompressed_single_sample_rgb_photometric_treated_as_graysca
     let file = build_stripped_uncompressed_tiff(4, 2, &pixels, 1, Some(2));
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(23),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "thumbnail".to_string(),
-                AssociatedImage {
-                    dimensions: (4, 2),
-                    sample_type: SampleType::Uint8,
-                    channels: 1,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "thumbnail".to_string(),
-            TileSource::Stripped {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::None,
-                strip_offsets: vec![container.get_u64(ifd_id, tags::STRIP_OFFSETS).unwrap()],
-                strip_byte_counts: vec![container
-                    .get_u64(ifd_id, tags::STRIP_BYTE_COUNTS)
-                    .unwrap()],
-            },
-        )]),
-    };
+    let layout = associated_image_layout(
+        DatasetId::new(23),
+        "thumbnail",
+        (4, 2),
+        1,
+        stripped_associated_source(&container, ifd_id, Compression::None),
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("thumbnail").unwrap();
@@ -3592,36 +3103,13 @@ fn read_associated_deflate_predictor_uses_tilecodec_path() {
     let file = build_stripped_tiff(3, 2, &compressed, 1, Some(1), Some(2), 8);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(25),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "thumbnail".to_string(),
-                AssociatedImage {
-                    dimensions: (3, 2),
-                    sample_type: SampleType::Uint8,
-                    channels: 1,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "thumbnail".to_string(),
-            TileSource::Stripped {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::Deflate,
-                strip_offsets: vec![container.get_u64(ifd_id, tags::STRIP_OFFSETS).unwrap()],
-                strip_byte_counts: vec![container
-                    .get_u64(ifd_id, tags::STRIP_BYTE_COUNTS)
-                    .unwrap()],
-            },
-        )]),
-    };
+    let layout = associated_image_layout(
+        DatasetId::new(25),
+        "thumbnail",
+        (3, 2),
+        1,
+        stripped_associated_source(&container, ifd_id, Compression::Deflate),
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("thumbnail").unwrap();
@@ -3918,51 +3406,18 @@ fn jp2k_tiled_sources_request_larger_shared_cache_budget() {
     let file = build_tiled_associated_tiff(2, 2, 2, 2, &tiles);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(24),
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape::default(),
-                    levels: vec![Level {
-                        dimensions: (2, 2),
-                        downsample: 1.0,
-                        tile_layout: TileLayout::Regular {
-                            tile_width: 2,
-                            tile_height: 2,
-                            tiles_across: 1,
-                            tiles_down: 1,
-                        },
-                    }],
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
-            associated_images: HashMap::new(),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        },
-        tile_sources: HashMap::from([(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+    let layout = single_series_layout(
+        DatasetId::new(24),
+        vec![regular_level(2, 2, 2, 2)],
+        HashMap::from([(
+            tile_source_key(0),
             TileSource::TiledIfd {
                 ifd_id,
                 jpeg_tables: None,
                 compression: Compression::Jp2kRgb,
             },
         )]),
-        associated_sources: HashMap::new(),
-    };
+    );
     let reader = TiffPixelReader::new(container, layout);
 
     assert_eq!(
@@ -3985,64 +3440,27 @@ fn build_single_tile_jp2k_layout(
     height: u32,
 ) -> TiffPixelReader {
     let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = DatasetLayout {
-        dataset: Dataset {
-            id: DatasetId::new(1),
-            scenes: vec![],
-            associated_images: HashMap::from([(
-                "label".to_string(),
-                AssociatedImage {
-                    dimensions: (width, height),
-                    sample_type: SampleType::Uint8,
-                    channels: 3,
-                },
-            )]),
-            properties: Properties::new(),
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
+    let layout = associated_image_layout(
+        DatasetId::new(1),
+        "label",
+        (width, height),
+        3,
+        TileSource::TiledIfd {
+            ifd_id,
+            jpeg_tables: None,
+            compression,
         },
-        tile_sources: HashMap::new(),
-        associated_sources: HashMap::from([(
-            "label".to_string(),
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: None,
-                compression,
-            },
-        )]),
-    };
+    );
     TiffPixelReader::new(container, layout)
 }
 
 fn assert_sample_buffer_matches_rgb_fixture(image: &CpuTile, expected_rgb: &image::RgbImage) {
-    assert_eq!(image.width, expected_rgb.width());
-    assert_eq!(image.height, expected_rgb.height());
-    let actual = image.data.as_u8().unwrap();
-    let expected = expected_rgb.as_raw();
-    assert_eq!(actual.len(), expected.len());
-
-    let mut total_delta = 0u64;
-    let mut max_delta = 0u8;
-    for (actual, expected) in actual.iter().zip(expected.iter()) {
-        let delta = actual.abs_diff(*expected);
-        total_delta += u64::from(delta);
-        max_delta = max_delta.max(delta);
-    }
-
-    let avg_delta_x100 = if actual.is_empty() {
-        0
-    } else {
-        (total_delta * 100) / actual.len() as u64
-    };
-
-    assert!(
-        max_delta <= 50,
-        "JP2K tiled decode drift too large: max channel delta {max_delta} > 50",
-    );
-    assert!(
-        avg_delta_x100 <= 1600,
-        "JP2K tiled decode drift too large: average channel delta {:.2} > 16.00",
-        avg_delta_x100 as f64 / 100.0,
+    assert_cpu_tile_matches_rgb_fixture_with_tolerance(
+        image,
+        expected_rgb,
+        50,
+        1600,
+        "JP2K tiled decode",
     );
 }
 

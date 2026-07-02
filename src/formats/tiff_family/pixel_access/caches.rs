@@ -1,4 +1,5 @@
 use super::*;
+use std::hash::Hash;
 
 // ── FullDecodeCache ───────────────────────────────────────────────
 
@@ -55,166 +56,76 @@ pub(super) fn jp2k_device_decode_enabled() -> bool {
     })
 }
 
+pub(super) struct ByteSizedTileCache<K, const DEFAULT_BYTES: u64> {
+    pub(super) entries: LruCache<K, Arc<CpuTile>>,
+    pub(super) current_bytes: u64,
+    pub(super) max_bytes: u64,
+}
+
+impl<K, const DEFAULT_BYTES: u64> ByteSizedTileCache<K, DEFAULT_BYTES>
+where
+    K: Eq + Hash,
+{
+    pub(super) fn new(max_bytes: u64) -> Self {
+        Self {
+            entries: LruCache::unbounded(),
+            current_bytes: 0,
+            max_bytes,
+        }
+    }
+}
+
+impl<K, const DEFAULT_BYTES: u64> ByteSizedTileCache<K, DEFAULT_BYTES>
+where
+    K: Eq + Hash,
+{
+    pub(super) fn get(&mut self, key: &K) -> Option<Arc<CpuTile>> {
+        self.entries.get(key).cloned()
+    }
+
+    pub(super) fn put(&mut self, key: K, data: Arc<CpuTile>) {
+        let byte_size = data.data.byte_size() as u64;
+
+        if byte_size > self.max_bytes {
+            return;
+        }
+
+        if let Some((_, existing)) = self.entries.pop_entry(&key) {
+            self.current_bytes -= existing.data.byte_size() as u64;
+        }
+
+        while self.current_bytes + byte_size > self.max_bytes {
+            if let Some((_, evicted)) = self.entries.pop_lru() {
+                self.current_bytes -= evicted.data.byte_size() as u64;
+            } else {
+                break;
+            }
+        }
+
+        self.entries.put(key, data);
+        self.current_bytes += byte_size;
+    }
+}
+
+impl<K, const DEFAULT_BYTES: u64> Default for ByteSizedTileCache<K, DEFAULT_BYTES>
+where
+    K: Eq + Hash,
+{
+    fn default() -> Self {
+        Self::new(DEFAULT_BYTES)
+    }
+}
+
 /// Byte-budgeted LRU cache for fully decoded NDPI levels.
 ///
 /// NDPI levels without restart markers require decoding the entire JPEG
 /// image to extract a single tile. This cache stores the decoded image
 /// so subsequent tile requests from the same level are satisfied from
 /// memory instead of re-decoding.
-///
-/// Same pattern as TileCache from Plan 1: byte budget drives eviction,
-/// oversize entries are rejected (not cached but still returned).
-pub(super) struct FullDecodeCache {
-    pub(super) entries: LruCache<IfdId, Arc<CpuTile>>,
-    pub(super) current_bytes: u64,
-    pub(super) max_bytes: u64,
-}
-
-impl FullDecodeCache {
-    pub fn new(max_bytes: u64) -> Self {
-        Self {
-            entries: LruCache::unbounded(),
-            current_bytes: 0,
-            max_bytes,
-        }
-    }
-
-    /// Get a cached decoded image by IFD ID.
-    pub fn get(&mut self, key: &IfdId) -> Option<Arc<CpuTile>> {
-        self.entries.get(key).cloned()
-    }
-
-    /// Insert a decoded image. Evicts LRU entries to make room.
-    /// Rejects entries larger than max_bytes (returns without storing).
-    pub fn put(&mut self, key: IfdId, data: Arc<CpuTile>) {
-        let byte_size = data.data.byte_size() as u64;
-
-        if byte_size > self.max_bytes {
-            return; // Oversize — don't cache
-        }
-
-        // Remove existing entry if present
-        if let Some((_, existing)) = self.entries.pop_entry(&key) {
-            self.current_bytes -= existing.data.byte_size() as u64;
-        }
-
-        // Evict LRU entries until there's room
-        while self.current_bytes + byte_size > self.max_bytes {
-            if let Some((_, evicted)) = self.entries.pop_lru() {
-                self.current_bytes -= evicted.data.byte_size() as u64;
-            } else {
-                break;
-            }
-        }
-
-        self.entries.put(key, data);
-        self.current_bytes += byte_size;
-    }
-}
-
-impl Default for FullDecodeCache {
-    fn default() -> Self {
-        Self::new(DEFAULT_FULL_DECODE_CACHE_BYTES)
-    }
-}
-
-pub(super) struct NdpiStripCache {
-    pub(super) entries: LruCache<NdpiStripKey, Arc<CpuTile>>,
-    pub(super) current_bytes: u64,
-    pub(super) max_bytes: u64,
-}
-
-impl NdpiStripCache {
-    pub(super) fn new(max_bytes: u64) -> Self {
-        Self {
-            entries: LruCache::unbounded(),
-            current_bytes: 0,
-            max_bytes,
-        }
-    }
-
-    pub(super) fn get(&mut self, key: &NdpiStripKey) -> Option<Arc<CpuTile>> {
-        self.entries.get(key).cloned()
-    }
-
-    pub(super) fn put(&mut self, key: NdpiStripKey, data: Arc<CpuTile>) {
-        let byte_size = data.data.byte_size() as u64;
-
-        if byte_size > self.max_bytes {
-            return;
-        }
-
-        if let Some((_, existing)) = self.entries.pop_entry(&key) {
-            self.current_bytes -= existing.data.byte_size() as u64;
-        }
-
-        while self.current_bytes + byte_size > self.max_bytes {
-            if let Some((_, evicted)) = self.entries.pop_lru() {
-                self.current_bytes -= evicted.data.byte_size() as u64;
-            } else {
-                break;
-            }
-        }
-
-        self.entries.put(key, data);
-        self.current_bytes += byte_size;
-    }
-}
-
-impl Default for NdpiStripCache {
-    fn default() -> Self {
-        Self::new(DEFAULT_NDPI_STRIP_CACHE_BYTES)
-    }
-}
-
-pub(super) struct SyntheticLevelCache {
-    pub(super) entries: LruCache<SyntheticLevelKey, Arc<CpuTile>>,
-    pub(super) current_bytes: u64,
-    pub(super) max_bytes: u64,
-}
-
-impl SyntheticLevelCache {
-    pub(super) fn new(max_bytes: u64) -> Self {
-        Self {
-            entries: LruCache::unbounded(),
-            current_bytes: 0,
-            max_bytes,
-        }
-    }
-
-    pub(super) fn get(&mut self, key: &SyntheticLevelKey) -> Option<Arc<CpuTile>> {
-        self.entries.get(key).cloned()
-    }
-
-    pub(super) fn put(&mut self, key: SyntheticLevelKey, data: Arc<CpuTile>) {
-        let byte_size = data.data.byte_size() as u64;
-
-        if byte_size > self.max_bytes {
-            return;
-        }
-
-        if let Some((_, existing)) = self.entries.pop_entry(&key) {
-            self.current_bytes -= existing.data.byte_size() as u64;
-        }
-
-        while self.current_bytes + byte_size > self.max_bytes {
-            if let Some((_, evicted)) = self.entries.pop_lru() {
-                self.current_bytes -= evicted.data.byte_size() as u64;
-            } else {
-                break;
-            }
-        }
-
-        self.entries.put(key, data);
-        self.current_bytes += byte_size;
-    }
-}
-
-impl Default for SyntheticLevelCache {
-    fn default() -> Self {
-        Self::new(DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES)
-    }
-}
+pub(super) type FullDecodeCache = ByteSizedTileCache<IfdId, DEFAULT_FULL_DECODE_CACHE_BYTES>;
+pub(super) type NdpiStripCache = ByteSizedTileCache<NdpiStripKey, DEFAULT_NDPI_STRIP_CACHE_BYTES>;
+pub(super) type SyntheticLevelCache =
+    ByteSizedTileCache<SyntheticLevelKey, DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) struct StitchedComponentTileKey {
@@ -224,53 +135,8 @@ pub(super) struct StitchedComponentTileKey {
     pub(super) height: u32,
 }
 
-pub(super) struct StitchedComponentTileCache {
-    pub(super) entries: LruCache<StitchedComponentTileKey, Arc<CpuTile>>,
-    pub(super) current_bytes: u64,
-    pub(super) max_bytes: u64,
-}
-
-impl StitchedComponentTileCache {
-    pub(super) fn new(max_bytes: u64) -> Self {
-        Self {
-            entries: LruCache::unbounded(),
-            current_bytes: 0,
-            max_bytes,
-        }
-    }
-
-    pub(super) fn get(&mut self, key: &StitchedComponentTileKey) -> Option<Arc<CpuTile>> {
-        self.entries.get(key).cloned()
-    }
-
-    pub(super) fn put(&mut self, key: StitchedComponentTileKey, data: Arc<CpuTile>) {
-        let byte_size = data.data.byte_size() as u64;
-        if byte_size > self.max_bytes {
-            return;
-        }
-
-        if let Some((_, existing)) = self.entries.pop_entry(&key) {
-            self.current_bytes -= existing.data.byte_size() as u64;
-        }
-
-        while self.current_bytes + byte_size > self.max_bytes {
-            if let Some((_, evicted)) = self.entries.pop_lru() {
-                self.current_bytes -= evicted.data.byte_size() as u64;
-            } else {
-                break;
-            }
-        }
-
-        self.entries.put(key, data);
-        self.current_bytes += byte_size;
-    }
-}
-
-impl Default for StitchedComponentTileCache {
-    fn default() -> Self {
-        Self::new(DEFAULT_STITCHED_COMPONENT_TILE_CACHE_BYTES)
-    }
-}
+pub(super) type StitchedComponentTileCache =
+    ByteSizedTileCache<StitchedComponentTileKey, DEFAULT_STITCHED_COMPONENT_TILE_CACHE_BYTES>;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct FullDecodeFlight {

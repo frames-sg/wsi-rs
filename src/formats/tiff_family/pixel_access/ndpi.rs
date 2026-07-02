@@ -1294,6 +1294,48 @@ impl TiffPixelReader {
     /// Caches the decoded image in FullDecodeCache for subsequent tile requests
     /// from the same level. Oversize images (larger than cache max) are decoded
     /// per-request without caching.
+    fn crop_ndpi_full_image_tile(
+        full_image: &CpuTile,
+        req: &TileRequest,
+        src_x: u32,
+        src_y: u32,
+        tile_w: u32,
+        tile_h: u32,
+    ) -> Result<CpuTile, WsiError> {
+        let full_w = full_image.width as usize;
+        let channels = full_image.channels as usize;
+        let src_data = full_image.data.as_u8().ok_or_else(|| WsiError::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason: "expected U8 data in full decode cache".into(),
+        })?;
+
+        let mut tile_data = Vec::with_capacity(tile_w as usize * tile_h as usize * channels);
+        for y in 0..tile_h {
+            let row_start = ((src_y + y) as usize * full_w + src_x as usize) * channels;
+            let row_end = row_start + tile_w as usize * channels;
+            if row_end > src_data.len() {
+                return Err(WsiError::TileRead {
+                    col: req.col,
+                    row: req.row,
+                    level: req.level.get(),
+                    reason: "decoded image smaller than expected".into(),
+                });
+            }
+            tile_data.extend_from_slice(&src_data[row_start..row_end]);
+        }
+
+        Ok(CpuTile {
+            width: tile_w,
+            height: tile_h,
+            channels: full_image.channels,
+            color_space: ColorSpace::Rgb,
+            layout: CpuTileLayout::Interleaved,
+            data: CpuTileData::u8(tile_data),
+        })
+    }
+
     pub(super) fn read_ndpi_full_decode_tile(
         &self,
         req: &TileRequest,
@@ -1340,39 +1382,7 @@ impl TiffPixelReader {
             });
         }
 
-        // Extract sub-region from the full interleaved RGB image
-        let full_w = full_image.width as usize;
-        let channels = full_image.channels as usize;
-        let src_data = full_image.data.as_u8().ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "expected U8 data in full decode cache".into(),
-        })?;
-
-        let mut tile_data = Vec::with_capacity(tile_w as usize * tile_h as usize * channels);
-        for y in 0..tile_h {
-            let row_start = ((src_y + y) as usize * full_w + src_x as usize) * channels;
-            let row_end = row_start + tile_w as usize * channels;
-            if row_end > src_data.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "decoded image smaller than expected".into(),
-                });
-            }
-            tile_data.extend_from_slice(&src_data[row_start..row_end]);
-        }
-
-        Ok(CpuTile {
-            width: tile_w,
-            height: tile_h,
-            channels: full_image.channels,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8(tile_data),
-        })
+        Self::crop_ndpi_full_image_tile(full_image.as_ref(), req, src_x, src_y, tile_w, tile_h)
     }
 
     pub(super) fn read_ndpi_full_display_tile(
@@ -1412,39 +1422,14 @@ impl TiffPixelReader {
 
         let tile_w = req.tile_width.min((level_w - tile_origin_x) as u32);
         let tile_h = req.tile_height.min((level_h - tile_origin_y) as u32);
-        let full_w = full_image.width as usize;
-        let channels = full_image.channels as usize;
-        let src_data = full_image.data.as_u8().ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "expected U8 data in full decode cache".into(),
-        })?;
-
-        let mut tile_data = Vec::with_capacity(tile_w as usize * tile_h as usize * channels);
-        for y in 0..tile_h {
-            let row_start =
-                ((tile_origin_y as u32 + y) as usize * full_w + tile_origin_x as usize) * channels;
-            let row_end = row_start + tile_w as usize * channels;
-            if row_end > src_data.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "decoded image smaller than expected".into(),
-                });
-            }
-            tile_data.extend_from_slice(&src_data[row_start..row_end]);
-        }
-
-        Ok(CpuTile {
-            width: tile_w,
-            height: tile_h,
-            channels: full_image.channels,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8(tile_data),
-        })
+        Self::crop_ndpi_full_image_tile(
+            full_image.as_ref(),
+            &tile_req,
+            tile_origin_x as u32,
+            tile_origin_y as u32,
+            tile_w,
+            tile_h,
+        )
     }
 }
 

@@ -3,6 +3,8 @@ pub(crate) mod error;
 pub(crate) mod icc;
 pub(crate) mod layout;
 pub(crate) mod pixel_access;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};

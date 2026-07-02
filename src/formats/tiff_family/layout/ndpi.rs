@@ -10,12 +10,12 @@ use crate::core::types::*;
 use crate::formats::tiff_family::container::tags;
 use crate::formats::tiff_family::container::TiffContainer;
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
 use super::{
-    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 // ── NDPI-specific tag constants ───────────────────────────────────
@@ -210,19 +210,6 @@ fn is_jpeg_sof_marker(marker: u8) -> bool {
     )
 }
 
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        6 | 7 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        other => Compression::Other(other as u16),
-    }
-}
-
 // ── NdpiInterpreter ───────────────────────────────────────────────
 
 pub(crate) struct NdpiInterpreter;
@@ -361,7 +348,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
         let (levels, tile_sources, z_count) = self.build_pyramid(container, &mut pyramid_ifds)?;
 
         // Phase 3: Parse properties
-        let mut properties = self.parse_properties(container)?;
+        let properties = self.parse_properties(container)?;
 
         // Phase 4: Assemble Dataset
         let property_ifd = *container
@@ -372,48 +359,18 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
             .last()
             .map(|ifd| ifd.ifd_id)
             .ok_or_else(|| TiffParseError::Structure("No pyramid IFDs in NDPI container".into()))?;
-        let identity =
-            compute_tiff_dataset_identity(container, lowest_resolution_ifd, property_ifd)?;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
-        let dataset_id = identity.dataset_id;
-
-        let mut dataset = Dataset {
-            id: dataset_id,
-            scenes: vec![Scene {
-                id: "s0".into(),
-                name: None,
-                series: vec![Series {
-                    id: "ser0".into(),
-                    axes: AxesShape {
-                        z: z_count,
-                        c: 1,
-                        t: 1,
-                    },
-                    levels,
-                    sample_type: SampleType::Uint8,
-                    channels: vec![],
-                }],
-            }],
+        finish_single_scene_uint8_tiff_layout(
+            container,
+            lowest_resolution_ifd,
+            property_ifd,
+            AxesShape::new(z_count, 1, 1),
+            levels,
             associated_images,
             properties,
-            icc_profiles: HashMap::new(),
-            source_icc_profiles: Vec::new(),
-        };
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        )
     }
 }
 
