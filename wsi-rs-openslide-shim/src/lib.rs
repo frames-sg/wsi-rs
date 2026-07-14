@@ -1,7 +1,4 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-// The public unsafe functions in this crate are OpenSlide C ABI exports, not
-// idiomatic Rust APIs. Their safety contract is the upstream openslide.h ABI.
-#![allow(clippy::missing_safety_doc)]
 
 pub mod install;
 
@@ -91,10 +88,15 @@ unsafe fn path_from_c(filename: *const c_char) -> Option<PathBuf> {
 }
 
 fn checked_pixel_len(w: i64, h: i64) -> Option<usize> {
-    if w < 0 || h < 0 {
-        return None;
-    }
-    (w as usize).checked_mul(h as usize)
+    usize::try_from(w)
+        .ok()?
+        .checked_mul(usize::try_from(h).ok()?)
+}
+
+fn checked_u32_pixel_len(w: u32, h: u32) -> Option<usize> {
+    usize::try_from(w)
+        .ok()?
+        .checked_mul(usize::try_from(h).ok()?)
 }
 
 unsafe fn clear_u32(dest: *mut u32, len: usize) {
@@ -116,6 +118,10 @@ fn first_series(handle: &OpenSlideHandle) -> Option<&wsi_rs::Series> {
 }
 
 #[no_mangle]
+/// Detect the vendor for an OpenSlide-compatible filename.
+///
+/// # Safety
+/// `filename` must be null or point to a readable NUL-terminated C string.
 pub unsafe extern "C" fn openslide_detect_vendor(filename: *const c_char) -> *const c_char {
     guard(ptr::null(), || {
         // SAFETY: The C ABI accepts null; `path_from_c` validates before
@@ -128,6 +134,10 @@ pub unsafe extern "C" fn openslide_detect_vendor(filename: *const c_char) -> *co
 }
 
 #[no_mangle]
+/// Open an OpenSlide-compatible image.
+///
+/// # Safety
+/// `filename` must be null or point to a readable NUL-terminated C string.
 pub unsafe extern "C" fn openslide_open(filename: *const c_char) -> *mut openslide_t {
     guard(ptr::null_mut(), || {
         // SAFETY: The C ABI accepts null; `path_from_c` validates before
@@ -143,6 +153,11 @@ pub unsafe extern "C" fn openslide_open(filename: *const c_char) -> *mut opensli
 }
 
 #[no_mangle]
+/// Close a handle returned by [`openslide_open`].
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library and not
+/// previously closed.
 pub unsafe extern "C" fn openslide_close(osr: *mut openslide_t) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: The C ABI permits null, and `take_handle` validates before
@@ -152,6 +167,10 @@ pub unsafe extern "C" fn openslide_close(osr: *mut openslide_t) {
 }
 
 #[no_mangle]
+/// Return the terminal error for a slide handle.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library.
 pub unsafe extern "C" fn openslide_get_error(osr: *mut openslide_t) -> *const c_char {
     guard(ptr::null(), || {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
@@ -164,11 +183,19 @@ pub unsafe extern "C" fn openslide_get_error(osr: *mut openslide_t) -> *const c_
 }
 
 #[no_mangle]
+/// Return the static OpenSlide compatibility version string.
+///
+/// # Safety
+/// The returned pointer is read-only and must not be freed.
 pub unsafe extern "C" fn openslide_get_version() -> *const c_char {
     VERSION.as_ptr().cast::<c_char>()
 }
 
 #[no_mangle]
+/// Return the number of levels in a slide.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library.
 pub unsafe extern "C" fn openslide_get_level_count(osr: *mut openslide_t) -> c_int {
     guard(-1, || {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
@@ -184,6 +211,11 @@ pub unsafe extern "C" fn openslide_get_level_count(osr: *mut openslide_t) -> c_i
 }
 
 #[no_mangle]
+/// Write level-zero dimensions.
+///
+/// # Safety
+/// `osr` must be null or live; non-null output pointers must be writable for
+/// one `i64`.
 pub unsafe extern "C" fn openslide_get_level0_dimensions(
     osr: *mut openslide_t,
     w: *mut i64,
@@ -195,6 +227,11 @@ pub unsafe extern "C" fn openslide_get_level0_dimensions(
 }
 
 #[no_mangle]
+/// Write dimensions for a level.
+///
+/// # Safety
+/// `osr` must be null or live; non-null output pointers must be writable for
+/// one `i64`.
 pub unsafe extern "C" fn openslide_get_level_dimensions(
     osr: *mut openslide_t,
     level: c_int,
@@ -240,6 +277,10 @@ pub unsafe extern "C" fn openslide_get_level_dimensions(
 }
 
 #[no_mangle]
+/// Return the downsample for a level.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library.
 pub unsafe extern "C" fn openslide_get_level_downsample(
     osr: *mut openslide_t,
     level: c_int,
@@ -265,6 +306,10 @@ pub unsafe extern "C" fn openslide_get_level_downsample(
 }
 
 #[no_mangle]
+/// Select the closest level for a requested downsample.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library.
 pub unsafe extern "C" fn openslide_get_best_level_for_downsample(
     osr: *mut openslide_t,
     downsample: f64,
@@ -295,6 +340,11 @@ pub unsafe extern "C" fn openslide_get_best_level_for_downsample(
 }
 
 #[no_mangle]
+/// Read a region as premultiplied ARGB pixels.
+///
+/// # Safety
+/// `osr` must be null or live. When `w * h` is positive, `dest` must point to
+/// a writable buffer containing at least that many `u32` elements.
 pub unsafe extern "C" fn openslide_read_region(
     osr: *mut openslide_t,
     dest: *mut u32,
@@ -404,6 +454,10 @@ pub unsafe extern "C" fn openslide_read_region(
 }
 
 #[no_mangle]
+/// Return the byte length of the slide ICC profile.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library.
 pub unsafe extern "C" fn openslide_get_icc_profile_size(osr: *mut openslide_t) -> i64 {
     guard(-1, || {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
@@ -419,6 +473,11 @@ pub unsafe extern "C" fn openslide_get_icc_profile_size(osr: *mut openslide_t) -
 }
 
 #[no_mangle]
+/// Copy the slide ICC profile to caller-owned memory.
+///
+/// # Safety
+/// `osr` must be null or live. `dest` must be null or writable for the byte
+/// count returned by [`openslide_get_icc_profile_size`].
 pub unsafe extern "C" fn openslide_read_icc_profile(osr: *mut openslide_t, dest: *mut c_void) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
@@ -440,6 +499,11 @@ pub unsafe extern "C" fn openslide_read_icc_profile(osr: *mut openslide_t, dest:
 }
 
 #[no_mangle]
+/// Return the null-terminated property-name array.
+///
+/// # Safety
+/// `osr` must be null or a live handle returned by this library. Returned
+/// pointers are borrowed from the handle and must not be freed.
 pub unsafe extern "C" fn openslide_get_property_names(
     osr: *mut openslide_t,
 ) -> *const *const c_char {
@@ -454,6 +518,11 @@ pub unsafe extern "C" fn openslide_get_property_names(
 }
 
 #[no_mangle]
+/// Return a property value.
+///
+/// # Safety
+/// `osr` must be null or live; `name` must be null or a readable
+/// NUL-terminated string. The returned pointer must not be freed.
 pub unsafe extern "C" fn openslide_get_property_value(
     osr: *mut openslide_t,
     name: *const c_char,
@@ -475,6 +544,11 @@ pub unsafe extern "C" fn openslide_get_property_value(
 }
 
 #[no_mangle]
+/// Return the null-terminated associated-image name array.
+///
+/// # Safety
+/// `osr` must be null or live. Returned pointers are borrowed from the handle
+/// and must not be freed.
 pub unsafe extern "C" fn openslide_get_associated_image_names(
     osr: *mut openslide_t,
 ) -> *const *const c_char {
@@ -489,6 +563,11 @@ pub unsafe extern "C" fn openslide_get_associated_image_names(
 }
 
 #[no_mangle]
+/// Write dimensions for an associated image.
+///
+/// # Safety
+/// `osr` must be null or live; `name` must be null or a readable C string;
+/// non-null output pointers must be writable for one `i64`.
 pub unsafe extern "C" fn openslide_get_associated_image_dimensions(
     osr: *mut openslide_t,
     name: *const c_char,
@@ -536,11 +615,17 @@ pub unsafe extern "C" fn openslide_get_associated_image_dimensions(
 }
 
 #[no_mangle]
+/// Read an associated image as premultiplied ARGB pixels.
+///
+/// # Safety
+/// `osr` must be null or live; `name` must be null or a readable C string;
+/// `dest` must be null or writable for the associated image pixel count.
 pub unsafe extern "C" fn openslide_read_associated_image(
     osr: *mut openslide_t,
     name: *const c_char,
     dest: *mut u32,
 ) {
+    let mut cleanup_len = 0;
     let result: FfiResult<()> = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
         // borrowing the opaque handle.
@@ -570,10 +655,11 @@ pub unsafe extern "C" fn openslide_read_associated_image(
             handle.set_error(format!("associated image not found: {name}"));
             return Err(FfiPanic);
         };
-        let len = usize::try_from(info.width)
-            .ok()
-            .and_then(|width| width.checked_mul(info.height as usize))
-            .unwrap_or(0);
+        let Some(len) = checked_u32_pixel_len(info.width, info.height) else {
+            handle.set_error("associated image dimensions exceed addressable memory");
+            return Err(FfiPanic);
+        };
+        cleanup_len = len;
         // SAFETY: `clear_u32` validates null and zero length before writing.
         unsafe { clear_u32(dest, len) };
         match slide
@@ -602,25 +688,17 @@ pub unsafe extern "C" fn openslide_read_associated_image(
     }))
     .unwrap_or(Err(FfiPanic));
     if result.is_err() {
-        // SAFETY: The C ABI permits null, and `handle_ref` validates before
-        // borrowing the opaque handle.
-        if let Some(handle) = unsafe { handle_ref(osr) } {
-            if !name.is_null() {
-                // SAFETY: `name` was checked non-null and must be
-                // NUL-terminated by the OpenSlide ABI caller.
-                let name = unsafe { CStr::from_ptr(name) };
-                if let Some(info) = handle.associated_image_info(name) {
-                    let len = info.width as usize * info.height as usize;
-                    // SAFETY: `clear_u32` validates null and zero length
-                    // before writing.
-                    unsafe { clear_u32(dest, len) };
-                }
-            }
-        }
+        // SAFETY: The length was checked and captured inside the unwind
+        // boundary; no pointer dereference or arithmetic happens here.
+        unsafe { clear_u32(dest, cleanup_len) };
     }
 }
 
 #[no_mangle]
+/// Return the ICC profile size for an associated image.
+///
+/// # Safety
+/// `osr` must be null or live and `name` must be null or a readable C string.
 pub unsafe extern "C" fn openslide_get_associated_image_icc_profile_size(
     osr: *mut openslide_t,
     name: *const c_char,
@@ -650,6 +728,11 @@ pub unsafe extern "C" fn openslide_get_associated_image_icc_profile_size(
 }
 
 #[no_mangle]
+/// Copy an associated-image ICC profile.
+///
+/// # Safety
+/// `osr` must be null or live; `name` must be null or a readable C string;
+/// `dest` must be null or writable for the reported profile size.
 pub unsafe extern "C" fn openslide_read_associated_image_icc_profile(
     osr: *mut openslide_t,
     name: *const c_char,
@@ -682,6 +765,11 @@ pub unsafe extern "C" fn openslide_read_associated_image_icc_profile(
 }
 
 #[no_mangle]
+/// Allocate an OpenSlide cache handle.
+///
+/// # Safety
+/// The returned pointer must be released exactly once with
+/// [`openslide_cache_release`].
 pub unsafe extern "C" fn openslide_cache_create(capacity: usize) -> *mut openslide_cache_t {
     guard(ptr::null_mut(), || {
         Box::into_raw(Box::new(ShimCache {
@@ -692,6 +780,10 @@ pub unsafe extern "C" fn openslide_cache_create(capacity: usize) -> *mut opensli
 }
 
 #[no_mangle]
+/// Associate a cache with a slide handle.
+///
+/// # Safety
+/// `osr` and `_cache` must be null or live pointers returned by this library.
 pub unsafe extern "C" fn openslide_set_cache(
     osr: *mut openslide_t,
     _cache: *mut openslide_cache_t,
@@ -707,10 +799,32 @@ pub unsafe extern "C" fn openslide_set_cache(
 }
 
 #[no_mangle]
+/// Release a cache handle.
+///
+/// # Safety
+/// `cache` must be null or a live pointer returned by
+/// [`openslide_cache_create`] and not previously released.
 pub unsafe extern "C" fn openslide_cache_release(cache: *mut openslide_cache_t) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: The C ABI permits null, and `cache_from_raw` validates before
         // reconstructing ownership of the cache allocation.
         let _ = unsafe { cache_from_raw(cache) };
     }));
+}
+
+#[cfg(test)]
+mod arithmetic_tests {
+    use super::*;
+
+    #[test]
+    fn pixel_lengths_reject_negative_and_overflowing_dimensions() {
+        assert_eq!(checked_pixel_len(2, 3), Some(6));
+        assert_eq!(checked_pixel_len(-1, 3), None);
+        assert_eq!(checked_pixel_len(i64::MAX, i64::MAX), None);
+        assert_eq!(checked_u32_pixel_len(2, 3), Some(6));
+
+        if usize::BITS == 32 {
+            assert_eq!(checked_u32_pixel_len(u32::MAX, 2), None);
+        }
+    }
 }

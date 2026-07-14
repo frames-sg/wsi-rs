@@ -1,43 +1,121 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dry_run="${DRY_RUN_ONLY:-false}"
-crate="wsi-rs"
-version="$(cargo pkgid | sed 's/.*#//')"
+usage() {
+  cat <<'USAGE'
+usage: scripts/publish-crate.sh --verify | --dry-run | --publish
 
-if [[ "$dry_run" == "true" ]]; then
-  cargo publish --dry-run
-  exit 0
-fi
+  --verify   validate manifest and changelog release identity only
+  --dry-run  validate release identity and run cargo publish --dry-run --locked
+  --publish  require an exact GitHub release tag and OIDC token, then publish
+USAGE
+}
 
-: "${CRATES_IO_API_TOKEN:?CRATES_IO_API_TOKEN is required for a real publish}"
+fail() {
+  printf 'release validation failed: %s\n' "$*" >&2
+  exit 1
+}
 
-if cargo info "${crate}@${version}" --registry crates-io >/dev/null 2>&1; then
-  echo "${crate} ${version} is already published; skipping"
-  exit 0
-fi
+release_version() {
+  python3 - <<'PY'
+from pathlib import Path
+import tomllib
 
-export CARGO_REGISTRY_TOKEN="$CRATES_IO_API_TOKEN"
-attempt=1
-max_attempts="${CRATES_IO_PUBLISH_ATTEMPTS:-3}"
-retry_seconds="${CRATES_IO_RATE_LIMIT_RETRY_SECONDS:-330}"
+with Path("Cargo.toml").open("rb") as handle:
+    manifest = tomllib.load(handle)
+version = manifest.get("package", {}).get("version")
+if not isinstance(version, str) or not version:
+    raise SystemExit("Cargo.toml has no package.version")
+print(version)
+PY
+}
 
-while true; do
-  set +e
-  output="$(cargo publish 2>&1)"
-  status=$?
-  set -e
-  printf '%s\n' "$output"
+validate_release_metadata() {
+  local version="$1"
+  python3 - "$version" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-  if [[ "$status" -eq 0 ]]; then
-    break
+version = sys.argv[1]
+changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+pattern = re.compile(
+    rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}$",
+    re.MULTILINE,
+)
+matches = pattern.findall(changelog)
+if len(matches) != 1:
+    raise SystemExit(
+        f"CHANGELOG.md must contain exactly one dated release heading for {version}"
+    )
+PY
+}
+
+validate_publish_ref() {
+  local version="$1"
+  local expected_tag="v${version}"
+  local ref_type="${GITHUB_REF_TYPE:-}"
+  local ref_name="${GITHUB_REF_NAME:-}"
+
+  [[ "$ref_type" == "tag" ]] || fail "real publish requires GITHUB_REF_TYPE=tag"
+  [[ "$ref_name" == "$expected_tag" ]] || \
+    fail "tag ${ref_name:-<unset>} does not match manifest version ${expected_tag}"
+
+  local head_sha tag_sha
+  head_sha="$(git rev-parse HEAD)"
+  tag_sha="$(git rev-list -n 1 "$ref_name")"
+  [[ "$head_sha" == "$tag_sha" ]] || fail "tag $ref_name does not point at HEAD"
+  if [[ -n "${GITHUB_SHA:-}" ]]; then
+    [[ "$head_sha" == "$GITHUB_SHA" ]] || fail "GITHUB_SHA does not match HEAD"
+  fi
+  [[ -z "$(git status --porcelain --untracked-files=no)" ]] || \
+    fail "tracked worktree is not clean"
+}
+
+main() {
+  [[ "$#" -eq 1 ]] || {
+    usage >&2
+    exit 2
+  }
+  local mode="$1"
+  case "$mode" in
+    --verify | --dry-run | --publish) ;;
+    -h | --help)
+      usage
+      return 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+
+  local crate="wsi-rs"
+  local version
+  version="$(release_version)"
+  validate_release_metadata "$version"
+
+  if [[ "$mode" == "--verify" ]]; then
+    printf 'release identity is valid for %s %s\n' "$crate" "$version"
+    return 0
   fi
 
-  if [[ "$output" != *"Too Many Requests"* || "$attempt" -ge "$max_attempts" ]]; then
-    exit "$status"
+  if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+    validate_publish_ref "$version"
   fi
 
-  attempt=$((attempt + 1))
-  echo "crates.io rate limited ${crate}; sleeping ${retry_seconds}s before retry ${attempt}/${max_attempts}"
-  sleep "$retry_seconds"
-done
+  if [[ "$mode" == "--dry-run" ]]; then
+    cargo publish --dry-run --locked
+    return 0
+  fi
+
+  validate_publish_ref "$version"
+  : "${CARGO_REGISTRY_TOKEN:?OIDC-provided CARGO_REGISTRY_TOKEN is required}"
+
+  if cargo info "${crate}@${version}" --registry crates-io >/dev/null 2>&1; then
+    fail "${crate} ${version} is already published"
+  fi
+  cargo publish --locked
+}
+
+main "$@"

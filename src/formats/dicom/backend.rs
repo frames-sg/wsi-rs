@@ -65,7 +65,7 @@ pub(super) fn dicom_jp2k_device_batch_allowed(
 }
 
 pub(crate) struct DicomBackend {
-    pub(super) probe_cache: Mutex<LruCache<PathBuf, Arc<DicomSlide>>>,
+    pub(super) probe_cache: Mutex<LruCache<FileIdentity, Arc<DicomSlide>>>,
 }
 
 impl DicomBackend {
@@ -75,8 +75,8 @@ impl DicomBackend {
         }
     }
 
-    pub(super) fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    pub(super) fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
+        FileIdentity::from_path(path)
     }
 
     pub(super) fn parse(&self, path: &Path) -> Result<Arc<DicomSlide>, WsiError> {
@@ -92,7 +92,7 @@ impl Default for DicomBackend {
 
 impl FormatProbe for DicomBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         if self
             .probe_cache
             .lock()
@@ -156,13 +156,12 @@ impl FormatProbe for DicomBackend {
 
 impl DatasetReader for DicomBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         let cached = self
             .probe_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .cloned();
+            .pop(&key);
         let slide = match cached {
             Some(slide) => slide,
             None => self.parse(path)?,

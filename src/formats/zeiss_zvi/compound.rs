@@ -45,8 +45,10 @@ pub(super) fn read_stream_to_end(
     compound: &mut CompoundFile<File>,
     path: &str,
 ) -> Result<Vec<u8>, WsiError> {
-    let mut stream = compound.open_stream(path)?;
-    let mut data = Vec::new();
-    stream.read_to_end(&mut data)?;
-    Ok(data)
+    let stream = compound.open_stream(path)?;
+    Ok(crate::core::limits::read_to_end_bounded(
+        stream,
+        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+        "ZVI compound stream",
+    )?)
 }

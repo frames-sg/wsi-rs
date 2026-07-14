@@ -8,7 +8,7 @@ mod slide;
 mod tests;
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
@@ -22,6 +22,7 @@ use j2k_jpeg::{
 };
 use lru::LruCache;
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
     read_cpu_tiles_with_backend, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
@@ -31,6 +32,7 @@ use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::decode::jpeg::{jpeg_dimensions, JpegTileGeometry};
 use crate::error::WsiError;
+use crate::formats::companion_path::resolve_companion_file;
 use crate::properties::Properties;
 
 use ini::{parse_vms_ini, GROUP_VMS, KEY_NUM_JPEG_COLS, KEY_NUM_JPEG_ROWS};
@@ -38,7 +40,7 @@ use model::VmsSlide;
 use slide::VmsReader;
 
 pub(crate) struct HamamatsuVmsBackend {
-    probe_cache: Mutex<LruCache<PathBuf, Arc<VmsSlide>>>,
+    probe_cache: Mutex<LruCache<FileIdentity, Arc<VmsSlide>>>,
 }
 
 impl HamamatsuVmsBackend {
@@ -48,8 +50,8 @@ impl HamamatsuVmsBackend {
         }
     }
 
-    fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
+        FileIdentity::from_path(path)
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<VmsSlide>, WsiError> {
@@ -100,7 +102,7 @@ impl FormatProbe for HamamatsuVmsBackend {
         }
 
         let slide = self.parse(path)?;
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         self.probe_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -116,7 +118,7 @@ impl FormatProbe for HamamatsuVmsBackend {
 
 impl DatasetReader for HamamatsuVmsBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         let cached = self
             .probe_cache
             .lock()

@@ -390,7 +390,7 @@ pub(super) fn copy_existing_svcache_tiles(
     scenes: &mut [SceneMeta],
     payload: &mut File,
 ) -> Result<usize, WsiError> {
-    if !out_path.is_file() || !svcache_matches_source(out_path, source_path).unwrap_or(false) {
+    if !out_path.is_file() || !svcache_matches_source(out_path, source_path)? {
         return Ok(0);
     }
     let (mut existing_file, payload_start, existing_metadata) = read_svcache(out_path)?;
@@ -479,7 +479,16 @@ fn copy_tile_payload(
     existing_file.seek(SeekFrom::Start(source_offset))?;
     let payload_offset = payload.seek(SeekFrom::End(0))?;
     let mut limited = existing_file.take(existing_tile.payload_len);
-    std::io::copy(&mut limited, payload)?;
+    let copied_len = std::io::copy(&mut limited, payload)?;
+    if copied_len != existing_tile.payload_len {
+        return Err(WsiError::InvalidSlide {
+            path: PathBuf::from(".svcache"),
+            message: format!(
+                "svcache payload copy was truncated: expected {}, copied {copied_len}",
+                existing_tile.payload_len
+            ),
+        });
+    }
     let mut copied = existing_tile.clone();
     copied.payload_offset = payload_offset;
     Ok(copied)

@@ -9,8 +9,9 @@ no-default-features = false
 version = 2
 ignore = [
     # RUSTSEC-2021-0153: `encoding` is pulled transitively by dicom-encoding
-    # 0.9.1. No safe upstream upgrade exists yet; revisit when dicom-rs
-    # replaces it.
+    # 0.9.1. No safe upstream upgrade exists yet. Owner: wsi-rs maintainers.
+    # Review/expiry: 2026-10-01 or the next dicom-rs release, whichever is first.
+    # See SUPPLY_CHAIN.md.
     "RUSTSEC-2021-0153",
 ]
 

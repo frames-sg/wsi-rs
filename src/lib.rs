@@ -74,6 +74,12 @@ pub use formats::svcache::{
 pub use output::cuda::CudaDeviceTile;
 pub use properties::Properties;
 
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub fn fuzz_parse_xml(input: &str) -> Result<(), WsiError> {
+    decode::xml::parse_xml(input).map(drop)
+}
+
 // Multi-dimensional API
 pub use core::registry::{
     DatasetReader, FormatProbe, FormatRegistry, ProbeConfidence, ProbeResult, Slide,

@@ -1,11 +1,52 @@
 use crate::error::WsiError;
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 use std::collections::HashMap;
 
-/// Maximum XML nesting depth allowed during parsing. Prevents stack overflow
-/// from crafted deeply nested XML in slide metadata (Leica, Philips, Ventana).
-const MAX_XML_DEPTH: u32 = 256;
+const MAX_XML_INPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_XML_DEPTH: u32 = 128;
+const MAX_XML_NODES: usize = 100_000;
+const MAX_XML_ATTRIBUTES: usize = 500_000;
+const MAX_XML_ATTRIBUTES_PER_NODE: usize = 256;
+
+#[derive(Default)]
+struct XmlBudget {
+    nodes: usize,
+    attributes: usize,
+}
+
+impl XmlBudget {
+    fn add_node(&mut self) -> Result<(), WsiError> {
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .ok_or_else(|| WsiError::Xml("XML node count overflow".into()))?;
+        if self.nodes > MAX_XML_NODES {
+            return Err(WsiError::Xml(format!(
+                "XML node count exceeds maximum of {MAX_XML_NODES}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn add_attributes(&mut self, count: usize) -> Result<(), WsiError> {
+        if count > MAX_XML_ATTRIBUTES_PER_NODE {
+            return Err(WsiError::Xml(format!(
+                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
+            )));
+        }
+        self.attributes = self
+            .attributes
+            .checked_add(count)
+            .ok_or_else(|| WsiError::Xml("XML attribute count overflow".into()))?;
+        if self.attributes > MAX_XML_ATTRIBUTES {
+            return Err(WsiError::Xml(format!(
+                "XML attribute count exceeds maximum of {MAX_XML_ATTRIBUTES}"
+            )));
+        }
+        Ok(())
+    }
+}
 
 /// Find the first element with the given tag name and return its text content.
 #[cfg(test)]
@@ -19,7 +60,10 @@ pub fn parse_element_text(xml: &str, tag: &str) -> Option<String> {
                 inside_tag = true;
             }
             Ok(Event::Text(e)) if inside_tag => {
-                return e.unescape().ok().map(|s| s.into_owned());
+                return e
+                    .xml_content(XmlVersion::Implicit1_0)
+                    .ok()
+                    .map(|s| s.into_owned());
             }
             Ok(Event::End(_)) if inside_tag => {
                 return None;
@@ -41,9 +85,15 @@ pub fn parse_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == tag.as_bytes() => {
-                for a in e.attributes().flatten() {
+                for a in e.attributes() {
+                    let Ok(a) = a else {
+                        return None;
+                    };
                     if a.key.as_ref() == attr.as_bytes() {
-                        return a.unescape_value().ok().map(|s| s.into_owned());
+                        return a
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .ok()
+                            .map(|s| s.into_owned());
                     }
                 }
             }
@@ -60,11 +110,9 @@ pub fn parse_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
 ///
 /// # Security note
 ///
-/// `quick_xml` 0.36 does **not** expand internal DTD entity references by
-/// default. The `read_event_into` loop only processes `Start`, `Empty`,
-/// `Text`, `End`, and `Eof` events — `DocType` events are ignored. Combined
-/// with the recursion depth limit in [`parse_node_recursive`], this makes
-/// the parser resistant to billion-laughs-style entity expansion attacks.
+/// The parser ignores document type events, resolves only predefined entities,
+/// and enforces input, depth, node, and attribute budgets before constructing
+/// the tree.
 #[derive(Debug, Clone)]
 pub struct XmlNode {
     pub tag: String,
@@ -92,18 +140,24 @@ impl XmlNode {
 
 /// Parse an XML string into a tree of `XmlNode`.
 pub fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
+    if xml.len() > MAX_XML_INPUT_BYTES {
+        return Err(WsiError::Xml(format!(
+            "XML input exceeds maximum of {MAX_XML_INPUT_BYTES} bytes"
+        )));
+    }
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
+    let mut budget = XmlBudget::default();
 
     // Find the root element
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let node = parse_node_recursive(&e, &mut reader, 0)?;
+                let node = parse_node_recursive(&e, &mut reader, 0, &mut budget)?;
                 return Ok(node);
             }
             Ok(Event::Empty(e)) => {
-                return make_empty_node(&e);
+                return make_empty_node(&e, &mut budget);
             }
             Ok(Event::Eof) => {
                 return Err(WsiError::Xml("empty document".into()));
@@ -117,17 +171,23 @@ pub fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
     }
 }
 
-fn make_empty_node(e: &quick_xml::events::BytesStart) -> Result<XmlNode, WsiError> {
+fn make_empty_node(
+    e: &quick_xml::events::BytesStart,
+    budget: &mut XmlBudget,
+) -> Result<XmlNode, WsiError> {
+    budget.add_node()?;
     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut attributes = HashMap::new();
-    for attr in e.attributes().flatten() {
+    for attr in e.attributes() {
+        let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|err| WsiError::Xml(err.to_string()))?
             .into_owned();
         attributes.insert(key, val);
     }
+    budget.add_attributes(attributes.len())?;
     Ok(XmlNode {
         tag,
         attributes,
@@ -140,6 +200,7 @@ fn parse_node_recursive(
     start: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
     depth: u32,
+    budget: &mut XmlBudget,
 ) -> Result<XmlNode, WsiError> {
     if depth > MAX_XML_DEPTH {
         return Err(WsiError::Xml(format!(
@@ -147,16 +208,19 @@ fn parse_node_recursive(
             MAX_XML_DEPTH
         )));
     }
+    budget.add_node()?;
     let tag = String::from_utf8_lossy(start.name().as_ref()).into_owned();
     let mut attributes = HashMap::new();
-    for attr in start.attributes().flatten() {
+    for attr in start.attributes() {
+        let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|err| WsiError::Xml(err.to_string()))?
             .into_owned();
         attributes.insert(key, val);
     }
+    budget.add_attributes(attributes.len())?;
     let mut children = Vec::new();
     let mut text = None;
     let mut buf = Vec::new();
@@ -164,15 +228,15 @@ fn parse_node_recursive(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let child = parse_node_recursive(&e, reader, depth + 1)?;
+                let child = parse_node_recursive(&e, reader, depth + 1, budget)?;
                 children.push(child);
             }
             Ok(Event::Empty(e)) => {
-                children.push(make_empty_node(&e)?);
+                children.push(make_empty_node(&e, budget)?);
             }
             Ok(Event::Text(e)) => {
                 let t = e
-                    .unescape()
+                    .xml_content(XmlVersion::Implicit1_0)
                     .map_err(|err| WsiError::Xml(err.to_string()))?
                     .into_owned();
                 if !t.trim().is_empty() {
@@ -269,5 +333,33 @@ mod tests {
             err_msg.contains("nesting depth"),
             "expected depth error, got: {err_msg}"
         );
+    }
+
+    #[test]
+    fn duplicate_attributes_are_rejected() {
+        let err = parse_xml(r#"<root value="first" value="second"/>"#).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicated attribute"),
+            "unexpected duplicate-attribute error: {err}"
+        );
+    }
+
+    #[test]
+    fn excessive_attributes_are_rejected() {
+        let attributes = (0..=MAX_XML_ATTRIBUTES_PER_NODE)
+            .map(|idx| format!(r#" a{idx}="value""#))
+            .collect::<String>();
+        let err = parse_xml(&format!("<root{attributes}/>")).unwrap_err();
+        assert!(
+            err.to_string().contains("attribute count"),
+            "unexpected attribute-budget error: {err}"
+        );
+    }
+
+    #[test]
+    fn document_type_entities_are_not_expanded() {
+        let xml = r#"<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>"#;
+        let root = parse_xml(xml).unwrap();
+        assert_ne!(root.text.as_deref(), Some("expanded"));
     }
 }

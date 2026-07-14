@@ -4,6 +4,7 @@ use super::slide::{
     ZEISS_DIRECT_LEVEL_COMPOSE_HITS, ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS, ZEISS_LOCAL_TILE_HITS,
 };
 use super::*;
+use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 
 impl ZeissSlide {
     pub(super) fn read_tile(
@@ -129,13 +130,14 @@ impl ZeissSlide {
             .get(level)
             .and_then(|tiles| tiles.get(&(col, row)).cloned())
             .unwrap_or_default();
+        let tile_rgb_len = crate::core::limits::checked_product_to_usize(
+            &[u64::from(tile_w), u64::from(tile_h), 3],
+            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            "Zeiss RGB tile",
+        )
+        .map_err(WsiError::DisplayConversion)?;
         if candidate_indices.is_empty() {
-            return rgb_u8_tile(
-                tile_w,
-                tile_h,
-                vec![0; tile_w as usize * tile_h as usize * 3],
-            )
-            .map(Some);
+            return rgb_u8_tile(tile_w, tile_h, vec![0; tile_rgb_len]).map(Some);
         }
         let _level_ratio = self.dataset.scenes[scene].series[0].levels[level]
             .downsample
@@ -214,7 +216,7 @@ impl ZeissSlide {
             .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
         let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         if direct_uncompressed_rgb {
-            let mut destination = vec![0u8; tile_w as usize * tile_h as usize * 3];
+            let mut destination = vec![0u8; tile_rgb_len];
             for info in subblocks {
                 let raw = czi
                     .read_subblock(info.index)
@@ -233,7 +235,7 @@ impl ZeissSlide {
             return rgb_u8_tile(tile_w, tile_h, destination).map(Some);
         }
 
-        let mut destination = vec![0u8; tile_w as usize * tile_h as usize * 3];
+        let mut destination = vec![0u8; tile_rgb_len];
         for info in subblocks {
             let raw = czi
                 .read_subblock(info.index)
@@ -356,8 +358,13 @@ impl ZeissSlide {
         let level_ratio = level_ref.downsample.round().max(1.0) as i32;
         if direct_uncompressed_rgb {
             let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let mut destination =
-                vec![0u8; level_ref.dimensions.0 as usize * level_ref.dimensions.1 as usize * 3];
+            let destination_len = checked_product_to_usize(
+                &[level_ref.dimensions.0, level_ref.dimensions.1, 3],
+                MAX_DECODED_IMAGE_BYTES,
+                "Zeiss composed level",
+            )
+            .map_err(WsiError::DisplayConversion)?;
+            let mut destination = vec![0u8; destination_len];
             for info in subblocks {
                 let raw = czi
                     .read_subblock(info.index)

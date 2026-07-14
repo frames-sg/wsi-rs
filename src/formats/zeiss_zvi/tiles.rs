@@ -1,5 +1,6 @@
 use super::model::{RawReadWindow, ZviCompression, ZviPlane, ZviSlide};
 use super::*;
+use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
 
 impl ZviSlide {
     pub(super) fn read_plane_window(
@@ -41,7 +42,8 @@ impl ZviSlide {
     ) -> Result<CpuTile, WsiError> {
         match plane.bytes_per_sample {
             1 => {
-                let mut samples = vec![0u8; w as usize * h as usize];
+                let len = zvi_image_len(w, h, 1)?;
+                let mut samples = vec![0u8; len];
                 self.read_raw_rows(
                     plane,
                     RawReadWindow {
@@ -63,8 +65,10 @@ impl ZviSlide {
                 )
             }
             2 => {
-                let mut row_bytes = vec![0u8; w as usize * 2];
-                let mut samples = vec![0u16; w as usize * h as usize];
+                let row_len = zvi_image_len(w, 1, 2)?;
+                let sample_len = zvi_image_len(w, h, 1)?;
+                let mut row_bytes = vec![0u8; row_len];
+                let mut samples = vec![0u16; sample_len];
                 let mut compound = self.compound.lock().unwrap_or_else(|e| e.into_inner());
                 let mut stream = compound.open_stream(&plane.stream_path)?;
                 for row in 0..h {
@@ -109,7 +113,7 @@ impl ZviSlide {
     ) -> Result<(), WsiError> {
         let mut compound = self.compound.lock().unwrap_or_else(|e| e.into_inner());
         let mut stream = compound.open_stream(&plane.stream_path)?;
-        let row_bytes = window.width as usize * window.bytes_per_sample as usize;
+        let row_bytes = zvi_image_len(window.width, 1, window.bytes_per_sample)?;
         for row in 0..window.height {
             let src_offset = plane
                 .payload_offset
@@ -133,10 +137,21 @@ impl ZviSlide {
         w: u32,
         h: u32,
     ) -> Result<CpuTile, WsiError> {
-        let compressed = self.read_plane_payload_to_end(plane)?;
+        let compressed = self.read_plane_payload(plane)?;
         let mut decoder = ZlibDecoder::new(compressed.as_slice());
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed)?;
+        let expected_len =
+            zvi_image_len(plane.width, plane.height, u64::from(plane.bytes_per_sample))?;
+        let decompressed =
+            read_to_end_bounded(&mut decoder, expected_len as u64, "ZVI inflated plane")?;
+        if decompressed.len() != expected_len {
+            return Err(WsiError::InvalidSlide {
+                path: PathBuf::from(&plane.stream_path),
+                message: format!(
+                    "ZVI inflated plane has {} bytes, expected {expected_len}",
+                    decompressed.len()
+                ),
+            });
+        }
         crop_decoded_zvi_plane(plane, &decompressed, x, y, w, h)
     }
 
@@ -148,30 +163,44 @@ impl ZviSlide {
         w: u32,
         h: u32,
     ) -> Result<CpuTile, WsiError> {
-        let jpeg = self.read_plane_payload_to_end(plane)?;
-        let decoded = decode_batch_jpeg(&[JpegDecodeJob {
-            data: std::borrow::Cow::Borrowed(jpeg.as_slice()),
-            tables: None,
-            expected_width: plane.width,
-            expected_height: plane.height,
-            color_transform: j2k_jpeg::ColorTransform::Auto,
-            force_dimensions: false,
-            requested_size: None,
-        }])
-        .into_iter()
-        .next()
-        .ok_or_else(|| WsiError::Jpeg("empty ZVI JPEG decode result".into()))??;
+        let jpeg = self.read_plane_payload(plane)?;
+        let decoded = crate::core::batch::exactly_one(
+            decode_batch_jpeg(&[JpegDecodeJob {
+                data: std::borrow::Cow::Borrowed(jpeg.as_slice()),
+                tables: None,
+                expected_width: plane.width,
+                expected_height: plane.height,
+                color_transform: j2k_jpeg::ColorTransform::Auto,
+                force_dimensions: false,
+                requested_size: None,
+            }]),
+            "ZVI JPEG decode",
+        )??;
         crop_interleaved_tile(&decoded, x, y, w, h)
     }
 
-    fn read_plane_payload_to_end(&self, plane: &ZviPlane) -> Result<Vec<u8>, WsiError> {
+    fn read_plane_payload(&self, plane: &ZviPlane) -> Result<Vec<u8>, WsiError> {
         let mut compound = self.compound.lock().unwrap_or_else(|e| e.into_inner());
         let mut stream = compound.open_stream(&plane.stream_path)?;
         stream.seek(SeekFrom::Start(plane.payload_offset))?;
-        let mut payload = Vec::new();
-        stream.read_to_end(&mut payload)?;
+        let mut payload = vec![
+            0;
+            usize::try_from(plane.payload_length).map_err(|_| {
+                WsiError::DisplayConversion("ZVI payload length exceeds address space".into())
+            })?
+        ];
+        stream.read_exact(&mut payload)?;
         Ok(payload)
     }
+}
+
+fn zvi_image_len(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize, WsiError> {
+    checked_product_to_usize(
+        &[u64::from(width), u64::from(height), bytes_per_pixel],
+        MAX_DECODED_IMAGE_BYTES,
+        "ZVI image",
+    )
+    .map_err(WsiError::DisplayConversion)
 }
 
 fn crop_decoded_zvi_plane(
@@ -184,7 +213,7 @@ fn crop_decoded_zvi_plane(
 ) -> Result<CpuTile, WsiError> {
     match plane.bytes_per_sample {
         1 => {
-            let mut samples = vec![0u8; w as usize * h as usize];
+            let mut samples = vec![0u8; zvi_image_len(w, h, 1)?];
             for row in 0..h as usize {
                 let src = ((y as usize + row) * plane.width as usize + x as usize)
                     .checked_mul(plane.bytes_per_sample as usize)
@@ -204,7 +233,7 @@ fn crop_decoded_zvi_plane(
             )
         }
         2 => {
-            let mut samples = vec![0u16; w as usize * h as usize];
+            let mut samples = vec![0u16; zvi_image_len(w, h, 1)?];
             for row in 0..h as usize {
                 let src = ((y as usize + row) * plane.width as usize + x as usize)
                     .checked_mul(2)
@@ -251,7 +280,7 @@ fn crop_interleaved_tile(
         .data
         .as_u8()
         .ok_or_else(|| WsiError::DisplayConversion("ZVI JPEG decoded to non-u8 samples".into()))?;
-    let mut out = vec![0u8; width as usize * height as usize * channels];
+    let mut out = vec![0u8; zvi_image_len(width, height, channels as u64)?];
     for row in 0..height as usize {
         let src_offset = ((y as usize + row) * src.width as usize + x as usize) * channels;
         let dst_offset = row * width as usize * channels;
@@ -266,4 +295,15 @@ fn crop_interleaved_tile(
         CpuTileLayout::Interleaved,
         CpuTileData::u8(out),
     )
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::zvi_image_len;
+
+    #[test]
+    fn zvi_image_len_rejects_oversized_planes() {
+        assert_eq!(zvi_image_len(10, 20, 2).unwrap(), 400);
+        assert!(zvi_image_len(u32::MAX, u32::MAX, 4).is_err());
+    }
 }

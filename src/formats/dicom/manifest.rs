@@ -2,6 +2,7 @@ use super::*;
 
 const DICOM_SHARED_CACHE_TARGET_REGION_SIDE: u32 = 2048;
 const DICOM_SHARED_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DICOM_DIRECTORY_FILES: usize = 10_000;
 
 pub(super) struct DicomSlide {
     pub(super) dataset: Dataset,
@@ -305,7 +306,7 @@ impl DicomLevel {
         }
 
         let (width, height) = self.actual_tile_dimensions(col_u32, row_u32);
-        Ok(black_sample_buffer(width, height))
+        black_sample_buffer(width, height)
     }
 
     pub(super) fn read_raw_compressed_tile(
@@ -609,9 +610,18 @@ pub(super) fn direct_child_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
             source: Arc::new(source),
             path: dir.to_path_buf(),
         })?;
-        let path = entry.path();
-        if path.is_file() {
-            paths.push(path);
+        let file_type = entry.file_type().map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: entry.path(),
+        })?;
+        if file_type.is_file() {
+            if paths.len() >= MAX_DICOM_DIRECTORY_FILES {
+                return Err(invalid_slide(
+                    dir,
+                    format!("DICOM directory exceeds {MAX_DICOM_DIRECTORY_FILES} direct files"),
+                ));
+            }
+            paths.push(entry.path());
         }
     }
     paths.sort();
@@ -646,4 +656,15 @@ where
         }
     }
     Ok(common)
+}
+
+#[cfg(test)]
+mod directory_limit_tests {
+    use super::MAX_DICOM_DIRECTORY_FILES;
+
+    #[test]
+    fn dicom_directory_file_limit_is_bounded() {
+        let limit = std::hint::black_box(MAX_DICOM_DIRECTORY_FILES);
+        assert!((1_000..=100_000).contains(&limit));
+    }
 }

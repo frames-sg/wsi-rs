@@ -38,6 +38,9 @@ impl TiffPixelReader {
         let total_bytes = strip_byte_counts.iter().try_fold(0usize, |acc, count| {
             acc.checked_add(usize::try_from(*count).ok()?)
         });
+        let total_bytes = total_bytes.filter(|bytes| {
+            u64::try_from(*bytes).is_ok_and(|bytes| bytes <= MAX_DECODED_IMAGE_BYTES)
+        });
         let total_bytes = total_bytes.ok_or_else(|| {
             WsiError::UnsupportedFormat(format!(
                 "associated image '{}' strip byte counts exceed addressable memory",
@@ -245,7 +248,12 @@ impl TiffPixelReader {
         let tiles_across = dimensions.0.div_ceil(tile_width);
         let tiles_down = dimensions.1.div_ceil(tile_height);
         let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(ifd_id)?;
-        let required_tiles = tiles_across as usize * tiles_down as usize;
+        let required_tiles = checked_product_to_usize(
+            &[u64::from(tiles_across), u64::from(tiles_down)],
+            16 * 1024 * 1024,
+            "associated TIFF tile count",
+        )
+        .map_err(WsiError::DisplayConversion)?;
         if offsets.len() < required_tiles || byte_counts.len() < required_tiles {
             return Err(WsiError::UnsupportedFormat(format!(
                 "associated image '{}' expected {} tiles, found offsets={} byte_counts={}",
@@ -256,9 +264,15 @@ impl TiffPixelReader {
             )));
         }
 
-        let mut composed = vec![0u8; dimensions.0 as usize * dimensions.1 as usize * 3];
+        let composed_len = checked_product_to_usize(
+            &[u64::from(dimensions.0), u64::from(dimensions.1), 3],
+            MAX_DECODED_IMAGE_BYTES,
+            "associated TIFF image",
+        )
+        .map_err(WsiError::DisplayConversion)?;
+        let mut composed = vec![0u8; composed_len];
         let composed_stride = dimensions.0 as usize * 3;
-        let mut tile_jobs = Vec::with_capacity(tiles_across as usize * tiles_down as usize);
+        let mut tile_jobs = Vec::with_capacity(required_tiles);
         for row in 0..tiles_down {
             for col in 0..tiles_across {
                 tile_jobs.push(AssociatedTileJob {

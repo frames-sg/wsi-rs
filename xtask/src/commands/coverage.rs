@@ -44,6 +44,10 @@ pub(super) fn changed(args: Vec<String>) -> Result<(), String> {
     }
 
     let percent = summary.percent();
+    for (path, (hit, found)) in &summary.files {
+        let file_percent = *hit as f64 * 100.0 / *found as f64;
+        println!("  {:6.2}% ({hit}/{found}) {}", file_percent, path.display());
+    }
     println!(
         "changed-path coverage: {:.2}% ({}/{} lines) across {} file(s)",
         percent,
@@ -134,6 +138,7 @@ struct ChangedCoverageSummary {
     found: u64,
     hit: u64,
     missing_files: Vec<PathBuf>,
+    files: BTreeMap<PathBuf, (u64, u64)>,
 }
 
 impl ChangedCoverageSummary {
@@ -156,9 +161,12 @@ fn summarize_changed_coverage(
             Some(file) => {
                 for line in lines {
                     if let Some(count) = file.lines.get(line) {
+                        let file_summary = summary.files.entry(path.clone()).or_default();
                         summary.found += 1;
+                        file_summary.1 += 1;
                         if *count > 0 {
                             summary.hit += 1;
+                            file_summary.0 += 1;
                         }
                     }
                 }
@@ -500,6 +508,10 @@ end_of_record
         assert_eq!(summary.hit, 1);
         assert_eq!(summary.percent(), 50.0);
         assert_eq!(summary.missing_files, vec![PathBuf::from("src/missing.rs")]);
+        assert_eq!(
+            summary.files,
+            BTreeMap::from([(PathBuf::from("src/lib.rs"), (1, 2))])
+        );
     }
 
     #[test]

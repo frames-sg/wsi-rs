@@ -14,6 +14,7 @@ use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry
 use j2k_core::BackendRequest;
 use lru::LruCache;
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
@@ -79,6 +80,7 @@ const DICOM_JP2K_DEVICE_DECODE_ENV: &str = "WSI_RS_JP2K_DEVICE_DECODE";
 
 mod backend;
 mod decode;
+mod frame_index;
 mod image;
 mod manifest;
 mod metadata;
@@ -87,6 +89,7 @@ mod reader;
 pub(crate) use backend::DicomBackend;
 use backend::*;
 use decode::*;
+use frame_index::*;
 use image::*;
 use manifest::*;
 use metadata::*;

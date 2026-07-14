@@ -580,7 +580,7 @@ impl TiffPixelReader {
             jobs.push(job);
         }
 
-        decode_mixed_batch(jobs)
+        decode_mixed_batch(jobs)?
             .into_iter()
             .zip(reqs.iter())
             .map(|(result, req)| {
@@ -884,8 +884,17 @@ impl TiffPixelReader {
             }
         };
 
-        let expected_bytes =
-            width as usize * height as usize * spp as usize * sample_type.byte_size();
+        let expected_bytes = crate::core::limits::checked_product_to_usize(
+            &[
+                u64::from(width),
+                u64::from(height),
+                u64::from(spp),
+                sample_type.byte_size() as u64,
+            ],
+            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            "uncompressed TIFF tile",
+        )
+        .map_err(WsiError::DisplayConversion)?;
         if data.len() < expected_bytes {
             return Err(WsiError::TileRead {
                 col: 0,

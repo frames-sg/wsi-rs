@@ -4,6 +4,7 @@ use super::model::{dataset_id_from_quickhash, invalid_slide, VmsJpeg, VmsLevel, 
 use super::*;
 
 const VMS_ASSOCIATED_CACHE_ENTRIES: usize = 4;
+const MAX_VMS_JPEG_SHARDS: u64 = 65_536;
 
 pub(super) struct VmsReader {
     pub(super) slide: Arc<VmsSlide>,
@@ -51,18 +52,18 @@ impl SlideReader for VmsReader {
             source: Arc::new(source),
             path: path.clone(),
         })?;
-        decode_batch_jpeg(&[JpegDecodeJob {
-            data: Cow::Borrowed(&data),
-            tables: None,
-            expected_width: 0,
-            expected_height: 0,
-            color_transform: j2k_jpeg::ColorTransform::Auto,
-            force_dimensions: false,
-            requested_size: None,
-        }])
-        .into_iter()
-        .next()
-        .expect("1-element JPEG facade batch")
+        crate::core::batch::exactly_one(
+            decode_batch_jpeg(&[JpegDecodeJob {
+                data: Cow::Borrowed(&data),
+                tables: None,
+                expected_width: 0,
+                expected_height: 0,
+                color_transform: j2k_jpeg::ColorTransform::Auto,
+                force_dimensions: false,
+                requested_size: None,
+            }]),
+            "VMS associated JPEG decode",
+        )?
         .map(|tile| {
             let tile = Arc::new(tile);
             self.slide
@@ -170,7 +171,9 @@ impl VmsSlide {
         }
 
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let mut image_paths = vec![None; (num_cols * num_rows) as usize];
+        let image_count = vms_image_count(num_cols, num_rows)
+            .ok_or_else(|| invalid_slide(path, "VMS JPEG shard count exceeds safety limit"))?;
+        let mut image_paths = vec![None; image_count];
         for (key, value) in group {
             if !key.starts_with(KEY_IMAGE_FILE) {
                 continue;
@@ -192,7 +195,7 @@ impl VmsSlide {
                     format!("duplicate VMS image for ({},{})", dims.col, dims.row),
                 ));
             }
-            image_paths[idx] = Some(dir.join(value));
+            image_paths[idx] = Some(resolve_companion_file(path, dir, value)?);
         }
         let image_paths: Vec<PathBuf> = image_paths
             .into_iter()
@@ -202,16 +205,25 @@ impl VmsSlide {
                     .ok_or_else(|| invalid_slide(path, format!("missing VMS image filename {idx}")))
             })
             .collect::<Result<_, _>>()?;
+        if image_paths.iter().collect::<HashSet<_>>().len() != image_paths.len() {
+            return Err(invalid_slide(path, "duplicate VMS image file path"));
+        }
 
-        let map_path = dir.join(
+        let map_path = resolve_companion_file(
+            path,
+            dir,
             group
                 .get(KEY_MAP_FILE)
                 .ok_or_else(|| invalid_slide(path, "missing MapFile"))?,
-        );
-        let macro_path = group.get(KEY_MACRO_IMAGE).map(|value| dir.join(value));
+        )?;
+        let macro_path = group
+            .get(KEY_MACRO_IMAGE)
+            .map(|value| resolve_companion_file(path, dir, value))
+            .transpose()?;
         let opt_path = group
             .get(KEY_OPTIMISATION_FILE)
-            .map(|value| dir.join(value));
+            .map(|value| resolve_companion_file(path, dir, value))
+            .transpose()?;
 
         let mut quickhash = Quickhash1::new();
         quickhash.hash_file(path)?;
@@ -345,5 +357,23 @@ impl VmsSlide {
                 NonZeroUsize::new(VMS_ASSOCIATED_CACHE_ENTRIES).unwrap(),
             )),
         })
+    }
+}
+
+fn vms_image_count(columns: u32, rows: u32) -> Option<usize> {
+    u64::from(columns)
+        .checked_mul(u64::from(rows))
+        .filter(|count| *count <= MAX_VMS_JPEG_SHARDS)
+        .and_then(|count| usize::try_from(count).ok())
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::vms_image_count;
+
+    #[test]
+    fn vms_image_count_rejects_oversized_grids() {
+        assert_eq!(vms_image_count(2, 3), Some(6));
+        assert_eq!(vms_image_count(u32::MAX, u32::MAX), None);
     }
 }

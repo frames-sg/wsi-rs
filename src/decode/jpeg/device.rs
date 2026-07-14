@@ -18,10 +18,12 @@ use j2k_core::{
 use j2k_core::{
     DeviceSubmission as J2kDeviceSubmission, ImageDecode as J2kImageDecode, ImageDecodeSubmit,
 };
+#[cfg(feature = "metal")]
+use j2k_jpeg::ColorTransform as J2kColorTransform;
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use j2k_jpeg::{
-    ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
-    JpegView as J2kJpegView, PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
+    DecodeOptions as J2kDecodeOptions, JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
+    SofKind as J2kSofKind,
 };
 #[cfg(feature = "metal")]
 use j2k_jpeg_metal::SurfaceResidency as J2kJpegSurfaceResidency;

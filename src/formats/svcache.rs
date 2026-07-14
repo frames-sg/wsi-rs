@@ -36,7 +36,7 @@ use crate::error::WsiError;
 use crate::properties::Properties;
 
 const MAGIC: &[u8; 8] = b"SVCACHE1";
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 const DEFAULT_TILE_SIZE: u32 = 256;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -78,6 +78,7 @@ struct SourceFingerprint {
     path: String,
     len: u64,
     modified_unix_nanos: Option<u128>,
+    sample_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

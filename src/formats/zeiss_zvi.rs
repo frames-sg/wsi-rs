@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use cfb::CompoundFile;
 use flate2::read::ZlibDecoder;
 use image::ImageFormat;
-use lru::LruCache;
 
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
@@ -32,19 +31,11 @@ use slide::ZviReader;
 
 const CFB_MAGIC: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 
-pub(crate) struct ZeissZviBackend {
-    probe_cache: Mutex<LruCache<PathBuf, Arc<ZviSlide>>>,
-}
+pub(crate) struct ZeissZviBackend;
 
 impl ZeissZviBackend {
     pub(crate) fn new() -> Self {
-        Self {
-            probe_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(8).unwrap())),
-        }
-    }
-
-    fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        Self
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<ZviSlide>, WsiError> {
@@ -60,21 +51,6 @@ impl Default for ZeissZviBackend {
 
 impl FormatProbe for ZeissZviBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let key = Self::cache_key(path);
-        if self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .is_some()
-        {
-            return Ok(ProbeResult {
-                detected: true,
-                vendor: "zeiss".into(),
-                confidence: ProbeConfidence::Definite,
-            });
-        }
-
         let mut magic = [0u8; 8];
         let mut file = match File::open(path) {
             Ok(file) => file,
@@ -122,24 +98,7 @@ impl FormatProbe for ZeissZviBackend {
 
 impl DatasetReader for ZeissZviBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path);
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .cloned();
-        let slide = match cached {
-            Some(slide) => slide,
-            None => {
-                let slide = self.parse(path)?;
-                self.probe_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .put(key, slide.clone());
-                slide
-            }
-        };
+        let slide = self.parse(path)?;
         Ok(Box::new(ZviReader { slide }))
     }
 }

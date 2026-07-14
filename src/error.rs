@@ -51,6 +51,13 @@ pub enum WsiError {
     #[error("display conversion error: {0}")]
     DisplayConversion(String),
 
+    #[error("backend contract violation in {context}: expected {expected} results, got {actual}")]
+    BackendContract {
+        context: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+
     /// Codec-layer error from j2k or the transitional facade.
     #[error("codec error in {codec}: {source}")]
     Codec {

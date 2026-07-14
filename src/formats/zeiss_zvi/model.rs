@@ -16,6 +16,7 @@ pub(super) struct ZviPlane {
     pub(super) height: u32,
     pub(super) bytes_per_sample: u32,
     pub(super) payload_offset: u64,
+    pub(super) payload_length: u64,
     pub(super) compression: ZviCompression,
     pub(super) z: u32,
     pub(super) c: u32,

@@ -288,7 +288,7 @@ impl DicomReader {
                     });
                 }
                 let (width, height) = level.actual_tile_dimensions(col, row);
-                results[slot] = Some(TilePixels::Cpu(black_sample_buffer(width, height)));
+                results[slot] = Some(TilePixels::Cpu(black_sample_buffer(width, height)?));
                 continue;
             };
             if !is_device_decodable(image.as_ref()) {
@@ -303,7 +303,7 @@ impl DicomReader {
                     });
                 }
                 let (width, height) = level.actual_tile_dimensions(col, row);
-                results[slot] = Some(TilePixels::Cpu(black_sample_buffer(width, height)));
+                results[slot] = Some(TilePixels::Cpu(black_sample_buffer(width, height)?));
                 continue;
             };
             let (actual_width, actual_height) = level.actual_tile_dimensions(col, row);
@@ -610,12 +610,12 @@ impl DicomReader {
             let row = req.row as u32;
             let Some(image) = level.image_for_tile(col, row) else {
                 let (width, height) = level.actual_tile_dimensions(col, row);
-                results[slot] = Some(black_sample_buffer(width, height));
+                results[slot] = Some(black_sample_buffer(width, height)?);
                 continue;
             };
             let Some(frame_index) = image.frame_index(col, row) else {
                 let (width, height) = level.actual_tile_dimensions(col, row);
-                results[slot] = Some(black_sample_buffer(width, height));
+                results[slot] = Some(black_sample_buffer(width, height)?);
                 continue;
             };
             let (actual_width, actual_height) = level.actual_tile_dimensions(col, row);
@@ -664,7 +664,11 @@ impl DicomReader {
                 requested_size: None,
             })
             .collect::<Vec<_>>();
-        let jpeg_decoded = decode_batch_jpeg(&jpeg_decode_jobs);
+        let jpeg_decoded = crate::core::batch::expect_exact_count(
+            decode_batch_jpeg(&jpeg_decode_jobs),
+            jpeg_decode_jobs.len(),
+            "DICOM JPEG batch decode",
+        )?;
         for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
             let tile = decoded.map_err(|err| WsiError::TileRead {
                 col: meta.req.col,
@@ -696,7 +700,11 @@ impl DicomReader {
                 backend,
             })
             .collect::<Vec<_>>();
-        let jp2k_decoded = decode_batch_jp2k(&jp2k_decode_jobs);
+        let jp2k_decoded = crate::core::batch::expect_exact_count(
+            decode_batch_jp2k(&jp2k_decode_jobs),
+            jp2k_decode_jobs.len(),
+            "DICOM JP2K batch decode",
+        )?;
         for ((meta, _), decoded) in jp2k_jobs.into_iter().zip(jp2k_decoded) {
             let tile = decoded.map_err(|err| WsiError::TileRead {
                 col: meta.req.col,

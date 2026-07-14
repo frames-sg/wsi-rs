@@ -7,12 +7,13 @@ pub(crate) mod pixel_access;
 pub(crate) mod test_support;
 
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use lru::LruCache;
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::registry::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
@@ -39,7 +40,7 @@ use self::pixel_access::TiffPixelReader;
 /// IFD chain. The parsed container is cached so `open()` doesn't
 /// redundantly re-parse — the amortized cost of probe+open is a single parse.
 pub(crate) struct TiffFamilyBackend {
-    probe_cache: Mutex<LruCache<PathBuf, Arc<TiffContainer>>>,
+    probe_cache: Mutex<LruCache<FileIdentity, Arc<TiffContainer>>>,
     interpreters: Vec<Box<dyn TiffLayoutInterpreter>>,
 }
 
@@ -59,10 +60,8 @@ impl TiffFamilyBackend {
         }
     }
 
-    /// Canonical key for the probe cache. Uses fs::canonicalize when
-    /// possible, falls back to the raw path.
-    fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
+        FileIdentity::from_path(path)
     }
 
     /// Find the first interpreter that detects the given container.
@@ -97,7 +96,7 @@ impl FormatProbe for TiffFamilyBackend {
         if let Some(interp) = self.find_interpreter(&container) {
             let vendor = interp.vendor_name().to_string();
             // Cache the container for open() to consume
-            let key = Self::cache_key(path);
+            let key = Self::cache_key(path)?;
             let mut cache = self.probe_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.put(key, Arc::new(container));
 
@@ -126,7 +125,7 @@ fn has_extension(path: &Path, expected: &str) -> bool {
 impl DatasetReader for TiffFamilyBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         let started = Instant::now();
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
 
         // Try to consume the cached container from probe()
         let cached_container = {

@@ -238,6 +238,8 @@ pub(crate) struct TiffContainer {
     pub(super) top_ifds: Vec<IfdId>,
     /// Flat arena: every parsed IFD lives here exactly once, keyed by byte offset.
     pub(super) ifds: HashMap<IfdId, Ifd>,
+    pub(super) parsed_ifd_entries: u64,
+    pub(super) declared_tag_payload_bytes: u64,
 }
 
 impl std::fmt::Debug for TiffContainer {

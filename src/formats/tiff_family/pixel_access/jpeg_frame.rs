@@ -406,7 +406,7 @@ pub(super) fn cpu_tile_from_rgb_pixels(
     height: u32,
     pixels: Vec<u8>,
 ) -> Result<CpuTile, WsiError> {
-    let expected_len = width as usize * height as usize * 3;
+    let expected_len = checked_rgb_u8_len(width, height)?;
     if pixels.len() != expected_len {
         return Err(WsiError::Jpeg(format!(
             "j2k JPEG decode produced {} bytes, expected {} for {}x{} RGB",

@@ -14,11 +14,13 @@ use super::ndpi_offsets::{fix_offset_ndpi, is_ndpi_extension, repair_ndpi_first_
 
 /// Maximum number of entries allowed in a single IFD. Prevents DoS from crafted
 /// BigTIFF files with huge entry counts.
-const MAX_IFD_ENTRIES: u64 = 1_000_000;
+const MAX_IFD_ENTRIES: u64 = 100_000;
+const MAX_TOTAL_IFD_ENTRIES: u64 = 2_000_000;
 
 /// Maximum byte size for a single tag payload read. Prevents OOM from crafted
 /// tags with enormous count × type_size products.
-const MAX_TAG_PAYLOAD: u64 = 256 * 1024 * 1024;
+const MAX_TAG_PAYLOAD: u64 = 64 * 1024 * 1024;
+const MAX_TOTAL_TAG_PAYLOAD: u64 = 512 * 1024 * 1024;
 
 // ── ParseReader (used only during open()) ──────────────────────────
 
@@ -175,6 +177,8 @@ impl TiffContainer {
             ndpi: initial_ndpi,
             top_ifds: Vec::new(),
             ifds: HashMap::new(),
+            parsed_ifd_entries: 0,
+            declared_tag_payload_bytes: 0,
         };
 
         // Walk the IFD chain
@@ -265,6 +269,17 @@ impl TiffContainer {
                 entry_count, MAX_IFD_ENTRIES
             )));
         }
+        self.parsed_ifd_entries = self
+            .parsed_ifd_entries
+            .checked_add(entry_count)
+            .ok_or_else(|| {
+                TiffParseError::Structure("aggregate TIFF IFD entry count overflow".into())
+            })?;
+        if self.parsed_ifd_entries > MAX_TOTAL_IFD_ENTRIES {
+            return Err(TiffParseError::Structure(format!(
+                "aggregate TIFF IFD entry count exceeds {MAX_TOTAL_IFD_ENTRIES}"
+            )));
+        }
 
         let slot_size: u64 = if self.bigtiff { 8 } else { 4 };
         let mut tags_map = HashMap::new();
@@ -310,6 +325,23 @@ impl TiffContainer {
                     message: format!(
                         "tag payload {} bytes exceeds {} byte limit",
                         total_bytes, MAX_TAG_PAYLOAD
+                    ),
+                });
+            }
+            self.declared_tag_payload_bytes = self
+                .declared_tag_payload_bytes
+                .checked_add(total_bytes)
+                .ok_or_else(|| TiffParseError::InvalidTag {
+                    ifd_offset: offset,
+                    tag: tag_id,
+                    message: "aggregate TIFF tag payload length overflow".into(),
+                })?;
+            if self.declared_tag_payload_bytes > MAX_TOTAL_TAG_PAYLOAD {
+                return Err(TiffParseError::InvalidTag {
+                    ifd_offset: offset,
+                    tag: tag_id,
+                    message: format!(
+                        "aggregate TIFF tag payload exceeds {MAX_TOTAL_TAG_PAYLOAD} byte limit"
                     ),
                 });
             }

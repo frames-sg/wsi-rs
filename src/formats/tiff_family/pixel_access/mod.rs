@@ -22,6 +22,7 @@ use lru::LruCache;
 use rayon::prelude::*;
 
 use crate::core::cache::CacheKey;
+use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{
     composite_region_from_source, crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
     SlideReader, DEFAULT_MAX_REGION_PIXELS,
@@ -47,7 +48,10 @@ mod decode_batch;
 mod dispatch;
 mod image_ops;
 mod jpeg_frame;
-mod ndpi;
+mod ndpi_batch;
+mod ndpi_core;
+mod ndpi_retile;
+mod ndpi_tiles;
 mod reader;
 mod stitched;
 mod synthetic;
@@ -58,6 +62,7 @@ use dct_reemit::encode_baseline_dct_image;
 use decode_batch::*;
 use image_ops::*;
 use jpeg_frame::*;
+use ndpi_retile::*;
 pub(crate) use reader::TiffPixelReader;
 
 #[cfg(feature = "metal")]

@@ -105,7 +105,13 @@ impl TiffPixelReader {
             return Ok(tile);
         }
 
-        let mut out = vec![0u8; out_width as usize * out_height as usize * 3];
+        let out_len = checked_product_to_usize(
+            &[u64::from(out_width), u64::from(out_height), 3],
+            MAX_DECODED_IMAGE_BYTES,
+            "stitched TIFF tile",
+        )
+        .map_err(WsiError::DisplayConversion)?;
+        let mut out = vec![0u8; out_len];
         let out_stride = out_width as usize * 3;
 
         for component in components {
@@ -299,7 +305,13 @@ impl TiffPixelReader {
             .get_u64_array(component.ifd_id, tags::TILE_BYTE_COUNTS)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
 
-        let mut out = vec![0u8; width as usize * height as usize * 3];
+        let out_len = checked_product_to_usize(
+            &[u64::from(width), u64::from(height), 3],
+            MAX_DECODED_IMAGE_BYTES,
+            "stitched TIFF region",
+        )
+        .map_err(WsiError::DisplayConversion)?;
+        let mut out = vec![0u8; out_len];
         let out_stride = width as usize * 3;
         let tile_width = component.tile_width;
         let tile_height = component.tile_height;

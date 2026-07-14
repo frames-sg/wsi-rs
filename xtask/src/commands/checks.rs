@@ -7,7 +7,6 @@ use super::process::{
 const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
-const SEMVER_BASELINE_ROOT_ENV: &str = "WSI_RS_SEMVER_BASELINE_ROOT";
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
@@ -37,15 +36,30 @@ pub(super) fn fmt() -> Result<(), String> {
 }
 
 pub(super) fn clippy() -> Result<(), String> {
-    run_cargo(&["clippy", "--all-targets", "--", "-D", "warnings"])
+    run_cargo(&[
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ])
 }
 
 pub(super) fn test() -> Result<(), String> {
-    run_cargo(&["test", "--lib", "--tests"])?;
-    run_cargo(&["test", "--lib", "--tests", "--features", "parity-openslide"])?;
+    run_cargo(&["test", "--locked", "--lib", "--tests"])?;
+    run_cargo(&[
+        "test",
+        "--locked",
+        "--lib",
+        "--tests",
+        "--features",
+        "parity-openslide",
+    ])?;
     if cfg!(target_os = "macos") {
         run_cargo(&[
             "test",
+            "--locked",
             "--lib",
             "--tests",
             "--features",
@@ -57,10 +71,11 @@ pub(super) fn test() -> Result<(), String> {
 }
 
 pub(super) fn nextest() -> Result<(), String> {
-    run_cargo(&["nextest", "run", "--lib", "--tests"])?;
+    run_cargo(&["nextest", "run", "--locked", "--lib", "--tests"])?;
     run_cargo(&[
         "nextest",
         "run",
+        "--locked",
         "--lib",
         "--tests",
         "--features",
@@ -69,6 +84,7 @@ pub(super) fn nextest() -> Result<(), String> {
     if cfg!(target_os = "macos") {
         run_cargo(&[
             "test",
+            "--locked",
             "--lib",
             "--tests",
             "--features",
@@ -80,9 +96,10 @@ pub(super) fn nextest() -> Result<(), String> {
 }
 
 pub(super) fn bench_check() -> Result<(), String> {
-    run_cargo(&["bench", "--benches", "--no-run"])?;
+    run_cargo(&["bench", "--locked", "--benches", "--no-run"])?;
     run_cargo(&[
         "bench",
+        "--locked",
         "--benches",
         "--features",
         "parity-openslide",
@@ -93,6 +110,7 @@ pub(super) fn bench_check() -> Result<(), String> {
 pub(super) fn bench() -> Result<(), String> {
     run_cargo(&[
         "bench",
+        "--locked",
         "--bench",
         "read_paths",
         "--",
@@ -110,6 +128,7 @@ pub(super) fn feature_check() -> Result<(), String> {
     run_cargo(&[
         "hack",
         "check",
+        "--locked",
         "--workspace",
         "--all-targets",
         "--feature-powerset",
@@ -121,6 +140,7 @@ pub(super) fn feature_check() -> Result<(), String> {
 pub(super) fn parity_corpus_test() -> Result<(), String> {
     run_cargo(&[
         "test",
+        "--locked",
         "--test",
         "openslide_parity",
         "--features",
@@ -132,6 +152,7 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
     ])?;
     run_cargo(&[
         "test",
+        "--locked",
         "--test",
         "j2k_parity",
         "j2k_cpu_vs_reference_within_tolerance",
@@ -141,6 +162,7 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
     ])?;
     run_cargo(&[
         "test",
+        "--locked",
         "--test",
         "dicom_parity",
         "dicom_public_corpus_decodes_with_wsi_rs",
@@ -150,6 +172,7 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
     ])?;
     run_cargo(&[
         "test",
+        "--locked",
         "--test",
         "dicom_parity",
         "--features",
@@ -159,15 +182,25 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
         "--exact",
         "--ignored",
     ])?;
-    run_cargo(&["test", "--test", "real_wsi_behavior", "--", "--ignored"])
+    run_cargo(&[
+        "test",
+        "--locked",
+        "--test",
+        "real_wsi_behavior",
+        "--",
+        "--ignored",
+    ])
 }
 
 pub(super) fn doc() -> Result<(), String> {
-    run_cargo_with_env(&["doc", "--no-deps"], &[("RUSTDOCFLAGS", "-D warnings")])
+    run_cargo_with_env(
+        &["doc", "--locked", "--no-deps"],
+        &[("RUSTDOCFLAGS", "-D warnings")],
+    )
 }
 
 pub(super) fn doc_test() -> Result<(), String> {
-    run_cargo(&["test", "--doc"])
+    run_cargo(&["test", "--locked", "--doc"])
 }
 
 pub(super) fn typos() -> Result<(), String> {
@@ -175,7 +208,15 @@ pub(super) fn typos() -> Result<(), String> {
 }
 
 pub(super) fn deny() -> Result<(), String> {
-    run_cargo(&["deny", "check", "advisories", "bans", "licenses", "sources"])
+    run_cargo(&[
+        "deny",
+        "--locked",
+        "check",
+        "advisories",
+        "bans",
+        "licenses",
+        "sources",
+    ])
 }
 
 pub(super) fn unused_deps() -> Result<(), String> {
@@ -184,7 +225,8 @@ pub(super) fn unused_deps() -> Result<(), String> {
 
 pub(super) fn deps() -> Result<(), String> {
     deny()?;
-    unused_deps()
+    unused_deps()?;
+    run_cargo(&["vet", "--locked"])
 }
 
 pub(super) fn api_check() -> Result<(), String> {
@@ -220,19 +262,21 @@ pub(super) fn api_check() -> Result<(), String> {
             ],
         )?;
     }
-    run_semver_check(&[])?;
-    run_semver_check(&["--features", "cuda"])?;
-    if cfg!(target_os = "macos") {
-        run_semver_check(&["--features", "metal"])?;
-    }
-    Ok(())
+    run_semver_check()
 }
 
 pub(super) fn fuzz_check() -> Result<(), String> {
+    let root_lock = fs::read("Cargo.lock").map_err(|err| format!("read Cargo.lock: {err}"))?;
+    let fuzz_lock =
+        fs::read("fuzz/Cargo.lock").map_err(|err| format!("read fuzz/Cargo.lock: {err}"))?;
     for target in [
         "open_wsi_bytes",
         "open_jp2k_codestream_bytes",
         "open_svcache_bytes",
+        "parse_xml_bytes",
+        "open_dicom_bytes",
+        "open_zvi_bytes",
+        "open_mirax_bundle_bytes",
     ] {
         run_program(
             OsString::from("rustup"),
@@ -244,6 +288,11 @@ pub(super) fn fuzz_check() -> Result<(), String> {
                 "{err}\n`cargo xtask fuzz-check` requires nightly Rust and cargo-fuzz; install cargo-fuzz with `cargo install cargo-fuzz` if the command is unavailable"
             )
         })?;
+    }
+    if fs::read("Cargo.lock").ok().as_deref() != Some(root_lock.as_slice())
+        || fs::read("fuzz/Cargo.lock").ok().as_deref() != Some(fuzz_lock.as_slice())
+    {
+        return Err("cargo-fuzz changed a tracked lockfile; update and review lockfiles before rerunning the gate".into());
     }
     Ok(())
 }
@@ -257,48 +306,10 @@ fn check_public_api_snapshot_for(snapshot_path: &str, args: &[&str]) -> Result<(
     check_public_api_snapshot(&actual, snapshot_path)
 }
 
-fn run_semver_check(extra_args: &[&str]) -> Result<(), String> {
-    let baseline_root = env::var_os(SEMVER_BASELINE_ROOT_ENV);
-    let has_local_baseline = baseline_root.is_some();
-    let args = semver_check_args(extra_args, baseline_root.as_deref().map(Path::new));
-    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    match run_cargo_capture(&args) {
-        Ok(_) => Ok(()),
-        Err(err)
-            if !has_local_baseline && is_unresolvable_yanked_published_baseline(&err) =>
-        {
-            eprintln!(
-                "warning: skipping cargo-semver-checks for {:?}: crates.io baseline wsi-rs 0.4.0 is unresolvable because its pre-rename signinum 0.5.0 dependencies are yanked. Public API snapshots were checked; set {SEMVER_BASELINE_ROOT_ENV} to a resolvable local baseline to enforce this semver check.",
-                extra_args
-            );
-            Ok(())
-        }
-        Err(err) => Err(format!(
-            "{err}\n`cargo xtask api-check` requires cargo-semver-checks; install it with `cargo install cargo-semver-checks` if the command is unavailable"
-        )),
-    }
-}
-
-fn semver_check_args(extra_args: &[&str], baseline_root: Option<&Path>) -> Vec<String> {
-    let mut args = vec![
-        "semver-checks".to_string(),
-        "check-release".to_string(),
-        "-p".to_string(),
-        "wsi-rs".to_string(),
-    ];
-    args.extend(extra_args.iter().map(|arg| (*arg).to_string()));
-    if let Some(baseline_root) = baseline_root {
-        args.push("--baseline-root".to_string());
-        args.push(baseline_root.display().to_string());
-    }
-    args
-}
-
-fn is_unresolvable_yanked_published_baseline(err: &str) -> bool {
-    err.contains("failed to select a version for the requirement `signinum-")
-        && err.contains("version 0.5.0 is yanked")
-        && err.contains("required by package `wsi-rs v0.4.0`")
-        && err.contains("target/semver-checks/registry-wsi_rs-0_4_0")
+fn run_semver_check() -> Result<(), String> {
+    run_program(OsString::from("scripts/check-semver.sh"), &[], &[]).map_err(|err| {
+        format!("{err}\n`cargo xtask api-check` requires nightly Rust and cargo-semver-checks")
+    })
 }
 
 fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), String> {
@@ -344,19 +355,88 @@ fn normalize_snapshot(snapshot: &str) -> String {
 }
 
 pub(super) fn release_test() -> Result<(), String> {
-    run_cargo(&["test", "--lib", "--tests", "--release"])
+    run_cargo(&["test", "--locked", "--lib", "--tests", "--release"])
 }
 
 pub(super) fn coverage() -> Result<(), String> {
     run_cargo(&[
         "llvm-cov",
+        "--locked",
         "--workspace",
         "--lib",
         "--tests",
         "--lcov",
         "--output-path",
         "lcov.info",
-    ])
+    ])?;
+
+    if std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()) {
+        let report = [
+            "--no-clean",
+            "--lcov",
+            "--output-path",
+            "target/coverage-corpus-step.lcov",
+            "--locked",
+        ];
+        let corpus_runs: &[&[&str]] = &[
+            &[
+                "--test",
+                "openslide_parity",
+                "--features",
+                "parity-openslide",
+                "--",
+                "preflight",
+                "--exact",
+                "--ignored",
+            ],
+            &[
+                "--test",
+                "j2k_parity",
+                "--",
+                "j2k_cpu_vs_reference_within_tolerance",
+                "--exact",
+                "--ignored",
+            ],
+            &[
+                "--test",
+                "dicom_parity",
+                "--",
+                "dicom_public_corpus_decodes_with_wsi_rs",
+                "--exact",
+                "--ignored",
+            ],
+            &[
+                "--test",
+                "dicom_parity",
+                "--features",
+                "parity-openslide",
+                "--",
+                "dicom_public_corpus_matches_openslide_within_tolerance",
+                "--exact",
+                "--ignored",
+            ],
+            &["--test", "real_wsi_behavior", "--", "--ignored"],
+        ];
+        for run in corpus_runs {
+            let mut args = vec!["llvm-cov"];
+            args.extend(report);
+            args.extend(*run);
+            run_cargo(&args)?;
+        }
+        run_cargo(&[
+            "llvm-cov",
+            "report",
+            "-p",
+            "wsi-rs",
+            "-p",
+            "wsi-rs-openslide-shim",
+            "--lcov",
+            "--output-path",
+            "lcov.info",
+        ])?;
+    }
+
+    Ok(())
 }
 
 pub(super) fn package() -> Result<(), String> {
@@ -371,31 +451,24 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn semver_check_args_accept_local_baseline_root() {
-        let args = semver_check_args(&["--features", "cuda"], Some(Path::new("target/baseline")));
-
-        assert_eq!(
-            args,
-            vec![
-                "semver-checks",
-                "check-release",
-                "-p",
-                "wsi-rs",
-                "--features",
-                "cuda",
-                "--baseline-root",
-                "target/baseline",
-            ]
-        );
+    fn semver_check_uses_checksum_pinned_published_baseline() {
+        let script = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
+        )
+        .expect("read semver script");
+        assert!(script.contains("BASELINE_VERSION=\"0.4.0\""));
+        assert!(script.contains("BASELINE_SHA256="));
+        assert!(script.contains("--baseline-rustdoc"));
+        assert!(!script.contains("skipping cargo-semver-checks"));
     }
 
     #[test]
-    fn semver_check_classifies_yanked_published_baseline() {
-        let err = "error: failed to select a version for the requirement `signinum-tilecodec = \"^0.5.0\"`\n  version 0.5.0 is yanked\nrequired by package `wsi-rs v0.4.0`\n    ... target/semver-checks/registry-wsi_rs-0_4_0-aarch64_apple_darwin";
-
-        assert!(is_unresolvable_yanked_published_baseline(err));
-        assert!(!is_unresolvable_yanked_published_baseline(
-            "error: public API changed"
-        ));
+    fn semver_check_covers_default_and_device_profiles_as_minor_compatibility() {
+        let script = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
+        )
+        .expect("read semver script");
+        assert!(script.contains("for profile in default cuda metal"));
+        assert!(script.contains("--release-type minor"));
     }
 }

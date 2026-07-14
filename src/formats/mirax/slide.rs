@@ -2,6 +2,12 @@ use super::helpers::*;
 use super::index::*;
 use super::*;
 
+const MAX_MIRAX_BASE_IMAGES: u64 = 16 * 1024 * 1024;
+const MAX_MIRAX_HIERARCHIES: i32 = 1_024;
+const MAX_MIRAX_NONHIERARCHIES: i32 = 4_096;
+const MAX_MIRAX_ZOOM_LEVELS: i32 = 64;
+const MAX_MIRAX_DATA_FILES: i32 = 4_096;
+
 impl MiraxSlide {
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
         let slide_dir = slide_dir_from_entry(path)?;
@@ -33,10 +39,24 @@ impl MiraxSlide {
         if images_x == 0 || images_y == 0 || image_divisions == 0 {
             return Err(invalid_slide(path, "MIRAX image counts must be positive"));
         }
+        if images_x < image_divisions
+            || images_y < image_divisions
+            || u64::from(images_x)
+                .checked_mul(u64::from(images_y))
+                .is_none_or(|count| count > MAX_MIRAX_BASE_IMAGES)
+        {
+            return Err(invalid_slide(
+                path,
+                "MIRAX image grid exceeds supported safety limits",
+            ));
+        }
 
         let hier_count = parse_ini_i32(path, hierarchical, KEY_HIER_COUNT)?;
         let nonhier_count = parse_ini_i32(path, hierarchical, KEY_NONHIER_COUNT)?;
-        if hier_count <= 0 || nonhier_count < 0 {
+        if hier_count <= 0
+            || hier_count > MAX_MIRAX_HIERARCHIES
+            || !(0..=MAX_MIRAX_NONHIERARCHIES).contains(&nonhier_count)
+        {
             return Err(invalid_slide(
                 path,
                 "MIRAX hierarchy counts must be positive/non-negative",
@@ -56,8 +76,9 @@ impl MiraxSlide {
         }
 
         let index_filename = required_ini_string(path, hierarchical, KEY_INDEXFILE)?;
+        let index_path = resolve_companion_file(path, &slide_dir, &index_filename)?;
         let zoom_levels = parse_ini_i32(path, hierarchical, &fmt_key(KEY_HIER_COUNT_FMT, 0))?;
-        if zoom_levels <= 0 {
+        if zoom_levels <= 0 || zoom_levels > MAX_MIRAX_ZOOM_LEVELS {
             return Err(invalid_slide(path, "MIRAX slide has no zoom levels"));
         }
         let zoom_sections = (0..zoom_levels)
@@ -71,15 +92,18 @@ impl MiraxSlide {
             .collect::<Result<Vec<_>, _>>()?;
 
         let datafile_count = parse_ini_i32(path, datafile_group, KEY_FILE_COUNT)?;
-        if datafile_count <= 0 {
+        if datafile_count <= 0 || datafile_count > MAX_MIRAX_DATA_FILES {
             return Err(invalid_slide(path, "MIRAX slide has no data files"));
         }
         let datafile_paths = (0..datafile_count)
             .map(|idx| {
                 required_ini_string(path, datafile_group, &fmt_key(KEY_FILE_FMT, idx))
-                    .map(|name| slide_dir.join(name))
+                    .and_then(|name| resolve_companion_file(path, &slide_dir, &name))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if datafile_paths.iter().collect::<HashSet<_>>().len() != datafile_paths.len() {
+            return Err(invalid_slide(path, "duplicate MIRAX data file path"));
+        }
 
         let mut section_defs = Vec::with_capacity(zoom_levels as usize);
         for (idx, section_name) in zoom_sections.iter().enumerate() {
@@ -171,16 +195,28 @@ impl MiraxSlide {
         let mut base_h = 0i64;
         for i in 0..images_x {
             if (i % image_divisions) != image_divisions - 1 || i == images_x - 1 {
-                base_w += i64::from(section_defs[0].image_w);
+                base_w = base_w
+                    .checked_add(i64::from(section_defs[0].image_w))
+                    .ok_or_else(|| invalid_slide(path, "MIRAX base width overflow"))?;
             } else {
-                base_w += (f64::from(section_defs[0].image_w) - section_defs[0].overlap_x) as i64;
+                base_w = base_w
+                    .checked_add(
+                        (f64::from(section_defs[0].image_w) - section_defs[0].overlap_x) as i64,
+                    )
+                    .ok_or_else(|| invalid_slide(path, "MIRAX base width overflow"))?;
             }
         }
         for i in 0..images_y {
             if (i % image_divisions) != image_divisions - 1 || i == images_y - 1 {
-                base_h += i64::from(section_defs[0].image_h);
+                base_h = base_h
+                    .checked_add(i64::from(section_defs[0].image_h))
+                    .ok_or_else(|| invalid_slide(path, "MIRAX base height overflow"))?;
             } else {
-                base_h += (f64::from(section_defs[0].image_h) - section_defs[0].overlap_y) as i64;
+                base_h = base_h
+                    .checked_add(
+                        (f64::from(section_defs[0].image_h) - section_defs[0].overlap_y) as i64,
+                    )
+                    .ok_or_else(|| invalid_slide(path, "MIRAX base height overflow"))?;
             }
         }
         if base_w <= 0 || base_h <= 0 {
@@ -191,7 +227,9 @@ impl MiraxSlide {
         let mut level_builders = Vec::with_capacity(section_defs.len());
         let mut total_concat_exponent = 0i32;
         for (idx, section) in section_defs.iter().enumerate() {
-            total_concat_exponent += section.concat_exponent;
+            total_concat_exponent = total_concat_exponent
+                .checked_add(section.concat_exponent)
+                .ok_or_else(|| invalid_slide(path, "MIRAX concat exponent overflow"))?;
             if total_concat_exponent >= 30 {
                 return Err(invalid_slide(path, "MIRAX concat exponent too large"));
             }
@@ -252,7 +290,6 @@ impl MiraxSlide {
             }
         }
 
-        let index_path = slide_dir.join(index_filename);
         let mut index_file = File::open(&index_path).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: index_path.clone(),
@@ -296,21 +333,20 @@ impl MiraxSlide {
         let seek_location = read_u32_le(&mut index_file, &index_path)? as u64;
 
         let mut quickhash_files = HashMap::new();
-        process_hier_data_pages_from_indexfile(
+        process_hier_data_pages_from_indexfile(MiraxIndexBuildContext {
             path,
-            &mut index_file,
-            &index_path,
+            index_file: &mut index_file,
+            index_path: &index_path,
             seek_location,
-            &datafile_paths,
-            images_x,
-            images_y,
+            datafile_paths: &datafile_paths,
+            images: (images_x, images_y),
             image_divisions,
-            &params,
-            &mut level_builders,
-            &slide_positions,
-            &mut quickhash,
-            &mut quickhash_files,
-        )?;
+            params: &params,
+            levels: &mut level_builders,
+            slide_positions: &slide_positions,
+            quickhash: &mut quickhash,
+            quickhash_files: &mut quickhash_files,
+        })?;
 
         let quickhash = quickhash
             .finish()
@@ -455,18 +491,18 @@ impl MiraxSlide {
         match format {
             MiraxImageFormat::Jpeg => {
                 let (expected_width, expected_height) = expected_dimensions.unwrap_or((0, 0));
-                decode_batch_jpeg(&[JpegDecodeJob {
-                    data: Cow::Borrowed(&bytes),
-                    tables: None,
-                    expected_width,
-                    expected_height,
-                    color_transform: j2k_jpeg::ColorTransform::Auto,
-                    force_dimensions: false,
-                    requested_size: None,
-                }])
-                .into_iter()
-                .next()
-                .expect("1-element JPEG facade batch")
+                crate::core::batch::exactly_one(
+                    decode_batch_jpeg(&[JpegDecodeJob {
+                        data: Cow::Borrowed(&bytes),
+                        tables: None,
+                        expected_width,
+                        expected_height,
+                        color_transform: j2k_jpeg::ColorTransform::Auto,
+                        force_dimensions: false,
+                        requested_size: None,
+                    }]),
+                    "MIRAX JPEG decode",
+                )?
             }
             MiraxImageFormat::Png | MiraxImageFormat::Bmp24 => {
                 let image = image::load_from_memory(&bytes)

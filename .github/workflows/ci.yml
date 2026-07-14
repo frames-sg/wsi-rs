@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -25,35 +28,53 @@ jobs:
           - { os: ubuntu-latest, rust: "1.96" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@master
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt,clippy
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-nextest@0.9.136
       - run: cargo xtask validate
         working-directory: wsi-rs
 
   feature-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-hack
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+          targets: i686-unknown-linux-gnu
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-hack@0.6.44
       - run: cargo xtask feature-check
+        working-directory: wsi-rs
+      - name: Check OpenSlide shim on 32-bit ABI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+          cargo check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked
         working-directory: wsi-rs
 
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
       - run: cargo xtask doc
         working-directory: wsi-rs
 
@@ -64,29 +85,51 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          tool: cargo-public-api,cargo-semver-checks
+          toolchain: nightly-2026-04-17
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-public-api@0.52.0,cargo-semver-checks@0.48.0
       - run: cargo xtask api-check
         working-directory: wsi-rs
 
   fuzz-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          tool: cargo-fuzz
+          toolchain: nightly-2026-04-17
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-fuzz@0.13.1
       - run: cargo xtask fuzz-check
         working-directory: wsi-rs
+      - name: Run bounded fuzz campaigns
+        working-directory: wsi-rs
+        run: |
+          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes; do
+            mkdir -p "fuzz/corpus/$target"
+            cargo +nightly-2026-04-17 fuzz run "$target" "fuzz/corpus/$target" -- "fuzz/seeds/$target" -max_total_time=15 -timeout=5 -rss_limit_mb=2048
+          done
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: fuzz-crash-artifacts
+          path: wsi-rs/fuzz/artifacts
+          if-no-files-found: ignore
 
   parity-corpus:
     runs-on: ubuntu-latest
@@ -94,11 +137,14 @@ jobs:
       WSI_RS_PARITY_ALIASES: >-
         svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
@@ -123,8 +169,10 @@ jobs:
   typos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: crate-ci/typos@96d9af6217dc2855210655af7e1ff19d23d4e593 # v1
 
   release:
     strategy:
@@ -133,20 +181,26 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
       - run: cargo xtask release-test
         working-directory: wsi-rs
 
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
       - run: cargo xtask package
         working-directory: wsi-rs
 
@@ -155,25 +209,56 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          tool: cargo-deny,cargo-machete
+          toolchain: "1.96.0"
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-deny@0.19.4,cargo-machete@0.9.2,cargo-vet@0.10.2
       - run: cargo xtask deps
         working-directory: wsi-rs
 
   coverage:
     runs-on: ubuntu-latest
+    env:
+      WSI_RS_PARITY_ALIASES: >-
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-llvm-cov
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
+        with:
+          tool: cargo-llvm-cov@0.8.7
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: ~/.cache/slideviewer/parity-corpus
+          key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+      - name: Install OpenSlide runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenslide0
+      - name: Fetch public coverage corpus
+        run: >-
+          scripts/parity-corpus-fetch.sh
+          svs-001
+          svs-jp2k-001
+          ndpi-001
+          vms-001
+          leica-001
+          ventana-001
+          mirax-001
+          dicom-jp2k-001
+        working-directory: wsi-rs
       - run: cargo xtask coverage
         working-directory: wsi-rs
       - name: Enforce changed-path coverage
@@ -190,7 +275,7 @@ jobs:
             base="origin/main"
           fi
           cargo xtask coverage-changed --base "$base" --lcov lcov.info --threshold 80
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: wsi-rs-lcov

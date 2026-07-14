@@ -2,6 +2,10 @@ pub mod wsi_rs
 pub mod wsi_rs::error
 #[non_exhaustive] pub enum wsi_rs::error::WsiError
 pub wsi_rs::error::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::error::WsiError::BackendContract
+pub wsi_rs::error::WsiError::BackendContract::actual: usize
+pub wsi_rs::error::WsiError::BackendContract::context: &'static str
+pub wsi_rs::error::WsiError::BackendContract::expected: usize
 pub wsi_rs::error::WsiError::Codec
 pub wsi_rs::error::WsiError::Codec::codec: &'static str
 pub wsi_rs::error::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
@@ -122,6 +126,10 @@ pub wsi_rs::prelude::TilePixels::Cpu(wsi_rs::CpuTile)
 pub wsi_rs::prelude::TilePixels::Device(wsi_rs::DeviceTile)
 #[non_exhaustive] pub enum wsi_rs::prelude::WsiError
 pub wsi_rs::prelude::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::prelude::WsiError::BackendContract
+pub wsi_rs::prelude::WsiError::BackendContract::actual: usize
+pub wsi_rs::prelude::WsiError::BackendContract::context: &'static str
+pub wsi_rs::prelude::WsiError::BackendContract::expected: usize
 pub wsi_rs::prelude::WsiError::Codec
 pub wsi_rs::prelude::WsiError::Codec::codec: &'static str
 pub wsi_rs::prelude::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
@@ -513,6 +521,10 @@ pub wsi_rs::TilePixels::Cpu(wsi_rs::CpuTile)
 pub wsi_rs::TilePixels::Device(wsi_rs::DeviceTile)
 #[non_exhaustive] pub enum wsi_rs::WsiError
 pub wsi_rs::WsiError::AssociatedImageNotFound(alloc::string::String)
+pub wsi_rs::WsiError::BackendContract
+pub wsi_rs::WsiError::BackendContract::actual: usize
+pub wsi_rs::WsiError::BackendContract::context: &'static str
+pub wsi_rs::WsiError::BackendContract::expected: usize
 pub wsi_rs::WsiError::Codec
 pub wsi_rs::WsiError::Codec::codec: &'static str
 pub wsi_rs::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>

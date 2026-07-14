@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::core::hash::Quickhash1;
+use crate::core::limits::{read_to_end_bounded, MAX_COMPRESSED_INPUT_BYTES};
 use crate::core::registry::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
@@ -55,7 +56,15 @@ impl FormatProbe for RawJp2kBackend {
 
 impl DatasetReader for RawJp2kBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let data = std::fs::read(path)?;
+        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+            source: std::sync::Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+        let data = read_to_end_bounded(file, MAX_COMPRESSED_INPUT_BYTES, "raw JP2K input")
+            .map_err(|source| WsiError::IoWithPath {
+                source: std::sync::Arc::new(source),
+                path: path.to_path_buf(),
+            })?;
         let header = parse_codestream_header(&data)?;
         validate_narrow_subset(&header)?;
         Ok(Box::new(RawJp2kReader {

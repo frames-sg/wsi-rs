@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-06-21
+## [0.5.0] - 2026-07-11
 
 ### Changed
 
@@ -19,6 +19,14 @@
 - Fixed API stability tooling package selection after the crate rename.
 - Fixed CUDA feature matrix compilation after the j2k dependency rename.
 - Removed stale cargo-deny duplicate skip configuration.
+- Bumped `.svcache` to schema 3 so freshness includes canonical source identity
+  and a bounded sampled content digest rather than only size and modification
+  time. Schema 2 caches must be rebuilt.
+- Hardened parser budgets, companion-path confinement, probe cache identity,
+  decoder cardinality handling, transactional shim installation, and bounded
+  fuzz campaigns for the 0.5 release candidate.
+- Added reproducible Cargo Vet policy and documented time-bound upstream
+  exceptions for the unmaintained DICOM and Metal transitives.
 
 ### Removed
 

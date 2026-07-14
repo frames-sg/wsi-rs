@@ -131,10 +131,22 @@ impl SvcacheReader {
     }
 
     fn read_tile_meta(&self, tile: &TileMeta) -> Result<CpuTile, WsiError> {
-        let mut encoded = vec![0_u8; tile.payload_len as usize];
+        let payload_len =
+            usize::try_from(tile.payload_len).map_err(|_| WsiError::InvalidSlide {
+                path: PathBuf::from(&self.metadata.source.path),
+                message: "svcache tile payload length is not addressable".into(),
+            })?;
+        let mut encoded = vec![0_u8; payload_len];
         {
             let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
-            file.seek(SeekFrom::Start(self.payload_start + tile.payload_offset))?;
+            let offset = self
+                .payload_start
+                .checked_add(tile.payload_offset)
+                .ok_or_else(|| WsiError::InvalidSlide {
+                    path: PathBuf::from(&self.metadata.source.path),
+                    message: "svcache tile payload offset overflow".into(),
+                })?;
+            file.seek(SeekFrom::Start(offset))?;
             file.read_exact(&mut encoded)?;
         }
         let actual_hash = hex_encode(&Sha256::digest(&encoded));

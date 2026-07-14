@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-wsi-rs = { path = ".." }
+wsi-rs = { path = "..", features = ["fuzzing"] }
 tempfile = "3"
 
 [[bin]]
@@ -29,6 +29,34 @@ bench = false
 [[bin]]
 name = "open_svcache_bytes"
 path = "fuzz_targets/open_svcache_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_xml_bytes"
+path = "fuzz_targets/parse_xml_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_dicom_bytes"
+path = "fuzz_targets/open_dicom_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_zvi_bytes"
+path = "fuzz_targets/open_zvi_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_mirax_bundle_bytes"
+path = "fuzz_targets/open_mirax_bundle_bytes.rs"
 test = false
 doc = false
 bench = false

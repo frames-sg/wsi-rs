@@ -1,7 +1,50 @@
 use super::helpers::*;
 use super::*;
+use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
 use crate::formats::geometry::irregular_extra_tiles;
 use crate::formats::ini::parse_ini_file;
+
+const MAX_MIRAX_INDEX_PAGES: usize = 1_000_000;
+const MAX_MIRAX_RECORDS: usize = 16 * 1024 * 1024;
+const MAX_MIRAX_RECORDS_PER_PAGE: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct MiraxIndexBudget {
+    visited_pages: std::collections::HashSet<u64>,
+    total_pages: usize,
+    total_records: usize,
+}
+
+impl MiraxIndexBudget {
+    fn record_page(&mut self, path: &Path, offset: u64, records: i32) -> Result<usize, WsiError> {
+        if !self.visited_pages.insert(offset) {
+            return Err(invalid_slide(path, "MIRAX index page cycle detected"));
+        }
+        self.total_pages = self
+            .total_pages
+            .checked_add(1)
+            .ok_or_else(|| invalid_slide(path, "MIRAX index page count overflow"))?;
+        if self.total_pages > MAX_MIRAX_INDEX_PAGES {
+            return Err(invalid_slide(path, "MIRAX index has too many pages"));
+        }
+        let records = usize::try_from(records)
+            .map_err(|_| invalid_slide(path, "negative MIRAX page length"))?;
+        if records > MAX_MIRAX_RECORDS_PER_PAGE {
+            return Err(invalid_slide(
+                path,
+                "MIRAX index page record count exceeds safety limit",
+            ));
+        }
+        self.total_records = self
+            .total_records
+            .checked_add(records)
+            .ok_or_else(|| invalid_slide(path, "MIRAX index record count overflow"))?;
+        if self.total_records > MAX_MIRAX_RECORDS {
+            return Err(invalid_slide(path, "MIRAX index has too many records"));
+        }
+        Ok(records)
+    }
+}
 
 pub(super) fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
     parse_ini_file(
@@ -12,22 +55,38 @@ pub(super) fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct MiraxIndexBuildContext<'a> {
+    pub(super) path: &'a Path,
+    pub(super) index_file: &'a mut File,
+    pub(super) index_path: &'a Path,
+    pub(super) seek_location: u64,
+    pub(super) datafile_paths: &'a [PathBuf],
+    pub(super) images: (u32, u32),
+    pub(super) image_divisions: u32,
+    pub(super) params: &'a [SlideZoomLevelParams],
+    pub(super) levels: &'a mut [MiraxLevelBuilder],
+    pub(super) slide_positions: &'a [i32],
+    pub(super) quickhash: &'a mut Quickhash1,
+    pub(super) quickhash_files: &'a mut HashMap<PathBuf, File>,
+}
+
 pub(super) fn process_hier_data_pages_from_indexfile(
-    path: &Path,
-    index_file: &mut File,
-    index_path: &Path,
-    mut seek_location: u64,
-    datafile_paths: &[PathBuf],
-    images_x: u32,
-    images_y: u32,
-    image_divisions: u32,
-    params: &[SlideZoomLevelParams],
-    levels: &mut [MiraxLevelBuilder],
-    slide_positions: &[i32],
-    quickhash: &mut Quickhash1,
-    quickhash_files: &mut HashMap<PathBuf, File>,
+    context: MiraxIndexBuildContext<'_>,
 ) -> Result<(), WsiError> {
+    let MiraxIndexBuildContext {
+        path,
+        index_file,
+        index_path,
+        mut seek_location,
+        datafile_paths,
+        images: (images_x, images_y),
+        image_divisions,
+        params,
+        levels,
+        slide_positions,
+        quickhash,
+        quickhash_files,
+    } = context;
     let mut image_number = 0u32;
     let positions_x = images_x / image_divisions;
     let positions_y = images_y / image_divisions;
@@ -35,6 +94,7 @@ pub(super) fn process_hier_data_pages_from_indexfile(
     let levels_len = levels.len();
     let level0_raw_image_width = levels[0].raw_image_width;
     let level0_raw_image_height = levels[0].raw_image_height;
+    let mut budget = MiraxIndexBudget::default();
 
     for zoom_level in 0..levels.len() {
         let level = &mut levels[zoom_level];
@@ -60,18 +120,17 @@ pub(super) fn process_hier_data_pages_from_indexfile(
             ));
         }
         let initial_data_page = read_u32_le(index_file, index_path)? as u64;
-        index_file
-            .seek(SeekFrom::Start(initial_data_page))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: index_path.to_path_buf(),
-            })?;
+        let mut data_page = initial_data_page;
 
         loop {
+            index_file
+                .seek(SeekFrom::Start(data_page))
+                .map_err(|source| WsiError::IoWithPath {
+                    source: Arc::new(source),
+                    path: index_path.to_path_buf(),
+                })?;
             let page_len = read_i32_le(index_file, index_path)?;
-            if page_len < 0 {
-                return Err(invalid_slide(path, "negative MIRAX page length"));
-            }
+            let page_len = budget.record_page(path, data_page, page_len)?;
             let next_ptr = read_i32_le(index_file, index_path)?;
             for _ in 0..page_len {
                 let image_index = read_i32_le(index_file, index_path)?;
@@ -125,7 +184,9 @@ pub(super) fn process_hier_data_pages_from_indexfile(
                     expected_width: level.raw_image_width,
                     expected_height: level.raw_image_height,
                 });
-                image_number += 1;
+                image_number = image_number
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_slide(path, "MIRAX image number overflow"))?;
 
                 for yi in 0..params_level.tiles_per_image {
                     let yy = y + yi * image_divisions;
@@ -175,15 +236,15 @@ pub(super) fn process_hier_data_pages_from_indexfile(
             if next_ptr == 0 {
                 break;
             }
-            index_file
-                .seek(SeekFrom::Start(next_ptr as u64))
-                .map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: index_path.to_path_buf(),
-                })?;
+            if next_ptr < 0 {
+                return Err(invalid_slide(path, "negative MIRAX next page pointer"));
+            }
+            data_page = next_ptr as u64;
         }
 
-        seek_location += 4;
+        seek_location = seek_location
+            .checked_add(4)
+            .ok_or_else(|| invalid_slide(path, "MIRAX hierarchy seek offset overflow"))?;
     }
 
     Ok(())
@@ -252,8 +313,21 @@ pub(super) fn load_slide_positions(
 ) -> Result<Vec<i32>, WsiError> {
     let positions_x = images_x / image_divisions;
     let positions_y = images_y / image_divisions;
-    let npositions = positions_x.saturating_mul(positions_y) as usize;
-    let expected_size = npositions * SLIDE_POSITION_RECORD_SIZE;
+    if positions_x == 0 || positions_y == 0 {
+        return Err(invalid_slide(path, "MIRAX position grid is empty"));
+    }
+    let npositions = checked_product_to_usize(
+        &[u64::from(positions_x), u64::from(positions_y)],
+        MAX_MIRAX_RECORDS as u64,
+        "MIRAX position count",
+    )
+    .map_err(|message| invalid_slide(path, message))?;
+    let expected_size = checked_product_to_usize(
+        &[npositions as u64, SLIDE_POSITION_RECORD_SIZE as u64],
+        MAX_DECODED_IMAGE_BYTES,
+        "MIRAX position buffer",
+    )
+    .map_err(|message| invalid_slide(path, message))?;
     let nonhier_root = (INDEX_VERSION.len() + slide_id_len + 4) as u64;
 
     if let Some(record) = vimslide_record.or(stitching_record) {
@@ -261,8 +335,12 @@ pub(super) fn load_slide_positions(
         let mut buffer = read_record_bytes_fields(&record.path, record.offset, record.len)?;
         if stitching_record == Some(record.index) {
             let mut decoder = ZlibDecoder::new(buffer.as_slice());
-            let mut inflated = Vec::with_capacity(expected_size);
-            decoder.read_to_end(&mut inflated).map_err(|err| {
+            let inflated = read_to_end_bounded(
+                &mut decoder,
+                expected_size as u64,
+                "MIRAX inflated position buffer",
+            )
+            .map_err(|err| {
                 invalid_slide(
                     path,
                     format!("failed to inflate MIRAX position buffer: {err}"),
@@ -610,4 +688,23 @@ pub(super) fn get_nonhier_name_offset_helper(
         offset += count;
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn index_budget_rejects_cycles_negative_and_huge_pages() {
+        let path = Path::new("slide.mrxs");
+        let mut budget = MiraxIndexBudget::default();
+        assert_eq!(budget.record_page(path, 100, 2).expect("first page"), 2);
+        assert!(budget.record_page(path, 100, 0).is_err());
+
+        let mut budget = MiraxIndexBudget::default();
+        assert!(budget.record_page(path, 1, -1).is_err());
+        assert!(budget
+            .record_page(path, 2, (MAX_MIRAX_RECORDS_PER_PAGE + 1) as i32)
+            .is_err());
+    }
 }

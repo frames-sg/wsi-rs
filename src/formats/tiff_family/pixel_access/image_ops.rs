@@ -50,7 +50,7 @@ pub(super) fn downsample_rgb_2x_box(source: &CpuTile) -> Result<CpuTile, WsiErro
     })?;
     let out_w = source.width.div_ceil(2);
     let out_h = source.height.div_ceil(2);
-    let mut out = vec![0u8; out_w as usize * out_h as usize * 3];
+    let mut out = vec![0u8; checked_rgb_u8_len(out_w, out_h)?];
     let src_stride = source.width as usize * 3;
     let dst_stride = out_w as usize * 3;
     for out_y in 0..out_h as usize {
@@ -129,16 +129,12 @@ pub(super) fn fit_synthetic_rgb_tile_to_dimensions(
 }
 
 pub(super) fn checked_rgb_u8_len(width: u32, height: u32) -> Result<usize, WsiError> {
-    let pixels = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| {
-            WsiError::DisplayConversion(format!("RGB region dimensions overflow: {width}x{height}"))
-        })?;
-    pixels.checked_mul(3).ok_or_else(|| {
-        WsiError::DisplayConversion(format!(
-            "RGB region byte length overflows usize: {width}x{height}"
-        ))
-    })
+    crate::core::limits::checked_product_to_usize(
+        &[u64::from(width), u64::from(height), 3],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        "RGB image",
+    )
+    .map_err(WsiError::DisplayConversion)
 }
 
 pub(super) fn zero_rgb_interleaved_u8_tile(width: u32, height: u32) -> Result<CpuTile, WsiError> {

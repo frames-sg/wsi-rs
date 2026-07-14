@@ -26,6 +26,8 @@ autobins = false
 
 [features]
 default = []
+# Exposes parser entry points used only by the separate cargo-fuzz package.
+fuzzing = []
 # Enables OpenSlide compatibility-oracle parity tests via libloading.
 # Off by default; CI matrix runs with and without.
 parity-openslide = []
@@ -43,7 +45,7 @@ cuda = [
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["bmp", "png", "pnm"] }
-quick-xml = "0.36"
+quick-xml = "0.41"
 lru = "0.18"
 thiserror = "2"
 sha2 = "0.10"

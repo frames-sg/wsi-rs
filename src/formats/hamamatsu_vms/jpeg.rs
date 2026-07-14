@@ -16,7 +16,8 @@ impl VmsJpeg {
         let geometry = header.geometry;
         let tiles_across = geometry.width.div_ceil(geometry.tile_width);
         let tiles_down = geometry.height.div_ceil(geometry.tile_height);
-        let tile_count = tiles_across as usize * tiles_down as usize;
+        let tile_count = usize::try_from(u64::from(tiles_across) * u64::from(tiles_down))
+            .map_err(|_| invalid_slide(path, "VMS JPEG tile count exceeds address space"))?;
         let mut unreliable_mcu_starts = vec![None; tile_count];
         for (row, offset) in row_starts.into_iter().enumerate().take(tiles_down as usize) {
             let idx = row * tiles_across as usize;
@@ -163,7 +164,12 @@ impl VmsJpeg {
     }
 
     fn tile_entropy_bounds(&self, tile_index: usize) -> Result<(u64, u64), WsiError> {
-        let tile_count = self.tiles_across as usize * self.tiles_down as usize;
+        let tile_count = usize::try_from(
+            u64::from(self.tiles_across)
+                .checked_mul(u64::from(self.tiles_down))
+                .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile count overflow".into()))?,
+        )
+        .map_err(|_| WsiError::Jpeg("VMS JPEG tile count exceeds address space".into()))?;
         if tile_index >= tile_count {
             return Err(WsiError::Jpeg(format!(
                 "VMS JPEG tile index {tile_index} out of range {tile_count}"

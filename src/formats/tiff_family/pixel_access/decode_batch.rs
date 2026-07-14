@@ -12,20 +12,16 @@ pub(super) struct TiffJpegDecodeOptions {
 }
 
 pub(super) fn decode_one_jpeg(job: JpegDecodeJob<'_>) -> Result<CpuTile, WsiError> {
-    decode_batch_jpeg(&[job])
-        .into_iter()
-        .next()
-        .expect("1-element JPEG batch")
+    crate::core::batch::exactly_one(decode_batch_jpeg(&[job]), "TIFF JPEG decode")?
 }
 
 pub(super) fn decode_one_jp2k(job: Jp2kDecodeJob<'_>) -> Result<CpuTile, WsiError> {
-    decode_batch_jp2k(&[job])
-        .into_iter()
-        .next()
-        .expect("1-element JP2K batch")
+    crate::core::batch::exactly_one(decode_batch_jp2k(&[job]), "TIFF JP2K decode")?
 }
 
-pub(super) fn decode_mixed_batch(jobs: Vec<CodecBatchJob<'_>>) -> Vec<Result<CpuTile, WsiError>> {
+pub(super) fn decode_mixed_batch(
+    jobs: Vec<CodecBatchJob<'_>>,
+) -> Result<Vec<Result<CpuTile, WsiError>>, WsiError> {
     let mut jpeg_jobs = Vec::new();
     let mut jpeg_slots = Vec::new();
     let mut jp2k_jobs = Vec::new();
@@ -46,14 +42,30 @@ pub(super) fn decode_mixed_batch(jobs: Vec<CodecBatchJob<'_>>) -> Vec<Result<Cpu
 
     let total = jpeg_slots.len() + jp2k_slots.len();
     let mut out: Vec<Option<Result<CpuTile, WsiError>>> = (0..total).map(|_| None).collect();
-    for (slot, result) in jpeg_slots.into_iter().zip(decode_batch_jpeg(&jpeg_jobs)) {
+    let jpeg_results = crate::core::batch::expect_exact_count(
+        decode_batch_jpeg(&jpeg_jobs),
+        jpeg_jobs.len(),
+        "TIFF mixed JPEG decode",
+    )?;
+    for (slot, result) in jpeg_slots.into_iter().zip(jpeg_results) {
         out[slot] = Some(result);
     }
-    for (slot, result) in jp2k_slots.into_iter().zip(decode_batch_jp2k(&jp2k_jobs)) {
+    let jp2k_results = crate::core::batch::expect_exact_count(
+        decode_batch_jp2k(&jp2k_jobs),
+        jp2k_jobs.len(),
+        "TIFF mixed JP2K decode",
+    )?;
+    for (slot, result) in jp2k_slots.into_iter().zip(jp2k_results) {
         out[slot] = Some(result);
     }
 
     out.into_iter()
-        .map(|result| result.expect("every mixed batch slot filled"))
+        .map(|result| {
+            result.ok_or(WsiError::BackendContract {
+                context: "TIFF mixed decode slot population",
+                expected: 1,
+                actual: 0,
+            })
+        })
         .collect()
 }

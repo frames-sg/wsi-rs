@@ -114,8 +114,10 @@ cargo xtask fuzz-check
 
 `cargo xtask validate` runs the default local gate.
 `cargo xtask rc-preflight` runs API checks, supply-chain checks, fuzz target
-type-checking, feature-combination checks, validation, and package dry-run
-checks.
+checks, feature-combination checks, validation, and package dry-run checks. CI
+also executes bounded fuzz campaigns from the tracked seed corpus. Temporary
+dependency exceptions and their expiry dates are recorded in
+[SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
 
 ## Security
 

@@ -1,6 +1,6 @@
 use super::compound::{compound_stream_paths, item_contents_index, read_stream_to_end};
 use super::header::read_zvi_header;
-use super::model::{ZviPlane, ZviSlide};
+use super::model::{ZviCompression, ZviPlane, ZviSlide};
 use super::mosaic::{apply_mosaic_positions, build_mosaic_grid, build_zvi_channels};
 use super::tags::{read_tags_if_present, tag_color, tag_f64, tag_string, tag_u32};
 use super::*;
@@ -53,6 +53,8 @@ impl ZviSlide {
         let mut planes = Vec::with_capacity(item_streams.len());
         for (item_index, stream_path) in item_streams {
             let header = read_zvi_header(&mut compound, &stream_path)?;
+            let stream_length = compound.open_stream(&stream_path)?.seek(SeekFrom::End(0))?;
+            let payload_length = validated_payload_length(path, stream_length, &header)?;
             let tag_path = format!("/Image/Item({item_index})/Tags/Contents");
             let tags = read_tags_if_present(&mut compound, &tag_path)?;
             let stage_position = tag_f64(&tags, 2073).zip(tag_f64(&tags, 2074));
@@ -62,6 +64,7 @@ impl ZviSlide {
                 height: header.height,
                 bytes_per_sample: header.bytes_per_sample,
                 payload_offset: header.payload_offset,
+                payload_length,
                 compression: header.compression,
                 z: header.z,
                 c: header.c,
@@ -342,6 +345,7 @@ fn quickhash_for_zvi(
         quickhash.update(&plane.width.to_le_bytes());
         quickhash.update(&plane.height.to_le_bytes());
         quickhash.update(&plane.payload_offset.to_le_bytes());
+        quickhash.update(&plane.payload_length.to_le_bytes());
     }
     quickhash
         .finish()
@@ -357,9 +361,75 @@ fn dataset_id_from_quickhash(path: &Path, quickhash: &str) -> Result<DatasetId, 
     Ok(DatasetId::new(value))
 }
 
+fn validated_payload_length(
+    path: &Path,
+    stream_length: u64,
+    header: &super::model::ZviImageHeader,
+) -> Result<u64, WsiError> {
+    let payload_length = stream_length
+        .checked_sub(header.payload_offset)
+        .ok_or_else(|| invalid_slide(path, "ZVI payload offset exceeds stream length"))?;
+    if payload_length > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
+        return Err(invalid_slide(
+            path,
+            "ZVI plane payload exceeds safety limit",
+        ));
+    }
+    if header.compression == ZviCompression::Raw {
+        let expected = u64::from(header.width)
+            .checked_mul(u64::from(header.height))
+            .and_then(|value| value.checked_mul(u64::from(header.bytes_per_sample)))
+            .ok_or_else(|| invalid_slide(path, "ZVI raw payload length overflow"))?;
+        if payload_length != expected {
+            return Err(invalid_slide(
+                path,
+                format!("ZVI raw payload has {payload_length} bytes, expected {expected}"),
+            ));
+        }
+    }
+    Ok(payload_length)
+}
+
 fn invalid_slide(path: &Path, message: impl ToString) -> WsiError {
     WsiError::InvalidSlide {
         path: path.to_path_buf(),
         message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::super::model::ZviImageHeader;
+    use super::*;
+
+    fn header(compression: ZviCompression) -> ZviImageHeader {
+        ZviImageHeader {
+            width: 2,
+            height: 3,
+            bytes_per_sample: 1,
+            payload_offset: 10,
+            compression,
+            z: 0,
+            c: 0,
+            t: 0,
+            tile_index: 0,
+        }
+    }
+
+    #[test]
+    fn payload_bounds_reject_offset_trailing_raw_data_and_oversize() {
+        let path = Path::new("plane.zvi");
+        assert_eq!(
+            validated_payload_length(path, 16, &header(ZviCompression::Raw)).unwrap(),
+            6
+        );
+        assert!(validated_payload_length(path, 9, &header(ZviCompression::Jpeg)).is_err());
+        assert!(validated_payload_length(path, 17, &header(ZviCompression::Raw)).is_err());
+        assert!(validated_payload_length(
+            path,
+            11 + crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+            &header(ZviCompression::Zlib),
+        )
+        .is_err());
     }
 }

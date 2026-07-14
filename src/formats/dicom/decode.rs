@@ -325,14 +325,19 @@ pub(super) fn trim_encapsulated_frame_padding(data: &mut Vec<u8>) {
     }
 }
 
-pub(super) fn black_sample_buffer(width: u32, height: u32) -> CpuTile {
+pub(super) fn black_sample_buffer(width: u32, height: u32) -> Result<CpuTile, WsiError> {
+    let len = crate::core::limits::checked_product_to_usize(
+        &[u64::from(width), u64::from(height), 3],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        "DICOM black tile",
+    )
+    .map_err(WsiError::DisplayConversion)?;
     CpuTile::new(
         width,
         height,
         3,
         ColorSpace::Rgb,
         CpuTileLayout::Interleaved,
-        CpuTileData::u8(vec![0; width as usize * height as usize * 3]),
+        CpuTileData::u8(vec![0; len]),
     )
-    .expect("black tile dimensions must match")
 }

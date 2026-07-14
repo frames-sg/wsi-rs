@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::limits::{checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES};
 
 pub(super) fn read_record_bytes(record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
     read_record_bytes_fields(&record.path, record.offset, record.len)
@@ -72,7 +73,9 @@ pub(super) fn read_record_bytes_from_file(
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
-    let mut buf = vec![0u8; len as usize];
+    let len = checked_product_to_usize(&[len], MAX_COMPRESSED_INPUT_BYTES, "MIRAX record")
+        .map_err(|message| invalid_slide(path, message))?;
+    let mut buf = vec![0u8; len];
     file.read_exact(&mut buf)
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),

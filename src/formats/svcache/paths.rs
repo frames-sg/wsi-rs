@@ -1,5 +1,7 @@
 use super::storage::{hex_encode, is_fresh_svcache};
 use super::*;
+use std::io::ErrorKind;
+use std::sync::Arc;
 
 pub fn default_svcache_path(source_path: &Path) -> PathBuf {
     let name = source_path
@@ -44,16 +46,33 @@ pub(crate) fn resolve_open_path_with_policy(
         return Ok(path.to_path_buf());
     }
 
+    let mut stale_candidate = None;
     for candidate in svcache_candidate_paths(path) {
-        if candidate.is_file() && is_fresh_svcache(&candidate, path).unwrap_or(false) {
-            return Ok(candidate);
+        match std::fs::metadata(&candidate) {
+            Ok(metadata) if metadata.is_file() => match is_fresh_svcache(&candidate, path) {
+                Ok(true) => return Ok(candidate),
+                Ok(false) => stale_candidate = Some(candidate),
+                Err(err) => return Err(err),
+            },
+            Ok(_) => continue,
+            Err(source) if source.kind() == ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(WsiError::IoWithPath {
+                    source: Arc::new(source),
+                    path: candidate,
+                });
+            }
         }
     }
 
     if matches!(policy, SvcachePolicy::RequireFresh) {
+        let detail = stale_candidate
+            .map(|candidate| format!("; stale candidate: {}", candidate.display()))
+            .unwrap_or_default();
         return Err(WsiError::UnsupportedFormat(format!(
-            "fresh .svcache required for {}",
-            path.display()
+            "fresh .svcache required for {}{}",
+            path.display(),
+            detail
         )));
     }
     Ok(path.to_path_buf())

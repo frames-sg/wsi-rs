@@ -38,19 +38,11 @@ use slide::{ZeissReader, ZeissSlide};
 
 const FILE_MAGIC: &[u8; 16] = b"ZISRAWFILE\0\0\0\0\0\0";
 
-pub(crate) struct ZeissBackend {
-    probe_cache: Mutex<LruCache<PathBuf, Arc<ZeissSlide>>>,
-}
+pub(crate) struct ZeissBackend;
 
 impl ZeissBackend {
     pub(crate) fn new() -> Self {
-        Self {
-            probe_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(8).unwrap())),
-        }
-    }
-
-    fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        Self
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<ZeissSlide>, WsiError> {
@@ -66,21 +58,6 @@ impl Default for ZeissBackend {
 
 impl FormatProbe for ZeissBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let key = Self::cache_key(path);
-        if self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .is_some()
-        {
-            return Ok(ProbeResult {
-                detected: true,
-                vendor: "zeiss".into(),
-                confidence: ProbeConfidence::Definite,
-            });
-        }
-
         let mut magic = [0u8; 16];
         let mut file = match fs::File::open(path) {
             Ok(file) => file,
@@ -110,24 +87,7 @@ impl FormatProbe for ZeissBackend {
 
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path);
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .cloned();
-        let slide = match cached {
-            Some(slide) => slide,
-            None => {
-                let slide = self.parse(path)?;
-                self.probe_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .put(key, slide.clone());
-                slide
-            }
-        };
+        let slide = self.parse(path)?;
         Ok(Box::new(ZeissReader { slide }))
     }
 }

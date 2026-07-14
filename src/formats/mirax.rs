@@ -8,7 +8,7 @@ mod tests;
 use helpers::invalid_slide;
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
@@ -21,6 +21,7 @@ use flate2::read::ZlibDecoder;
 use j2k_core::BackendRequest;
 use lru::LruCache;
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, DatasetReader, FormatProbe,
@@ -30,6 +31,7 @@ use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
+use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
 
@@ -89,7 +91,7 @@ const KEY_IMAGE_CONCAT_FACTOR: &str = "IMAGE_CONCAT_FACTOR";
 static MIRAX_ASSOCIATED_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct MiraxBackend {
-    probe_cache: Mutex<LruCache<PathBuf, Arc<MiraxSlide>>>,
+    probe_cache: Mutex<LruCache<FileIdentity, Arc<MiraxSlide>>>,
 }
 
 impl MiraxBackend {
@@ -99,8 +101,8 @@ impl MiraxBackend {
         }
     }
 
-    fn cache_key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
+        FileIdentity::from_path(path)
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<MiraxSlide>, WsiError> {
@@ -119,7 +121,7 @@ impl FormatProbe for MiraxBackend {
         if !looks_like_mirax(path) {
             return Ok(not_detected());
         }
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         if self
             .probe_cache
             .lock()
@@ -151,13 +153,12 @@ impl FormatProbe for MiraxBackend {
 
 impl DatasetReader for MiraxBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path);
+        let key = Self::cache_key(path)?;
         let cached = self
             .probe_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .cloned();
+            .pop(&key);
         let slide = match cached {
             Some(slide) => slide,
             None => self.parse(path)?,

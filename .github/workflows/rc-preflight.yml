@@ -19,17 +19,28 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: wsi-rs
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
+          toolchain: nightly-2026-04-17
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
           components: rustfmt,clippy
-      - uses: taiki-e/install-action@nextest
-      - uses: taiki-e/install-action@v2
+          targets: i686-unknown-linux-gnu
+      - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
         with:
-          tool: cargo-hack,cargo-public-api,cargo-semver-checks,cargo-fuzz,cargo-deny,cargo-machete
+          tool: cargo-nextest@0.9.136,cargo-hack@0.6.44,cargo-public-api@0.52.0,cargo-semver-checks@0.48.0,cargo-fuzz@0.13.1,cargo-deny@0.19.4,cargo-machete@0.9.2,cargo-vet@0.10.2
       - run: cargo xtask rc-preflight
+        working-directory: wsi-rs
+      - name: Check OpenSlide shim on 32-bit ABI
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+          cargo check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked
         working-directory: wsi-rs
