@@ -67,9 +67,13 @@ impl PixelFormat {
     pub const fn bytes_per_pixel(self) -> usize {
         self.channels() * self.bytes_per_sample()
     }
+}
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(crate) fn try_from_j2k(format: j2k_core::PixelFormat) -> Result<Self, WsiError> {
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl TryFrom<j2k_core::PixelFormat> for PixelFormat {
+    type Error = WsiError;
+
+    fn try_from(format: j2k_core::PixelFormat) -> Result<Self, Self::Error> {
         match format {
             j2k_core::PixelFormat::Rgb8 => Ok(Self::Rgb8),
             j2k_core::PixelFormat::Rgba8 => Ok(Self::Rgba8),
@@ -78,8 +82,45 @@ impl PixelFormat {
             j2k_core::PixelFormat::Rgba16 => Ok(Self::Rgba16),
             j2k_core::PixelFormat::Gray16 => Ok(Self::Gray16),
             _ => Err(WsiError::Unsupported {
-                reason: format!("device decode returned unsupported pixel format {format:?}"),
+                reason: format!("pixel format {format:?} is unsupported by wsi-rs"),
             }),
+        }
+    }
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl From<PixelFormat> for j2k_core::PixelFormat {
+    fn from(format: PixelFormat) -> Self {
+        match format {
+            PixelFormat::Rgb8 => Self::Rgb8,
+            PixelFormat::Rgba8 => Self::Rgba8,
+            PixelFormat::Gray8 => Self::Gray8,
+            PixelFormat::Rgb16 => Self::Rgb16,
+            PixelFormat::Rgba16 => Self::Rgba16,
+            PixelFormat::Gray16 => Self::Gray16,
+        }
+    }
+}
+
+#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
+mod j2k_format_tests {
+    use super::PixelFormat;
+
+    #[test]
+    fn every_wsi_pixel_format_round_trips_through_j2k_core() {
+        for format in [
+            PixelFormat::Rgb8,
+            PixelFormat::Rgba8,
+            PixelFormat::Gray8,
+            PixelFormat::Rgb16,
+            PixelFormat::Rgba16,
+            PixelFormat::Gray16,
+        ] {
+            let j2k = j2k_core::PixelFormat::from(format);
+            assert_eq!(
+                PixelFormat::try_from(j2k).expect("supported J2K format"),
+                format
+            );
         }
     }
 }

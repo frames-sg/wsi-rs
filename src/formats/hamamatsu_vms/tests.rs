@@ -57,7 +57,7 @@ fn vms_jpeg_decodes_restart_segment_tile() {
     let encoded = write_restart_jpeg(&path, 128, 16);
     let reference = J2kJpegDecoder::new(&encoded)
         .unwrap()
-        .decode_region_scaled(
+        .decode_request(J2kJpegDecodeRequest::region_scaled(
             J2kPixelFormat::Rgb8,
             J2kRect {
                 x: 64,
@@ -66,10 +66,10 @@ fn vms_jpeg_decodes_restart_segment_tile() {
                 h: 8,
             },
             J2kDownscale::None,
-        )
+        ))
         .unwrap()
         .0;
-    let restart_index = J2kJpegDecoder::new(&encoded)
+    let restart_index = J2kJpegView::parse(&encoded)
         .unwrap()
         .restart_index()
         .unwrap()

@@ -1,0 +1,65 @@
+name: CUDA validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  J2K_REQUIRE_CUDA_RUNTIME: "1"
+  J2K_REQUIRE_CUDA_OXIDE_BUILD: "1"
+  RUSTFLAGS: "-D warnings"
+  RUST_TEST_THREADS: "1"
+
+jobs:
+  cuda-runtime:
+    name: CUDA resident decode validation
+    runs-on: [self-hosted, Linux, X64, cuda]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable, pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+      - name: Configure CUDA Oxide bindgen
+        shell: bash
+        run: |
+          if [[ -z "${LIBCLANG_PATH:-}" ]]; then
+            libclang_dir=""
+            for dir in /usr/lib/llvm-*/lib "${HOME}"/.local/llvm*/usr/lib/llvm-*/lib; do
+              if compgen -G "${dir}/libclang*.so*" >/dev/null; then
+                libclang_dir="${dir}"
+              fi
+            done
+            test -n "${libclang_dir}" || {
+              echo "libclang not found; CUDA Oxide bindgen cannot run" >&2
+              exit 1
+            }
+            echo "LIBCLANG_PATH=${libclang_dir}" >> "${GITHUB_ENV}"
+          fi
+
+          resource_dir=""
+          for dir in /usr/lib/llvm-*/lib/clang/[0-9]* "${HOME}"/.local/llvm*/usr/lib/llvm-*/lib/clang/[0-9]*; do
+            if [[ -d "${dir}/include" ]]; then
+              resource_dir="${dir}"
+            fi
+          done
+
+          bindgen_args="${BINDGEN_EXTRA_CLANG_ARGS:-}"
+          if [[ -n "${resource_dir}" ]]; then
+            bindgen_args="${bindgen_args:+${bindgen_args} }-resource-dir=${resource_dir}"
+          fi
+          gcc_include="$(gcc -print-file-name=include)"
+          if [[ -d "${gcc_include}" ]]; then
+            bindgen_args="${bindgen_args:+${bindgen_args} }-I${gcc_include}"
+          fi
+          if [[ -d /usr/local/cuda/include ]]; then
+            bindgen_args="${bindgen_args:+${bindgen_args} }-I/usr/local/cuda/include"
+          fi
+          echo "BINDGEN_EXTRA_CLANG_ARGS=${bindgen_args}" >> "${GITHUB_ENV}"
+      - name: Run fail-closed CUDA library tests
+        run: cargo test --locked --lib --features cuda

@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use crate::error::WsiError;
 use j2k_jpeg::{
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
-    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, JpegError as J2kJpegError,
-    PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
+    DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
+    JpegError as J2kJpegError, JpegView, PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
 };
 
 #[cfg(test)]
@@ -122,13 +122,14 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         force_dimensions,
     );
     validate_j2k_jpeg_output_size(input.as_ref())?;
-    let decoder = J2kJpegDecoder::new_with_options(
+    let view = JpegView::parse_with_options(
         input.as_ref(),
         J2kDecodeOptions::default().with_color_transform(color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let (pixels, outcome) = decoder
-        .decode(J2kPixelFormat::Rgb8)
+        .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
         .map_err(|err| WsiError::Jpeg(err.to_string()))?;
     crop_jpeg_rgb_to_expected(
         DecodedJpegRgb {
@@ -186,15 +187,16 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         req.force_dimensions,
     );
     validate_j2k_jpeg_output_size(input.as_ref())?;
-    let decoder = J2kJpegDecoder::new_with_options(
+    let view = JpegView::parse_with_options(
         input.as_ref(),
         J2kDecodeOptions::default().with_color_transform(req.color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let decode_result = if scale == J2kDownscale::None {
-        decoder.decode(J2kPixelFormat::Rgb8)
+        decoder.decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
     } else {
-        decoder.decode_scaled(J2kPixelFormat::Rgb8, scale)
+        decoder.decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
     };
     let (pixels, outcome) = match decode_result {
         Ok(decoded) => decoded,

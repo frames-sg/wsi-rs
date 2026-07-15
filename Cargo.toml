@@ -35,7 +35,12 @@ parity-openslide = []
 # Off by default; macOS only; CI matrix runs with and without.
 parity-metal = []
 # Enables Metal-backed device payload plumbing for Phase 5.
-metal = ["dep:metal", "dep:j2k-jpeg-metal", "dep:j2k-metal"]
+metal = [
+    "dep:metal",
+    "dep:j2k-jpeg-metal",
+    "dep:j2k-metal",
+    "dep:j2k-metal-support",
+]
 cuda = [
     "dep:j2k-jpeg-cuda",
     "dep:j2k-cuda",
@@ -58,14 +63,15 @@ base64 = "0.22"
 flate2 = "1"
 tempfile = "3"
 zstd = "0.13"
-j2k-jpeg = "0.6.2"
-j2k-core = "0.6.2"
-j2k-tilecodec = "0.6.2"
-j2k = "0.6.2"
-j2k-jpeg-metal = { version = "0.6.2", optional = true }
-j2k-metal = { version = "0.6.2", optional = true }
-j2k-jpeg-cuda = { version = "0.6.2", optional = true, default-features = false }
-j2k-cuda = { version = "0.6.2", optional = true, default-features = false }
+j2k-jpeg = "0.7.1"
+j2k-core = "0.7.1"
+j2k-tilecodec = "0.7.1"
+j2k = "0.7.1"
+j2k-jpeg-metal = { version = "0.7.1", optional = true }
+j2k-metal = { version = "0.7.1", optional = true }
+j2k-metal-support = { version = "0.7.1", optional = true }
+j2k-jpeg-cuda = { version = "0.7.1", optional = true, default-features = false }
+j2k-cuda = { version = "0.7.1", optional = true, default-features = false }
 metal = { version = "0.33", optional = true }
 dicom-core = "0.9"
 dicom-object = "0.9"
@@ -81,7 +87,8 @@ jpeg-encoder = "0.6"
 tempfile = { workspace = true }
 toml = "0.8"
 libloading = { workspace = true }
-j2k-native = "0.6.2"
+j2k-native = "0.7.1"
+syn = { version = "2", features = ["full", "visit"] }
 
 [[bin]]
 name = "svcache"

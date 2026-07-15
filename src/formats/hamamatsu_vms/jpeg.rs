@@ -99,7 +99,11 @@ impl VmsJpeg {
             h: height,
         };
         let (pixels, _outcome) = decoder
-            .decode_region_scaled(J2kPixelFormat::Rgb8, roi, scale)
+            .decode_request(J2kJpegDecodeRequest::region_scaled(
+                J2kPixelFormat::Rgb8,
+                roi,
+                scale,
+            ))
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let scale_denom = scale.denominator();
         let width = width.div_ceil(scale_denom);

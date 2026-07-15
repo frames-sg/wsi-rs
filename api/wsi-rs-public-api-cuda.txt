@@ -91,6 +91,11 @@ pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
 pub const fn wsi_rs::PixelFormat::channels(self) -> usize
 pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
 pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+impl core::convert::From<wsi_rs::PixelFormat> for j2k_core::pixel::PixelFormat
+pub fn j2k_core::pixel::PixelFormat::from(wsi_rs::PixelFormat) -> Self
+impl core::convert::TryFrom<j2k_core::pixel::PixelFormat> for wsi_rs::PixelFormat
+pub type wsi_rs::PixelFormat::Error = wsi_rs::error::WsiError
+pub fn wsi_rs::PixelFormat::try_from(j2k_core::pixel::PixelFormat) -> core::result::Result<Self, Self::Error>
 #[non_exhaustive] pub enum wsi_rs::prelude::RequestBuildError
 pub wsi_rs::prelude::RequestBuildError::MissingColumn
 pub wsi_rs::prelude::RequestBuildError::MissingOrigin
@@ -432,6 +437,11 @@ pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
 pub const fn wsi_rs::PixelFormat::channels(self) -> usize
 pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
 pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+impl core::convert::From<wsi_rs::PixelFormat> for j2k_core::pixel::PixelFormat
+pub fn j2k_core::pixel::PixelFormat::from(wsi_rs::PixelFormat) -> Self
+impl core::convert::TryFrom<j2k_core::pixel::PixelFormat> for wsi_rs::PixelFormat
+pub type wsi_rs::PixelFormat::Error = wsi_rs::error::WsiError
+pub fn wsi_rs::PixelFormat::try_from(j2k_core::pixel::PixelFormat) -> core::result::Result<Self, Self::Error>
 #[non_exhaustive] pub enum wsi_rs::ProbeConfidence
 pub wsi_rs::ProbeConfidence::Definite
 pub wsi_rs::ProbeConfidence::Likely

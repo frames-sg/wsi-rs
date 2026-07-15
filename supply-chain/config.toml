@@ -33,7 +33,7 @@ version = "0.10.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytemuck]]
-version = "1.25.0"
+version = "1.25.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.byteorder-lite]]
@@ -45,7 +45,7 @@ version = "0.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
-version = "1.2.65"
+version = "1.2.67"
 criteria = "safe-to-deploy"
 
 [[exemptions.cfb]]
@@ -73,7 +73,7 @@ version = "1.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-deque]]
-version = "0.8.6"
+version = "0.8.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-epoch]]
@@ -81,7 +81,7 @@ version = "0.9.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-utils]]
-version = "0.8.21"
+version = "0.8.22"
 criteria = "safe-to-deploy"
 
 [[exemptions.crypto-common]]
@@ -185,10 +185,6 @@ version = "0.14.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
-version = "0.3.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.getrandom]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
@@ -217,59 +213,63 @@ version = "1.0.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k]]
-version = "0.6.2"
+version = "0.7.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.j2k-codec-math]]
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-core]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-cuda]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-cuda-runtime]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg-cuda]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg-metal]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-metal]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-metal-support]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-native]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-profile]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-tilecodec]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-types]]
-version = "0.6.2"
+version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.jobserver]]
-version = "0.1.34"
+version = "0.1.35"
 criteria = "safe-to-deploy"
 
 [[exemptions.jpeg-decoder]]
@@ -281,7 +281,7 @@ version = "0.6.1"
 criteria = "safe-to-run"
 
 [[exemptions.js-sys]]
-version = "0.3.102"
+version = "0.3.103"
 criteria = "safe-to-deploy"
 
 [[exemptions.libc]]
@@ -309,11 +309,11 @@ version = "0.4.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.lru]]
-version = "0.18.0"
+version = "0.18.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.memchr]]
-version = "2.8.2"
+version = "2.8.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.moxcms]]
@@ -345,15 +345,15 @@ version = "0.18.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.pxfm]]
-version = "0.1.29"
+version = "0.1.30"
 criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
 version = "0.41.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.r-efi]]
-version = "5.3.0"
+[[exemptions.quote]]
+version = "1.0.46"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
@@ -377,7 +377,7 @@ version = "1.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustversion]]
-version = "1.0.22"
+version = "1.0.23"
 criteria = "safe-to-deploy"
 
 [[exemptions.safe-transmute]]
@@ -413,7 +413,7 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.simd-adler32]]
-version = "0.3.9"
+version = "0.3.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.slab]]
@@ -429,7 +429,7 @@ version = "0.8.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
-version = "2.0.118"
+version = "2.0.119"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
@@ -489,7 +489,7 @@ version = "1.0.24"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.3"
+version = "1.23.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.version_check]]
@@ -497,19 +497,19 @@ version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen]]
-version = "0.2.125"
+version = "0.2.126"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-macro]]
-version = "0.2.125"
+version = "0.2.126"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-macro-support]]
-version = "0.2.125"
+version = "0.2.126"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-shared]]
-version = "0.2.125"
+version = "0.2.126"
 criteria = "safe-to-deploy"
 
 [[exemptions.web-time]]
@@ -517,7 +517,7 @@ version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.weezl]]
-version = "0.2.1"
+version = "0.1.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-core]]
@@ -557,7 +557,7 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zmij]]
-version = "1.0.21"
+version = "1.0.23"
 criteria = "safe-to-deploy"
 
 [[exemptions.zstd]]

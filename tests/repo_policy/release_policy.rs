@@ -241,6 +241,35 @@ fn release_candidate_preflight_workflow_runs_exact_gate() {
 }
 
 #[test]
+fn cuda_release_validation_is_fail_closed_on_the_hardware_runner() {
+    let workflow_path = crate_root().join(".github/workflows/cuda-validation.yml");
+    assert!(
+        workflow_path.is_file(),
+        "CUDA releases require an on-demand hardware validation workflow"
+    );
+    let workflow = fs::read_to_string(workflow_path).expect("read CUDA validation workflow");
+
+    for required in [
+        "workflow_dispatch:",
+        "runs-on: [self-hosted, Linux, X64, cuda]",
+        "J2K_REQUIRE_CUDA_RUNTIME: \"1\"",
+        "J2K_REQUIRE_CUDA_OXIDE_BUILD: \"1\"",
+        "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        "dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30",
+        "cargo test --locked --lib --features cuda",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "CUDA validation workflow must contain `{required}`"
+        );
+    }
+    assert!(
+        workflow.contains("libclang not found; CUDA Oxide bindgen cannot run"),
+        "CUDA validation must fail instead of skipping when bindgen cannot run"
+    );
+}
+
+#[test]
 fn internal_release_markdown_is_not_tracked() {
     let readme = fs::read_to_string(crate_root().join("README.md")).expect("read README");
     let lib = fs::read_to_string(crate_root().join("src/lib.rs")).expect("read lib docs");

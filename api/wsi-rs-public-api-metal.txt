@@ -52,6 +52,8 @@ pub mod wsi_rs::output::metal
 pub wsi_rs::output::metal::MetalDeviceStorage::Buffer
 pub wsi_rs::output::metal::MetalDeviceStorage::Buffer::buffer: metal::buffer::Buffer
 pub wsi_rs::output::metal::MetalDeviceStorage::Buffer::byte_offset: usize
+pub wsi_rs::output::metal::MetalDeviceStorage::Resident
+pub wsi_rs::output::metal::MetalDeviceStorage::Resident::image: j2k_metal_support::resident::ResidentMetalImage
 pub struct wsi_rs::output::metal::MetalBackendSessions
 impl wsi_rs::output::metal::MetalBackendSessions
 pub fn wsi_rs::output::metal::MetalBackendSessions::new(metal::device::Device) -> Self
@@ -62,7 +64,12 @@ pub wsi_rs::output::metal::MetalDeviceTile::pitch_bytes: usize
 pub wsi_rs::output::metal::MetalDeviceTile::storage: wsi_rs::output::metal::MetalDeviceStorage
 pub wsi_rs::output::metal::MetalDeviceTile::width: u32
 impl wsi_rs::output::metal::MetalDeviceTile
-pub fn wsi_rs::output::metal::MetalDeviceTile::from_buffer(metal::buffer::Buffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> Self
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_buffer(metal::buffer::Buffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_completed_buffer(metal::buffer::Buffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::raw_buffer(&self) -> (&metal::buffer::Buffer, usize)
+impl wsi_rs::output::metal::MetalDeviceTile
+pub fn wsi_rs::output::metal::MetalDeviceTile::from_resident(j2k_metal_support::resident::ResidentMetalImage) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::output::metal::MetalDeviceTile::validated_resident_image(&self) -> core::result::Result<&j2k_metal_support::resident::ResidentMetalImage, wsi_rs::error::WsiError>
 pub mod wsi_rs::prelude
 #[non_exhaustive] pub enum wsi_rs::prelude::ColorSpace
 pub wsi_rs::prelude::ColorSpace::Cmyk
@@ -85,6 +92,11 @@ pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
 pub const fn wsi_rs::PixelFormat::channels(self) -> usize
 pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
 pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+impl core::convert::From<wsi_rs::PixelFormat> for j2k_core::pixel::PixelFormat
+pub fn j2k_core::pixel::PixelFormat::from(wsi_rs::PixelFormat) -> Self
+impl core::convert::TryFrom<j2k_core::pixel::PixelFormat> for wsi_rs::PixelFormat
+pub type wsi_rs::PixelFormat::Error = wsi_rs::error::WsiError
+pub fn wsi_rs::PixelFormat::try_from(j2k_core::pixel::PixelFormat) -> core::result::Result<Self, Self::Error>
 #[non_exhaustive] pub enum wsi_rs::prelude::RequestBuildError
 pub wsi_rs::prelude::RequestBuildError::MissingColumn
 pub wsi_rs::prelude::RequestBuildError::MissingOrigin
@@ -426,6 +438,11 @@ pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
 pub const fn wsi_rs::PixelFormat::channels(self) -> usize
 pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
 pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+impl core::convert::From<wsi_rs::PixelFormat> for j2k_core::pixel::PixelFormat
+pub fn j2k_core::pixel::PixelFormat::from(wsi_rs::PixelFormat) -> Self
+impl core::convert::TryFrom<j2k_core::pixel::PixelFormat> for wsi_rs::PixelFormat
+pub type wsi_rs::PixelFormat::Error = wsi_rs::error::WsiError
+pub fn wsi_rs::PixelFormat::try_from(j2k_core::pixel::PixelFormat) -> core::result::Result<Self, Self::Error>
 #[non_exhaustive] pub enum wsi_rs::ProbeConfidence
 pub wsi_rs::ProbeConfidence::Definite
 pub wsi_rs::ProbeConfidence::Likely

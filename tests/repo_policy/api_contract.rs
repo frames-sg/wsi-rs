@@ -92,6 +92,12 @@ fn public_api_snapshot_uses_stable_user_facing_paths() {
         "Metal device tiles must expose a wsi-rs-owned pixel format type"
     );
     assert!(
+        metal_snapshot.contains(
+            "pub fn wsi_rs::output::metal::MetalDeviceTile::validated_resident_image(&self) -> core::result::Result<&j2k_metal_support::resident::ResidentMetalImage, wsi_rs::error::WsiError>"
+        ),
+        "Metal device tiles must expose one canonical resident metadata validation path"
+    );
+    assert!(
         !metal_snapshot.contains(
             "pub wsi_rs::output::metal::MetalDeviceTile::format: j2k_core::"
         ),
@@ -797,8 +803,8 @@ fn public_svcache_tile_selection_uses_stable_newtypes() {
 
 #[test]
 fn optional_metal_public_surface_is_future_extensible() {
-    assert_non_exhaustive_struct("src/output/metal.rs", "MetalDeviceTile");
-    assert_non_exhaustive_enum("src/output/metal.rs", "MetalDeviceStorage");
+    assert_non_exhaustive_struct("src/output/metal/tile.rs", "MetalDeviceTile");
+    assert_non_exhaustive_enum("src/output/metal/tile.rs", "MetalDeviceStorage");
     assert_non_exhaustive_struct("src/output/cuda.rs", "CudaDeviceTile");
     assert_non_exhaustive_enum("src/output/cuda.rs", "CudaDeviceStorage");
 }
@@ -885,4 +891,41 @@ fn default_manifest_uses_cpu_jp2k_facade_and_optional_metal_adapter() {
         vec!["metal"],
         "only the metal feature may enable j2k-metal"
     );
+}
+#[test]
+fn metal_output_facade_delegates_resource_lifecycles_to_focused_modules() {
+    let facade = read_repo_text("src/output/metal.rs");
+    for required in [
+        "mod interop;",
+        "mod session;",
+        "mod tile;",
+        "mod ycbcr;",
+        "pub use session::MetalBackendSessions;",
+        "pub use tile::{MetalDeviceStorage, MetalDeviceTile};",
+    ] {
+        assert!(
+            facade.contains(required),
+            "Metal facade is missing `{required}`"
+        );
+    }
+    for forbidden in [
+        "pub struct MetalBackendSessions",
+        "pub struct MetalDeviceTile",
+        "pub enum MetalDeviceStorage",
+        "struct YcbcrAddressPlan",
+    ] {
+        assert!(
+            !facade.contains(forbidden),
+            "Metal facade owns `{forbidden}`"
+        );
+    }
+    for relative in [
+        "src/output/metal/session.rs",
+        "src/output/metal/tile.rs",
+        "src/output/metal/ycbcr.rs",
+        "src/output/metal/interop.rs",
+        "src/output/metal/ycbcr.metal",
+    ] {
+        assert!(crate_root().join(relative).is_file(), "missing {relative}");
+    }
 }

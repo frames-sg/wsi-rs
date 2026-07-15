@@ -25,7 +25,7 @@ use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelForma
 #[cfg(feature = "metal")]
 use j2k_metal::SurfaceResidency as J2kJp2kSurfaceResidency;
 #[cfg(feature = "metal")]
-use j2k_metal::{J2kDecoder as J2kMetalJp2kDecoder, MetalTileBatch};
+use j2k_metal::{J2kDecoder as J2kMetalJp2kDecoder, MetalDecodeRequest, MetalTileBatch};
 #[cfg(feature = "metal")]
 use std::sync::Arc;
 
@@ -422,7 +422,10 @@ fn decode_one_jp2k_pixels_metal(
     let mut decoder = J2kMetalJp2kDecoder::new(job.data.as_ref())
         .map_err(|err| WsiError::Jp2k(err.to_string()))?;
     let surface = decoder
-        .decode_to_device_with_session(J2kPixelFormat::Rgb8, metal_sessions.j2k())
+        .decode_request_to_device_with_session(
+            MetalDecodeRequest::full(J2kPixelFormat::Rgb8, J2kBackendRequest::Metal),
+            metal_sessions.j2k(),
+        )
         .map_err(|err| WsiError::Jp2k(format!("j2k JP2K device decode failed: {err}")))?;
     tile_pixels_from_jp2k_surface(
         surface,
@@ -665,7 +668,10 @@ fn decode_jp2k_tile_batch_to_pixels(
             let mut decoder = J2kMetalJp2kDecoder::new(req.data.as_ref())
                 .map_err(|err| WsiError::Jp2k(err.to_string()))?;
             decoder
-                .decode_to_device_with_session(J2kPixelFormat::Rgb8, metal_sessions.j2k())
+                .decode_request_to_device_with_session(
+                    MetalDecodeRequest::full(J2kPixelFormat::Rgb8, J2kBackendRequest::Metal),
+                    metal_sessions.j2k(),
+                )
                 .map_err(|err| WsiError::Jp2k(format!("j2k JP2K device decode failed: {err}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -739,10 +745,9 @@ fn decode_jp2k_tile_batch_to_device_pixels(
     let mut batch = MetalTileBatch::with_capacity(reqs.len());
     for req in reqs {
         batch
-            .push_shared_tile(
+            .push_shared_tile_request(
                 Arc::<[u8]>::from(req.data.as_ref()),
-                J2kPixelFormat::Rgb8,
-                J2kBackendRequest::Metal,
+                MetalDecodeRequest::full(J2kPixelFormat::Rgb8, J2kBackendRequest::Metal),
             )
             .map_err(|err| WsiError::Jp2k(format!("j2k JP2K device batch submit failed: {err}")))?;
     }
@@ -920,7 +925,9 @@ fn sample_buffer_from_j2k_surface(
     }
     let (width, height) = surface.dimensions();
     let expected_len = width as usize * height as usize * 3;
-    let bytes = surface.as_bytes();
+    let bytes = surface
+        .as_bytes()
+        .map_err(|err| WsiError::Jp2k(format!("j2k JP2K surface readback failed: {err}")))?;
     if bytes.len() != expected_len {
         return Err(WsiError::Jp2k(format!(
             "j2k JP2K returned {} bytes for {}x{} RGB8 surface",

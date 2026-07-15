@@ -4,18 +4,26 @@
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-11
+## [0.5.0] - 2026-07-14
 
 ### Changed
 
 - Renamed the public crate and repository identity from `statumen` to `wsi-rs`.
-- Raised the public `j2k` crate family dependency floor to 0.6.0 and removed
+- Raised the public `j2k` crate family dependency floor to 0.7.1 and removed
   the yanked pre-rename `signinum-*` 0.5 dependency aliases.
+- Metal decode and conversion outputs now retain their owning GPU allocation
+  through `ResidentMetalImage`; safe encode paths reject legacy raw-buffer
+  storage whose completion and lifetime cannot be verified.
+- Added fail-closed CUDA resident-decode validation on the self-hosted CUDA
+  release runner.
 - Refreshed public API snapshots for source ICC profile metadata and format
   vendor detection surfaces.
 
 ### Fixed
 
+- Fixed Metal YCbCr conversion addressing beyond 4 GiB with checked host-side
+  span validation and a 64-bit shader path, while retaining the validated
+  32-bit path for smaller images.
 - Fixed API stability tooling package selection after the crate rename.
 - Fixed CUDA feature matrix compilation after the j2k dependency rename.
 - Removed stale cargo-deny duplicate skip configuration.

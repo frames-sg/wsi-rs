@@ -347,13 +347,11 @@ fn fixture_ycbcr_device_decode_returns_rgb_metal_tile() {
         (header.image_width, header.image_height)
     );
     assert_eq!(tile.format, PixelFormat::Rgb8);
-    let crate::output::metal::MetalDeviceStorage::Buffer {
-        buffer,
-        byte_offset,
-    } = &tile.storage;
-    assert_eq!(*byte_offset, 0);
-    assert_eq!(buffer.storage_mode(), metal::MTLStorageMode::Shared);
-    assert!(buffer.length() >= tile.pitch_bytes as u64 * u64::from(tile.height));
+    let crate::output::metal::MetalDeviceStorage::Resident { image } = &tile.storage else {
+        panic!("converted JP2K tile must be resident");
+    };
+    assert_eq!(image.byte_offset(), 0);
+    assert!(image.byte_len() >= tile.pitch_bytes * tile.height as usize);
 }
 
 #[cfg(feature = "metal")]

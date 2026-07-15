@@ -476,7 +476,10 @@ fn cpu_tile_from_jpeg_surface(
         DecodedJpegRgb {
             width,
             height,
-            pixels: surface.as_bytes().to_vec(),
+            pixels: surface
+                .as_bytes()
+                .map_err(|err| WsiError::Jpeg(format!("j2k JPEG surface readback failed: {err}")))?
+                .to_vec(),
         },
         expected_width,
         expected_height,

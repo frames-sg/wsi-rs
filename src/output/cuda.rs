@@ -135,7 +135,7 @@ impl CudaDeviceTile {
 
         let dimensions = surface.dimensions();
         let pitch_bytes = surface.pitch_bytes();
-        let format = PixelFormat::try_from_j2k(surface.pixel_format())?;
+        let format = PixelFormat::try_from(surface.pixel_format())?;
         Ok(Some(Self {
             width: dimensions.0,
             height: dimensions.1,
@@ -157,7 +157,7 @@ impl CudaDeviceTile {
 
         let dimensions = surface.dimensions();
         let pitch_bytes = surface.pitch_bytes();
-        let format = PixelFormat::try_from_j2k(surface.pixel_format())?;
+        let format = PixelFormat::try_from(surface.pixel_format())?;
         Ok(Some(Self {
             width: dimensions.0,
             height: dimensions.1,

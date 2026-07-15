@@ -118,6 +118,8 @@ checks, feature-combination checks, validation, and package dry-run checks. CI
 also executes bounded fuzz campaigns from the tracked seed corpus. Temporary
 dependency exceptions and their expiry dates are recorded in
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
+Releases that include the `cuda` feature also require the fail-closed
+`CUDA validation` workflow on the self-hosted CUDA runner.
 
 ## Security
 

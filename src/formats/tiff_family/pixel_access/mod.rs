@@ -13,7 +13,8 @@ use j2k_jpeg::transcode::{
 };
 use j2k_jpeg::{
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
-    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, PixelFormat as J2kPixelFormat,
+    DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
+    JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
 };
 use j2k_tilecodec::{
     DeflateCodec, DeflatePool, LzwCodec, LzwPool, TileDecompress, ZstdCodec, ZstdPool,

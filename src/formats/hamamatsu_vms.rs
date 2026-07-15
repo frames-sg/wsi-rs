@@ -16,9 +16,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use j2k_core::BackendRequest;
+#[cfg(test)]
+use j2k_jpeg::JpegView as J2kJpegView;
 use j2k_jpeg::{
-    Decoder as J2kJpegDecoder, Downscale as J2kDownscale, PixelFormat as J2kPixelFormat,
-    Rect as J2kRect,
+    DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
+    PixelFormat as J2kPixelFormat, Rect as J2kRect,
 };
 use lru::LruCache;
 

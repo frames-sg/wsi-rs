@@ -102,14 +102,16 @@ impl TiffPixelReader {
             self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &jpeg, None)
                 .color_transform,
         );
-        let decoder = J2kJpegDecoder::new_with_options(&jpeg, options)
+        let view = J2kJpegView::parse_with_options(&jpeg, options)
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+        let decoder =
+            J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let source_dims = decoder.info().dimensions;
         let scale_denom = scale.denominator();
         let scaled_width = source_dims.0.div_ceil(scale_denom);
         let scaled_height = source_dims.1.div_ceil(scale_denom);
         let (pixels, _outcome) = decoder
-            .decode_scaled(J2kPixelFormat::Rgb8, scale)
+            .decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let scaled = cpu_tile_from_rgb_pixels(scaled_width, scaled_height, pixels)?;
 

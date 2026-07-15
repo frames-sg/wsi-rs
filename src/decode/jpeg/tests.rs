@@ -319,8 +319,10 @@ fn private_metal_jpeg_decode_returns_private_device_tile() {
     let TilePixels::Device(DeviceTile::Metal(tile)) = pixels else {
         panic!("expected private Metal tile");
     };
-    let crate::output::metal::MetalDeviceStorage::Buffer { buffer, .. } = tile.storage;
-    assert_eq!(buffer.storage_mode(), metal::MTLStorageMode::Private);
+    let crate::output::metal::MetalDeviceStorage::Resident { image } = tile.storage else {
+        panic!("private JPEG decode must return resident storage");
+    };
+    assert_eq!(image.dimensions(), (16, 16));
     assert_eq!(tile.width, 16);
     assert_eq!(tile.height, 16);
 }

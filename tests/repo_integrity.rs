@@ -8,3 +8,5 @@ mod package_docs;
 mod release_policy;
 #[path = "repo_policy/support.rs"]
 mod support;
+#[path = "repo_policy/unsafe_syntax.rs"]
+mod unsafe_syntax;

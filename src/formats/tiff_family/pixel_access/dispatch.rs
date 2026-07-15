@@ -758,10 +758,12 @@ impl SlideReader for TiffPixelReader {
                     self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &data, None)
                         .color_transform,
                 );
-                let decoder = J2kJpegDecoder::new_with_options(&data, options)
+                let view = J2kJpegView::parse_with_options(&data, options)
+                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+                let decoder = J2kJpegDecoder::from_view(view)
                     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
                 let (pixels, outcome) = decoder
-                    .decode(J2kPixelFormat::Rgb8)
+                    .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
                     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
                 let decoded =
                     cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;

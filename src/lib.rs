@@ -51,7 +51,7 @@
 //! }
 //! ```
 //!
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub(crate) mod core;
 pub(crate) mod decode;
