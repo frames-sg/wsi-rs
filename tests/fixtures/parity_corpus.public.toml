@@ -166,6 +166,7 @@ path             = "downloads/openslide-testdata-extracted/dicom/dicom-cmu1-jp2k
 format           = "dicom"
 codecs           = ["j2k"]
 must_decode      = ["base"]
+openslide_required = false
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true

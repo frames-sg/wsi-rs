@@ -14,6 +14,8 @@ pub struct CorpusEntry {
     pub codecs: Vec<String>,
     #[serde(default)]
     pub must_decode: Vec<String>,
+    #[serde(default = "default_true")]
+    pub openslide_required: bool,
     pub source: String,
     pub license: String,
     pub redistributable: bool,
@@ -43,6 +45,10 @@ impl CorpusEntry {
         })
     }
 
+    pub fn openslide_must_decode_level(&self, level: u32) -> bool {
+        self.openslide_required && self.must_decode_level(level)
+    }
+
     pub fn expected_failure(&self, pair: &str, level: u32) -> bool {
         let numbered = format!("{pair}:level{level}");
         let alias = if level == 0 {
@@ -54,6 +60,10 @@ impl CorpusEntry {
             .iter()
             .any(|item| item == &numbered || alias.as_ref() == Some(item))
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

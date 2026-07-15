@@ -239,7 +239,7 @@ fn preflight() {
                 }
                 Err(err) => {
                     eprintln!("[preflight] {} OpenSlide read failed: {err}", entry.alias);
-                    if required {
+                    if entry.openslide_must_decode_level(level) {
                         failures.push(format!(
                             "{} level={level}: required OpenSlide read failed: {err}",
                             entry.alias

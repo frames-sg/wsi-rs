@@ -159,6 +159,14 @@ fn corpus_public_manifest_parses() {
         assert!(!slide.format.is_empty());
         assert!(!slide.codecs.is_empty());
     }
+
+    let dicom_jp2k = manifest
+        .slides
+        .iter()
+        .find(|slide| slide.alias == "dicom-jp2k-001")
+        .expect("public DICOM JP2K corpus entry");
+    assert!(dicom_jp2k.must_decode_level(0));
+    assert!(!dicom_jp2k.openslide_must_decode_level(0));
 }
 
 #[test]
@@ -172,6 +180,18 @@ fn corpus_must_decode_level_matches_base_and_numbered_levels() {
     assert!(entry.must_decode_level(12));
     assert!(!entry.must_decode_level(2));
     assert!(!entry.must_decode_level(10));
+}
+
+#[test]
+fn corpus_can_require_wsi_decode_without_requiring_openslide() {
+    let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+    let entry = manifest.slides.first_mut().expect("slide");
+
+    assert!(entry.openslide_must_decode_level(0));
+    entry.openslide_required = false;
+
+    assert!(entry.must_decode_level(0));
+    assert!(!entry.openslide_must_decode_level(0));
 }
 
 #[test]
