@@ -233,6 +233,7 @@ fn release_candidate_preflight_workflow_runs_exact_gate() {
         "fallback: cargo-install",
         "os: [ubuntu-latest, macos-latest]",
         "cargo xtask rc-preflight",
+        "cargo +1.96.0 check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked",
     ] {
         assert!(
             workflow.contains(required),
@@ -349,6 +350,12 @@ fn fuzzing_tooling_is_wired() {
     assert!(
         ci.contains("tool: cargo-fuzz@0.13.1\n          fallback: cargo-install"),
         "CI must build cargo-fuzz for the runner host instead of using a statically linked musl fallback binary"
+    );
+    assert!(
+        ci.contains(
+            "cargo +1.96.0 check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked"
+        ),
+        "CI must use the exact toolchain that owns the installed i686 target"
     );
 
     for extension in [

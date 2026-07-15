@@ -43,5 +43,5 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-multilib
-          cargo check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked
+          cargo +1.96.0 check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked
         working-directory: wsi-rs

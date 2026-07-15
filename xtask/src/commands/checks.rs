@@ -501,7 +501,11 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
         )
         .expect("read semver script");
-        assert!(script.contains("for profile in default cuda metal"));
+        assert!(script.contains("profiles=(default cuda)"));
+        assert!(script.contains("profiles+=(metal)"));
+        assert!(script.contains("if [[ \"$(uname -s)\" == \"Darwin\" ]]"));
+        assert!(script.contains("for profile in \"${profiles[@]}\""));
+        assert!(!script.contains("for profile in default cuda metal"));
         assert!(script.contains("--release-type minor"));
     }
 }

@@ -68,7 +68,11 @@ build_rustdoc() {
 }
 
 cd "$repo_root"
-for profile in default cuda metal; do
+profiles=(default cuda)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  profiles+=(metal)
+fi
+for profile in "${profiles[@]}"; do
   baseline_rustdoc="$work_dir/baseline-${profile}.json"
   current_rustdoc="$work_dir/current-${profile}.json"
   build_rustdoc "$baseline_root" "$profile" "$baseline_rustdoc"
