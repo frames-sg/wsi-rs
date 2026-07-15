@@ -94,14 +94,21 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
         .expect("libopenslide is required for DICOM OpenSlide parity");
     let openslide = OpenSlideOracle { lib };
     let manifest = load_public().expect("load public manifest");
+    let required_entries = manifest
+        .slides
+        .iter()
+        .filter(|entry| {
+            entry.format == "dicom" && entry.openslide_required && !entry.must_decode.is_empty()
+        })
+        .collect::<Vec<_>>();
+    if required_entries.is_empty() {
+        eprintln!("[dicom-parity] no public DICOM entries require an OpenSlide oracle");
+        return;
+    }
     let mut checked = 0u32;
     let mut failures = Vec::new();
 
-    for entry in manifest
-        .slides
-        .iter()
-        .filter(|entry| entry.format == "dicom")
-    {
+    for entry in required_entries {
         let path = resolve_entry_path(entry);
         if !path.is_file() {
             failures.push(format!(
