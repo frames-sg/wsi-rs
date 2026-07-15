@@ -63,8 +63,10 @@ export PATH="$temp_root/bin:$PATH"
 export FAKE_CARGO_LOG="$temp_root/cargo.log"
 cd "$temp_root"
 
-"$publish_script" --verify >/dev/null
-"$publish_script" --dry-run >/dev/null
+env -u GITHUB_REF_TYPE -u GITHUB_REF_NAME -u GITHUB_SHA \
+  "$publish_script" --verify >/dev/null
+env -u GITHUB_REF_TYPE -u GITHUB_REF_NAME -u GITHUB_SHA \
+  "$publish_script" --dry-run >/dev/null
 grep -Fxq 'publish --dry-run --locked' "$FAKE_CARGO_LOG" || \
   fail "dry run did not use --locked"
 
