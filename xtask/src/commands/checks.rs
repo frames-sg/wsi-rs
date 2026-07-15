@@ -7,6 +7,7 @@ use super::process::{
 const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
+const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-04-17";
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
@@ -280,7 +281,14 @@ pub(super) fn fuzz_check() -> Result<(), String> {
     ] {
         run_program(
             OsString::from("rustup"),
-            &["run", "nightly", "cargo", "fuzz", "check", target],
+            &[
+                "run",
+                PINNED_NIGHTLY_TOOLCHAIN,
+                "cargo",
+                "fuzz",
+                "check",
+                target,
+            ],
             &[],
         )
         .map_err(|err| {
@@ -449,6 +457,11 @@ pub(super) fn package() -> Result<(), String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn fuzz_checks_use_the_ci_pinned_nightly_toolchain() {
+        assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-04-17");
+    }
 
     #[test]
     fn semver_check_uses_checksum_pinned_published_baseline() {

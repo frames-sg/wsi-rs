@@ -9,7 +9,7 @@
 ### Changed
 
 - Renamed the public crate and repository identity from `statumen` to `wsi-rs`.
-- Raised the public `j2k` crate family dependency floor to 0.7.1 and removed
+- Raised the public `j2k` crate family dependency floor to 0.7.2 and removed
   the yanked pre-rename `signinum-*` 0.5 dependency aliases.
 - Metal decode and conversion outputs now retain their owning GPU allocation
   through `ResidentMetalImage`; safe encode paths reject legacy raw-buffer
