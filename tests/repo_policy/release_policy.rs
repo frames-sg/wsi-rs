@@ -230,6 +230,7 @@ fn release_candidate_preflight_workflow_runs_exact_gate() {
         "components: rustfmt,clippy",
         "taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145",
         "cargo-nextest@0.9.136,cargo-hack@0.6.44,cargo-public-api@0.52.0,cargo-semver-checks@0.48.0,cargo-fuzz@0.13.1,cargo-deny@0.19.4,cargo-machete@0.9.2,cargo-vet@0.10.2",
+        "fallback: cargo-install",
         "os: [ubuntu-latest, macos-latest]",
         "cargo xtask rc-preflight",
     ] {
@@ -344,6 +345,10 @@ fn fuzzing_tooling_is_wired() {
     assert!(
         ci.contains("cargo xtask fuzz-check"),
         "CI must type-check fuzz targets"
+    );
+    assert!(
+        ci.contains("tool: cargo-fuzz@0.13.1\n          fallback: cargo-install"),
+        "CI must build cargo-fuzz for the runner host instead of using a statically linked musl fallback binary"
     );
 
     for extension in [
