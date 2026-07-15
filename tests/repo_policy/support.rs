@@ -18,14 +18,29 @@ pub(super) fn read_repo_text(relative: &str) -> String {
         return files
             .into_iter()
             .map(|path| {
-                fs::read_to_string(&path).unwrap_or_else(|err| {
+                let text = fs::read_to_string(&path).unwrap_or_else(|err| {
                     panic!("read {}: {err}", path.display());
-                })
+                });
+                normalize_line_endings(text)
             })
             .collect::<Vec<_>>()
             .join("\n");
     }
-    fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    normalize_line_endings(text)
+}
+
+fn normalize_line_endings(text: String) -> String {
+    text.replace("\r\n", "\n")
+}
+
+#[test]
+fn repository_text_normalizes_windows_line_endings() {
+    assert_eq!(
+        normalize_line_endings("alpha\r\nbeta\r\n".to_owned()),
+        "alpha\nbeta\n"
+    );
 }
 
 pub(super) fn markdown_link_targets(markdown: &str) -> Vec<&str> {

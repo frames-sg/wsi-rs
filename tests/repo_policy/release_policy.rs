@@ -3,7 +3,7 @@ use std::fs;
 
 #[test]
 fn api_stability_tooling_is_wired() {
-    let ci = fs::read_to_string(crate_root().join(".github/workflows/ci.yml")).expect("read CI");
+    let ci = read_repo_text(".github/workflows/ci.yml");
     let xtask_mod = fs::read_to_string(crate_root().join("xtask/src/commands/mod.rs"))
         .expect("read xtask command router");
     let xtask_checks = fs::read_to_string(crate_root().join("xtask/src/commands/checks.rs"))
@@ -315,7 +315,7 @@ fn internal_release_markdown_is_not_tracked() {
 #[test]
 fn fuzzing_tooling_is_wired() {
     let manifest = fs::read_to_string(crate_root().join("Cargo.toml")).expect("read manifest");
-    let ci = fs::read_to_string(crate_root().join(".github/workflows/ci.yml")).expect("read CI");
+    let ci = read_repo_text(".github/workflows/ci.yml");
     let xtask_mod = fs::read_to_string(crate_root().join("xtask/src/commands/mod.rs"))
         .expect("read xtask command router");
     let wsi_fuzz = fs::read_to_string(crate_root().join("fuzz/fuzz_targets/open_wsi_bytes.rs"))

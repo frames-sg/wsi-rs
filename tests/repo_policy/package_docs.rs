@@ -87,7 +87,7 @@ fn docs_rs_metadata_keeps_public_docs_build_portable() {
 
 #[test]
 fn crate_docs_expose_compile_checked_quickstart() {
-    let lib = fs::read_to_string(crate_root().join("src/lib.rs")).expect("read lib");
+    let lib = read_repo_text("src/lib.rs");
 
     for required in [
         "//! # wsi-rs",
