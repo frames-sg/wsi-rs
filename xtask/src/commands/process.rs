@@ -28,10 +28,6 @@ pub(super) fn run_cargo(args: &[&str]) -> Result<(), String> {
     run_cargo_with_env(args, &[])
 }
 
-pub(super) fn run_cargo_capture(args: &[&str]) -> Result<String, String> {
-    run_program_capture(cargo(), args, &[])
-}
-
 pub(super) fn run_cargo_with_env(args: &[&str], envs: &[(&str, &str)]) -> Result<(), String> {
     run_program(cargo(), args, envs)
 }
@@ -58,7 +54,7 @@ pub(super) fn run_program(
     }
 }
 
-fn run_program_capture(
+pub(super) fn run_program_capture(
     program: OsString,
     args: &[&str],
     envs: &[(&str, &str)],

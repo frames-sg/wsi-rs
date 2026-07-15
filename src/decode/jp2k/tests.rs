@@ -116,7 +116,7 @@ fn require_cuda_jp2k_without_session_returns_unsupported() {
 
 #[cfg(feature = "cuda")]
 #[test]
-fn require_cuda_classic_jp2k_rejects_cpu_staged_upload() {
+fn require_cuda_classic_jp2k_decodes_to_resident_surface_without_copy_dispatches() {
     let codestream = include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k");
     let header = parse_codestream_header(codestream).unwrap();
     let job = Jp2kDecodeJob {
@@ -128,15 +128,41 @@ fn require_cuda_classic_jp2k_rejects_cpu_staged_upload() {
     };
     let sessions = crate::output::cuda::CudaBackendSessions::new();
 
-    let err = decode_one_jp2k_pixels(&job, true, None, Some(&sessions)).unwrap_err();
-    let WsiError::Unsupported { reason } = err else {
-        panic!("strict CUDA classic JP2K must be Unsupported, got {err:?}");
+    let decoded = match decode_one_jp2k_pixels(&job, true, None, Some(&sessions)) {
+        Ok(decoded) => decoded,
+        Err(WsiError::Unsupported { reason })
+            if cuda_unavailable_reason(&reason)
+                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
+        {
+            eprintln!("skipping CUDA classic JP2K decode test: {reason}");
+            return;
+        }
+        Err(err) => panic!("strict CUDA classic JP2K decode failed unexpectedly: {err}"),
     };
+
+    let TilePixels::Device(DeviceTile::Cuda(tile)) = decoded else {
+        panic!("strict CUDA classic JP2K decode must return DeviceTile::Cuda");
+    };
+    let surface = tile
+        .storage
+        .j2k_surface()
+        .expect("CUDA classic JP2K storage must expose a J2K surface");
+    assert_eq!(
+        surface.residency(),
+        j2k_cuda::SurfaceResidency::CudaResidentDecode
+    );
+    let stats = surface
+        .cuda_surface()
+        .expect("resident CUDA classic JP2K surface")
+        .stats();
+    assert_eq!(
+        stats.copy_kernel_dispatches(),
+        0,
+        "strict CUDA classic JP2K must not stage through a copy kernel"
+    );
     assert!(
-        reason.contains("JP2K CUDA device decode failed")
-            || reason.contains("CPU-staged CUDA upload")
-            || reason.contains("unsupported CUDA request"),
-        "unexpected strict CUDA classic JP2K error: {reason}"
+        stats.decode_kernel_dispatches() > 0,
+        "strict CUDA classic JP2K must execute CUDA decode kernels"
     );
 }
 

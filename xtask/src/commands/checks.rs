@@ -1,7 +1,7 @@
 use std::{env, ffi::OsString, fs, path::Path};
 
 use super::process::{
-    ensure_clean_worktree, run_cargo, run_cargo_capture, run_cargo_with_env, run_program,
+    ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
 
 const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
@@ -306,12 +306,19 @@ pub(super) fn fuzz_check() -> Result<(), String> {
 }
 
 fn check_public_api_snapshot_for(snapshot_path: &str, args: &[&str]) -> Result<(), String> {
-    let actual = run_cargo_capture(args).map_err(|err| {
+    let rustup_args = pinned_nightly_cargo_args(args);
+    let actual = run_program_capture(OsString::from("rustup"), &rustup_args, &[]).map_err(|err| {
         format!(
             "{err}\n`cargo xtask api-check` requires cargo-public-api; install it with `cargo install cargo-public-api` if the command is unavailable"
         )
     })?;
     check_public_api_snapshot(&actual, snapshot_path)
+}
+
+fn pinned_nightly_cargo_args<'a>(args: &'a [&'a str]) -> Vec<&'a str> {
+    let mut rustup_args = vec!["run", PINNED_NIGHTLY_TOOLCHAIN, "cargo"];
+    rustup_args.extend_from_slice(args);
+    rustup_args
 }
 
 fn run_semver_check() -> Result<(), String> {
@@ -459,8 +466,19 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn fuzz_checks_use_the_ci_pinned_nightly_toolchain() {
+    fn nightly_tools_use_the_ci_pinned_toolchain() {
         assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-04-17");
+        assert_eq!(
+            pinned_nightly_cargo_args(&["public-api", "-p", "wsi-rs"]),
+            [
+                "run",
+                "nightly-2026-04-17",
+                "cargo",
+                "public-api",
+                "-p",
+                "wsi-rs"
+            ]
+        );
     }
 
     #[test]
@@ -472,6 +490,8 @@ mod tests {
         assert!(script.contains("BASELINE_VERSION=\"0.4.0\""));
         assert!(script.contains("BASELINE_SHA256="));
         assert!(script.contains("--baseline-rustdoc"));
+        assert!(script.contains("cargo +nightly-2026-04-17 rustdoc"));
+        assert!(!script.contains("cargo +nightly rustdoc"));
         assert!(!script.contains("skipping cargo-semver-checks"));
     }
 

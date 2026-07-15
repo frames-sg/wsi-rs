@@ -52,16 +52,16 @@ build_rustdoc() {
     cd "$root"
     if [[ "$root" == "$repo_root" && "$profile" == "default" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly rustdoc --package wsi-rs --lib --locked
+        cargo +nightly-2026-04-17 rustdoc --package wsi-rs --lib --locked
     elif [[ "$root" == "$repo_root" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly rustdoc --package wsi-rs --lib --features "$profile" --locked
+        cargo +nightly-2026-04-17 rustdoc --package wsi-rs --lib --features "$profile" --locked
     elif [[ "$profile" == "default" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly rustdoc --lib --locked
+        cargo +nightly-2026-04-17 rustdoc --lib --locked
     else
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly rustdoc --lib --features "$profile" --locked
+        cargo +nightly-2026-04-17 rustdoc --lib --features "$profile" --locked
     fi
     cp target/doc/wsi_rs.json "$output"
   )
