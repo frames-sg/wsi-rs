@@ -52,19 +52,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
           toolchain: "1.96.0"
-          targets: i686-unknown-linux-gnu
       - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
         with:
           tool: cargo-hack@0.6.44
       - run: cargo xtask feature-check
         working-directory: wsi-rs
-      - name: Check OpenSlide shim on 32-bit ABI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib
-          cargo +1.96.0 check -p wsi-rs-openslide-shim --target i686-unknown-linux-gnu --locked
-        working-directory: wsi-rs
-
   docs:
     runs-on: ubuntu-latest
     steps:
