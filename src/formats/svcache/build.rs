@@ -3,7 +3,7 @@ use super::*;
 
 pub fn build_svcache(source_path: &Path, out_path: &Path) -> Result<(), WsiError> {
     let registry = FormatRegistry::builtin_native();
-    let source = registry.open_exact(source_path)?;
+    let source = registry.open(source_path)?;
     let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
     let source_fingerprint = fingerprint_source(source_path)?;
 
@@ -207,7 +207,7 @@ fn build_partial_svcache_with_existing_policy(
     existing_tile_policy: ExistingTilePolicy,
 ) -> Result<usize, WsiError> {
     let registry = FormatRegistry::builtin_native();
-    let source = registry.open_exact(source_path)?;
+    let source = registry.open(source_path)?;
     let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
     let source_fingerprint = fingerprint_source(source_path)?;
 

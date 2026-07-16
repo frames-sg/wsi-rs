@@ -1,4 +1,3 @@
-use super::dispatch::TiffPixelReaderNoSyntheticPrime;
 use super::*;
 
 impl TiffPixelReader {
@@ -120,43 +119,6 @@ impl TiffPixelReader {
             Ok(Some(scaled))
         } else {
             Ok(None)
-        }
-    }
-
-    pub(super) fn prime_deepest_synthetic_levels_best_effort(&self) {
-        let mut deepest: HashMap<SyntheticDeepestKey, SyntheticDeepestValue> = HashMap::new();
-        for (key, source) in &self.layout.tile_sources {
-            let TileSource::SyntheticDownsample { base_level, factor } = source else {
-                continue;
-            };
-            deepest
-                .entry((key.scene, key.series, key.z, key.c, key.t))
-                .and_modify(|current| {
-                    if key.level > current.0 {
-                        *current = (key.level, *base_level, *factor);
-                    }
-                })
-                .or_insert((key.level, *base_level, *factor));
-        }
-
-        for ((scene, series, z, c, t), (target_level, base_level, factor)) in deepest {
-            let req = TileRequest {
-                scene: scene.into(),
-                series: series.into(),
-                level: target_level.into(),
-                plane: PlaneSelection { z, c, t }.into(),
-                col: 0,
-                row: 0,
-            };
-            let key = Self::synthetic_level_key_for_tile(&req, base_level);
-            if self.get_cached_synthetic_level(&key).is_some() {
-                continue;
-            }
-            if let Ok(Some(image)) =
-                self.try_decode_synthetic_level_with_j2k(&req, base_level, factor)
-            {
-                self.put_synthetic_level_cache(key, Arc::new(image));
-            }
         }
     }
 
@@ -512,9 +474,8 @@ impl TiffPixelReader {
                 })?,
             ),
         };
-        let base_source = TiffPixelReaderNoSyntheticPrime { inner: self };
         let base_region = ensure_interleaved_rgb_u8(composite_region_from_source(
-            &base_source,
+            self,
             cache,
             &base_req,
             max_region_pixels,

@@ -1723,6 +1723,23 @@ fn build_synthetic_ndpi_reader(
 }
 
 #[test]
+fn synthetic_ndpi_dataset_access_does_not_prime_level_cache() {
+    let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
+
+    assert_eq!(
+        reader.synthetic_region_cache.lock().unwrap().current_bytes,
+        0,
+        "synthetic region cache should start empty"
+    );
+    let _ = reader.dataset();
+    assert_eq!(
+        reader.synthetic_region_cache.lock().unwrap().current_bytes,
+        0,
+        "metadata access must not decode or cache synthetic pixels"
+    );
+}
+
+#[test]
 fn synthetic_ndpi_level_source_kind_marks_generated_downsamples() {
     let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
 

@@ -138,9 +138,6 @@ impl<'a> SlideReadContext<'a> {
 ///     fn read_tile_cpu(&self, _: &TileRequest) -> Result<CpuTile, WsiError> {
 ///         Ok(CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![255, 0, 0]).unwrap())
 ///     }
-///     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-///         Err(WsiError::AssociatedImageNotFound(name.into()))
-///     }
 /// }
 /// let m = Mock;
 /// let _ = m.read_tile(
@@ -288,7 +285,9 @@ pub trait SlideReader: Send + Sync {
             Err(err) => Err(err),
         }
     }
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError>;
+    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
+        Err(WsiError::AssociatedImageNotFound(name.into()))
+    }
     fn recommended_shared_cache_bytes(&self) -> Option<u64> {
         None
     }

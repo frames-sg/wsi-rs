@@ -265,17 +265,6 @@ pub(crate) enum TileSource {
     /// that level.
     SyntheticDownsample { base_level: u32, factor: u32 },
 
-    /// A public level composed from multiple tiled TIFF IFD-backed images.
-    ///
-    /// Leica SCN exposes one stitched public slide assembled from multiple
-    /// brightfield images positioned within the collection coordinate space.
-    /// Each component contributes a rectangular region at this public level.
-    #[allow(dead_code)]
-    StitchedLevel {
-        components: Vec<StitchedLevelComponent>,
-        direct_tiles: HashMap<(i64, i64), usize>,
-    },
-
     /// Stripped TIFF (associated images, older formats).
     Stripped {
         ifd_id: IfdId,
@@ -288,21 +277,6 @@ pub(crate) enum TileSource {
 
     /// Associated image stored as an external JPEG sidecar file.
     ExternalJpeg { path: PathBuf },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StitchedLevelComponent {
-    pub ifd_id: IfdId,
-    pub jpeg_tables: Option<Vec<u8>>,
-    pub compression: Compression,
-    pub origin_x: i64,
-    pub origin_y: i64,
-    pub width: u64,
-    pub height: u64,
-    pub tile_width: u32,
-    pub tile_height: u32,
-    pub tiles_across: u64,
-    pub tiles_down: u64,
 }
 
 pub(crate) fn compute_tiff_dataset_identity(

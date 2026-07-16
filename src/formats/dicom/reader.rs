@@ -17,10 +17,6 @@ impl SlideReader for DicomReader {
             .unwrap_or(TileCodecKind::Other)
     }
 
-    fn use_display_tile_cache(&self, _req: &TileViewRequest) -> bool {
-        true
-    }
-
     fn read_tiles(
         &self,
         reqs: &[TileRequest],

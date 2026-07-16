@@ -101,10 +101,6 @@ impl MiraxBackend {
         }
     }
 
-    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
-        FileIdentity::from_path(path)
-    }
-
     fn parse(&self, path: &Path) -> Result<Arc<MiraxSlide>, WsiError> {
         Ok(Arc::new(MiraxSlide::parse(path)?))
     }
@@ -121,7 +117,7 @@ impl FormatProbe for MiraxBackend {
         if !looks_like_mirax(path) {
             return Ok(not_detected());
         }
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         if self
             .probe_cache
             .lock()
@@ -153,7 +149,7 @@ impl FormatProbe for MiraxBackend {
 
 impl DatasetReader for MiraxBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         let cached = self
             .probe_cache
             .lock()

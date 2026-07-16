@@ -546,10 +546,6 @@ impl SlideReader for AdaptiveDecodeReader {
             .with_current(|| self.inner.read_display_tile(req))
     }
 
-    fn associated_image(&self, name: &str) -> Result<Option<CpuTile>, WsiError> {
-        self.inner.associated_image(name)
-    }
-
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.inner.read_associated(name)
     }

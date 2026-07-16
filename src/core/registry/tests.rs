@@ -97,9 +97,18 @@ impl SlideReader for MockSource {
             data: CpuTileData::u8(data),
         })
     }
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        Err(WsiError::AssociatedImageNotFound(name.into()))
-    }
+}
+
+#[test]
+fn slide_reader_defaults_to_no_associated_images() {
+    let error = MockSource::new()
+        .read_associated("label")
+        .expect_err("a reader without associated images should report not found");
+
+    assert!(matches!(
+        error,
+        WsiError::AssociatedImageNotFound(name) if name == "label"
+    ));
 }
 
 struct CountingSource {

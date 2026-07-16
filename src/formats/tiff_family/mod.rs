@@ -60,10 +60,6 @@ impl TiffFamilyBackend {
         }
     }
 
-    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
-        FileIdentity::from_path(path)
-    }
-
     /// Find the first interpreter that detects the given container.
     fn find_interpreter(&self, container: &TiffContainer) -> Option<&dyn TiffLayoutInterpreter> {
         self.interpreters
@@ -81,7 +77,11 @@ impl FormatProbe for TiffFamilyBackend {
         let container = match TiffContainer::open(path) {
             Ok(c) => c,
             Err(err) => {
-                if has_extension(path, "ndpi") {
+                if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("ndpi"))
+                {
                     return Err(err.into_wsi_error(path));
                 }
                 return Ok(ProbeResult {
@@ -96,7 +96,7 @@ impl FormatProbe for TiffFamilyBackend {
         if let Some(interp) = self.find_interpreter(&container) {
             let vendor = interp.vendor_name().to_string();
             // Cache the container for open() to consume
-            let key = Self::cache_key(path)?;
+            let key = FileIdentity::from_path(path)?;
             let mut cache = self.probe_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.put(key, Arc::new(container));
 
@@ -116,16 +116,10 @@ impl FormatProbe for TiffFamilyBackend {
     }
 }
 
-fn has_extension(path: &Path, expected: &str) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
-}
-
 impl DatasetReader for TiffFamilyBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         let started = Instant::now();
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
 
         // Try to consume the cached container from probe()
         let cached_container = {

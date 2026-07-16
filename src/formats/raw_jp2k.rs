@@ -22,12 +22,6 @@ const MARKER_SOC_BYTES: [u8; 2] = [0xFF, 0x4F];
 
 pub(crate) struct RawJp2kBackend;
 
-impl RawJp2kBackend {
-    pub(crate) fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatProbe for RawJp2kBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
@@ -229,9 +223,5 @@ impl SlideReader for RawJp2kReader {
             .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
             .data(self.data.clone())
             .build()?)
-    }
-
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        Err(WsiError::AssociatedImageNotFound(name.into()))
     }
 }

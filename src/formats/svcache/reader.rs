@@ -1,12 +1,6 @@
 use super::storage::{dataset_from_metadata, hex_encode, read_svcache};
 use super::*;
 
-impl SvcacheBackend {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatProbe for SvcacheBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let mut file = File::open(path)?;

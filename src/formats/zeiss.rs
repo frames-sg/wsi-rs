@@ -40,22 +40,6 @@ const FILE_MAGIC: &[u8; 16] = b"ZISRAWFILE\0\0\0\0\0\0";
 
 pub(crate) struct ZeissBackend;
 
-impl ZeissBackend {
-    pub(crate) fn new() -> Self {
-        Self
-    }
-
-    fn parse(&self, path: &Path) -> Result<Arc<ZeissSlide>, WsiError> {
-        Ok(Arc::new(ZeissSlide::parse(path)?))
-    }
-}
-
-impl Default for ZeissBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FormatProbe for ZeissBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let mut magic = [0u8; 16];
@@ -87,7 +71,7 @@ impl FormatProbe for ZeissBackend {
 
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let slide = self.parse(path)?;
+        let slide = Arc::new(ZeissSlide::parse(path)?);
         Ok(Box::new(ZeissReader { slide }))
     }
 }

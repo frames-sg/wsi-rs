@@ -19,8 +19,6 @@ pub(crate) struct TiffPixelReader {
     pub(super) synthetic_region_cache: Mutex<SyntheticLevelCache>,
     pub(super) synthetic_level_flights: Mutex<HashMap<SyntheticLevelKey, SyntheticLevelFlight>>,
     pub(super) synthetic_level_ready: Condvar,
-    pub(super) synthetic_prime_once: OnceLock<()>,
-    pub(super) stitched_component_tile_cache: Mutex<StitchedComponentTileCache>,
 }
 
 impl TiffPixelReader {
@@ -67,8 +65,6 @@ impl TiffPixelReader {
             )),
             synthetic_level_flights: Mutex::new(HashMap::new()),
             synthetic_level_ready: Condvar::new(),
-            synthetic_prime_once: OnceLock::new(),
-            stitched_component_tile_cache: Mutex::new(StitchedComponentTileCache::default()),
         }
     }
 }

@@ -26,12 +26,6 @@ const OLYMPUS_JPEG_2000: u32 = 3;
 
 pub(crate) struct OlympusVsiBackend;
 
-impl OlympusVsiBackend {
-    pub(crate) fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatProbe for OlympusVsiBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let detected = is_vsi_path(path) && companion_dir(path).is_some_and(|dir| dir.is_dir());
@@ -60,10 +54,6 @@ impl SlideReader for OlympusVsiReader {
         &self.slide.dataset
     }
 
-    fn use_display_tile_cache(&self, _req: &TileViewRequest) -> bool {
-        true
-    }
-
     fn read_tiles(
         &self,
         reqs: &[TileRequest],
@@ -79,10 +69,6 @@ impl SlideReader for OlympusVsiReader {
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.read_tile_with_backend(req, BackendRequest::Auto)
-    }
-
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        Err(WsiError::AssociatedImageNotFound(name.into()))
     }
 }
 

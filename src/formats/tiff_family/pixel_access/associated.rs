@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::OnceLock;
 
 impl TiffPixelReader {
     pub(super) fn stripped_associated_decode_pool() -> Result<&'static rayon::ThreadPool, WsiError>

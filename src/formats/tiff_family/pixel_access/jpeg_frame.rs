@@ -167,7 +167,7 @@ pub(super) fn standalone_jpeg_frame_owned(
 }
 
 fn validate_standalone_jpeg_payload(tile_data: &[u8]) -> Result<(), WsiError> {
-    if !jpeg_has_soi(tile_data) {
+    if !tile_data.starts_with(&[0xFF, 0xD8]) {
         return Err(WsiError::Unsupported {
             reason: "JPEG passthrough requires tile payloads to start with SOI".into(),
         });
@@ -206,10 +206,6 @@ fn scan_baseline_jpeg_frame(data: &[u8]) -> Result<(bool, bool, JpegFrameInfo), 
         reason: "JPEG passthrough could not find a Baseline JPEG SOF0 marker".into(),
     })?;
     Ok((has_dqt, has_dht, info))
-}
-
-pub(super) fn jpeg_has_soi(data: &[u8]) -> bool {
-    data.starts_with(&[0xFF, 0xD8])
 }
 
 pub(super) fn rebuild_jpeg_frame_with_tables(

@@ -52,10 +52,6 @@ impl HamamatsuVmsBackend {
         }
     }
 
-    fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
-        FileIdentity::from_path(path)
-    }
-
     fn parse(&self, path: &Path) -> Result<Arc<VmsSlide>, WsiError> {
         let slide = Arc::new(VmsSlide::parse(path)?);
         Ok(slide)
@@ -104,7 +100,7 @@ impl FormatProbe for HamamatsuVmsBackend {
         }
 
         let slide = self.parse(path)?;
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         self.probe_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -120,7 +116,7 @@ impl FormatProbe for HamamatsuVmsBackend {
 
 impl DatasetReader for HamamatsuVmsBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         let cached = self
             .probe_cache
             .lock()

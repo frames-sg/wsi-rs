@@ -55,7 +55,7 @@ impl FormatRegistry {
     /// Create a registry with all built-in backends registered.
     pub fn builtin() -> Self {
         let mut reg = Self::new();
-        let svcache = Arc::new(SvcacheBackend::new());
+        let svcache = Arc::new(SvcacheBackend);
         reg.register(svcache.clone(), svcache);
         reg.register_native_backends();
         reg
@@ -74,13 +74,13 @@ impl FormatRegistry {
         self.register(mirax.clone(), mirax);
         let vms = Arc::new(HamamatsuVmsBackend::new());
         self.register(vms.clone(), vms);
-        let vsi = Arc::new(OlympusVsiBackend::new());
+        let vsi = Arc::new(OlympusVsiBackend);
         self.register(vsi.clone(), vsi);
-        let raw_jp2k = Arc::new(RawJp2kBackend::new());
+        let raw_jp2k = Arc::new(RawJp2kBackend);
         self.register(raw_jp2k.clone(), raw_jp2k);
-        let zeiss_zvi = Arc::new(ZeissZviBackend::new());
+        let zeiss_zvi = Arc::new(ZeissZviBackend);
         self.register(zeiss_zvi.clone(), zeiss_zvi);
-        let zeiss = Arc::new(ZeissBackend::new());
+        let zeiss = Arc::new(ZeissBackend);
         self.register(zeiss.clone(), zeiss);
         let tiff = Arc::new(TiffFamilyBackend::new());
         self.register(tiff.clone(), tiff);
@@ -97,10 +97,6 @@ impl FormatRegistry {
     /// Probe all backends, open with best match.
     /// Definite confidence beats Likely. First-registered wins ties.
     pub fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_exact(path)
-    }
-
-    pub(crate) fn open_exact(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         match self.best_probe(path)? {
             Some((_, i)) => self.backends[i].reader.open(path),
             None => Err(WsiError::UnsupportedFormat(path.display().to_string())),

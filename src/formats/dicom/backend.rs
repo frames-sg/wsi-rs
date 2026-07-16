@@ -75,10 +75,6 @@ impl DicomBackend {
         }
     }
 
-    pub(super) fn cache_key(path: &Path) -> Result<FileIdentity, WsiError> {
-        FileIdentity::from_path(path)
-    }
-
     pub(super) fn parse(&self, path: &Path) -> Result<Arc<DicomSlide>, WsiError> {
         Ok(Arc::new(DicomSlide::parse(path)?))
     }
@@ -92,7 +88,7 @@ impl Default for DicomBackend {
 
 impl FormatProbe for DicomBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         if self
             .probe_cache
             .lock()
@@ -156,7 +152,7 @@ impl FormatProbe for DicomBackend {
 
 impl DatasetReader for DicomBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = Self::cache_key(path)?;
+        let key = FileIdentity::from_path(path)?;
         let cached = self
             .probe_cache
             .lock()

@@ -133,37 +133,8 @@ impl TiffPixelReader {
     }
 }
 
-pub(super) struct TiffPixelReaderNoSyntheticPrime<'a> {
-    pub(super) inner: &'a TiffPixelReader,
-}
-
-impl SlideReader for TiffPixelReaderNoSyntheticPrime<'_> {
-    fn dataset(&self) -> &Dataset {
-        &self.inner.layout.dataset
-    }
-
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        <TiffPixelReader as SlideReader>::read_tiles(self.inner, reqs, output)
-    }
-
-    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.inner.read_tile_cpu(req)
-    }
-
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        self.inner.read_associated(name)
-    }
-}
-
 impl SlideReader for TiffPixelReader {
     fn dataset(&self) -> &Dataset {
-        let _ = self
-            .synthetic_prime_once
-            .get_or_init(|| self.prime_deepest_synthetic_levels_best_effort());
         &self.layout.dataset
     }
 
@@ -270,9 +241,6 @@ impl SlideReader for TiffPixelReader {
             }),
             TileSource::SyntheticDownsample { .. } => Err(WsiError::Unsupported {
                 reason: "JPEG passthrough is not available for synthetic downsample levels".into(),
-            }),
-            TileSource::StitchedLevel { .. } => Err(WsiError::Unsupported {
-                reason: "JPEG passthrough is not available for stitched levels".into(),
             }),
             TileSource::Stripped { .. } | TileSource::ExternalJpeg { .. } => Err(WsiError::Unsupported {
                 reason: "JPEG passthrough is only available for tiled image levels".into(),
@@ -446,10 +414,6 @@ impl SlideReader for TiffPixelReader {
                 *compression,
                 BackendRequest::Auto,
             ),
-            TileSource::StitchedLevel {
-                components,
-                direct_tiles,
-            } => self.read_stitched_level_tile(req, components, direct_tiles),
             TileSource::SyntheticDownsample { base_level, factor } => {
                 if req.col != 0 || req.row != 0 {
                     return Err(WsiError::TileRead {

@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 
 use j2k_core::BackendRequest;
 use j2k_jpeg::transcode::{
@@ -38,9 +38,7 @@ use crate::decode::jpeg::{decode_batch_jpeg, decode_jpeg_rgb_with_size_override,
 use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::IfdId;
-use crate::formats::tiff_family::layout::{
-    DatasetLayout, StitchedLevelComponent, TileSource, TileSourceKey,
-};
+use crate::formats::tiff_family::layout::{DatasetLayout, TileSource, TileSourceKey};
 
 mod associated;
 mod caches;
@@ -54,7 +52,6 @@ mod ndpi_core;
 mod ndpi_retile;
 mod ndpi_tiles;
 mod reader;
-mod stitched;
 mod synthetic;
 mod tiled_ifd;
 

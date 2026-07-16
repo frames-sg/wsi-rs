@@ -17,7 +17,6 @@ pub(super) const NDPI_STRIP_CACHE_BYTES_ENV: &str = "WSI_RS_NDPI_STRIP_CACHE_BYT
 pub(super) const DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const SYNTHETIC_LEVEL_CACHE_BYTES_ENV: &str = "WSI_RS_SYNTHETIC_LEVEL_CACHE_BYTES";
 pub(super) const DEFAULT_JP2K_SHARED_TILE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
-pub(super) const DEFAULT_STITCHED_COMPONENT_TILE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_BATCH: usize = 4;
 pub(super) const NDPI_DISPLAY_NARROW_STRIP_BATCH: usize = 8;
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -26,8 +25,6 @@ pub(super) const JPEG_DEVICE_DECODE_ENV: &str = "WSI_RS_JPEG_DEVICE_DECODE";
 pub(super) const JP2K_DEVICE_DECODE_ENV: &str = "WSI_RS_JP2K_DEVICE_DECODE";
 
 pub(super) type NdpiMcuStartsCache = HashMap<(IfdId, u16), Arc<Vec<u64>>>;
-pub(super) type SyntheticDeepestKey = (usize, usize, u32, u32, u32);
-pub(super) type SyntheticDeepestValue = (u32, u32, u32);
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_WIDTH: u32 = 1024;
 
 pub(super) struct NdpiJpegTilePayload {
@@ -126,17 +123,6 @@ pub(super) type FullDecodeCache = ByteSizedTileCache<IfdId, DEFAULT_FULL_DECODE_
 pub(super) type NdpiStripCache = ByteSizedTileCache<NdpiStripKey, DEFAULT_NDPI_STRIP_CACHE_BYTES>;
 pub(super) type SyntheticLevelCache =
     ByteSizedTileCache<SyntheticLevelKey, DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES>;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(super) struct StitchedComponentTileKey {
-    pub(super) ifd_id: IfdId,
-    pub(super) tile_idx: usize,
-    pub(super) width: u32,
-    pub(super) height: u32,
-}
-
-pub(super) type StitchedComponentTileCache =
-    ByteSizedTileCache<StitchedComponentTileKey, DEFAULT_STITCHED_COMPONENT_TILE_CACHE_BYTES>;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct FullDecodeFlight {

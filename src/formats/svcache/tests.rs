@@ -106,7 +106,7 @@ fn svcache_round_trips_single_tile() {
     let metadata = single_level_svcache_metadata(source.path(), true, 1, 1, vec![Some(tile_meta)]);
     write_svcache_file(&out_path, &metadata, payload).unwrap();
 
-    let backend = SvcacheBackend::new();
+    let backend = SvcacheBackend;
     let reader = backend.open(&out_path).unwrap();
     let decoded = reader
         .read_tile_cpu(&TileRequest {
@@ -324,7 +324,7 @@ fn svcache_sparse_level_reports_missing_tile() {
     let metadata = single_level_svcache_metadata(source.path(), false, 2, 1, vec![None, None]);
     write_svcache_file(&out_path, &metadata, payload).unwrap();
 
-    let backend = SvcacheBackend::new();
+    let backend = SvcacheBackend;
     let reader = backend.open(&out_path).unwrap();
     let err = reader
         .read_tile_cpu(&TileRequest {
@@ -535,7 +535,7 @@ fn build_svcache_tiles_replace_rewrites_selected_tiles_when_cache_exists() {
     assert_eq!(level.sparse_tiles.len(), 1);
     assert_eq!(level.sparse_tiles[0].index, 0);
 
-    let backend = SvcacheBackend::new();
+    let backend = SvcacheBackend;
     let reader = backend.open(&out_path).unwrap();
     reader
         .read_tile_cpu(&TileRequest {
@@ -606,7 +606,7 @@ fn build_svcache_tile_payloads_replace_writes_sparse_decoded_tiles() {
     assert!(level.tiles.is_empty());
     assert_eq!(level.sparse_tiles.len(), 1);
 
-    let backend = SvcacheBackend::new();
+    let backend = SvcacheBackend;
     let reader = backend.open(&out_path).unwrap();
     let decoded = reader
         .read_tile_cpu(&TileRequest {

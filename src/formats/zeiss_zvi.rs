@@ -33,22 +33,6 @@ const CFB_MAGIC: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 
 pub(crate) struct ZeissZviBackend;
 
-impl ZeissZviBackend {
-    pub(crate) fn new() -> Self {
-        Self
-    }
-
-    fn parse(&self, path: &Path) -> Result<Arc<ZviSlide>, WsiError> {
-        Ok(Arc::new(ZviSlide::parse(path)?))
-    }
-}
-
-impl Default for ZeissZviBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FormatProbe for ZeissZviBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let mut magic = [0u8; 8];
@@ -98,7 +82,7 @@ impl FormatProbe for ZeissZviBackend {
 
 impl DatasetReader for ZeissZviBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let slide = self.parse(path)?;
+        let slide = Arc::new(ZviSlide::parse(path)?);
         Ok(Box::new(ZviReader { slide }))
     }
 }
