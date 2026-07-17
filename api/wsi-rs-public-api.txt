@@ -6,6 +6,7 @@ pub wsi_rs::error::WsiError::BackendContract
 pub wsi_rs::error::WsiError::BackendContract::actual: usize
 pub wsi_rs::error::WsiError::BackendContract::context: &'static str
 pub wsi_rs::error::WsiError::BackendContract::expected: usize
+pub wsi_rs::error::WsiError::Cancelled
 pub wsi_rs::error::WsiError::Codec
 pub wsi_rs::error::WsiError::Codec::codec: &'static str
 pub wsi_rs::error::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
@@ -110,6 +111,7 @@ pub wsi_rs::prelude::WsiError::BackendContract
 pub wsi_rs::prelude::WsiError::BackendContract::actual: usize
 pub wsi_rs::prelude::WsiError::BackendContract::context: &'static str
 pub wsi_rs::prelude::WsiError::BackendContract::expected: usize
+pub wsi_rs::prelude::WsiError::Cancelled
 pub wsi_rs::prelude::WsiError::Codec
 pub wsi_rs::prelude::WsiError::Codec::codec: &'static str
 pub wsi_rs::prelude::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
@@ -286,7 +288,9 @@ pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result
 pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tiles_controlled(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 impl core::fmt::Debug for wsi_rs::Slide
@@ -499,6 +503,7 @@ pub wsi_rs::WsiError::BackendContract
 pub wsi_rs::WsiError::BackendContract::actual: usize
 pub wsi_rs::WsiError::BackendContract::context: &'static str
 pub wsi_rs::WsiError::BackendContract::expected: usize
+pub wsi_rs::WsiError::Cancelled
 pub wsi_rs::WsiError::Codec
 pub wsi_rs::WsiError::Codec::codec: &'static str
 pub wsi_rs::WsiError::Codec::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
@@ -719,6 +724,15 @@ pub fn wsi_rs::RawCompressedTileBuilder::data(self, alloc::vec::Vec<u8>) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::dimensions(self, u32, u32) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::photometric_interpretation(self, wsi_rs::EncodedTilePhotometricInterpretation) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::samples_per_pixel(self, u16) -> Self
+pub struct wsi_rs::ReadCancellationToken
+impl wsi_rs::ReadCancellationToken
+pub fn wsi_rs::ReadCancellationToken::cancel(&self)
+pub fn wsi_rs::ReadCancellationToken::is_cancelled(&self) -> bool
+pub fn wsi_rs::ReadCancellationToken::new() -> Self
+pub struct wsi_rs::ReadControl
+impl wsi_rs::ReadControl
+pub fn wsi_rs::ReadControl::cancellation(&self) -> &wsi_rs::ReadCancellationToken
+pub const fn wsi_rs::ReadControl::new(wsi_rs::ReadCancellationToken) -> Self
 #[non_exhaustive] pub struct wsi_rs::RegionRequest
 pub wsi_rs::RegionRequest::level: wsi_rs::LevelIdx
 pub wsi_rs::RegionRequest::origin_px: (i64, i64)
@@ -782,7 +796,9 @@ pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result
 pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_tiles_controlled(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 impl core::fmt::Debug for wsi_rs::Slide
@@ -809,6 +825,8 @@ pub fn wsi_rs::SlideReadContext<'a>::output(&self) -> &wsi_rs::TileOutputPrefere
 pub wsi_rs::SourceIccProfile::bytes: alloc::vec::Vec<u8>
 pub wsi_rs::SourceIccProfile::key: wsi_rs::SourceIccProfileKey
 pub wsi_rs::SourceIccProfile::provenance: wsi_rs::IccProfileProvenance
+impl wsi_rs::SourceIccProfile
+pub fn wsi_rs::SourceIccProfile::new(wsi_rs::SourceIccProfileKey, alloc::vec::Vec<u8>, wsi_rs::IccProfileProvenance) -> Self
 #[non_exhaustive] pub struct wsi_rs::SourceIccProfileConflict
 pub wsi_rs::SourceIccProfileConflict::scene: wsi_rs::SceneId
 pub wsi_rs::SourceIccProfileConflict::series: wsi_rs::SeriesId
@@ -820,6 +838,10 @@ pub wsi_rs::SourceIccProfileKey::channel: core::option::Option<usize>
 pub wsi_rs::SourceIccProfileKey::optical_path: core::option::Option<usize>
 pub wsi_rs::SourceIccProfileKey::scene: wsi_rs::SceneId
 pub wsi_rs::SourceIccProfileKey::series: wsi_rs::SeriesId
+impl wsi_rs::SourceIccProfileKey
+pub const fn wsi_rs::SourceIccProfileKey::new(wsi_rs::SceneId, wsi_rs::SeriesId) -> Self
+pub const fn wsi_rs::SourceIccProfileKey::with_channel(self, usize) -> Self
+pub const fn wsi_rs::SourceIccProfileKey::with_optical_path(self, usize) -> Self
 #[non_exhaustive] pub struct wsi_rs::SvcacheTileSelection
 pub wsi_rs::SvcacheTileSelection::col: i64
 pub wsi_rs::SvcacheTileSelection::level: wsi_rs::LevelIdx
@@ -906,6 +928,7 @@ pub fn wsi_rs::SlideReader::read_region_fastpath(&self, &mut wsi_rs::SlideReadCo
 pub fn wsi_rs::SlideReader::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_tile_cpu(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::read_tiles_controlled(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_tiles_cpu(&self, &[wsi_rs::TileRequest]) -> core::result::Result<alloc::vec::Vec<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::recommended_shared_cache_bytes(&self) -> core::option::Option<u64>
 pub fn wsi_rs::SlideReader::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind

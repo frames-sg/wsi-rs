@@ -553,7 +553,7 @@ version = "0.7.15"
 criteria = "safe-to-run"
 
 [[exemptions.wsi-rs]]
-version = "0.5.0"
+version = "0.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.zmij]]
