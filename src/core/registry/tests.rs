@@ -1409,3 +1409,48 @@ fn read_associated_delegates_to_source() {
         other => panic!("expected AssociatedImageNotFound, got {:?}", other),
     }
 }
+
+struct CancellingSource {
+    inner: MockSource,
+    token: crate::ReadCancellationToken,
+    reads: Arc<AtomicUsize>,
+}
+
+impl SlideReader for CancellingSource {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.token.cancel();
+        self.inner.read_tile_cpu(req)
+    }
+}
+
+#[test]
+fn controlled_tile_reads_stop_between_batch_elements() {
+    let token = crate::ReadCancellationToken::new();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let source: Box<dyn SlideReader> = Box::new(CancellingSource {
+        inner: MockSource::new(),
+        token: token.clone(),
+        reads: Arc::clone(&reads),
+    });
+    let slide = Slide::from_source(source, Arc::new(TileCache::new(1024)));
+    let requests = [
+        TileRequest::new(0usize, 0usize, 0, 0, 0),
+        TileRequest::new(0usize, 0usize, 0, 1, 0),
+    ];
+
+    let error = slide
+        .read_tiles_controlled(
+            &requests,
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::new(token),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+}

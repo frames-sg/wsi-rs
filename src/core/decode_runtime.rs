@@ -493,6 +493,20 @@ impl SlideReader for AdaptiveDecodeReader {
         self.read_tiles_adaptive(reqs, output)
     }
 
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        control.check_cancelled()?;
+        let tiles = self
+            .runtime
+            .with_current(|| self.inner.read_tiles_controlled(reqs, output, control))?;
+        control.check_cancelled()?;
+        Ok(tiles)
+    }
+
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.runtime.with_current(|| self.inner.read_tile_cpu(req))
     }

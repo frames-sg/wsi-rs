@@ -63,6 +63,35 @@ impl MetalDeviceTile {
         Self::from_resident(image).map(Some)
     }
 
+    pub(crate) fn crop_top_left(
+        self,
+        expected_width: u32,
+        expected_height: u32,
+    ) -> Result<Self, WsiError> {
+        if expected_width == 0 || expected_height == 0 {
+            return Ok(self);
+        }
+        let image = self.validated_resident_image()?;
+        let dimensions = (
+            image.dimensions().0.min(expected_width),
+            image.dimensions().1.min(expected_height),
+        );
+        if dimensions == image.dimensions() {
+            return Ok(self);
+        }
+        let layout = j2k_metal_support::MetalImageLayout::new(
+            image.byte_offset(),
+            dimensions,
+            image.pitch_bytes(),
+            image.pixel_format(),
+        )
+        .map_err(|source| interop::support_error("metal-tile-crop-layout", source))?;
+        let cropped = image
+            .view(layout)
+            .map_err(|source| interop::support_error("metal-tile-crop-view", source))?;
+        Self::from_resident(cropped)
+    }
+
     pub(crate) fn ycbcr8_to_rgb8(
         &self,
         converter: &YcbcrToRgb8Converter,

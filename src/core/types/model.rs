@@ -132,6 +132,30 @@ pub struct SourceIccProfileKey {
     pub channel: Option<usize>,
 }
 
+impl SourceIccProfileKey {
+    #[must_use]
+    pub const fn new(scene: SceneId, series: SeriesId) -> Self {
+        Self {
+            scene,
+            series,
+            optical_path: None,
+            channel: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_optical_path(mut self, optical_path: usize) -> Self {
+        self.optical_path = Some(optical_path);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_channel(mut self, channel: usize) -> Self {
+        self.channel = Some(channel);
+        self
+    }
+}
+
 /// Source ICC profile bytes plus the normalized key and extraction provenance.
 ///
 /// Use [`SourceIccProfileKey`] for dataset indices and numeric refinements.
@@ -146,6 +170,17 @@ pub struct SourceIccProfile {
     pub bytes: Vec<u8>,
     /// Where this profile was found.
     pub provenance: IccProfileProvenance,
+}
+
+impl SourceIccProfile {
+    #[must_use]
+    pub fn new(key: SourceIccProfileKey, bytes: Vec<u8>, provenance: IccProfileProvenance) -> Self {
+        Self {
+            key,
+            bytes,
+            provenance,
+        }
+    }
 }
 
 /// Provenance for ICC profile bytes extracted from source metadata.

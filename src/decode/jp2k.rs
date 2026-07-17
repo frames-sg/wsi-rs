@@ -773,6 +773,7 @@ fn decode_jp2k_tile_batch_to_device_pixels(
                 });
             }
             if let Some(tile) = crate::output::metal::MetalDeviceTile::from_j2k(surface)? {
+                let tile = tile.crop_top_left(req.expected_width, req.expected_height)?;
                 ycbcr_slots.push(pixels.len());
                 ycbcr_tiles.push(tile);
                 pixels.push(None);
@@ -847,8 +848,10 @@ fn tile_pixels_from_jp2k_surface(
                 let converter = metal_sessions.ycbcr_to_rgb8_converter()?;
                 return tile
                     .ycbcr8_to_rgb8(&converter)
+                    .and_then(|tile| tile.crop_top_left(expected_width, expected_height))
                     .map(|tile| TilePixels::Device(DeviceTile::Metal(tile)));
             }
+            let tile = tile.crop_top_left(expected_width, expected_height)?;
             return Ok(TilePixels::Device(DeviceTile::Metal(tile)));
         }
         if require_device {

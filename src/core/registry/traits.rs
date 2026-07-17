@@ -194,6 +194,21 @@ pub trait SlideReader: Send + Sync {
             .map(|req| self.read_tile_cpu(req).map(TilePixels::Cpu))
             .collect()
     }
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        control.check_cancelled()?;
+        let mut tiles = Vec::with_capacity(reqs.len());
+        for request in reqs {
+            control.check_cancelled()?;
+            tiles.push(self.read_tile(request, output.clone())?);
+            control.check_cancelled()?;
+        }
+        Ok(tiles)
+    }
     fn read_tile(
         &self,
         req: &TileRequest,

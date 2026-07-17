@@ -576,6 +576,48 @@ impl SlideReader for TiffPixelReader {
             .map(|tiles| tiles.into_iter().map(TilePixels::Cpu).collect())
     }
 
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        control.check_cancelled()?;
+        if !output.prefers_device() {
+            let mut tiles = Vec::with_capacity(reqs.len());
+            for request in reqs {
+                control.check_cancelled()?;
+                tiles.extend(self.read_tiles(std::slice::from_ref(request), output.clone())?);
+                control.check_cancelled()?;
+            }
+            return Ok(tiles);
+        }
+
+        // Two tiles is the smallest batch that enables the resident Metal
+        // JPEG path. This retains device batching while bounding how much work
+        // can pass between cooperative cancellation checks.
+        let mut tiles = Vec::with_capacity(reqs.len());
+        for requests in reqs.chunks(2) {
+            control.check_cancelled()?;
+            let mut decoded = self.read_tiles(requests, output.clone())?;
+            if decoded.len() != requests.len() {
+                return Err(WsiError::TileRead {
+                    col: requests[0].col,
+                    row: requests[0].row,
+                    level: requests[0].level.get(),
+                    reason: format!(
+                        "controlled TIFF batch returned {} tiles for {} requests",
+                        decoded.len(),
+                        requests.len()
+                    ),
+                });
+            }
+            tiles.append(&mut decoded);
+            control.check_cancelled()?;
+        }
+        Ok(tiles)
+    }
+
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         self.read_tiles_cpu_with_backend(reqs, BackendRequest::Auto)
     }

@@ -4,6 +4,8 @@ use std::sync::Arc;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WsiError {
+    #[error("read cancelled")]
+    Cancelled,
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
     #[error("TIFF error in {path}: {message}")]

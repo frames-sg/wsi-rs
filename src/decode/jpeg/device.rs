@@ -279,9 +279,9 @@ fn decode_one_jpeg_pixels_metal(
     if metal_sessions.private_jpeg_decode() {
         match decoder.decode_private_rgb8_tile_with_session(metal_sessions.jpeg()) {
             Ok(tile) => {
-                return Ok(TilePixels::Device(DeviceTile::Metal(
-                    crate::output::metal::MetalDeviceTile::from_private_jpeg(tile)?,
-                )));
+                let tile = crate::output::metal::MetalDeviceTile::from_private_jpeg(tile)?
+                    .crop_top_left(job.expected_width, job.expected_height)?;
+                return Ok(TilePixels::Device(DeviceTile::Metal(tile)));
             }
             Err(err) if require_device => {
                 return Err(WsiError::Unsupported {
@@ -316,6 +316,7 @@ fn tile_pixels_from_metal_jpeg_surface(
             return decode_one_jpeg_job(job).map(TilePixels::Cpu);
         }
         if let Some(tile) = crate::output::metal::MetalDeviceTile::from_jpeg(surface)? {
+            let tile = tile.crop_top_left(job.expected_width, job.expected_height)?;
             return Ok(TilePixels::Device(DeviceTile::Metal(tile)));
         }
         if require_device {

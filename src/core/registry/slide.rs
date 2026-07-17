@@ -212,6 +212,32 @@ impl Slide {
         self.source.read_tiles(reqs, output)
     }
 
+    /// Reads tiles with cooperative cancellation delegated to the source.
+    ///
+    /// Existing batch APIs remain unchanged. This controlled path checks for
+    /// cancellation before each source admission and before returning pixels.
+    pub fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.source.read_tiles_controlled(reqs, output, control)
+    }
+
+    /// Reads one tile with cooperative cancellation checks around source work.
+    pub fn read_tile_controlled(
+        &self,
+        req: &TileRequest,
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<TilePixels, WsiError> {
+        control.check_cancelled()?;
+        let tile = self.read_tile(req, output)?;
+        control.check_cancelled()?;
+        Ok(tile)
+    }
+
     pub fn read_raw_compressed_tile(
         &self,
         req: &TileRequest,

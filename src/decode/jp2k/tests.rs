@@ -318,8 +318,8 @@ fn fixture_rgb_device_batch_returns_metal_tiles() {
     let requests = [
         Jp2kDecodeJob {
             data: Cow::Borrowed(codestream),
-            expected_width: header.image_width,
-            expected_height: header.image_height,
+            expected_width: header.image_width - 1,
+            expected_height: header.image_height - 2,
             rgb_color_space: true,
             backend: J2kBackendRequest::Auto,
         },
@@ -335,14 +335,14 @@ fn fixture_rgb_device_batch_returns_metal_tiles() {
     let decoded = decode_jp2k_tile_batch_to_device_pixels(&requests, false, &sessions).unwrap();
 
     assert_eq!(decoded.len(), 2);
-    for tile in decoded {
+    for (tile, dimensions) in decoded.into_iter().zip([
+        (header.image_width - 1, header.image_height - 2),
+        (header.image_width, header.image_height),
+    ]) {
         let TilePixels::Device(DeviceTile::Metal(tile)) = tile else {
             panic!("expected Metal device tile");
         };
-        assert_eq!(
-            (tile.width, tile.height),
-            (header.image_width, header.image_height)
-        );
+        assert_eq!((tile.width, tile.height), dimensions);
         assert_eq!(tile.format, PixelFormat::Rgb8);
     }
 }
@@ -358,8 +358,8 @@ fn fixture_ycbcr_device_decode_returns_rgb_metal_tile() {
     let header = parse_codestream_header(codestream).unwrap();
     let request = Jp2kDecodeJob {
         data: Cow::Borrowed(codestream),
-        expected_width: header.image_width,
-        expected_height: header.image_height,
+        expected_width: header.image_width - 1,
+        expected_height: header.image_height - 2,
         rgb_color_space: false,
         backend: J2kBackendRequest::Auto,
     };
@@ -370,7 +370,7 @@ fn fixture_ycbcr_device_decode_returns_rgb_metal_tile() {
     };
     assert_eq!(
         (tile.width, tile.height),
-        (header.image_width, header.image_height)
+        (header.image_width - 1, header.image_height - 2)
     );
     assert_eq!(tile.format, PixelFormat::Rgb8);
     let crate::output::metal::MetalDeviceStorage::Resident { image } = &tile.storage else {
@@ -392,8 +392,8 @@ fn fixture_ycbcr_device_batch_returns_rgb_metal_tiles() {
     let requests = [
         Jp2kDecodeJob {
             data: Cow::Borrowed(codestream),
-            expected_width: header.image_width,
-            expected_height: header.image_height,
+            expected_width: header.image_width - 1,
+            expected_height: header.image_height - 2,
             rgb_color_space: false,
             backend: J2kBackendRequest::Auto,
         },
@@ -409,14 +409,14 @@ fn fixture_ycbcr_device_batch_returns_rgb_metal_tiles() {
     let decoded = decode_jp2k_tile_batch_to_device_pixels(&requests, true, &sessions).unwrap();
 
     assert_eq!(decoded.len(), 2);
-    for tile in decoded {
+    for (tile, dimensions) in decoded.into_iter().zip([
+        (header.image_width - 1, header.image_height - 2),
+        (header.image_width, header.image_height),
+    ]) {
         let TilePixels::Device(DeviceTile::Metal(tile)) = tile else {
             panic!("expected Metal device tile");
         };
-        assert_eq!(
-            (tile.width, tile.height),
-            (header.image_width, header.image_height)
-        );
+        assert_eq!((tile.width, tile.height), dimensions);
         assert_eq!(tile.format, PixelFormat::Rgb8);
     }
 }

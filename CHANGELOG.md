@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-17
+
+### Added
+
+- Added cloneable cancellation tokens and controlled tile-read APIs while
+  preserving the existing tile-read interfaces.
+- Added an opt-in Metal edge-tile conformance test for local SVS fixtures.
+
+### Fixed
+
+- Cropped Metal JPEG and JPEG 2000 edge tiles to their logical dimensions so
+  GPU and CPU reads return identical geometry instead of repeating padded
+  pixels at the right or bottom slide edge.
+- Used the TIFF tile span for logical compressed-tile dimensions rather than
+  the codec's padded physical dimensions.
+- Added cancellation checks around tile I/O and codec admission so obsolete
+  viewer generations can stop before producing stale results.
+
 ## [0.5.0] - 2026-07-14
 
 ### Changed

@@ -10,7 +10,9 @@
 `wsi-rs` is a Rust whole-slide image reader. It opens TIFF-family WSI,
 DICOM VL WSI, Zeiss CZI/ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
 JPEG 2000 codestream fixtures, and `.svcache` containers. JPEG, JPEG 2000,
-and HTJ2K decode is delegated to the `j2k-*` crates.
+and HTJ2K decode is delegated to the
+[J2K pure-Rust JPEG 2000 codec](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/)
+crates.
 
 The main crate forbids `unsafe` code.
 Unsupported or incomplete sources return `WsiError`; they should not silently

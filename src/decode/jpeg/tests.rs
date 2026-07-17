@@ -329,6 +329,46 @@ fn private_metal_jpeg_decode_returns_private_device_tile() {
 
 #[cfg(all(feature = "metal", target_os = "macos"))]
 #[test]
+fn metal_jpeg_edge_tile_is_cropped_to_expected_dimensions() {
+    let Some(device) = metal::Device::system_default() else {
+        return;
+    };
+    let sessions = crate::output::metal::MetalBackendSessions::new(device);
+    let mut rgb = image::RgbImage::new(16, 16);
+    for (idx, pixel) in rgb.pixels_mut().enumerate() {
+        *pixel = image::Rgb([
+            ((idx * 17) & 0xff) as u8,
+            ((idx * 31 + 9) & 0xff) as u8,
+            ((idx * 7 + 3) & 0xff) as u8,
+        ]);
+    }
+    let jpeg_data = encode_test_jpeg(&rgb);
+    let job = JpegDecodeJob {
+        data: Cow::Borrowed(jpeg_data.as_slice()),
+        tables: None,
+        expected_width: 7,
+        expected_height: 11,
+        color_transform: J2kColorTransform::Auto,
+        force_dimensions: false,
+        requested_size: None,
+    };
+
+    let pixels =
+        decode_one_jpeg_pixels(&job, J2kBackendRequest::Metal, true, Some(&sessions), None)
+            .expect("cropped Metal JPEG edge tile");
+    let TilePixels::Device(DeviceTile::Metal(tile)) = pixels else {
+        panic!("expected resident Metal tile");
+    };
+
+    assert_eq!((tile.width, tile.height), (7, 11));
+    assert_eq!(
+        tile.validated_resident_image().unwrap().dimensions(),
+        (7, 11)
+    );
+}
+
+#[cfg(all(feature = "metal", target_os = "macos"))]
+#[test]
 fn decode_batch_jpeg_pixels_uses_session_backed_device_batch() {
     let Some(device) = metal::Device::system_default() else {
         return;

@@ -392,7 +392,10 @@ impl TiffPixelReader {
         let tile_data = self.read_tiled_ifd_tile_span(span)?;
         let (data, info) = standalone_jpeg_frame_owned(tile_data, jpeg_tables)?;
         Ok(RawCompressedTile::builder(Compression::Jpeg)
-            .dimensions(info.width, info.height)
+            // The encoded JPEG commonly retains a full physical tile at the
+            // right and bottom edges. Preserve the TIFF level's logical edge
+            // dimensions so device decoders crop exactly like the CPU path.
+            .dimensions(span.width, span.height)
             .bits_allocated(info.bits_allocated)
             .samples_per_pixel(info.samples_per_pixel)
             .photometric_interpretation(info.photometric_interpretation)
