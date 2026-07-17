@@ -52,6 +52,7 @@ mod ndpi_core;
 mod ndpi_retile;
 mod ndpi_tiles;
 mod reader;
+mod stripped_level;
 mod synthetic;
 mod tiled_ifd;
 

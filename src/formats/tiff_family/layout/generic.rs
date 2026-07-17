@@ -1,11 +1,13 @@
 //! Generic TIFF layout interpreter.
 //!
-//! Fallback interpreter for any tiled TIFF that is not claimed by a
-//! vendor-specific interpreter. Registered last in the interpreter chain
-//! so it only fires when all specific vendors decline.
+//! Fallback interpreter for tiled TIFFs and a narrow set of strip-based RGB
+//! TIFFs that are not claimed by a vendor-specific interpreter. Registered
+//! last in the interpreter chain so it only fires when all specific vendors
+//! decline.
 
 use std::collections::HashMap;
 
+use crate::core::limits::MAX_DECODED_IMAGE_BYTES;
 use crate::core::types::*;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
@@ -17,6 +19,84 @@ use super::{
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+const STRIPPED_LEVEL_TILE_SIZE: u32 = 256;
+
+fn is_supported_stripped_rgb_ifd(container: &TiffContainer, ifd_id: IfdId) -> bool {
+    let Ok(width) = container.get_u64(ifd_id, tags::IMAGE_WIDTH) else {
+        return false;
+    };
+    let Ok(height) = container.get_u64(ifd_id, tags::IMAGE_LENGTH) else {
+        return false;
+    };
+    if width == 0 || height == 0 || width > u64::from(u32::MAX) || height > u64::from(u32::MAX) {
+        return false;
+    }
+    let Some(decoded_bytes) = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(3))
+    else {
+        return false;
+    };
+    if decoded_bytes > MAX_DECODED_IMAGE_BYTES {
+        return false;
+    }
+
+    if container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1) != 1
+        || container.get_u32(ifd_id, tags::PHOTOMETRIC).unwrap_or(0) != 2
+        || container
+            .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
+            .unwrap_or(1)
+            != 3
+        || container.get_u32(ifd_id, tags::ORIENTATION).unwrap_or(1) != 1
+        || container.get_u32(ifd_id, tags::PREDICTOR).unwrap_or(1) != 1
+    {
+        return false;
+    }
+    let planar = container
+        .get_u32(ifd_id, tags::PLANAR_CONFIGURATION)
+        .unwrap_or(1);
+    if !matches!(planar, 1 | 2) {
+        return false;
+    }
+    if !container
+        .get_u64_array(ifd_id, tags::BITS_PER_SAMPLE)
+        .is_ok_and(|values| !values.is_empty() && values.iter().all(|&value| value == 8))
+    {
+        return false;
+    }
+    if container
+        .get_u64_array(ifd_id, tags::SAMPLE_FORMAT)
+        .is_ok_and(|values| values.iter().any(|&value| value != 1))
+    {
+        return false;
+    }
+
+    let rows_per_strip = u64::from(
+        container
+            .get_u32(ifd_id, tags::ROWS_PER_STRIP)
+            .unwrap_or(height as u32),
+    );
+    if rows_per_strip == 0 {
+        return false;
+    }
+    let strips_per_plane = height.div_ceil(rows_per_strip);
+    let expected_strips = strips_per_plane * if planar == 2 { 3 } else { 1 };
+    let Ok(strip_offsets) = container.get_u64_array(ifd_id, tags::STRIP_OFFSETS) else {
+        return false;
+    };
+    let Ok(strip_byte_counts) = container.get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS) else {
+        return false;
+    };
+    let total_strip_bytes = strip_byte_counts
+        .iter()
+        .try_fold(0u64, |total, &count| total.checked_add(count));
+    strip_offsets.len() as u64 == expected_strips
+        && strip_byte_counts.len() as u64 == expected_strips
+        && strip_offsets.iter().all(|&offset| offset > 0)
+        && strip_byte_counts.iter().all(|&count| count > 0)
+        && total_strip_bytes == Some(decoded_bytes)
+}
 
 // ── Interpreter ──────────────────────────────────────────────────────
 
@@ -44,13 +124,16 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             }
         }
 
-        // Accept if at least one top-level IFD has TILE_WIDTH.
-        container.top_ifds().iter().any(|&ifd_id| {
+        // Accept any tiled TIFF, or one unambiguous strip-based RGB image.
+        let has_tiled_ifd = container.top_ifds().iter().any(|&ifd_id| {
             container
                 .ifd_by_id(ifd_id)
                 .map(|ifd| ifd.tags.contains_key(&tags::TILE_WIDTH))
                 .unwrap_or(false)
-        })
+        });
+        has_tiled_ifd
+            || (container.top_ifds().len() == 1
+                && is_supported_stripped_rgb_ifd(container, container.top_ifds()[0]))
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
@@ -110,9 +193,13 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             }
         }
 
-        if tiled_ifds.is_empty() {
+        let stripped_level_index = (tiled_ifds.is_empty()
+            && stripped_ifds.len() == 1
+            && is_supported_stripped_rgb_ifd(container, stripped_ifds[0].ifd_id))
+        .then_some(0usize);
+        if tiled_ifds.is_empty() && stripped_level_index.is_none() {
             return Err(TiffParseError::Structure(
-                "No tiled IFDs found in generic TIFF".into(),
+                "No tiled IFDs or supported stripped RGB image found in generic TIFF".into(),
             ));
         }
 
@@ -123,14 +210,20 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             area_b.cmp(&area_a)
         });
 
-        let base_w = tiled_ifds[0].width;
-        let base_h = tiled_ifds[0].height;
+        let (base_w, base_h) = if let Some(first) = tiled_ifds.first() {
+            (first.width, first.height)
+        } else {
+            let stripped = &stripped_ifds[stripped_level_index.unwrap()];
+            (stripped.width, stripped.height)
+        };
 
         // Phase 3: JPEG tables from tag 347 on first tiled IFD if present.
-        let jpeg_tables: Option<Vec<u8>> = container
-            .get_bytes(tiled_ifds[0].ifd_id, tags::JPEG_TABLES)
-            .ok()
-            .map(|b| b.to_vec());
+        let jpeg_tables: Option<Vec<u8>> = tiled_ifds.first().and_then(|first| {
+            container
+                .get_bytes(first.ifd_id, tags::JPEG_TABLES)
+                .ok()
+                .map(|bytes| bytes.to_vec())
+        });
 
         // Phase 4: Build levels and tile sources.
         let mut levels = Vec::with_capacity(tiled_ifds.len());
@@ -172,11 +265,42 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             );
         }
 
+        if let Some(index) = stripped_level_index {
+            let stripped = &stripped_ifds[index];
+            levels.push(regular_tiff_level(
+                "Generic stripped TIFF",
+                stripped.width,
+                stripped.height,
+                STRIPPED_LEVEL_TILE_SIZE,
+                STRIPPED_LEVEL_TILE_SIZE,
+                1.0,
+            )?);
+            tile_sources.insert(
+                TileSourceKey {
+                    scene: 0,
+                    series: 0,
+                    level: 0,
+                    z: 0,
+                    c: 0,
+                    t: 0,
+                },
+                TileSource::StrippedLevel {
+                    ifd_id: stripped.ifd_id,
+                    compression: stripped.compression,
+                    strip_offsets: stripped.strip_offsets.clone(),
+                    strip_byte_counts: stripped.strip_byte_counts.clone(),
+                },
+            );
+        }
+
         // Phase 5: Build associated images from stripped IFDs.
         let mut associated_images: HashMap<String, AssociatedImage> = HashMap::new();
         let mut associated_sources: HashMap<String, TileSource> = HashMap::new();
 
         for (i, sifd) in stripped_ifds.iter().enumerate() {
+            if stripped_level_index == Some(i) {
+                continue;
+            }
             let name = format!("image_{}", i);
             associated_images.insert(
                 name.clone(),
@@ -239,9 +363,18 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             .first()
             .ok_or_else(|| TiffParseError::Structure("No IFDs in generic TIFF container".into()))?;
         // Phase 8: Assemble Dataset with single Scene, single Series.
+        let (lowest_resolution_ifd, source_icc_ifds) = if let Some(index) = stripped_level_index {
+            let ifd_id = stripped_ifds[index].ifd_id;
+            (ifd_id, vec![ifd_id])
+        } else {
+            (
+                tiled_ifds.last().unwrap().ifd_id,
+                tiled_ifds.iter().map(|ifd| ifd.ifd_id).collect(),
+            )
+        };
         finish_single_scene_uint8_tiff_layout(
             container,
-            tiled_ifds.last().unwrap().ifd_id,
+            lowest_resolution_ifd,
             property_ifd,
             AxesShape::default(),
             levels,
@@ -249,7 +382,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             properties,
             tile_sources,
             associated_sources,
-            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
+            source_icc_ifds,
         )
     }
 }

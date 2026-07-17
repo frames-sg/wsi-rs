@@ -74,7 +74,7 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 
 | Input family | Typical paths |
 | --- | --- |
-| TIFF-family WSI | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif` |
+| TIFF-family WSI and uncompressed RGB TIFF | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif` |
 | DICOM VL WSI | `.dcm` files or a DICOM series directory |
 | Zeiss | `.czi`, `.zvi` |
 | MIRAX | `.mrxs` plus sibling data files |
@@ -82,6 +82,11 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 | Olympus VSI | `.vsi` plus matching ETS companion data |
 | Raw JPEG 2000 codestream | `.j2k`, `.j2c` |
 | `.svcache` | `.svcache` |
+
+Generic strip-based TIFF support is intentionally limited to one top-level,
+uncompressed 8-bit RGB image with top-left orientation, no predictor, and
+either interleaved or separate sample planes. Other ordinary TIFF variants
+remain unsupported unless they use a registered WSI layout.
 
 ## Features
 

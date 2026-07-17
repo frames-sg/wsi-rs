@@ -242,7 +242,9 @@ impl SlideReader for TiffPixelReader {
             TileSource::SyntheticDownsample { .. } => Err(WsiError::Unsupported {
                 reason: "JPEG passthrough is not available for synthetic downsample levels".into(),
             }),
-            TileSource::Stripped { .. } | TileSource::ExternalJpeg { .. } => Err(WsiError::Unsupported {
+            TileSource::Stripped { .. }
+            | TileSource::StrippedLevel { .. }
+            | TileSource::ExternalJpeg { .. } => Err(WsiError::Unsupported {
                 reason: "JPEG passthrough is only available for tiled image levels".into(),
             }),
         }
@@ -428,8 +430,20 @@ impl SlideReader for TiffPixelReader {
                     .as_ref()
                     .clone())
             }
+            TileSource::StrippedLevel {
+                ifd_id,
+                compression,
+                strip_offsets,
+                strip_byte_counts,
+            } => self.read_stripped_level_tile(
+                req,
+                *ifd_id,
+                *compression,
+                strip_offsets,
+                strip_byte_counts,
+            ),
             TileSource::Stripped { .. } => Err(WsiError::UnsupportedFormat(
-                "Stripped pixel access via read_tile not supported; use read_associated()".into(),
+                "Associated stripped images cannot be read via read_tile()".into(),
             )),
             TileSource::ExternalJpeg { .. } => Err(WsiError::UnsupportedFormat(
                 "External JPEG associated images cannot be read via read_tile()".into(),

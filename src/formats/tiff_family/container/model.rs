@@ -22,9 +22,11 @@ pub(crate) mod tags {
     pub const PHOTOMETRIC: u16 = 262;
     pub const IMAGE_DESCRIPTION: u16 = 270;
     pub const STRIP_OFFSETS: u16 = 273;
+    pub const ORIENTATION: u16 = 274;
     pub const SAMPLES_PER_PIXEL: u16 = 277;
     pub const ROWS_PER_STRIP: u16 = 278;
     pub const STRIP_BYTE_COUNTS: u16 = 279;
+    pub const PLANAR_CONFIGURATION: u16 = 284;
     #[cfg(test)]
     pub const SUB_IFDS: u16 = 330;
     pub const TILE_WIDTH: u16 = 322;
@@ -35,6 +37,7 @@ pub(crate) mod tags {
     pub const Y_RESOLUTION: u16 = 283;
     pub const RESOLUTION_UNIT: u16 = 296;
     pub const PREDICTOR: u16 = 317;
+    pub const SAMPLE_FORMAT: u16 = 339;
     pub const JPEG_TABLES: u16 = 347;
     pub const XMP: u16 = 700;
     pub const ICC_PROFILE: u16 = 34675;

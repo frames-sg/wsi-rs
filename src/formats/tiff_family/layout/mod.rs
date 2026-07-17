@@ -275,6 +275,14 @@ pub(crate) enum TileSource {
         strip_byte_counts: Vec<u64>,
     },
 
+    /// Generic strip-based TIFF exposed as a synthetic regular tile grid.
+    StrippedLevel {
+        ifd_id: IfdId,
+        compression: Compression,
+        strip_offsets: Vec<u64>,
+        strip_byte_counts: Vec<u64>,
+    },
+
     /// Associated image stored as an external JPEG sidecar file.
     ExternalJpeg { path: PathBuf },
 }

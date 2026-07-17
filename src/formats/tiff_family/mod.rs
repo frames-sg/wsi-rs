@@ -566,6 +566,92 @@ mod tests {
         file
     }
 
+    /// Build an uncompressed RGB TIFF with separate sample planes and no native tiles.
+    fn build_planar_stripped_rgb_tiff(
+        width: u32,
+        height: u32,
+        rows_per_strip: u32,
+    ) -> NamedTempFile {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"II");
+        buf.extend_from_slice(&42u16.to_le_bytes());
+        let first_ifd_pos = buf.len();
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut strip_offsets = Vec::new();
+        let mut strip_byte_counts = Vec::new();
+        for channel in 0..3 {
+            for strip_y in (0..height).step_by(rows_per_strip as usize) {
+                strip_offsets.push(buf.len() as u32);
+                let strip_height = rows_per_strip.min(height - strip_y);
+                for y in strip_y..strip_y + strip_height {
+                    for x in 0..width {
+                        let sample = match channel {
+                            0 => x as u8,
+                            1 => y as u8,
+                            _ => x.wrapping_add(y) as u8,
+                        };
+                        buf.push(sample);
+                    }
+                }
+                strip_byte_counts.push(width * strip_height);
+            }
+        }
+
+        let bits_per_sample_offset = buf.len() as u32;
+        for bits in [8u16; 3] {
+            buf.extend_from_slice(&bits.to_le_bytes());
+        }
+        let strip_offsets_offset = buf.len() as u32;
+        for offset in &strip_offsets {
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        let strip_byte_counts_offset = buf.len() as u32;
+        for byte_count in &strip_byte_counts {
+            buf.extend_from_slice(&byte_count.to_le_bytes());
+        }
+
+        let ifd_offset = buf.len() as u32;
+        buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&ifd_offset.to_le_bytes());
+        let mut tags: Vec<(u16, u16, u32, [u8; 4])> = vec![
+            (256, 4, 1, width.to_le_bytes()),
+            (257, 4, 1, height.to_le_bytes()),
+            (258, 3, 3, bits_per_sample_offset.to_le_bytes()),
+            (259, 3, 1, to_short_in_long(1, false)),
+            (262, 3, 1, to_short_in_long(2, false)),
+            (
+                273,
+                4,
+                strip_offsets.len() as u32,
+                strip_offsets_offset.to_le_bytes(),
+            ),
+            (274, 3, 1, to_short_in_long(1, false)),
+            (277, 3, 1, to_short_in_long(3, false)),
+            (278, 4, 1, rows_per_strip.to_le_bytes()),
+            (
+                279,
+                4,
+                strip_byte_counts.len() as u32,
+                strip_byte_counts_offset.to_le_bytes(),
+            ),
+            (284, 3, 1, to_short_in_long(2, false)),
+        ];
+        tags.sort_by_key(|tag| tag.0);
+        buf.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+        for (tag, typ, count, value) in tags {
+            buf.extend_from_slice(&tag.to_le_bytes());
+            buf.extend_from_slice(&typ.to_le_bytes());
+            buf.extend_from_slice(&count.to_le_bytes());
+            buf.extend_from_slice(&value);
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&buf).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
     #[test]
     fn generic_tiff_detected_as_fallback() {
         let file = build_generic_tiled_tiff(256, 256);
@@ -597,6 +683,46 @@ mod tests {
         assert_eq!(tile.width, 64);
         assert_eq!(tile.height, 64);
         assert_eq!(tile.channels, 3);
+    }
+
+    #[test]
+    fn generic_planar_stripped_rgb_tiff_opens_and_reads_synthetic_edge_tile() {
+        let file = build_planar_stripped_rgb_tiff(260, 258, 128);
+        let backend = TiffFamilyBackend::new();
+
+        let probe = backend.probe(file.path()).unwrap();
+        assert!(probe.detected);
+        assert_eq!(probe.vendor, "generic-tiff");
+
+        let source = backend.open(file.path()).unwrap();
+        let level = &source.dataset().scenes[0].series[0].levels[0];
+        assert_eq!(level.dimensions, (260, 258));
+        assert!(matches!(
+            level.tile_layout,
+            crate::core::types::TileLayout::Regular {
+                tile_width: 256,
+                tile_height: 256,
+                tiles_across: 2,
+                tiles_down: 2,
+            }
+        ));
+
+        let tile = source
+            .read_tile_cpu(&crate::core::types::TileRequest {
+                scene: 0usize.into(),
+                series: 0usize.into(),
+                level: 0u32.into(),
+                plane: crate::core::types::PlaneSelection::default().into(),
+                col: 1,
+                row: 1,
+            })
+            .unwrap();
+        assert_eq!((tile.width, tile.height), (4, 2));
+        assert_eq!(tile.channels, 3);
+        assert_eq!(tile.color_space, ColorSpace::Rgb);
+        let pixels = tile.data.as_u8().unwrap();
+        assert_eq!(&pixels[..3], &[0, 0, 0]);
+        assert_eq!(&pixels[pixels.len() - 3..], &[3, 1, 4]);
     }
 
     // ── Review finding tests ─────────────────────────────────────
