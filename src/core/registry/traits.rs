@@ -8,6 +8,21 @@ pub trait FormatProbe: Send + Sync {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError>;
 }
 
+/// Internal probe extension for formats whose validation constructs the slide.
+///
+/// It keeps probing and opening on the same caller-supplied cache policy so a
+/// successful probe can be reused without first constructing default caches.
+pub(crate) trait ConfiguredFormatProbe: FormatProbe {
+    fn probe_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<ProbeResult, WsiError> {
+        let _ = cache_config;
+        self.probe(path)
+    }
+}
+
 /// Result from a cheap file-format probe.
 #[derive(Debug)]
 #[non_exhaustive]

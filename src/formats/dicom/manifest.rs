@@ -11,6 +11,7 @@ pub(super) struct DicomSlide {
 }
 
 impl DicomSlide {
+    #[cfg(test)]
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
         Self::parse_with_cache_config(path, CacheConfig::deterministic())
     }
@@ -29,16 +30,23 @@ impl DicomSlide {
             associated_images,
             source_file_count,
         } = DicomSeriesManifest::resolve(path)?;
+        let private_cache_count = volume_images
+            .len()
+            .saturating_add(associated_images.len())
+            .saturating_mul(2);
+        let mut private_cache_budget = cache_config.private_cache_budget(private_cache_count);
         let source_icc_profiles = source_icc_profiles(&volume_images)?;
         let level_images = volume_images
             .into_iter()
-            .map(|meta| DicomImage::from_metadata_with_cache_config(meta, cache_config))
+            .map(|meta| {
+                DicomImage::from_metadata_with_private_cache_budget(meta, &mut private_cache_budget)
+            })
             .map(|result| result.map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         let mut associated_images = associated_images
             .into_iter()
             .map(|(kind, meta)| {
-                DicomImage::from_metadata_with_cache_config(meta, cache_config)
+                DicomImage::from_metadata_with_private_cache_budget(meta, &mut private_cache_budget)
                     .map(Arc::new)
                     .map(|image| (kind.name().to_string(), image))
             })

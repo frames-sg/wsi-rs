@@ -1,4 +1,6 @@
 use lru::LruCache;
+use std::borrow::Borrow;
+use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +28,10 @@ const DISPLAY_TILE_CACHE_BYTES_ENV: &str = "WSI_RS_DISPLAY_TILE_CACHE_BYTES";
 // conservative floor so tiny source tiles cannot turn a byte budget into an
 // enormous hash-table capacity at open time.
 const PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES: u64 = 256;
+// Private per-format caches supplement the public shared tile cache. Bound
+// their aggregate entry capacity to one quarter of the configured shared
+// cache so opening a slide cannot multiply the caller's byte policy.
+const PRIVATE_CACHE_BUDGET_DIVISOR: u64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -63,28 +69,112 @@ impl CacheConfig {
             .unwrap_or(DEFAULT_DISPLAY_TILE_CACHE_SIZE)
     }
 
-    pub(crate) fn private_entry_capacity(
-        self,
-        estimated_entry_bytes: u64,
-        budget_share_count: u64,
-    ) -> NonZeroUsize {
-        let cache_budget = self
-            .shared_tile_budget(None)
-            .checked_div(budget_share_count.max(1))
-            .unwrap_or(0);
-        let entry_bytes = estimated_entry_bytes.max(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES);
-        let entries = cache_budget
-            .checked_div(entry_bytes)
-            .unwrap_or(0)
-            .max(1)
-            .min(usize::MAX as u64) as usize;
-        NonZeroUsize::new(entries).expect("private cache capacity is clamped to at least one")
+    pub(crate) fn private_cache_budget(self, cache_count: usize) -> PrivateCacheBudget {
+        PrivateCacheBudget {
+            remaining_bytes: self.private_cache_budget_bytes(),
+            remaining_caches: cache_count,
+        }
+    }
+
+    pub(crate) fn private_cache_budget_bytes(self) -> u64 {
+        self.shared_tile_budget(None) / PRIVATE_CACHE_BUDGET_DIVISOR
     }
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self::deterministic()
+    }
+}
+
+/// One slide's aggregate budget for count-bounded format-private caches.
+///
+/// Allocations are made against estimated retained bytes (including a floor
+/// for LRU bookkeeping). A cache receives zero entries when the remaining
+/// budget cannot account for one entry, avoiding eager hash-table allocation.
+pub(crate) struct PrivateCacheBudget {
+    remaining_bytes: u64,
+    remaining_caches: usize,
+}
+
+impl PrivateCacheBudget {
+    pub(crate) fn allocate(&mut self, estimated_entry_bytes: u64) -> PrivateCacheCapacity {
+        if self.remaining_caches == 0 {
+            return PrivateCacheCapacity::default();
+        }
+
+        let cache_count = self.remaining_caches as u64;
+        self.remaining_caches -= 1;
+        let accounted_entry_bytes =
+            estimated_entry_bytes.max(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES);
+        let fair_share = self.remaining_bytes / cache_count;
+        let mut entries = fair_share / accounted_entry_bytes;
+        if entries == 0 && self.remaining_bytes >= accounted_entry_bytes {
+            entries = 1;
+        }
+        entries = entries.min(usize::MAX as u64);
+        let accounted_bytes = entries
+            .checked_mul(accounted_entry_bytes)
+            .unwrap_or(self.remaining_bytes)
+            .min(self.remaining_bytes);
+        self.remaining_bytes -= accounted_bytes;
+
+        PrivateCacheCapacity {
+            entries: entries as usize,
+            accounted_bytes,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PrivateCacheCapacity {
+    entries: usize,
+    accounted_bytes: u64,
+}
+
+/// A count-bounded private LRU that can be completely disabled.
+///
+/// `lru::LruCache::new` preallocates for its entry capacity and requires a
+/// non-zero value. Keeping the disabled state as `None` makes a zero-budget
+/// cache allocation-free and causes inserts to be ignored.
+#[derive(Debug)]
+pub(crate) struct PrivateCache<K: Hash + Eq, V> {
+    lru: Option<LruCache<K, V>>,
+    capacity: PrivateCacheCapacity,
+}
+
+impl<K: Hash + Eq, V> PrivateCache<K, V> {
+    pub(crate) fn new(capacity: PrivateCacheCapacity) -> Self {
+        let lru = NonZeroUsize::new(capacity.entries).map(LruCache::new);
+        Self { lru, capacity }
+    }
+
+    pub(crate) fn get<'a, Q>(&'a mut self, key: &Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.lru.as_mut()?.get(key)
+    }
+
+    pub(crate) fn put(&mut self, key: K, value: V) {
+        if let Some(lru) = &mut self.lru {
+            lru.put(key, value);
+        }
+    }
+
+    pub(crate) fn capacity_entries(&self) -> usize {
+        self.capacity.entries
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accounted_capacity_bytes(&self) -> u64 {
+        self.capacity.accounted_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.lru.as_ref().map_or(0, LruCache::len)
     }
 }
 
@@ -302,20 +392,41 @@ mod tile_cache_tests {
     }
 
     #[test]
-    fn private_entry_capacity_tracks_shared_cache_budget() {
-        let small = CacheConfig::deterministic()
-            .with_shared_tile_bytes(8 * 1024)
-            .private_entry_capacity(1024, 2);
-        let large = CacheConfig::deterministic()
-            .with_shared_tile_bytes(32 * 1024)
-            .private_entry_capacity(1024, 2);
-        let sub_entry_budget = CacheConfig::deterministic()
-            .with_shared_tile_bytes(1)
-            .private_entry_capacity(1024, 4);
+    fn private_cache_budget_bounds_aggregate_capacity_and_disables_excess_caches() {
+        let config = CacheConfig::deterministic().with_shared_tile_bytes(8 * 1024);
+        let mut budget = config.private_cache_budget(8);
+        let mut caches = (0..8)
+            .map(|_| PrivateCache::<u32, u32>::new(budget.allocate(1024)))
+            .collect::<Vec<_>>();
 
-        assert_eq!(small.get(), 4);
-        assert_eq!(large.get(), 16);
-        assert_eq!(sub_entry_budget.get(), 1);
+        assert!(
+            caches
+                .iter()
+                .map(PrivateCache::accounted_capacity_bytes)
+                .sum::<u64>()
+                <= config.private_cache_budget_bytes()
+        );
+        assert_eq!(
+            caches
+                .iter()
+                .map(PrivateCache::capacity_entries)
+                .sum::<usize>(),
+            2
+        );
+        assert_eq!(
+            caches
+                .iter()
+                .filter(|cache| cache.capacity_entries() == 0)
+                .count(),
+            6
+        );
+
+        let disabled = caches
+            .iter_mut()
+            .find(|cache| cache.capacity_entries() == 0)
+            .expect("small aggregate budget disables at least one cache");
+        disabled.put(1, 2);
+        assert_eq!(disabled.len(), 0, "disabled caches retain no entries");
     }
 
     #[test]

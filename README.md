@@ -80,9 +80,12 @@ indexes and creates no sidecar files.
 
 `SlideOpenOptions` owns cache configuration. The shared source-tile and display
 composition caches are byte-bounded LRUs, while narrowly scoped format caches
-cover source-specific data such as DICOM frame bytes. Cache effects completed by
-a legacy reader are not rolled back when a controlled read is cancelled, but a
-cancelled result is not returned to the caller.
+cover source-specific data such as DICOM frame bytes. Those private caches share
+one aggregate allocation derived from the configured source-tile budget; excess
+per-image or per-shard caches remain disabled instead of preallocating outside
+that policy. Cache effects completed by a legacy reader are not rolled back when
+a controlled read is cancelled, but a cancelled result is not returned to the
+caller.
 
 Metal and CUDA features expose renderer-uploadable device payloads. Output
 residency and codec backend selection are related but separate choices. Metal

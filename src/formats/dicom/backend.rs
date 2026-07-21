@@ -1,9 +1,5 @@
 use super::*;
 
-// Probe entries retain parsed frame metadata and sparse maps but no decoded
-// pixels. This conservative estimate keeps the count tied to CacheConfig.
-const DICOM_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 16 * 1024 * 1024;
-
 pub(super) fn is_encapsulated_transfer_syntax(uid: &str) -> bool {
     uid == JPEG_TRANSFER_SYNTAX
         || uid == RLE_TRANSFER_SYNTAX
@@ -69,21 +65,14 @@ pub(super) fn dicom_jp2k_device_batch_allowed(
 }
 
 pub(crate) struct DicomBackend {
-    pub(super) probe_cache: Mutex<LruCache<FileIdentity, Arc<DicomSlide>>>,
+    pub(super) probe_cache: ConfiguredProbeCache<DicomSlide>,
 }
 
 impl DicomBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(
-                CacheConfig::deterministic()
-                    .private_entry_capacity(DICOM_PROBE_ENTRY_ESTIMATE_BYTES, 1),
-            )),
+            probe_cache: ConfiguredProbeCache::new(),
         }
-    }
-
-    pub(super) fn parse(&self, path: &Path) -> Result<Arc<DicomSlide>, WsiError> {
-        Ok(Arc::new(DicomSlide::parse(path)?))
     }
 
     fn parse_with_cache_config(
@@ -103,18 +92,9 @@ impl DicomBackend {
         cache_config: CacheConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
         let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = if cache_config == CacheConfig::deterministic() {
-            match cached {
-                Some(slide) => slide,
-                None => self.parse_with_cache_config(path, cache_config)?,
-            }
-        } else {
-            self.parse_with_cache_config(path, cache_config)?
+        let slide = match self.probe_cache.take(&key, cache_config) {
+            Some(slide) => slide,
+            None => self.parse_with_cache_config(path, cache_config)?,
         };
         Ok(Box::new(DicomReader { slide }))
     }
@@ -128,14 +108,18 @@ impl Default for DicomBackend {
 
 impl FormatProbe for DicomBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
+        self.probe_with_cache_config(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredFormatProbe for DicomBackend {
+    fn probe_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<ProbeResult, WsiError> {
         let key = FileIdentity::from_path(path)?;
-        if self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .is_some()
-        {
+        if self.probe_cache.get(&key, cache_config).is_some() {
             return Ok(ProbeResult {
                 detected: true,
                 vendor: "dicom".into(),
@@ -143,12 +127,9 @@ impl FormatProbe for DicomBackend {
             });
         }
         if path.is_dir() {
-            return match self.parse(path) {
+            return match self.parse_with_cache_config(path, cache_config) {
                 Ok(slide) => {
-                    self.probe_cache
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .put(key, slide);
+                    self.probe_cache.insert(key, cache_config, slide);
                     Ok(ProbeResult {
                         detected: true,
                         vendor: "dicom".into(),
@@ -165,11 +146,8 @@ impl FormatProbe for DicomBackend {
         }
         match parse_metadata_object(path) {
             Ok(meta) if is_vl_wsi(meta.obj.meta().media_storage_sop_class_uid()) => {
-                let slide = self.parse(path)?;
-                self.probe_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .put(key, slide);
+                let slide = self.parse_with_cache_config(path, cache_config)?;
+                self.probe_cache.insert(key, cache_config, slide);
                 Ok(ProbeResult {
                     detected: true,
                     vendor: "dicom".into(),

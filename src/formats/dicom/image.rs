@@ -22,8 +22,8 @@ pub(super) struct DicomImage {
     pub(super) pixel_spacing: Option<(f64, f64)>,
     pub(super) objective_lens_power: Option<f64>,
     pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
-    pub(super) encapsulated_frame_cache: Mutex<LruCache<u32, Arc<Vec<u8>>>>,
-    pub(super) decoded_frame_cache: Mutex<LruCache<u32, Arc<CpuTile>>>,
+    pub(super) encapsulated_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
+    pub(super) decoded_frame_cache: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
 }
 
 #[derive(Debug)]
@@ -46,9 +46,9 @@ pub(super) struct DicomEncapsulatedFrames {
 }
 
 impl DicomImage {
-    pub(super) fn from_metadata_with_cache_config(
+    pub(super) fn from_metadata_with_private_cache_budget(
         meta: ParsedDicomMetadata,
-        cache_config: CacheConfig,
+        private_cache_budget: &mut PrivateCacheBudget,
     ) -> Result<Self, WsiError> {
         let width = meta.total_pixel_matrix_columns.unwrap_or(meta.columns);
         let height = meta.total_pixel_matrix_rows.unwrap_or(meta.rows);
@@ -61,12 +61,12 @@ impl DicomImage {
         } else {
             DicomGrid::Full
         };
-        let frame_cache_entries = dicom_frame_cache_capacity(
-            cache_config,
-            tile_width,
-            tile_height,
-            meta.samples_per_pixel,
-        );
+        let estimated_frame_bytes =
+            dicom_frame_cache_entry_bytes(tile_width, tile_height, meta.samples_per_pixel);
+        let encapsulated_frame_cache =
+            PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
+        let decoded_frame_cache =
+            PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
         Ok(Self {
             path: meta.path,
             sop_instance_uid: meta.sop_instance_uid,
@@ -85,8 +85,8 @@ impl DicomImage {
             pixel_spacing: meta.pixel_spacing,
             objective_lens_power: meta.objective_lens_power,
             encapsulated_frames: Mutex::new(None),
-            encapsulated_frame_cache: Mutex::new(LruCache::new(frame_cache_entries)),
-            decoded_frame_cache: Mutex::new(LruCache::new(frame_cache_entries)),
+            encapsulated_frame_cache: Mutex::new(encapsulated_frame_cache),
+            decoded_frame_cache: Mutex::new(decoded_frame_cache),
         })
     }
 
@@ -206,8 +206,7 @@ impl DicomImage {
                 .decoded_frame_cache
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .cap()
-                .get()
+                .capacity_entries()
     }
 
     pub(super) fn decode_uncompressed_frame_sample_buffer(
@@ -917,17 +916,15 @@ impl DicomImage {
     }
 }
 
-pub(super) fn dicom_frame_cache_capacity(
-    cache_config: CacheConfig,
+pub(super) fn dicom_frame_cache_entry_bytes(
     tile_width: u32,
     tile_height: u32,
     samples_per_pixel: u16,
-) -> NonZeroUsize {
-    let estimated_frame_bytes = u64::from(tile_width)
+) -> u64 {
+    u64::from(tile_width)
         .saturating_mul(u64::from(tile_height))
         .saturating_mul(u64::from(samples_per_pixel))
         // Keep the estimate safe for both the supported 8-bit transfer
         // syntaxes and future 16-bit decoded storage.
-        .saturating_mul(2);
-    cache_config.private_entry_capacity(estimated_frame_bytes, 4)
+        .saturating_mul(2)
 }

@@ -29,25 +29,38 @@ impl FormatProbe for FalseProbe {
     }
 }
 
-struct TrueProbe;
+struct CacheConfigRecordingBackend {
+    observed_probe_shared_bytes: Arc<AtomicUsize>,
+    observed_shared_bytes: Arc<AtomicUsize>,
+}
 
-impl FormatProbe for TrueProbe {
+impl FormatProbe for CacheConfigRecordingBackend {
     fn probe(&self, _path: &Path) -> Result<ProbeResult, WsiError> {
         Ok(ProbeResult::detected("test", ProbeConfidence::Definite))
     }
 }
 
-struct CacheConfigRecordingReader {
-    observed_shared_bytes: Arc<AtomicUsize>,
+impl ConfiguredFormatProbe for CacheConfigRecordingBackend {
+    fn probe_with_cache_config(
+        &self,
+        _path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<ProbeResult, WsiError> {
+        self.observed_probe_shared_bytes.store(
+            cache_config.shared_tile_bytes.unwrap_or_default() as usize,
+            Ordering::SeqCst,
+        );
+        Ok(ProbeResult::detected("test", ProbeConfidence::Definite))
+    }
 }
 
-impl DatasetReader for CacheConfigRecordingReader {
+impl DatasetReader for CacheConfigRecordingBackend {
     fn open(&self, _path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         Ok(Box::new(MockSource::new()))
     }
 }
 
-impl ConfiguredDatasetReader for CacheConfigRecordingReader {
+impl ConfiguredDatasetReader for CacheConfigRecordingBackend {
     fn open_with_cache_config(
         &self,
         _path: &Path,
@@ -71,22 +84,23 @@ impl DatasetReader for MockReader {
 
 #[test]
 fn slide_open_options_passes_cache_config_to_the_selected_reader() {
+    let observed_probe_shared_bytes = Arc::new(AtomicUsize::new(0));
     let observed_shared_bytes = Arc::new(AtomicUsize::new(0));
     let mut registry = FormatRegistry::new();
-    registry.register_cache_configured(
-        TrueProbe,
-        CacheConfigRecordingReader {
-            observed_shared_bytes: observed_shared_bytes.clone(),
-        },
-    );
-    let config = CacheConfig::deterministic().with_shared_tile_bytes(123_456);
+    let backend = Arc::new(CacheConfigRecordingBackend {
+        observed_probe_shared_bytes: observed_probe_shared_bytes.clone(),
+        observed_shared_bytes: observed_shared_bytes.clone(),
+    });
+    registry.register_cache_configured(backend.clone(), backend);
+    let config = CacheConfig::deterministic().with_shared_tile_bytes(512);
 
     let options = SlideOpenOptions::deterministic()
         .with_registry(registry)
         .with_cache_config(config);
     Slide::open_with_options("ignored.test", options).expect("open configured test reader");
 
-    assert_eq!(observed_shared_bytes.load(Ordering::SeqCst), 123_456);
+    assert_eq!(observed_probe_shared_bytes.load(Ordering::SeqCst), 512);
+    assert_eq!(observed_shared_bytes.load(Ordering::SeqCst), 512);
 }
 
 // Mock SlideReader for testing -- returns solid-color tiles based on (col, row).

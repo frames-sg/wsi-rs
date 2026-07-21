@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -12,14 +11,13 @@ use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
 use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
 use j2k_core::BackendRequest;
-use lru::LruCache;
 
-use crate::core::cache::CacheConfig;
+use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, ConfiguredDatasetReader, DatasetReader, FormatProbe,
-    ProbeConfidence, ProbeResult, SlideReader,
+    crop_rgb_interleaved_u8_buffer, ConfiguredDatasetReader, ConfiguredFormatProbe,
+    ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 #[cfg(any(feature = "metal", feature = "cuda"))]

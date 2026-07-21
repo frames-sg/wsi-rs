@@ -4,8 +4,8 @@ use super::attachments::{
 use super::metadata::*;
 use super::*;
 
-type LevelImageCache = Mutex<LruCache<(usize, usize), Arc<CpuTile>>>;
-type LocalTileCache = Mutex<LruCache<(usize, usize, i64, i64), Arc<CpuTile>>>;
+type LevelImageCache = Mutex<PrivateCache<(usize, usize), Arc<CpuTile>>>;
+type LocalTileCache = Mutex<PrivateCache<(usize, usize, i64, i64), Arc<CpuTile>>>;
 
 #[cfg(test)]
 pub(super) static ZEISS_LOCAL_TILE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -67,7 +67,7 @@ pub(super) struct ZeissSlide {
     pub(super) czi: Mutex<CziFile>,
     pub(super) level_cache: LevelImageCache,
     pub(super) tile_cache: LocalTileCache,
-    pub(super) associated_cache: Mutex<LruCache<String, Arc<CpuTile>>>,
+    pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     pub(super) associated_sources: HashMap<String, czi_rs::AttachmentInfo>,
     pub(super) subblock_origin: (i32, i32),
     pub(super) canvas_level_subblocks: Vec<Vec<usize>>,
@@ -284,18 +284,18 @@ impl ZeissSlide {
             .max()
             .unwrap_or(1);
 
+        let mut private_cache_budget = cache_config.private_cache_budget(3);
+        let level_cache = PrivateCache::new(private_cache_budget.allocate(level_entry_bytes));
+        let tile_cache = PrivateCache::new(private_cache_budget.allocate(tile_entry_bytes));
+        let associated_cache =
+            PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
+
         Ok(Self {
             dataset,
             czi: Mutex::new(czi),
-            level_cache: Mutex::new(LruCache::new(
-                cache_config.private_entry_capacity(level_entry_bytes, 6),
-            )),
-            tile_cache: Mutex::new(LruCache::new(
-                cache_config.private_entry_capacity(tile_entry_bytes, 6),
-            )),
-            associated_cache: Mutex::new(LruCache::new(
-                cache_config.private_entry_capacity(associated_entry_bytes, 6),
-            )),
+            level_cache: Mutex::new(level_cache),
+            tile_cache: Mutex::new(tile_cache),
+            associated_cache: Mutex::new(associated_cache),
             associated_sources,
             subblock_origin,
             canvas_level_subblocks,

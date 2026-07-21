@@ -14,7 +14,10 @@
 ### Changed
 
 - Derived DICOM, MIRAX, VMS, and Zeiss private decoded-data cache capacities
-  from `CacheConfig`, and moved built-in backend composition out of core.
+  from one aggregate `CacheConfig` budget, including zero-capacity caches for
+  excess images or shards, and moved built-in backend composition out of core.
+- Applied the caller's cache policy during format probing and reused that
+  configured parse during open instead of first constructing default caches.
 - Matched OpenSlide's floor-like best-level selection at exact boundaries and
   for non-finite requests.
 

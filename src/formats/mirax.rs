@@ -16,16 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use flate2::read::ZlibDecoder;
-use j2k_core::BackendRequest;
-use lru::LruCache;
-
-use crate::core::cache::CacheConfig;
+use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    ConfiguredFormatProbe, ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence,
+    ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
@@ -34,6 +31,8 @@ use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
+use flate2::read::ZlibDecoder;
+use j2k_core::BackendRequest;
 
 const MRXS_EXT: &str = "mrxs";
 const SLIDEDAT_INI: &str = "Slidedat.ini";
@@ -43,9 +42,6 @@ const KEY_FILE_MAX_SIZE: u64 = 1 << 20;
 const SLIDE_POSITION_RECORD_SIZE: usize = 9;
 const MIRAX_ASSOCIATED_DIMENSION_PROBE_BYTES: u64 = 64 << 10;
 const MIRAX_QUICKHASH_READ_BUFFER_BYTES: usize = 64 << 10;
-// Parsed probe entries retain MIRAX level/index metadata but no decoded pixels.
-const MIRAX_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 4 * 1024 * 1024;
-
 const GROUP_GENERAL: &str = "GENERAL";
 const KEY_SLIDE_ID: &str = "SLIDE_ID";
 const KEY_IMAGE_NUMBER_X: &str = "IMAGENUMBER_X";
@@ -93,21 +89,14 @@ const KEY_IMAGE_CONCAT_FACTOR: &str = "IMAGE_CONCAT_FACTOR";
 static MIRAX_ASSOCIATED_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct MiraxBackend {
-    probe_cache: Mutex<LruCache<FileIdentity, Arc<MiraxSlide>>>,
+    probe_cache: ConfiguredProbeCache<MiraxSlide>,
 }
 
 impl MiraxBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(
-                CacheConfig::deterministic()
-                    .private_entry_capacity(MIRAX_PROBE_ENTRY_ESTIMATE_BYTES, 1),
-            )),
+            probe_cache: ConfiguredProbeCache::new(),
         }
-    }
-
-    fn parse(&self, path: &Path) -> Result<Arc<MiraxSlide>, WsiError> {
-        Ok(Arc::new(MiraxSlide::parse(path)?))
     }
 
     fn parse_with_cache_config(
@@ -127,18 +116,9 @@ impl MiraxBackend {
         cache_config: CacheConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
         let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = if cache_config == CacheConfig::deterministic() {
-            match cached {
-                Some(slide) => slide,
-                None => self.parse_with_cache_config(path, cache_config)?,
-            }
-        } else {
-            self.parse_with_cache_config(path, cache_config)?
+        let slide = match self.probe_cache.take(&key, cache_config) {
+            Some(slide) => slide,
+            None => self.parse_with_cache_config(path, cache_config)?,
         };
         Ok(Box::new(MiraxReader { slide }))
     }
@@ -152,31 +132,32 @@ impl Default for MiraxBackend {
 
 impl FormatProbe for MiraxBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
+        self.probe_with_cache_config(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredFormatProbe for MiraxBackend {
+    fn probe_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<ProbeResult, WsiError> {
         if !looks_like_mirax(path) {
             return Ok(not_detected());
         }
         let key = FileIdentity::from_path(path)?;
-        if self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .is_some()
-        {
+        if self.probe_cache.get(&key, cache_config).is_some() {
             return Ok(ProbeResult {
                 detected: true,
                 vendor: "mirax".into(),
                 confidence: ProbeConfidence::Definite,
             });
         }
-        let slide = match self.parse(path) {
+        let slide = match self.parse_with_cache_config(path, cache_config) {
             Ok(slide) => slide,
             Err(_) => return Ok(not_detected()),
         };
-        self.probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .put(key, slide);
+        self.probe_cache.insert(key, cache_config, slide);
         Ok(ProbeResult {
             detected: true,
             vendor: "mirax".into(),
@@ -305,8 +286,8 @@ struct MiraxSlide {
     dataset: Dataset,
     levels: Vec<MiraxLevel>,
     associated: HashMap<String, MiraxRecord>,
-    decoded_images: Mutex<LruCache<u32, Arc<CpuTile>>>,
-    associated_cache: Mutex<LruCache<String, Arc<CpuTile>>>,
+    decoded_images: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
+    associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     open_files: Mutex<HashMap<PathBuf, File>>,
 }
 

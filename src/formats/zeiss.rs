@@ -22,14 +22,13 @@ use czi_rs::{
 };
 use image::imageops::{self, FilterType};
 use j2k_core::BackendRequest;
-use lru::LruCache;
 use std::collections::HashMap as StdHashMap;
 
-use crate::core::cache::CacheConfig;
+use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    ConfiguredFormatProbe, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -70,6 +69,8 @@ impl FormatProbe for ZeissBackend {
         })
     }
 }
+
+impl ConfiguredFormatProbe for ZeissBackend {}
 
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {

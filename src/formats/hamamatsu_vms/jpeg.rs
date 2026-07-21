@@ -9,10 +9,20 @@ impl VmsJpeg {
         Self::parse_with_cache_config(path, row_starts, CacheConfig::deterministic())
     }
 
+    #[cfg(test)]
     pub(super) fn parse_with_cache_config(
         path: &Path,
         row_starts: Vec<Option<u64>>,
         cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
+        let mut private_cache_budget = cache_config.private_cache_budget(1);
+        Self::parse_with_private_cache_budget(path, row_starts, &mut private_cache_budget)
+    }
+
+    pub(super) fn parse_with_private_cache_budget(
+        path: &Path,
+        row_starts: Vec<Option<u64>>,
+        private_cache_budget: &mut PrivateCacheBudget,
     ) -> Result<Self, WsiError> {
         let header = read_vms_jpeg_header(path).map_err(|err| {
             invalid_slide(
@@ -55,12 +65,11 @@ impl VmsJpeg {
             tiles_down,
             mcu_starts: Mutex::new(mcu_starts),
             unreliable_mcu_starts,
-            decoded_tile_cache: Mutex::new(LruCache::new(
-                cache_config.private_entry_capacity(
+            decoded_tile_cache: Mutex::new(PrivateCache::new(
+                private_cache_budget.allocate(
                     u64::from(geometry.tile_width)
                         .saturating_mul(u64::from(geometry.tile_height))
                         .saturating_mul(3),
-                    4,
                 ),
             )),
             comment: header.comment,

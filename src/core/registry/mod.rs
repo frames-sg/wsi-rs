@@ -14,6 +14,7 @@ pub(crate) const DEFAULT_MAX_REGION_PIXELS: u64 = 256 * 1024 * 1024;
 
 mod composition;
 mod open_options;
+mod probe_cache;
 mod registry_impl;
 mod slide;
 mod traits;
@@ -23,9 +24,12 @@ pub(crate) use composition::{
     read_display_tile_from_source,
 };
 pub use open_options::SlideOpenOptions;
+pub(crate) use probe_cache::ConfiguredProbeCache;
 pub use registry_impl::FormatRegistry;
 pub use slide::Slide;
-pub(crate) use traits::{read_cpu_tiles_with_backend, ConfiguredDatasetReader};
+pub(crate) use traits::{
+    read_cpu_tiles_with_backend, ConfiguredDatasetReader, ConfiguredFormatProbe,
+};
 pub use traits::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReadContext, SlideReader,
 };

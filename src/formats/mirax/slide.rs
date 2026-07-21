@@ -9,6 +9,7 @@ const MAX_MIRAX_ZOOM_LEVELS: i32 = 64;
 const MAX_MIRAX_DATA_FILES: i32 = 4_096;
 
 impl MiraxSlide {
+    #[cfg(test)]
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
         Self::parse_with_cache_config(path, CacheConfig::deterministic())
     }
@@ -429,9 +430,10 @@ impl MiraxSlide {
             })
             .max()
             .unwrap_or(1);
-        let decoded_cache_entries = cache_config.private_entry_capacity(decoded_image_bytes, 4);
-        let associated_cache_entries =
-            cache_config.private_entry_capacity(associated_image_bytes, 4);
+        let mut private_cache_budget = cache_config.private_cache_budget(2);
+        let decoded_cache = PrivateCache::new(private_cache_budget.allocate(decoded_image_bytes));
+        let associated_cache =
+            PrivateCache::new(private_cache_budget.allocate(associated_image_bytes));
 
         let dataset = Dataset {
             id: dataset_id,
@@ -456,8 +458,8 @@ impl MiraxSlide {
             dataset,
             levels,
             associated,
-            decoded_images: Mutex::new(LruCache::new(decoded_cache_entries)),
-            associated_cache: Mutex::new(LruCache::new(associated_cache_entries)),
+            decoded_images: Mutex::new(decoded_cache),
+            associated_cache: Mutex::new(associated_cache),
             open_files: Mutex::new(quickhash_files),
         })
     }

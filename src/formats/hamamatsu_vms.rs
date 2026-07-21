@@ -14,21 +14,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use j2k_core::BackendRequest;
-#[cfg(test)]
-use j2k_jpeg::JpegView as J2kJpegView;
-use j2k_jpeg::{
-    DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
-    PixelFormat as J2kPixelFormat, Rect as J2kRect,
-};
-use lru::LruCache;
-
-use crate::core::cache::CacheConfig;
+use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    read_cpu_tiles_with_backend, ConfiguredDatasetReader, DatasetReader, FormatProbe,
-    ProbeConfidence, ProbeResult, SlideReader,
+    read_cpu_tiles_with_backend, ConfiguredDatasetReader, ConfiguredFormatProbe,
+    ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -36,31 +27,27 @@ use crate::decode::jpeg::{jpeg_dimensions, JpegTileGeometry};
 use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::properties::Properties;
+use j2k_core::BackendRequest;
+#[cfg(test)]
+use j2k_jpeg::JpegView as J2kJpegView;
+use j2k_jpeg::{
+    DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
+    PixelFormat as J2kPixelFormat, Rect as J2kRect,
+};
 
 use ini::{parse_vms_ini, GROUP_VMS, KEY_NUM_JPEG_COLS, KEY_NUM_JPEG_ROWS};
 use model::VmsSlide;
 use slide::VmsReader;
 
-// Parsed probe entries retain shard indexes and open file owners, not pixels.
-const VMS_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 4 * 1024 * 1024;
-
 pub(crate) struct HamamatsuVmsBackend {
-    probe_cache: Mutex<LruCache<FileIdentity, Arc<VmsSlide>>>,
+    probe_cache: ConfiguredProbeCache<VmsSlide>,
 }
 
 impl HamamatsuVmsBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(
-                CacheConfig::deterministic()
-                    .private_entry_capacity(VMS_PROBE_ENTRY_ESTIMATE_BYTES, 1),
-            )),
+            probe_cache: ConfiguredProbeCache::new(),
         }
-    }
-
-    fn parse(&self, path: &Path) -> Result<Arc<VmsSlide>, WsiError> {
-        let slide = Arc::new(VmsSlide::parse(path)?);
-        Ok(slide)
     }
 
     fn parse_with_cache_config(
@@ -80,18 +67,9 @@ impl HamamatsuVmsBackend {
         cache_config: CacheConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
         let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = if cache_config == CacheConfig::deterministic() {
-            match cached {
-                Some(slide) => slide,
-                None => self.parse_with_cache_config(path, cache_config)?,
-            }
-        } else {
-            self.parse_with_cache_config(path, cache_config)?
+        let slide = match self.probe_cache.take(&key, cache_config) {
+            Some(slide) => slide,
+            None => self.parse_with_cache_config(path, cache_config)?,
         };
         Ok(Box::new(VmsReader { slide }))
     }
@@ -105,6 +83,16 @@ impl Default for HamamatsuVmsBackend {
 
 impl FormatProbe for HamamatsuVmsBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
+        self.probe_with_cache_config(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredFormatProbe for HamamatsuVmsBackend {
+    fn probe_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<ProbeResult, WsiError> {
         let ini = match parse_vms_ini(path) {
             Ok(ini) => ini,
             Err(_) => {
@@ -138,12 +126,16 @@ impl FormatProbe for HamamatsuVmsBackend {
             });
         }
 
-        let slide = self.parse(path)?;
         let key = FileIdentity::from_path(path)?;
-        self.probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .put(key, slide);
+        if self.probe_cache.get(&key, cache_config).is_some() {
+            return Ok(ProbeResult {
+                detected: true,
+                vendor: "hamamatsu".into(),
+                confidence: ProbeConfidence::Definite,
+            });
+        }
+        let slide = self.parse_with_cache_config(path, cache_config)?;
+        self.probe_cache.insert(key, cache_config, slide);
 
         Ok(ProbeResult {
             detected: true,

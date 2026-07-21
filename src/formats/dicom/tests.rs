@@ -2,21 +2,62 @@ use super::*;
 
 #[test]
 fn private_frame_cache_capacity_tracks_cache_config_bytes() {
-    let small = dicom_frame_cache_capacity(
-        CacheConfig::deterministic().with_shared_tile_bytes(12 * 1024),
-        16,
-        16,
-        3,
+    let entry_bytes = dicom_frame_cache_entry_bytes(16, 16, 3);
+    let mut small_budget = CacheConfig::deterministic()
+        .with_shared_tile_bytes(12 * 1024)
+        .private_cache_budget(2);
+    let mut large_budget = CacheConfig::deterministic()
+        .with_shared_tile_bytes(48 * 1024)
+        .private_cache_budget(2);
+    let small = PrivateCache::<u32, Arc<CpuTile>>::new(small_budget.allocate(entry_bytes));
+    let large = PrivateCache::<u32, Arc<CpuTile>>::new(large_budget.allocate(entry_bytes));
+
+    assert_eq!(small.capacity_entries(), 1);
+    assert_eq!(large.capacity_entries(), 4);
+}
+
+#[test]
+fn configured_probe_reuses_the_small_budget_slide_during_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("small-budget.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let cache_config = CacheConfig::deterministic().with_shared_tile_bytes(512);
+    let backend = DicomBackend::new();
+
+    let result = backend
+        .probe_with_cache_config(&path, cache_config)
+        .expect("configured DICOM probe");
+    assert!(result.detected);
+    let identity = FileIdentity::from_path(&path).unwrap();
+    let probed_slide = backend
+        .probe_cache
+        .get(&identity, cache_config)
+        .expect("probe retains the parsed slide for open");
+    let image = &probed_slide.levels[0].parts[0];
+    assert_eq!(
+        image
+            .encapsulated_frame_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .capacity_entries(),
+        0
     );
-    let large = dicom_frame_cache_capacity(
-        CacheConfig::deterministic().with_shared_tile_bytes(48 * 1024),
-        16,
-        16,
-        3,
+    assert_eq!(
+        image
+            .decoded_frame_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .capacity_entries(),
+        0
     );
 
-    assert_eq!(small.get(), 2);
-    assert_eq!(large.get(), 8);
+    let reader = backend
+        .open_with_cache_config(&path, cache_config)
+        .expect("open consumes configured probe result");
+    assert_eq!(Arc::strong_count(&probed_slide), 2);
+    assert!(backend.probe_cache.get(&identity, cache_config).is_none());
+    drop(reader);
+    assert_eq!(Arc::strong_count(&probed_slide), 1);
 }
 use crate::core::registry::Slide;
 use dicom_core::value::fragments::Fragments;
@@ -629,11 +670,16 @@ fn test_dicom_image_with_transfer_syntax(
         pixel_spacing: None,
         objective_lens_power: None,
         encapsulated_frames: Mutex::new(None),
-        encapsulated_frame_cache: Mutex::new(LruCache::new(
-            std::num::NonZeroUsize::new(1).unwrap(),
-        )),
-        decoded_frame_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(1).unwrap())),
+        encapsulated_frame_cache: Mutex::new(test_private_cache()),
+        decoded_frame_cache: Mutex::new(test_private_cache()),
     })
+}
+
+fn test_private_cache<K: std::hash::Hash + Eq, V>() -> PrivateCache<K, V> {
+    let mut budget = CacheConfig::deterministic()
+        .with_shared_tile_bytes(4 * 1024)
+        .private_cache_budget(1);
+    PrivateCache::new(budget.allocate(1024))
 }
 
 fn empty_dataset() -> Dataset {

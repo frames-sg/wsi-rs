@@ -157,10 +157,6 @@ impl VmsReader {
 }
 
 impl VmsSlide {
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
-        Self::parse_with_cache_config(path, CacheConfig::deterministic())
-    }
-
     pub(super) fn parse_with_cache_config(
         path: &Path,
         cache_config: CacheConfig,
@@ -179,6 +175,8 @@ impl VmsSlide {
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         let image_count = vms_image_count(num_cols, num_rows)
             .ok_or_else(|| invalid_slide(path, "VMS JPEG shard count exceeds safety limit"))?;
+        let mut private_cache_budget =
+            cache_config.private_cache_budget(image_count.saturating_add(2));
         let mut image_paths = vec![None; image_count];
         for (key, value) in group {
             if !key.starts_with(KEY_IMAGE_FILE) {
@@ -244,16 +242,16 @@ impl VmsSlide {
         let mut base_images = Vec::with_capacity(image_paths.len());
         for (idx, image_path) in image_paths.iter().enumerate() {
             let row_starts = opt_offsets.get(idx).cloned().unwrap_or_default();
-            base_images.push(Arc::new(VmsJpeg::parse_with_cache_config(
+            base_images.push(Arc::new(VmsJpeg::parse_with_private_cache_budget(
                 image_path,
                 row_starts,
-                cache_config,
+                &mut private_cache_budget,
             )?));
         }
-        let map_image = Arc::new(VmsJpeg::parse_with_cache_config(
+        let map_image = Arc::new(VmsJpeg::parse_with_private_cache_budget(
             &map_path,
             Vec::new(),
-            cache_config,
+            &mut private_cache_budget,
         )?);
 
         let mut properties = Properties::new();
@@ -353,8 +351,8 @@ impl VmsSlide {
             })
             .max()
             .unwrap_or(1);
-        let associated_cache_entries =
-            cache_config.private_entry_capacity(associated_entry_bytes, 4);
+        let associated_cache =
+            PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
 
         let dataset = Dataset {
             id: dataset_id,
@@ -379,7 +377,7 @@ impl VmsSlide {
             dataset,
             levels,
             associated_paths,
-            associated_cache: Mutex::new(LruCache::new(associated_cache_entries)),
+            associated_cache: Mutex::new(associated_cache),
         })
     }
 }

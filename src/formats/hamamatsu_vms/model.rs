@@ -4,7 +4,7 @@ pub(super) struct VmsSlide {
     pub(super) dataset: Dataset,
     pub(super) levels: Vec<VmsLevel>,
     pub(super) associated_paths: HashMap<String, PathBuf>,
-    pub(super) associated_cache: Mutex<LruCache<String, Arc<CpuTile>>>,
+    pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
 }
 
 pub(super) struct VmsLevel {
@@ -29,7 +29,7 @@ pub(super) struct VmsJpeg {
     pub(super) tiles_down: u32,
     pub(super) mcu_starts: Mutex<Vec<Option<u64>>>,
     pub(super) unreliable_mcu_starts: Vec<Option<u64>>,
-    pub(super) decoded_tile_cache: Mutex<LruCache<(usize, u32), Arc<CpuTile>>>,
+    pub(super) decoded_tile_cache: Mutex<PrivateCache<(usize, u32), Arc<CpuTile>>>,
     pub(super) comment: Option<String>,
 }
 
