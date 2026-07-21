@@ -180,6 +180,21 @@ pub trait SlideReader: Send + Sync {
         }
         Ok(LevelSourceKind::Physical)
     }
+    /// Prepares format-specific state for a level without decoding pixels.
+    ///
+    /// The default implementation validates the requested level and otherwise
+    /// performs no work, preserving compatibility for existing readers.
+    fn prepare_level_controlled(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        control.check_cancelled()?;
+        self.level_source_kind(scene, series, level)?;
+        control.check_cancelled()
+    }
     fn read_tiles(
         &self,
         reqs: &[TileRequest],
@@ -187,7 +202,7 @@ pub trait SlideReader: Send + Sync {
     ) -> Result<Vec<TilePixels>, WsiError> {
         if matches!(output, TileOutputPreference::RequireDevice { .. }) {
             return Err(WsiError::Unsupported {
-                reason: "RequireDevice not supported by this reader in Phase 2".into(),
+                reason: "RequireDevice is not supported by this reader".into(),
             });
         }
         reqs.iter()
@@ -201,13 +216,11 @@ pub trait SlideReader: Send + Sync {
         control: &crate::ReadControl,
     ) -> Result<Vec<TilePixels>, WsiError> {
         control.check_cancelled()?;
-        let mut tiles = Vec::with_capacity(reqs.len());
-        for request in reqs {
-            control.check_cancelled()?;
-            tiles.push(self.read_tile(request, output.clone())?);
-            control.check_cancelled()?;
-        }
-        Ok(tiles)
+        let result = self.read_tiles(reqs, output).and_then(|tiles| {
+            crate::core::batch::expect_exact_count(tiles, reqs.len(), "controlled tile batch")
+        });
+        control.check_cancelled()?;
+        result
     }
     fn read_tile(
         &self,
@@ -283,7 +296,7 @@ pub trait SlideReader: Send + Sync {
     ) -> Result<TilePixels, WsiError> {
         if matches!(output, TileOutputPreference::RequireDevice { .. }) {
             return Err(WsiError::Unsupported {
-                reason: "region requires CPU composition; RequireDevice not supported in Phase 2"
+                reason: "region composition requires CPU output; RequireDevice is not supported"
                     .into(),
             });
         }

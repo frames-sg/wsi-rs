@@ -39,7 +39,7 @@
 # license          = "unknown"
 # redistributable  = false
 # phi_reviewed     = true
-# notes            = "Phase 7a covers native uncompressed variants with synthetic unit fixtures; add a real WSI fixture here when available."
+# notes            = "Native uncompressed variants have synthetic unit coverage; add a real WSI fixture here when available."
 
 # [[slide]]
 # name             = "dicom_wsi_rle_lossless"
@@ -52,7 +52,7 @@
 # license          = "unknown"
 # redistributable  = false
 # phi_reviewed     = true
-# notes            = "No redistributable RLE WSI fixture is known; Phase 7a keeps RLE regression coverage synthetic."
+# notes            = "No redistributable RLE WSI fixture is known; RLE regression coverage remains synthetic."
 
 # [[slide]]
 # name             = "hamamatsu_ndpi_no_restart_markers"

@@ -64,8 +64,7 @@ pub(super) fn test() -> Result<(), String> {
             "--lib",
             "--tests",
             "--features",
-            "metal",
-            "--no-run",
+            "parity-metal",
         ])?;
     }
     Ok(())
@@ -84,13 +83,13 @@ pub(super) fn nextest() -> Result<(), String> {
     ])?;
     if cfg!(target_os = "macos") {
         run_cargo(&[
-            "test",
+            "nextest",
+            "run",
             "--locked",
             "--lib",
             "--tests",
             "--features",
-            "metal",
-            "--no-run",
+            "parity-metal",
         ])?;
     }
     Ok(())

@@ -59,7 +59,7 @@ pub(super) fn resident_test_image(
 }
 
 #[cfg(test)]
-pub(super) fn resident_bytes(image: &ResidentMetalImage) -> Vec<u8> {
+pub(crate) fn resident_bytes(image: &ResidentMetalImage) -> Vec<u8> {
     // SAFETY: test output is complete and the immutable resident allocation is
     // read only for the duration of this snapshot.
     unsafe {

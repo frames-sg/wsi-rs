@@ -139,6 +139,27 @@ fn release_validation_runs_doctests() {
 }
 
 #[test]
+fn macos_validation_runs_metal_pixel_parity() {
+    let manifest = read_repo_text("Cargo.toml");
+    let xtask_checks = read_repo_text("xtask/src/commands/checks.rs");
+    let jp2k_tests = read_repo_text("src/decode/jp2k/tests.rs");
+
+    assert!(
+        manifest.contains("parity-metal = [\"metal\"]"),
+        "parity-metal must enable the Metal implementation it compares"
+    );
+    assert!(
+        xtask_checks.matches("\"parity-metal\"").count() >= 2,
+        "both cargo test and nextest must run parity-metal on macOS"
+    );
+    assert!(
+        jp2k_tests.contains("fn j2k_metal_vs_cpu_within_tolerance()")
+            && jp2k_tests.contains("assert_cpu_tile_matches_rgb_fixture_with_tolerance"),
+        "Metal parity must compare decoded pixels rather than only surface metadata"
+    );
+}
+
+#[test]
 fn package_gate_runs_publish_dry_run() {
     let xtask_checks = fs::read_to_string(crate_root().join("xtask/src/commands/checks.rs"))
         .expect("read xtask checks");

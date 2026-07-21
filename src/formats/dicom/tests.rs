@@ -657,6 +657,23 @@ fn encode_test_jpeg_rgb(width: u16, height: u16, seed: u8) -> Vec<u8> {
 }
 
 #[cfg(feature = "metal")]
+fn encode_test_htj2k_rgb(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 3);
+    for index in 0..width * height {
+        pixels.push(((index * 17 + index / 3) & 0xff) as u8);
+        pixels.push(((index * 29 + 7) & 0xff) as u8);
+        pixels.push(((index * 43 + 19) & 0xff) as u8);
+    }
+    let options = j2k_native::EncodeOptions {
+        reversible: true,
+        num_decomposition_levels: 1,
+        ..j2k_native::EncodeOptions::default()
+    };
+    j2k_native::encode_htj2k(&pixels, width, height, 3, 8, false, &options)
+        .expect("encode RGB HTJ2K fixture")
+}
+
+#[cfg(feature = "metal")]
 fn test_metal_sessions() -> Option<crate::output::metal::MetalBackendSessions> {
     let device = metal::Device::system_default()?;
     Some(crate::output::metal::MetalBackendSessions::new(device))
@@ -1157,6 +1174,111 @@ fn read_tiles_cpu_decodes_jpeg_frames_in_request_order() {
     );
 }
 
+type RecordedTileAdmissions = Arc<Mutex<Vec<Vec<(i64, i64)>>>>;
+
+struct RecordingDicomReader {
+    inner: DicomReader,
+    controlled_admissions: RecordedTileAdmissions,
+}
+
+impl SlideReader for RecordingDicomReader {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        self.inner.tile_codec_kind(req)
+    }
+
+    fn read_tiles(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.inner.read_tiles(reqs, output)
+    }
+
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.controlled_admissions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(reqs.iter().map(|req| (req.col, req.row)).collect());
+        self.inner.read_tiles_controlled(reqs, output, control)
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_tile_cpu(req)
+    }
+}
+
+#[test]
+fn controlled_batch_of_eight_reaches_dicom_once_in_original_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jpeg-controlled-batch-eight.dcm");
+    let mut options = TestDicomOptions::native(Vec::new());
+    options.transfer_syntax = JPEG_TRANSFER_SYNTAX;
+    options.rows = 16;
+    options.columns = 16;
+    options.total_pixel_matrix_rows = 16;
+    options.total_pixel_matrix_columns = 16 * 8;
+    options.number_of_frames = 8;
+    options.pixel_data = TestPixelData::EncapsulatedFrames(
+        (0..8)
+            .map(|index| encode_test_jpeg_rgb(16, 16, 3 + index * 19))
+            .collect(),
+    );
+    write_test_dicom(&path, options);
+
+    let (inner, _) = reader_and_first_image(&path);
+    let controlled_admissions = Arc::new(Mutex::new(Vec::new()));
+    let slide = Slide::from_source_with_cache_bytes(
+        Box::new(RecordingDicomReader {
+            inner,
+            controlled_admissions: Arc::clone(&controlled_admissions),
+        }),
+        1024 * 1024,
+    );
+    let requests = [7, 0, 5, 2, 6, 1, 4, 3]
+        .into_iter()
+        .map(|col| tile_request(col, 0))
+        .collect::<Vec<_>>();
+
+    let tiles = slide
+        .read_tiles_controlled(
+            &requests,
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
+        )
+        .expect("controlled DICOM batch of eight");
+
+    assert_eq!(tiles.len(), requests.len());
+    assert_eq!(
+        *controlled_admissions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+        vec![requests
+            .iter()
+            .map(|request| (request.col, request.row))
+            .collect::<Vec<_>>()],
+        "the adaptive wrapper must admit one unchanged DICOM batch"
+    );
+    for (tile, expected) in tiles.iter().zip(requests.iter().map(|request| {
+        slide
+            .read_tile(request, TileOutputPreference::cpu())
+            .expect("matching sequential tile")
+    })) {
+        let (TilePixels::Cpu(tile), TilePixels::Cpu(expected)) = (tile, expected) else {
+            panic!("CPU output expected");
+        };
+        assert_eq!(tile.data.as_u8(), expected.data.as_u8());
+    }
+}
+
 #[test]
 fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -1174,14 +1296,86 @@ fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
 
     let slide = Slide::open(&path).expect("open generated DICOM JP2K slide");
     let tiles = slide
-        .read_tiles(
+        .read_tiles_controlled(
             &[tile_request(1, 0), tile_request(0, 0)],
             TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
         )
         .expect("read JP2K CPU tile batch");
 
     assert_eq!(tiles.len(), 2);
     assert!(tiles.iter().all(|tile| matches!(tile, TilePixels::Cpu(_))));
+}
+
+#[test]
+fn controlled_jp2k_batch_preserves_edge_tile_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jp2k-controlled-edge-batch.dcm");
+    let codestream = include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let mut options = TestDicomOptions::native(Vec::new());
+    options.transfer_syntax = uids::JPEG2000_LOSSLESS;
+    options.rows = 12;
+    options.columns = 16;
+    options.total_pixel_matrix_rows = 12;
+    options.total_pixel_matrix_columns = 24;
+    options.number_of_frames = 2;
+    options.pixel_data = TestPixelData::EncapsulatedFrames(vec![codestream.clone(), codestream]);
+    write_test_dicom(&path, options);
+
+    let slide = Slide::open(&path).expect("open generated DICOM JP2K slide");
+    let tiles = slide
+        .read_tiles_controlled(
+            &[tile_request(1, 0), tile_request(0, 0)],
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
+        )
+        .expect("read controlled JP2K edge batch");
+
+    let dimensions = tiles
+        .into_iter()
+        .map(|tile| match tile {
+            TilePixels::Cpu(tile) => (tile.width, tile.height),
+            TilePixels::Device(_) => panic!("CPU output expected"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(dimensions, vec![(8, 12), (16, 12)]);
+}
+
+#[test]
+fn controlled_dicom_batch_cancelled_before_io_does_not_build_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jp2k-cancelled-before-io.dcm");
+    let codestream = include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let mut options = TestDicomOptions::native(Vec::new());
+    options.transfer_syntax = uids::JPEG2000_LOSSLESS;
+    options.rows = 12;
+    options.columns = 16;
+    options.total_pixel_matrix_rows = 12;
+    options.total_pixel_matrix_columns = 32;
+    options.number_of_frames = 2;
+    options.pixel_data = TestPixelData::EncapsulatedFrames(vec![codestream.clone(), codestream]);
+    write_test_dicom(&path, options);
+
+    let (reader, image) = reader_and_first_image(&path);
+    let cancellation = crate::ReadCancellationToken::new();
+    cancellation.cancel();
+    let error = reader
+        .read_tiles_controlled(
+            &[tile_request(1, 0), tile_request(0, 0)],
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::new(cancellation),
+        )
+        .expect_err("cancelled DICOM batch must stop before I/O");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert!(
+        image
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_none(),
+        "cancellation before admission must not build the frame index"
+    );
 }
 
 #[test]
@@ -1238,6 +1432,70 @@ fn extract_encapsulated_frames_batch_preserves_requested_frames() {
 
     assert_eq!(extracted.get(&2).unwrap().as_slice(), frames[2].as_slice());
     assert_eq!(extracted.get(&0).unwrap().as_slice(), frames[0].as_slice());
+}
+
+#[test]
+fn grouped_frame_read_validates_item_header_from_the_grouped_window() {
+    struct CountingCursor {
+        inner: std::io::Cursor<Vec<u8>>,
+        read_calls: usize,
+    }
+
+    impl std::io::Read for CountingCursor {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.read_calls += 1;
+            self.inner.read(buffer)
+        }
+    }
+
+    impl std::io::Seek for CountingCursor {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grouped-read-io-count.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let (_reader, image) = reader_and_first_image(&path);
+    let payload = [1, 2, 3, 4];
+    let fragment = DicomFragmentRef {
+        item_offset: 0,
+        payload_offset: 8,
+        len: payload.len() as u32,
+    };
+    let frames = DicomEncapsulatedFrames {
+        fragments: vec![fragment],
+        frame_ranges: std::iter::once(0..1).collect(),
+    };
+    let group = DicomFrameReadGroup {
+        start: 0,
+        end: 12,
+        spans: vec![DicomFrameReadSpan {
+            frame_index: 0,
+            frame_range: 0..1,
+            start: 0,
+            end: 12,
+        }],
+    };
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    let mut reader = CountingCursor {
+        inner: std::io::Cursor::new(bytes),
+        read_calls: 0,
+    };
+
+    let extracted = image
+        .read_encapsulated_frame_group(&mut reader, &frames, &group)
+        .expect("grouped read validates and extracts its frame");
+
+    assert_eq!(extracted, vec![(0, payload.to_vec())]);
+    assert_eq!(
+        reader.read_calls, 1,
+        "one grouped window read must provide both Item headers and payload bytes"
+    );
 }
 
 fn literal_rle_segment(bytes: &[u8]) -> Vec<u8> {
@@ -1327,6 +1585,588 @@ fn raw_encapsulated_scan_handles_extended_offset_table_layout() {
 }
 
 #[test]
+fn controlled_indexing_reports_basic_offset_table_mapping() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-bot-diagnostics.dcm");
+    let frames = [[0xFF, 0x4F, 0x01, 0x02], [0xFF, 0x4F, 0x03, 0x04]];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&12u32.to_le_bytes());
+    for frame in &frames {
+        push_pixel_fragment(&mut bytes, frame);
+    }
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
+        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+    ));
+
+    let index = scan_encapsulated_frames_controlled(
+        &path,
+        uids::EXPLICIT_VR_LITTLE_ENDIAN,
+        2,
+        Some(&control),
+    )
+    .expect("fast indexing should resolve the nonzero BOT offset once");
+
+    assert_eq!(index.frame_ranges, vec![0..1, 1..2]);
+    let outcomes = events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| match event {
+            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        vec![crate::DicomIndexOutcome::BuiltFast {
+            mapping: crate::DicomIndexMapping::BasicOffsetTableItems,
+        }]
+    );
+}
+
+#[test]
+fn raw_encapsulated_scan_uses_extended_offsets_for_multi_fragment_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-eot-multi-fragment.dcm");
+    let fragments = [[0xFF, 0x4F], [0x01, 0x02], [0xFF, 0x4F], [0x03, 0x04]];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let second_frame_offset = 2 * (8 + fragments[0].len() as u64);
+    let mut eot = Vec::new();
+    eot.extend_from_slice(&0u64.to_le_bytes());
+    eot.extend_from_slice(&second_frame_offset.to_le_bytes());
+    push_explicit_vr_long_element(&mut bytes, [0xE0, 0x7F, 0x01, 0x00], b"OV", &eot);
+
+    let mut eot_lengths = Vec::new();
+    eot_lengths.extend_from_slice(&4u64.to_le_bytes());
+    eot_lengths.extend_from_slice(&4u64.to_le_bytes());
+    push_explicit_vr_long_element(&mut bytes, [0xE0, 0x7F, 0x02, 0x00], b"OV", &eot_lengths);
+
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for fragment in &fragments {
+        push_pixel_fragment(&mut bytes, fragment);
+    }
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let frames = scan_encapsulated_frames_raw_little_endian(&path, 2)
+        .expect("raw scan succeeds")
+        .expect("Pixel Data is found");
+    assert_eq!(frames.frame_ranges, vec![0..2, 2..4]);
+}
+
+#[test]
+fn raw_encapsulated_scan_rejects_pixel_data_pattern_inside_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-false-pixel-data-pattern.dcm");
+    let frame = [0xFF, 0x4F, 0x01, 0x02];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let mut metadata_value = Vec::new();
+    metadata_value.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    metadata_value.extend_from_slice(b"OB");
+    metadata_value.extend_from_slice(&[0, 0]);
+    metadata_value.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    metadata_value.extend_from_slice(&[0; 16]);
+    push_explicit_vr_long_element(&mut bytes, [0x11, 0x00, 0x10, 0x10], b"OB", &metadata_value);
+
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let item_offset = push_pixel_fragment(&mut bytes, &frame);
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let frames = scan_encapsulated_frames_raw_little_endian(&path, 1)
+        .expect("raw scan skips the false metadata candidate")
+        .expect("real Pixel Data is found");
+    assert_eq!(frames.frame_ranges, vec![0..1]);
+    assert_eq!(frames.fragments[0].item_offset, item_offset);
+}
+
+#[test]
+fn raw_encapsulated_scan_rejects_complete_pixel_sequence_inside_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-complete-false-pixel-sequence.dcm");
+    let fake_frame = [0xDE, 0xAD, 0xBE, 0xEF];
+    let real_frame = [0xFF, 0x4F, 0x01, 0x02];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let mut metadata_value = Vec::new();
+    metadata_value.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    metadata_value.extend_from_slice(b"OB");
+    metadata_value.extend_from_slice(&[0, 0]);
+    metadata_value.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    metadata_value.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    metadata_value.extend_from_slice(&0u32.to_le_bytes());
+    push_pixel_fragment(&mut metadata_value, &fake_frame);
+    metadata_value.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    metadata_value.extend_from_slice(&0u32.to_le_bytes());
+    push_explicit_vr_long_element(&mut bytes, [0x11, 0x00, 0x10, 0x10], b"OB", &metadata_value);
+
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let real_item_offset = push_pixel_fragment(&mut bytes, &real_frame);
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let frames = scan_encapsulated_frames_raw_little_endian(&path, 1)
+        .expect("raw scan skips a complete false metadata sequence")
+        .expect("real Pixel Data is found");
+
+    assert_eq!(frames.frame_ranges, vec![0..1]);
+    assert_eq!(frames.fragments[0].item_offset, real_item_offset);
+}
+
+#[test]
+fn extended_offset_direct_path_rejects_invalid_intermediate_item_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-eot-invalid-middle-item.dcm");
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let mut offsets = Vec::new();
+    for offset in [0u64, 12, 24] {
+        offsets.extend_from_slice(&offset.to_le_bytes());
+    }
+    push_explicit_vr_long_element(&mut bytes, EXTENDED_OFFSET_TABLE_TAG_LE, b"OV", &offsets);
+    let mut lengths = Vec::new();
+    for length in [4u64, 4, 4] {
+        lengths.extend_from_slice(&length.to_le_bytes());
+    }
+    push_explicit_vr_long_element(
+        &mut bytes,
+        EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE,
+        b"OV",
+        &lengths,
+    );
+
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&[1, 2, 3, 4]);
+    bytes.extend_from_slice(&[0xAA; 8]);
+    bytes.extend_from_slice(&[5, 6, 7, 8]);
+    push_pixel_fragment(&mut bytes, &[9, 10, 11, 12]);
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    scan_encapsulated_frames_raw_little_endian(&path, 3)
+        .expect_err("an EOT offset into payload bytes must not be accepted as an Item");
+}
+
+#[test]
+fn extended_offset_table_values_are_bounds_checked_before_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-eot-values-out-of-bounds.dcm");
+    std::fs::write(&path, vec![0u8; 64]).unwrap();
+    let mut file = File::open(&path).unwrap();
+
+    let error = read_extended_offset_tables_le(&mut file, &path, Some(56), Some(16), 16, None)
+        .expect_err("EOT values beyond EOF must fail before allocation/read");
+
+    assert!(error.to_string().contains("outside the source file"));
+}
+
+#[test]
+fn extended_fragment_padding_rejects_u32_overflow() {
+    let error = checked_padded_fragment_len(
+        Path::new("overflowing-extended-length.dcm"),
+        0,
+        u64::from(u32::MAX),
+    )
+    .expect_err("odd u32::MAX payload length cannot be represented after padding");
+
+    assert!(error.to_string().contains("padded length"));
+}
+
+#[test]
+fn malformed_extended_offsets_fall_back_to_valid_basic_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-invalid-eot-valid-bot.dcm");
+    let frames = [[0xFF, 0x4F, 0x01, 0x02], [0xFF, 0x4F, 0x03, 0x04]];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let mut invalid_eot = Vec::new();
+    invalid_eot.extend_from_slice(&0u64.to_le_bytes());
+    invalid_eot.extend_from_slice(&1u64.to_le_bytes());
+    push_explicit_vr_long_element(
+        &mut bytes,
+        EXTENDED_OFFSET_TABLE_TAG_LE,
+        b"OV",
+        &invalid_eot,
+    );
+    let mut lengths = Vec::new();
+    lengths.extend_from_slice(&4u64.to_le_bytes());
+    lengths.extend_from_slice(&4u64.to_le_bytes());
+    push_explicit_vr_long_element(
+        &mut bytes,
+        EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE,
+        b"OV",
+        &lengths,
+    );
+
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&(8u32 + frames[0].len() as u32).to_le_bytes());
+    for frame in &frames {
+        push_pixel_fragment(&mut bytes, frame);
+    }
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let index = scan_encapsulated_frames_raw_little_endian(&path, 2)
+        .expect("valid BOT safely replaces malformed EOT")
+        .expect("Pixel Data is found");
+    assert_eq!(index.frame_ranges, vec![0..1, 1..2]);
+}
+
+#[test]
+fn malformed_extended_offsets_without_safe_mapping_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-invalid-eot-no-fallback.dcm");
+    let fragments = [[1, 2], [3, 4], [5, 6], [7, 8]];
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+
+    let mut invalid_eot = Vec::new();
+    invalid_eot.extend_from_slice(&0u64.to_le_bytes());
+    invalid_eot.extend_from_slice(&1u64.to_le_bytes());
+    push_explicit_vr_long_element(
+        &mut bytes,
+        EXTENDED_OFFSET_TABLE_TAG_LE,
+        b"OV",
+        &invalid_eot,
+    );
+    let mut lengths = Vec::new();
+    lengths.extend_from_slice(&4u64.to_le_bytes());
+    lengths.extend_from_slice(&4u64.to_le_bytes());
+    push_explicit_vr_long_element(
+        &mut bytes,
+        EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE,
+        b"OV",
+        &lengths,
+    );
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for fragment in &fragments {
+        push_pixel_fragment(&mut bytes, fragment);
+    }
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let error = scan_encapsulated_frames_raw_little_endian(&path, 2)
+        .expect_err("malformed EOT without BOT/item mapping must fail");
+    assert!(error.to_string().contains("extended offset table"));
+}
+
+#[test]
+fn raw_encapsulated_scan_rejects_fragment_extending_past_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("raw-truncated-fragment.dcm");
+    let mut bytes = vec![0; 132];
+    bytes[128..132].copy_from_slice(b"DICM");
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&1024u32.to_le_bytes());
+    bytes.extend_from_slice(&[1, 2, 3, 4]);
+    std::fs::write(&path, bytes).unwrap();
+
+    let error = scan_encapsulated_frames_raw_little_endian(&path, 1)
+        .expect_err("truncated fragment must fail safely");
+    assert!(error.to_string().contains("beyond the source file"));
+}
+
+#[test]
+fn raw_item_scan_seeks_over_fragment_payloads() {
+    struct CountingCursor {
+        inner: std::io::Cursor<Vec<u8>>,
+        bytes_read: usize,
+    }
+
+    impl std::io::Read for CountingCursor {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buffer)?;
+            self.bytes_read += read;
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for CountingCursor {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let payload_len = 1024 * 1024u32;
+    let mut bytes = Vec::with_capacity(payload_len as usize + 36);
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&payload_len.to_le_bytes());
+    bytes.resize(bytes.len() + payload_len as usize, 0xA5);
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let file_len = bytes.len() as u64;
+    let mut reader = CountingCursor {
+        inner: std::io::Cursor::new(bytes),
+        bytes_read: 0,
+    };
+
+    let (fragments, basic_offsets) = scan_raw_encapsulated_pixel_sequence_with_reader(
+        &mut reader,
+        Path::new("counted-payload.dcm"),
+        0,
+        file_len,
+        None,
+    )
+    .expect("item scan succeeds");
+
+    assert_eq!(fragments.len(), 1);
+    assert!(basic_offsets.is_empty());
+    assert_eq!(
+        reader.bytes_read, 24,
+        "indexing should read only the BOT, fragment, and delimiter headers"
+    );
+}
+
+#[test]
+fn oversized_basic_offset_table_is_rejected_without_allocating_its_payload() {
+    let error = validate_basic_offset_table_len(
+        Path::new("oversized-basic-offset-table.dcm"),
+        u32::MAX - 3,
+        None,
+    )
+    .expect_err("an untrusted multi-gigabyte basic offset table must be rejected");
+
+    assert!(
+        error.to_string().contains("exceeds safety limit"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn raw_item_scan_rejects_oversized_basic_offset_table_before_reading_payload() {
+    struct CountingCursor {
+        inner: std::io::Cursor<Vec<u8>>,
+        bytes_read: usize,
+    }
+
+    impl std::io::Read for CountingCursor {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buffer)?;
+            self.bytes_read += read;
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for CountingCursor {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let declared_len = u32::MAX - 3;
+    let mut bytes = vec![0; EXPLICIT_VR_LONG_HEADER_LEN];
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&declared_len.to_le_bytes());
+    let file_len = bytes.len() as u64 + u64::from(declared_len);
+    let mut reader = CountingCursor {
+        inner: std::io::Cursor::new(bytes),
+        bytes_read: 0,
+    };
+
+    let error = scan_raw_encapsulated_pixel_sequence_with_reader(
+        &mut reader,
+        Path::new("oversized-basic-offset-table.dcm"),
+        0,
+        file_len,
+        None,
+    )
+    .expect_err("the scanner must reject an oversized basic offset table");
+
+    assert!(error.to_string().contains("exceeds safety limit"));
+    assert_eq!(
+        reader.bytes_read, 8,
+        "only the basic offset table Item header may be read"
+    );
+}
+
+#[test]
+fn cancellation_during_basic_offset_table_read_stops_before_next_chunk() {
+    struct CancellingTableReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        cancellation: crate::ReadCancellationToken,
+        bytes_read: usize,
+    }
+
+    impl std::io::Read for CancellingTableReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let reading_table_payload = self.inner.position()
+                >= u64::try_from(EXPLICIT_VR_LONG_HEADER_LEN + 8).expect("header offset");
+            let read = self.inner.read(buffer)?;
+            self.bytes_read += read;
+            if reading_table_payload && read > 0 {
+                self.cancellation.cancel();
+            }
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for CancellingTableReader {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let table_len = 128 * 1024u32;
+    let mut bytes = vec![0; EXPLICIT_VR_LONG_HEADER_LEN];
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&table_len.to_le_bytes());
+    bytes.resize(bytes.len() + table_len as usize, 0);
+    let file_len = bytes.len() as u64;
+    let cancellation = crate::ReadCancellationToken::new();
+    let control = crate::ReadControl::new(cancellation.clone());
+    let mut reader = CancellingTableReader {
+        inner: std::io::Cursor::new(bytes),
+        cancellation,
+        bytes_read: 0,
+    };
+
+    let error = scan_raw_encapsulated_pixel_sequence_with_reader_controlled(
+        &mut reader,
+        Path::new("cancelled-basic-offset-table.dcm"),
+        0,
+        file_len,
+        Some(table_len / 4),
+        Some(&control),
+    )
+    .expect_err("cancellation after the first table chunk must stop the scan");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(
+        reader.bytes_read,
+        8 + 64 * 1024,
+        "the second table chunk must not be admitted"
+    );
+}
+
+#[test]
+fn raw_item_scan_cancellation_stops_before_the_next_header_admission() {
+    struct CancellingCursor {
+        inner: std::io::Cursor<Vec<u8>>,
+        token: crate::ReadCancellationToken,
+        bytes_read: usize,
+    }
+
+    impl std::io::Read for CancellingCursor {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buffer)?;
+            self.bytes_read += read;
+            if read > 0 {
+                self.token.cancel();
+            }
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for CancellingCursor {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+    bytes.extend_from_slice(b"OB");
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+    bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    push_pixel_fragment(&mut bytes, &[1, 2, 3, 4]);
+    bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let file_len = bytes.len() as u64;
+    let token = crate::ReadCancellationToken::new();
+    let control = crate::ReadControl::new(token.clone());
+    let mut reader = CancellingCursor {
+        inner: std::io::Cursor::new(bytes),
+        token,
+        bytes_read: 0,
+    };
+
+    let error = scan_raw_encapsulated_pixel_sequence_with_reader_controlled(
+        &mut reader,
+        Path::new("cancelled-item-scan.dcm"),
+        0,
+        file_len,
+        Some(1),
+        Some(&control),
+    )
+    .expect_err("cancellation must stop before the fragment header is admitted");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(reader.bytes_read, 8, "only the BOT header should be read");
+}
+
+#[test]
 fn large_basic_offset_table_frame_index_builds_quickly() {
     let frame_count = 25_000usize;
     let mut fragments = Vec::with_capacity(frame_count);
@@ -1364,9 +2204,65 @@ fn large_basic_offset_table_frame_index_builds_quickly() {
 }
 
 #[test]
+fn basic_offset_table_maps_a_nonzero_second_frame_offset_once() {
+    let frames = build_encapsulated_frame_index(
+        Path::new("two-frame-basic-offset-table.dcm"),
+        vec![
+            DicomFragmentRef {
+                payload_offset: 108,
+                item_offset: 100,
+                len: 4,
+            },
+            DicomFragmentRef {
+                payload_offset: 120,
+                item_offset: 112,
+                len: 4,
+            },
+        ],
+        vec![0, 12],
+        2,
+    )
+    .expect("the BOT offset is relative to the first fragment Item exactly once");
+
+    assert_eq!(frames.frame_ranges, vec![0..1, 1..2]);
+}
+
+#[test]
+fn extended_offset_validation_rejects_non_monotonic_and_overflowing_offsets() {
+    let path = Path::new("malformed-extended-offsets.dcm");
+    let fragments = vec![
+        DicomFragmentRef {
+            payload_offset: 108,
+            item_offset: 100,
+            len: 4,
+        },
+        DicomFragmentRef {
+            payload_offset: 120,
+            item_offset: 112,
+            len: 4,
+        },
+    ];
+    let non_monotonic = DicomExtendedOffsetTables {
+        offsets: vec![0, 0],
+        lengths: vec![4, 4],
+    };
+    let error = frame_ranges_from_extended_offsets(path, &fragments, &non_monotonic, 2)
+        .expect_err("non-monotonic EOT must fail");
+    assert!(error.to_string().contains("strictly increasing"));
+
+    let overflowing = DicomExtendedOffsetTables {
+        offsets: vec![0, u64::MAX],
+        lengths: vec![4, 4],
+    };
+    let error = frame_ranges_from_extended_offsets(path, &fragments, &overflowing, 2)
+        .expect_err("overflowing EOT must fail");
+    assert!(error.to_string().contains("overflow"));
+}
+
+#[test]
 #[cfg(feature = "metal")]
 fn local_htj2k_dicom_full_tile_can_require_device_output() {
-    let Some(path) = local_htj2k_dicom_device_fixture() else {
+    let Some(path) = local_htj2k_dicom_fixture() else {
         return;
     };
     let Some(sessions) = test_metal_sessions() else {
@@ -1376,7 +2272,7 @@ fn local_htj2k_dicom_full_tile_can_require_device_output() {
 
     let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
     let tile = slide
-        .read_tile(
+        .read_tile_controlled(
             &TileRequest {
                 scene: 0usize.into(),
                 series: 0usize.into(),
@@ -1386,6 +2282,7 @@ fn local_htj2k_dicom_full_tile_can_require_device_output() {
                 row: 0,
             },
             TileOutputPreference::require_device_auto_with_metal_and_compressed_decode(sessions),
+            &crate::ReadControl::default(),
         )
         .expect("read full HTJ2K tile with required device output");
 
@@ -1394,8 +2291,51 @@ fn local_htj2k_dicom_full_tile_can_require_device_output() {
 
 #[test]
 #[cfg(feature = "metal")]
+fn controlled_classic_jp2k_and_htj2k_keep_metal_output() {
+    let Some(sessions) = test_metal_sessions() else {
+        eprintln!("skipping controlled JP2K residency test; no Metal device");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let classic = include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let htj2k = encode_test_htj2k_rgb(16, 12);
+
+    for (name, transfer_syntax, codestream) in [
+        ("classic", uids::JPEG2000_LOSSLESS, classic),
+        ("htj2k", HTJ2K_LOSSLESS_TRANSFER_SYNTAX, htj2k),
+    ] {
+        let path = dir.path().join(format!("controlled-{name}.dcm"));
+        let mut options = TestDicomOptions::native(Vec::new());
+        options.transfer_syntax = transfer_syntax;
+        options.rows = 12;
+        options.columns = 16;
+        options.total_pixel_matrix_rows = 12;
+        options.total_pixel_matrix_columns = 16;
+        options.pixel_data = TestPixelData::EncapsulatedFrames(vec![codestream]);
+        write_test_dicom(&path, options);
+        let slide = Slide::open(&path).expect("open generated JP2K DICOM");
+
+        let tile = slide
+            .read_tile_controlled(
+                &tile_request(0, 0),
+                TileOutputPreference::require_device_auto_with_metal_and_compressed_decode(
+                    sessions.clone(),
+                ),
+                &crate::ReadControl::default(),
+            )
+            .unwrap_or_else(|error| panic!("controlled {name} device decode failed: {error}"));
+
+        assert!(
+            matches!(tile, TilePixels::Device(DeviceTile::Metal(_))),
+            "controlled {name} decode must remain Metal-resident"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "metal")]
 fn local_htj2k_dicom_prefer_device_batch_keeps_full_tiles_on_device() {
-    let Some(path) = local_htj2k_dicom_device_fixture() else {
+    let Some(path) = local_htj2k_dicom_fixture() else {
         return;
     };
     let Some(sessions) = test_metal_sessions() else {
@@ -1405,7 +2345,7 @@ fn local_htj2k_dicom_prefer_device_batch_keeps_full_tiles_on_device() {
 
     let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
     let tiles = slide
-        .read_tiles(
+        .read_tiles_controlled(
             &[
                 TileRequest {
                     scene: 0usize.into(),
@@ -1426,6 +2366,7 @@ fn local_htj2k_dicom_prefer_device_batch_keeps_full_tiles_on_device() {
             ],
             TileOutputPreference::prefer_device_auto_with_metal_and_compressed_decode(sessions)
                 .without_adaptive_decode_route(),
+            &crate::ReadControl::default(),
         )
         .expect("read full HTJ2K tile batch with residency-preferred device output");
 
@@ -1434,6 +2375,99 @@ fn local_htj2k_dicom_prefer_device_batch_keeps_full_tiles_on_device() {
             .iter()
             .any(|tile| matches!(tile, TilePixels::Device(_))),
         "prefer-device HTJ2K batch should return device tiles when full tiles are decodable"
+    );
+}
+
+#[test]
+#[cfg(feature = "parity-metal")]
+fn local_htj2k_dicom_full_tile_pixels_match_cpu_on_metal() {
+    let Some(path) = local_htj2k_dicom_fixture() else {
+        return;
+    };
+    let Some(sessions) = test_metal_sessions() else {
+        eprintln!("skipping local HTJ2K DICOM parity test; no Metal device");
+        return;
+    };
+
+    let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
+    let level = &slide.dataset().scenes[0].series[0].levels[0];
+    let TileLayout::Regular {
+        tile_width,
+        tile_height,
+        ..
+    } = level.tile_layout
+    else {
+        panic!("local HTJ2K DICOM fixture must use a regular tile grid");
+    };
+    assert!(level.dimensions.0 >= u64::from(tile_width));
+    assert!(level.dimensions.1 >= u64::from(tile_height));
+    let requests = [TileRequest {
+        scene: 0usize.into(),
+        series: 0usize.into(),
+        level: 0u32.into(),
+        plane: PlaneSelection::default().into(),
+        col: 0,
+        row: 0,
+    }];
+    let cpu = slide
+        .read_tiles_controlled(
+            &requests,
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
+        )
+        .expect("read CPU parity tiles");
+    let device = slide
+        .read_tiles_controlled(
+            &requests,
+            TileOutputPreference::require_device_auto_with_metal_and_compressed_decode(sessions)
+                .without_adaptive_decode_route(),
+            &crate::ReadControl::default(),
+        )
+        .expect("read Metal parity tiles");
+
+    for (index, (cpu, device)) in cpu.into_iter().zip(device).enumerate() {
+        let TilePixels::Cpu(cpu) = cpu else {
+            panic!("CPU parity request {index} returned device pixels");
+        };
+        let TilePixels::Device(DeviceTile::Metal(device)) = device else {
+            panic!("Metal parity request {index} returned CPU pixels");
+        };
+        let resident = device
+            .validated_resident_image()
+            .expect("validated resident Metal tile");
+        let metal = crate::output::metal::resident_bytes(resident);
+        let cpu = cpu.data.as_u8().expect("CPU parity tile is RGB8");
+        assert_eq!(metal.len(), cpu.len(), "tile {index} byte cardinality");
+        let max_delta = metal
+            .iter()
+            .zip(cpu)
+            .map(|(metal, cpu)| metal.abs_diff(*cpu))
+            .max()
+            .unwrap_or(0);
+        assert!(max_delta <= 4, "tile {index} max channel delta {max_delta}");
+    }
+}
+
+#[test]
+fn local_htj2k_dicom_level_preparation_meets_interactive_budget() {
+    let Some(path) = local_htj2k_dicom_fixture() else {
+        return;
+    };
+    let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
+    let started = std::time::Instant::now();
+    slide
+        .prepare_level_controlled(
+            SceneId::new(0),
+            SeriesId::new(0),
+            LevelIdx::new(0),
+            &crate::ReadControl::default(),
+        )
+        .expect("prepare local HTJ2K DICOM base level");
+    let elapsed = started.elapsed();
+    eprintln!("local HTJ2K DICOM level preparation: {elapsed:?}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(75),
+        "DICOM level preparation should remain inside the 75 ms interactive budget"
     );
 }
 
@@ -1477,8 +2511,7 @@ fn dicom_jpeg_require_device_batch_uses_jpeg_device_route() {
     );
 }
 
-#[cfg(feature = "metal")]
-fn local_htj2k_dicom_device_fixture() -> Option<PathBuf> {
+fn local_htj2k_dicom_fixture() -> Option<PathBuf> {
     let Some(path) = std::env::var_os("WSI_RS_LOCAL_HTJ2K_DICOM").map(PathBuf::from) else {
         eprintln!("skipping local HTJ2K DICOM device test; WSI_RS_LOCAL_HTJ2K_DICOM unset");
         return None;
@@ -1732,6 +2765,468 @@ fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
 }
 
 #[test]
+fn prepare_level_controlled_builds_the_lazy_frame_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("prepare-level.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let image = slide.levels[0].parts[0].clone();
+    let reader = DicomReader { slide };
+    let handle = Slide::from_source_with_cache_bytes(Box::new(reader), 1024 * 1024);
+
+    handle
+        .prepare_level_controlled(
+            SceneId::new(0),
+            SeriesId::new(0),
+            LevelIdx::new(0),
+            &crate::ReadControl::default(),
+        )
+        .expect("prepare DICOM level");
+
+    assert!(
+        image
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_some(),
+        "preparation should publish the complete frame index"
+    );
+}
+
+#[test]
+fn controlled_preparation_reports_fast_index_build_then_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("prepare-level-diagnostics.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let reader = DicomReader { slide };
+    let handle = Slide::from_source_with_cache_bytes(Box::new(reader), 1024 * 1024);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
+        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+    ));
+
+    for _ in 0..2 {
+        handle
+            .prepare_level_controlled(
+                SceneId::new(0),
+                SeriesId::new(0),
+                LevelIdx::new(0),
+                &control,
+            )
+            .expect("prepare DICOM level");
+    }
+
+    let outcomes = events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| match event {
+            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        vec![
+            crate::DicomIndexOutcome::BuiltFast {
+                mapping: crate::DicomIndexMapping::SingleFrameItems,
+            },
+            crate::DicomIndexOutcome::Reused,
+        ]
+    );
+}
+
+#[test]
+fn controlled_preparation_invokes_diagnostic_sink_after_releasing_index_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("prepare-level-reentrant-diagnostics.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let image = slide.levels[0].parts[0].clone();
+    let reader = DicomReader { slide };
+    let handle = Slide::from_source_with_cache_bytes(Box::new(reader), 1024 * 1024);
+    let callback_observed_unlocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = Arc::clone(&callback_observed_unlocked);
+    let callback_image = image.clone();
+    let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
+        move |_event: crate::ReadDiagnostic| {
+            let lock_available = callback_image.encapsulated_frames.try_lock().is_ok();
+            observed.store(lock_available, std::sync::atomic::Ordering::Release);
+        },
+    ));
+
+    handle
+        .prepare_level_controlled(
+            SceneId::new(0),
+            SeriesId::new(0),
+            LevelIdx::new(0),
+            &control,
+        )
+        .expect("prepare DICOM level");
+
+    assert!(
+        callback_observed_unlocked.load(std::sync::atomic::Ordering::Acquire),
+        "diagnostic callbacks must not run while the encapsulated-frame index mutex is held"
+    );
+}
+
+#[test]
+fn controlled_indexing_reports_token_fallback_for_implicit_vr_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("implicit-vr-index-fallback.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::IMPLICIT_VR_LITTLE_ENDIAN,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
+        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+    ));
+
+    let frames = scan_encapsulated_frames_controlled(
+        &path,
+        uids::IMPLICIT_VR_LITTLE_ENDIAN,
+        1,
+        Some(&control),
+    )
+    .expect("token parser should index the implicit-VR encapsulated layout");
+
+    assert_eq!(frames.frame_ranges, vec![0..1]);
+    let outcomes = events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| match event {
+            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        vec![
+            crate::DicomIndexOutcome::FastPathFallback,
+            crate::DicomIndexOutcome::TokenFallback,
+        ]
+    );
+}
+
+#[test]
+fn disabled_index_diagnostics_do_not_sample_the_clock() {
+    let clock_calls = std::cell::Cell::new(0);
+    let started = index_diagnostic_timer_with(Some(&crate::ReadControl::default()), false, || {
+        clock_calls.set(clock_calls.get() + 1);
+        std::time::Instant::now()
+    });
+
+    assert!(started.is_none());
+    assert_eq!(clock_calls.get(), 0);
+}
+
+#[test]
+fn concurrent_frame_index_preparation_reuses_one_complete_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("concurrent-prepare-level.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
+    let image = slide.levels[0].parts[0].clone();
+    let workers = (0..8)
+        .map(|_| {
+            let image = image.clone();
+            std::thread::spawn(move || image.ensure_encapsulated_frames().unwrap())
+        })
+        .collect::<Vec<_>>();
+    let indexes = workers
+        .into_iter()
+        .map(|worker| worker.join().expect("preparation worker did not panic"))
+        .collect::<Vec<_>>();
+
+    assert!(
+        indexes
+            .windows(2)
+            .all(|pair| Arc::ptr_eq(&pair[0], &pair[1])),
+        "concurrent preparation should publish and reuse one complete index"
+    );
+}
+
+#[test]
+fn cancelled_level_preparation_does_not_publish_an_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cancel-prepare-level.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let image = slide.levels[0].parts[0].clone();
+    let reader = DicomReader { slide };
+    let cancellation = crate::ReadCancellationToken::new();
+    cancellation.cancel();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    let control = crate::ReadControl::new(cancellation).with_diagnostic_sink(Arc::new(
+        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+    ));
+
+    let error = reader
+        .prepare_level_controlled(
+            SceneId::new(0),
+            SeriesId::new(0),
+            LevelIdx::new(0),
+            &control,
+        )
+        .expect_err("cancelled preparation should stop");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "cancelled preparation must not report an index outcome"
+    );
+    assert!(
+        image
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_none(),
+        "cancelled preparation must not publish a partial index"
+    );
+}
+
+#[test]
+fn cancellation_during_frame_index_build_does_not_publish_the_completed_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cancel-during-index-build.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
+    let image = slide.levels[0].parts[0].clone();
+    let cancellation = crate::ReadCancellationToken::new();
+    let control = crate::ReadControl::new(cancellation.clone());
+
+    let error = image
+        .ensure_encapsulated_frames_with_builder(Some(&control), || {
+            cancellation.cancel();
+            Ok(DicomEncapsulatedFrames {
+                fragments: vec![DicomFragmentRef {
+                    item_offset: 0,
+                    payload_offset: 8,
+                    len: 4,
+                }],
+                frame_ranges: std::iter::once(0..1).collect(),
+            })
+        })
+        .expect_err("a cancelled build must not publish its completed candidate");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert!(
+        image
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_none(),
+        "cancellation during the build must leave no cached index"
+    );
+}
+
+#[test]
+fn cancellation_during_extended_table_read_does_not_publish_an_index() {
+    struct CancellingTableReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        cancellation: crate::ReadCancellationToken,
+    }
+
+    impl std::io::Read for CancellingTableReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buffer)?;
+            if read > 0 {
+                self.cancellation.cancel();
+            }
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for CancellingTableReader {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cancel-during-extended-table.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
+    let image = slide.levels[0].parts[0].clone();
+    let cancellation = crate::ReadCancellationToken::new();
+    let control = crate::ReadControl::new(cancellation.clone());
+    let table_len = 64 * 1024u32;
+    let mut reader = CancellingTableReader {
+        inner: std::io::Cursor::new(vec![0; 2 * table_len as usize]),
+        cancellation,
+    };
+
+    let error = image
+        .ensure_encapsulated_frames_with_builder(Some(&control), || {
+            let _ = read_extended_offset_tables_with_reader(
+                &mut reader,
+                &path,
+                0,
+                u64::from(table_len),
+                table_len,
+                2 * u64::from(table_len),
+                Some(&control),
+            )?;
+            Ok(DicomEncapsulatedFrames {
+                fragments: Vec::new(),
+                frame_ranges: Vec::new(),
+            })
+        })
+        .expect_err("cancellation between bounded table chunks must stop preparation");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert!(
+        image
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_none(),
+        "a cancelled extended-table read must not publish an index"
+    );
+}
+
+#[test]
+fn indexed_fragment_header_is_revalidated_before_payload_read() {
+    use std::io::{Seek as _, Write as _};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fragment-header-revalidation.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            pixel_spacing: Some("0.00025\\0.00025"),
+            shared_pixel_spacing: None,
+            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
+    let image = slide.levels[0].parts[0].clone();
+    let frames = image
+        .ensure_encapsulated_frames()
+        .expect("build the frame index before corrupting the source");
+    let item_offset = frames.fragments[0].item_offset;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("open fixture for corruption");
+    file.seek(std::io::SeekFrom::Start(item_offset))
+        .expect("seek to fragment Item header");
+    file.write_all(&[0xAA; 4])
+        .expect("replace fragment Item tag");
+    drop(file);
+
+    let error = image
+        .extract_encapsulated_frame(0, 0, 0, 0, false)
+        .expect_err("an indexed fragment with a corrupt Item header must not be returned");
+
+    assert!(error
+        .to_string()
+        .contains("does not match its indexed length"));
+}
+
+#[test]
 fn tile_codec_kind_classifies_dicom_transfer_syntaxes() {
     assert_eq!(
         dicom_tile_codec_kind(JPEG_TRANSFER_SYNTAX),
@@ -1799,6 +3294,83 @@ fn dicom_jp2k_device_batch_policy_is_selective() {
         true,
         1,
     ));
+}
+
+#[test]
+#[cfg(feature = "metal")]
+fn mixed_device_batch_admits_one_ordered_cpu_remainder_batch() {
+    fn marker_tile(value: u8) -> CpuTile {
+        CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![value, 0, 0]).unwrap()
+    }
+
+    let requests = [0, 1, 2, 3]
+        .into_iter()
+        .map(|col| tile_request(col, 0))
+        .collect::<Vec<_>>();
+    let results = vec![
+        Some(TilePixels::Cpu(marker_tile(10))),
+        None,
+        Some(TilePixels::Cpu(marker_tile(30))),
+        None,
+    ];
+    let codec_admissions = std::cell::RefCell::new(Vec::new());
+
+    let completed = complete_mixed_device_batch_with_cpu_remainder(
+        &requests,
+        &TileOutputPreference::prefer_device_auto_with_compressed_decode(),
+        BackendRequest::Auto,
+        results,
+        None,
+        |remainder, _, _| {
+            codec_admissions.borrow_mut().push(
+                remainder
+                    .iter()
+                    .map(|request| request.col)
+                    .collect::<Vec<_>>(),
+            );
+            Ok(vec![marker_tile(20), marker_tile(40)])
+        },
+    )
+    .expect("complete mixed device/CPU batch");
+
+    assert_eq!(*codec_admissions.borrow(), vec![vec![1, 3]]);
+    assert_eq!(completed.len(), requests.len());
+    assert_eq!(
+        completed
+            .iter()
+            .map(|tile| match tile {
+                TilePixels::Cpu(tile) => tile.data.as_u8().unwrap()[0],
+                TilePixels::Device(_) => panic!("synthetic completion uses CPU marker tiles"),
+            })
+            .collect::<Vec<_>>(),
+        vec![10, 20, 30, 40],
+        "CPU remainder results must return to their original request slots"
+    );
+}
+
+#[test]
+#[cfg(feature = "metal")]
+fn cancelled_mixed_device_batch_never_admits_a_cpu_remainder() {
+    let token = crate::ReadCancellationToken::new();
+    token.cancel();
+    let control = crate::ReadControl::new(token);
+    let admissions = std::cell::Cell::new(0_usize);
+
+    let error = complete_mixed_device_batch_with_cpu_remainder(
+        &[tile_request(0, 0)],
+        &TileOutputPreference::prefer_device_auto_with_compressed_decode(),
+        BackendRequest::Auto,
+        vec![None],
+        Some(&control),
+        |_, _, _| {
+            admissions.set(admissions.get() + 1);
+            Ok(Vec::new())
+        },
+    )
+    .expect_err("cancelled mixed batch must not enter CPU fallback");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(admissions.get(), 0);
 }
 
 #[test]

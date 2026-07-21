@@ -53,6 +53,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `SlideOpenOptions` for explicit cache budgets, read-through `.svcache`
 lookup, custom registries, region limits, or decode execution settings.
 
+## Architecture
+
+`wsi-rs` presents a format-independent `Slide` façade backed by a
+`SlideReader`. Format modules own metadata validation, tile or frame lookup,
+and source I/O; the shared core owns typed requests, byte-bounded caches,
+decode policy, and CPU or device output types. Unsupported or invalid input
+returns a typed `WsiError` instead of silently producing a partial tile.
+
+Batch reads preserve request order and cardinality. The default controlled-read
+adapter checks cancellation, submits the complete request slice once, validates
+the result count with `WsiError::BackendContract`, and checks cancellation again
+before returning. Format-specific implementations may group internal I/O, but
+they restore results to the original request slots. Cancellation is terminal for
+that attempt and is not reinterpreted as a codec error or a reason to fall back
+from device output to CPU. JPEG and JPEG 2000 kernels already running remain
+non-preemptive.
+
+Encapsulated DICOM images lazily share one validated frame index between reads
+and `prepare_level_controlled`. The normal indexer seeks over compressed
+payloads, prefers a valid Extended Offset Table, and otherwise validates the
+Basic Offset Table and Item headers. Unusual supported layouts retain a token
+parser fallback. Index construction checks counts, monotonic offsets, arithmetic,
+file bounds, frame lengths, and `NumberOfFrames`; it publishes only complete
+indexes and creates no sidecar files.
+
+`SlideOpenOptions` owns cache configuration. The shared source-tile and display
+composition caches are byte-bounded LRUs, while narrowly scoped format caches
+cover source-specific data such as DICOM frame bytes. Cache effects completed by
+a legacy reader are not rolled back when a controlled read is cancelled, but a
+cancelled result is not returned to the caller.
+
+Metal and CUDA features expose renderer-uploadable device payloads. Output
+residency and codec backend selection are related but separate choices. Metal
+tiles normally retain an immutable resident allocation through downstream GPU
+use; within the main `wsi-rs` library crate, the only production unsafe-code
+exception is the audited Metal ownership adapter. CUDA payload support does not
+by itself provide cross-API renderer interoperability.
+
+Controlled-read diagnostics are opt-in and delivered outside internal locks.
+The library emits operational events through `tracing`, but installs no
+subscriber and owns no application UI or JSONL output.
+
 For viewer zoom/pan debugging on tiled SVS inputs:
 
 ```sh
@@ -97,7 +139,7 @@ remain unsupported unless they use a registered WSI layout.
 | `metal` | off | Metal-backed device payloads on macOS. |
 | `cuda` | off | CUDA-backed payload surface. |
 | `parity-openslide` | off | OpenSlide oracle parity tests. |
-| `parity-metal` | off | Metal parity checks on macOS. |
+| `parity-metal` | off | CPU-vs-Metal pixel parity checks on macOS. |
 
 ## OpenSlide Compatibility Shim
 

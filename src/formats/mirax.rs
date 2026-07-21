@@ -180,7 +180,7 @@ impl SlideReader for MiraxReader {
         read_cpu_tiles_with_backend(
             reqs,
             output,
-            "RequireDevice not supported for MIRAX in Phase 2",
+            "RequireDevice is not supported for MIRAX",
             |req, backend| self.read_tile_with_backend(req, backend),
         )
     }

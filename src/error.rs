@@ -60,7 +60,7 @@ pub enum WsiError {
         actual: usize,
     },
 
-    /// Codec-layer error from j2k or the transitional facade.
+    /// Codec-layer error from a j2k backend.
     #[error("codec error in {codec}: {source}")]
     Codec {
         codec: &'static str,

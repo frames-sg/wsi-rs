@@ -119,6 +119,18 @@ impl Slide {
             .level_source_kind(scene.into(), series.into(), level.into())
     }
 
+    /// Prepares format-specific level state without decoding any pixels.
+    pub fn prepare_level_controlled(
+        &self,
+        scene: impl Into<SceneId>,
+        series: impl Into<SeriesId>,
+        level: impl Into<LevelIdx>,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        self.source
+            .prepare_level_controlled(scene.into(), series.into(), level.into(), control)
+    }
+
     pub fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
         self.source.tile_codec_kind(req)
     }
@@ -214,8 +226,8 @@ impl Slide {
 
     /// Reads tiles with cooperative cancellation delegated to the source.
     ///
-    /// Existing batch APIs remain unchanged. This controlled path checks for
-    /// cancellation before each source admission and before returning pixels.
+    /// Existing batch APIs remain unchanged. This controlled path preserves
+    /// the source batch while checking cancellation around its admission.
     pub fn read_tiles_controlled(
         &self,
         reqs: &[TileRequest],
@@ -232,10 +244,8 @@ impl Slide {
         output: TileOutputPreference,
         control: &crate::ReadControl,
     ) -> Result<TilePixels, WsiError> {
-        control.check_cancelled()?;
-        let tile = self.read_tile(req, output)?;
-        control.check_cancelled()?;
-        Ok(tile)
+        let tiles = self.read_tiles_controlled(std::slice::from_ref(req), output, control)?;
+        crate::core::batch::exactly_one(tiles, "controlled single tile read")
     }
 
     pub fn read_raw_compressed_tile(
@@ -328,8 +338,7 @@ impl Slide {
             read_display_tile_from_source(self.source.as_ref(), display_cache, req, output)
         } else if matches!(output, TileOutputPreference::RequireDevice { .. }) {
             Err(WsiError::Unsupported {
-                reason: "format-specific display tile fast paths return CPU pixels in Phase 2"
-                    .into(),
+                reason: "this format-specific display tile path requires CPU output".into(),
             })
         } else {
             self.source.read_display_tile(req)

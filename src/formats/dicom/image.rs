@@ -463,6 +463,7 @@ impl DicomImage {
             })
     }
 
+    #[cfg(test)]
     pub(super) fn extract_encapsulated_frames(
         &self,
         frame_indices: &[u32],
@@ -471,6 +472,28 @@ impl DicomImage {
         row: i64,
         cache_result: bool,
     ) -> Result<HashMap<u32, Arc<Vec<u8>>>, WsiError> {
+        self.extract_encapsulated_frames_controlled(
+            frame_indices,
+            level,
+            col,
+            row,
+            cache_result,
+            None,
+        )
+    }
+
+    pub(super) fn extract_encapsulated_frames_controlled(
+        &self,
+        frame_indices: &[u32],
+        level: u32,
+        col: i64,
+        row: i64,
+        cache_result: bool,
+        control: Option<&crate::ReadControl>,
+    ) -> Result<HashMap<u32, Arc<Vec<u8>>>, WsiError> {
+        if let Some(control) = control {
+            control.check_cancelled()?;
+        }
         let mut results = HashMap::with_capacity(frame_indices.len());
         if frame_indices.is_empty() {
             return Ok(results);
@@ -483,6 +506,9 @@ impl DicomImage {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             for &frame_index in frame_indices {
+                if let Some(control) = control {
+                    control.check_cancelled()?;
+                }
                 if results.contains_key(&frame_index) {
                     continue;
                 }
@@ -494,6 +520,9 @@ impl DicomImage {
             }
         } else {
             for &frame_index in frame_indices {
+                if let Some(control) = control {
+                    control.check_cancelled()?;
+                }
                 if !results.contains_key(&frame_index) {
                     missing.push(frame_index);
                 }
@@ -513,9 +542,12 @@ impl DicomImage {
             return Ok(results);
         }
 
-        let encapsulated_frames = self.ensure_encapsulated_frames()?;
+        let encapsulated_frames = self.ensure_encapsulated_frames_controlled(control)?;
         let mut spans = Vec::with_capacity(missing.len());
         for frame_index in missing {
+            if let Some(control) = control {
+                control.check_cancelled()?;
+            }
             let frame_range = encapsulated_frames
                 .frame_ranges
                 .get(frame_index as usize)
@@ -544,6 +576,9 @@ impl DicomImage {
             path: self.path.clone(),
         })?;
         for group in group_frame_read_spans(spans) {
+            if let Some(control) = control {
+                control.check_cancelled()?;
+            }
             for (frame_index, bytes) in
                 self.read_encapsulated_frame_group(&mut file, &encapsulated_frames, &group)?
             {
@@ -558,25 +593,102 @@ impl DicomImage {
             }
         }
 
+        if let Some(control) = control {
+            control.check_cancelled()?;
+        }
         Ok(results)
     }
 
     pub(super) fn ensure_encapsulated_frames(
         &self,
     ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
+        self.ensure_encapsulated_frames_controlled(None)
+    }
+
+    pub(super) fn ensure_encapsulated_frames_controlled(
+        &self,
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
+        let Some(control) = control else {
+            return self.ensure_encapsulated_frames_with_builder(None, || {
+                scan_encapsulated_frames_controlled(
+                    &self.path,
+                    &self.transfer_syntax_uid,
+                    self.number_of_frames,
+                    None,
+                )
+            });
+        };
+
+        let (deferred_control, deferred_diagnostics) = control.defer_diagnostics();
+        let result = self.ensure_encapsulated_frames_with_builder(Some(&deferred_control), || {
+            scan_encapsulated_frames_controlled(
+                &self.path,
+                &self.transfer_syntax_uid,
+                self.number_of_frames,
+                Some(&deferred_control),
+            )
+        });
+        if result.is_ok() {
+            deferred_diagnostics.flush();
+        }
+        result
+    }
+
+    pub(super) fn ensure_encapsulated_frames_with_builder(
+        &self,
+        control: Option<&crate::ReadControl>,
+        build: impl FnOnce() -> Result<DicomEncapsulatedFrames, WsiError>,
+    ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
+        let reuse_started = control
+            .filter(|control| control.diagnostics_enabled())
+            .map(|_| std::time::Instant::now());
         let mut guard = self
             .encapsulated_frames
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(frames) = &*guard {
-            return Ok(frames.clone());
+        if let Some(control) = control {
+            control.check_cancelled()?;
         }
-        let frames = Arc::new(scan_encapsulated_frames(
-            &self.path,
-            &self.transfer_syntax_uid,
-            self.number_of_frames,
-        )?);
+        if let Some(frames) = &*guard {
+            let frames = frames.clone();
+            tracing::trace!(
+                path = %self.path.display(),
+                outcome = "reused",
+                "reused DICOM encapsulated frame index"
+            );
+            drop(guard);
+            if let (Some(control), Some(started)) = (control, reuse_started) {
+                control.record_diagnostic(crate::ReadDiagnostic::DicomIndex(
+                    crate::DicomIndexDiagnostic::new(
+                        crate::DicomIndexOutcome::Reused,
+                        started.elapsed(),
+                    ),
+                ));
+            }
+            return Ok(frames);
+        }
+        let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
+        let result = build();
+        if let Some(control) = control {
+            control.check_cancelled()?;
+        }
+        let frames = Arc::new(result?);
         *guard = Some(frames.clone());
+        if let Some(control) = control {
+            if let Err(error) = control.check_cancelled() {
+                *guard = None;
+                return Err(error);
+            }
+        }
+        if let Some(started) = started {
+            tracing::debug!(
+                path = %self.path.display(),
+                outcome = "built",
+                elapsed_us = started.elapsed().as_micros(),
+                "published DICOM encapsulated frame index"
+            );
+        }
         Ok(frames)
     }
 
@@ -596,6 +708,7 @@ impl DicomImage {
         file: &mut File,
         fragments: &[DicomFragmentRef],
     ) -> Result<Vec<u8>, WsiError> {
+        self.validate_encapsulated_fragment_headers_with_file(file, fragments)?;
         let total_len: usize = fragments.iter().map(|fragment| fragment.len as usize).sum();
         let mut data = Vec::with_capacity(total_len);
         for fragment in fragments {
@@ -635,7 +748,7 @@ impl DicomImage {
             level,
             reason: format!("encapsulated frame {frame_index} has no fragments"),
         })?;
-        let mut start = first.payload_offset;
+        let mut start = first.item_offset;
         let mut end = first
             .payload_offset
             .checked_add(first.len as u64)
@@ -646,7 +759,7 @@ impl DicomImage {
                 reason: format!("encapsulated frame {frame_index} byte span overflow"),
             })?;
         for fragment in &fragments[1..] {
-            start = start.min(fragment.payload_offset);
+            start = start.min(fragment.item_offset);
             let fragment_end = fragment
                 .payload_offset
                 .checked_add(fragment.len as u64)
@@ -666,9 +779,9 @@ impl DicomImage {
         })
     }
 
-    fn read_encapsulated_frame_group(
+    pub(super) fn read_encapsulated_frame_group<R: Read + Seek>(
         &self,
-        file: &mut File,
+        file: &mut R,
         encapsulated_frames: &DicomEncapsulatedFrames,
         group: &DicomFrameReadGroup,
     ) -> Result<Vec<(u32, Vec<u8>)>, WsiError> {
@@ -691,9 +804,75 @@ impl DicomImage {
                     .ok_or_else(|| {
                         invalid_slide(&self.path, "DICOM batch frame fragment range out of bounds")
                     })?;
+                for fragment in fragments {
+                    let relative_start =
+                        fragment
+                            .item_offset
+                            .checked_sub(group.start)
+                            .ok_or_else(|| {
+                                invalid_slide(
+                                    &self.path,
+                                    "DICOM batch fragment Item offset underflow",
+                                )
+                            })?;
+                    let relative_start = usize::try_from(relative_start).map_err(|_| {
+                        invalid_slide(&self.path, "DICOM batch fragment Item offset overflow")
+                    })?;
+                    let relative_end = relative_start.checked_add(8).ok_or_else(|| {
+                        invalid_slide(&self.path, "DICOM batch fragment Item header overflow")
+                    })?;
+                    let header = window.get(relative_start..relative_end).ok_or_else(|| {
+                        invalid_slide(
+                            &self.path,
+                            "DICOM batch fragment Item header is outside the read window",
+                        )
+                    })?;
+                    self.validate_encapsulated_fragment_header(fragment, header)?;
+                }
                 let data = copy_fragments_from_window(&self.path, group.start, &window, fragments)?;
                 Ok((span.frame_index, data))
             })
             .collect()
+    }
+
+    fn validate_encapsulated_fragment_headers_with_file(
+        &self,
+        file: &mut (impl Read + Seek),
+        fragments: &[DicomFragmentRef],
+    ) -> Result<(), WsiError> {
+        for fragment in fragments {
+            let mut header = [0u8; 8];
+            read_exact_at(file, &self.path, fragment.item_offset, &mut header)?;
+            self.validate_encapsulated_fragment_header(fragment, &header)?;
+        }
+        Ok(())
+    }
+
+    fn validate_encapsulated_fragment_header(
+        &self,
+        fragment: &DicomFragmentRef,
+        header: &[u8],
+    ) -> Result<(), WsiError> {
+        let tag = header
+            .get(..4)
+            .ok_or_else(|| invalid_slide(&self.path, "truncated DICOM fragment Item tag"))?;
+        let length = header
+            .get(4..8)
+            .ok_or_else(|| invalid_slide(&self.path, "truncated DICOM fragment Item length"))?;
+        let length = u32::from_le_bytes(
+            length
+                .try_into()
+                .expect("validated DICOM fragment Item length is four bytes"),
+        );
+        if tag != DICOM_ITEM_TAG_LE || length != fragment.len {
+            return Err(invalid_slide(
+                &self.path,
+                format!(
+                    "DICOM fragment Item header at byte {} does not match its indexed length",
+                    fragment.item_offset
+                ),
+            ));
+        }
+        Ok(())
     }
 }

@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-18
+
+### Added
+
+- Added cancellation-aware level preparation so DICOM frame indexes can be
+  built once in the background and reused by concurrent reads.
+- Added opt-in typed controlled-read diagnostics for DICOM frame-index
+  strategy, fallback, reuse, and timing; the default path does not sample a
+  clock or allocate diagnostic storage.
+
+### Changed
+
+- Controlled tile reads now preserve the original batch order and cardinality,
+  share adaptive CPU/device routing with existing reads, and treat cancellation
+  as terminal before additional probes, fallback, or cache publication.
+- Split TIFF-family layout construction into focused format modules while
+  preserving the existing public reader behavior.
+
+### Fixed
+
+- Replaced the normal DICOM compressed-frame scan with validated seek-based
+  Extended/Basic Offset Table indexing and grouped frame I/O, retaining the
+  token parser as a fallback for unusual supported layouts.
+- Fixed cancellation races in adaptive route publication and prevented partial
+  DICOM indexes from entering the preparation cache.
+- Kept logical TIFF edge-tile dimensions conformant across CPU and Metal JPEG
+  and JPEG 2000 output, including right and bottom edge regression coverage.
+
 ## [0.5.1] - 2026-07-17
 
 ### Added
@@ -97,7 +125,9 @@
 
 - Initial public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/frames-sg/wsi-rs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/frames-sg/wsi-rs/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/frames-sg/wsi-rs/compare/v0.3.0...v0.3.1

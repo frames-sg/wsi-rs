@@ -749,7 +749,7 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
 ) -> Result<CpuTile, WsiError> {
     if matches!(output, TileOutputPreference::RequireDevice { .. }) {
         return Err(WsiError::Unsupported {
-            reason: "display tile composition returns CPU pixels in Phase 2".into(),
+            reason: "display tile composition requires CPU output".into(),
         });
     }
 

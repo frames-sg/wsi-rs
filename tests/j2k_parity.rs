@@ -165,11 +165,3 @@ fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
         Tolerance::JPEG_TIGHT
     }
 }
-
-#[cfg(feature = "parity-metal")]
-#[test]
-fn j2k_metal_vs_cpu_within_tolerance() {
-    eprintln!(
-        "[sc-parity-metal] Phase 0 stub: no production Metal split yet; harness wired for Phase 5"
-    );
-}

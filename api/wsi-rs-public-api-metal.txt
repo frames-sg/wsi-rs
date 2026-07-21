@@ -311,6 +311,7 @@ pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::open_with_cache_bytes(impl core::convert::AsRef<std::path::Path>, &wsi_rs::FormatRegistry, u64) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::open_with_options(impl core::convert::AsRef<std::path::Path>, wsi_rs::SlideOpenOptions) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::prepare_level_controlled(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_display_tile_with_output(&self, &wsi_rs::TileViewRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
@@ -409,6 +410,18 @@ pub wsi_rs::DecodeRoute::Cpu
 pub wsi_rs::DecodeRoute::Device
 #[non_exhaustive] pub enum wsi_rs::DeviceTile
 pub wsi_rs::DeviceTile::Metal(wsi_rs::output::metal::MetalDeviceTile)
+#[non_exhaustive] pub enum wsi_rs::DicomIndexMapping
+pub wsi_rs::DicomIndexMapping::BasicOffsetTableItems
+pub wsi_rs::DicomIndexMapping::ExtendedOffsetTableDirect
+pub wsi_rs::DicomIndexMapping::ExtendedOffsetTableItems
+pub wsi_rs::DicomIndexMapping::OneFragmentPerFrame
+pub wsi_rs::DicomIndexMapping::SingleFrameItems
+#[non_exhaustive] pub enum wsi_rs::DicomIndexOutcome
+pub wsi_rs::DicomIndexOutcome::BuiltFast
+pub wsi_rs::DicomIndexOutcome::BuiltFast::mapping: wsi_rs::DicomIndexMapping
+pub wsi_rs::DicomIndexOutcome::FastPathFallback
+pub wsi_rs::DicomIndexOutcome::Reused
+pub wsi_rs::DicomIndexOutcome::TokenFallback
 #[non_exhaustive] pub enum wsi_rs::EncodedTilePhotometricInterpretation
 pub wsi_rs::EncodedTilePhotometricInterpretation::Monochrome2
 pub wsi_rs::EncodedTilePhotometricInterpretation::Rgb
@@ -465,6 +478,8 @@ pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Sel
 impl core::error::Error for wsi_rs::RawCompressedTileBuildError
 impl core::fmt::Display for wsi_rs::RawCompressedTileBuildError
 pub fn wsi_rs::RawCompressedTileBuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum wsi_rs::ReadDiagnostic
+pub wsi_rs::ReadDiagnostic::DicomIndex(wsi_rs::DicomIndexDiagnostic)
 #[non_exhaustive] pub enum wsi_rs::RequestBuildError
 pub wsi_rs::RequestBuildError::MissingColumn
 pub wsi_rs::RequestBuildError::MissingOrigin
@@ -683,6 +698,11 @@ pub fn wsi_rs::DeviceOutputContext::none() -> Self
 pub fn wsi_rs::DeviceOutputContext::with_compressed_device_decode(self) -> Self
 pub fn wsi_rs::DeviceOutputContext::with_metal(wsi_rs::output::metal::MetalBackendSessions) -> Self
 pub fn wsi_rs::DeviceOutputContext::without_adaptive_decode_route(self) -> Self
+#[non_exhaustive] pub struct wsi_rs::DicomIndexDiagnostic
+pub wsi_rs::DicomIndexDiagnostic::elapsed: core::time::Duration
+pub wsi_rs::DicomIndexDiagnostic::outcome: wsi_rs::DicomIndexOutcome
+impl wsi_rs::DicomIndexDiagnostic
+pub const fn wsi_rs::DicomIndexDiagnostic::new(wsi_rs::DicomIndexOutcome, core::time::Duration) -> Self
 #[non_exhaustive] pub struct wsi_rs::DisplayWindow
 impl wsi_rs::DisplayWindow
 pub fn wsi_rs::DisplayWindow::max(&self) -> f64
@@ -776,7 +796,13 @@ pub fn wsi_rs::ReadCancellationToken::new() -> Self
 pub struct wsi_rs::ReadControl
 impl wsi_rs::ReadControl
 pub fn wsi_rs::ReadControl::cancellation(&self) -> &wsi_rs::ReadCancellationToken
+pub fn wsi_rs::ReadControl::check_cancelled(&self) -> core::result::Result<(), wsi_rs::error::WsiError>
+pub fn wsi_rs::ReadControl::diagnostics_enabled(&self) -> bool
 pub const fn wsi_rs::ReadControl::new(wsi_rs::ReadCancellationToken) -> Self
+pub fn wsi_rs::ReadControl::record_diagnostic(&self, wsi_rs::ReadDiagnostic)
+pub fn wsi_rs::ReadControl::with_diagnostic_sink(self, alloc::sync::Arc<dyn wsi_rs::ReadDiagnosticSink>) -> Self
+impl core::fmt::Debug for wsi_rs::ReadControl
+pub fn wsi_rs::ReadControl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct wsi_rs::RegionRequest
 pub wsi_rs::RegionRequest::level: wsi_rs::LevelIdx
 pub wsi_rs::RegionRequest::origin_px: (i64, i64)
@@ -831,6 +857,7 @@ pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::open_with_cache_bytes(impl core::convert::AsRef<std::path::Path>, &wsi_rs::FormatRegistry, u64) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::open_with_options(impl core::convert::AsRef<std::path::Path>, wsi_rs::SlideOpenOptions) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::prepare_level_controlled(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_display_tile_with_output(&self, &wsi_rs::TileViewRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
@@ -959,10 +986,15 @@ pub trait wsi_rs::FormatProbe: core::marker::Send + core::marker::Sync
 pub fn wsi_rs::FormatProbe::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
 impl<T: wsi_rs::FormatProbe> wsi_rs::FormatProbe for alloc::sync::Arc<T>
 pub fn alloc::sync::Arc<T>::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
+pub trait wsi_rs::ReadDiagnosticSink: core::marker::Send + core::marker::Sync
+pub fn wsi_rs::ReadDiagnosticSink::record(&self, wsi_rs::ReadDiagnostic)
+impl<F> wsi_rs::ReadDiagnosticSink for F where F: core::ops::function::Fn(wsi_rs::ReadDiagnostic) + core::marker::Send + core::marker::Sync
+pub fn F::record(&self, wsi_rs::ReadDiagnostic)
 pub trait wsi_rs::SlideReader: core::marker::Send + core::marker::Sync
 pub fn wsi_rs::SlideReader::associated_image(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::prepare_level_controlled(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_raw_compressed_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>

@@ -31,7 +31,7 @@ impl SlideReader for ZeissReader {
         read_cpu_tiles_with_backend(
             reqs,
             output,
-            "RequireDevice not supported for Zeiss in Phase 2",
+            "RequireDevice is not supported for Zeiss",
             |req, backend| self.read_tile_with_backend(req, backend),
         )
     }

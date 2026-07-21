@@ -230,6 +230,41 @@ impl DecodeRuntime {
             .unwrap_or_else(|err| err.into_inner())
             .insert(key, decision);
     }
+
+    fn store_route_controlled(
+        &self,
+        key: DecodeRouteKey,
+        decision: DecodeRouteDecision,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        self.store_route_controlled_inner(key, decision, control, || {})
+    }
+
+    #[cfg(test)]
+    fn store_route_controlled_with_hook(
+        &self,
+        key: DecodeRouteKey,
+        decision: DecodeRouteDecision,
+        control: &crate::ReadControl,
+        before_publication: impl FnOnce(),
+    ) -> Result<(), WsiError> {
+        self.store_route_controlled_inner(key, decision, control, before_publication)
+    }
+
+    fn store_route_controlled_inner(
+        &self,
+        key: DecodeRouteKey,
+        decision: DecodeRouteDecision,
+        control: &crate::ReadControl,
+        before_publication: impl FnOnce(),
+    ) -> Result<(), WsiError> {
+        let mut route_cache = self
+            .route_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        before_publication();
+        control.publish_if_active(|| route_cache.insert(key, decision))
+    }
 }
 
 #[derive(Debug)]
@@ -314,16 +349,16 @@ impl AdaptiveDecodeReader {
         &self,
         reqs: &[TileRequest],
         output: TileOutputPreference,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Vec<TilePixels>, WsiError> {
+        Self::check_control(control)?;
         if !should_adapt_output(&output) {
             tracing::debug!(
                 requested_tiles = reqs.len(),
                 adaptive_decode = false,
                 "wsi tile batch routed without adaptive decode"
             );
-            return self
-                .runtime
-                .with_current(|| self.inner.read_tiles(reqs, output));
+            return self.read_inner(reqs, output, control);
         }
         let route_sample_size = self.runtime.options.route_sample_size();
         let Some(key) = route_key_for_batch(self.inner.as_ref(), reqs, &output, route_sample_size)
@@ -335,9 +370,7 @@ impl AdaptiveDecodeReader {
                 route_key_available = false,
                 "wsi adaptive decode fell back to requested output"
             );
-            return self
-                .runtime
-                .with_current(|| self.inner.read_tiles(reqs, output));
+            return self.read_inner(reqs, output, control);
         };
         if reqs.len() >= DIRECT_DEVICE_BATCH_THRESHOLD {
             tracing::debug!(
@@ -348,11 +381,9 @@ impl AdaptiveDecodeReader {
                 route_key_available = true,
                 "wsi adaptive decode sent large batch through requested output"
             );
-            return self
-                .runtime
-                .with_current(|| self.inner.read_tiles(reqs, output));
+            return self.read_inner(reqs, output, control);
         }
-        let (route, measured) = match self.runtime.cached_route(&key) {
+        let (route, measured, measured_decision) = match self.runtime.cached_route(&key) {
             Some(decision) => {
                 tracing::debug!(
                     requested_tiles = reqs.len(),
@@ -365,11 +396,12 @@ impl AdaptiveDecodeReader {
                     device_tile_count = decision.device_tile_count,
                     "wsi adaptive decode reused cached route"
                 );
-                (decision.winner, None)
+                (decision.winner, None, None)
             }
             None => {
-                let measured = self.measure_route(reqs, output.clone())?;
-                let winner = measured.decision.winner;
+                let measured = self.measure_route(reqs, output.clone(), control)?;
+                let decision = measured.decision.clone();
+                let winner = decision.winner;
                 tracing::debug!(
                     requested_tiles = reqs.len(),
                     route_sample_size,
@@ -381,44 +413,87 @@ impl AdaptiveDecodeReader {
                     device_tile_count = measured.decision.device_tile_count,
                     "wsi adaptive decode measured route"
                 );
-                self.runtime.store_route(key, measured.decision.clone());
-                (winner, Some(measured.sample_tiles))
+                (winner, Some(measured.sample_tiles), Some(decision))
             }
         };
         let routed_output = match route {
             DecodeRoute::Cpu => TileOutputPreference::cpu(),
             DecodeRoute::Device => output,
         };
-        if let Some(mut measured) = measured {
-            let sample_len = reqs.len().min(self.runtime.options.route_sample_size());
-            if measured.len() == sample_len {
-                if sample_len == reqs.len() {
-                    return Ok(measured);
+        let tiles = match measured {
+            Some(mut measured) => {
+                let sample_len = reqs.len().min(self.runtime.options.route_sample_size());
+                if measured.len() == sample_len {
+                    if sample_len == reqs.len() {
+                        measured
+                    } else {
+                        let mut rest =
+                            self.read_inner(&reqs[sample_len..], routed_output, control)?;
+                        measured.append(&mut rest);
+                        measured
+                    }
+                } else {
+                    self.read_inner(reqs, routed_output, control)?
                 }
-                let mut rest = self
-                    .runtime
-                    .with_current(|| self.inner.read_tiles(&reqs[sample_len..], routed_output))?;
-                measured.append(&mut rest);
-                return Ok(measured);
+            }
+            None => self.read_inner(reqs, routed_output, control)?,
+        };
+        if let Some(decision) = measured_decision {
+            if let Some(control) = control {
+                self.runtime
+                    .store_route_controlled(key, decision, control)?;
+            } else {
+                self.runtime.store_route(key, decision);
             }
         }
-        self.runtime
-            .with_current(|| self.inner.read_tiles(reqs, routed_output))
+        Ok(tiles)
+    }
+
+    fn check_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
+        control.map_or(Ok(()), crate::ReadControl::check_cancelled)
+    }
+
+    fn read_inner(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        Self::check_control(control)?;
+        let result = self.runtime.with_current(|| match control {
+            Some(control) => self.inner.read_tiles_controlled(reqs, output, control),
+            None => self.inner.read_tiles(reqs, output),
+        });
+        let result = if control.is_some() {
+            result.and_then(|tiles| {
+                crate::core::batch::expect_exact_count(
+                    tiles,
+                    reqs.len(),
+                    "adaptive controlled tile batch",
+                )
+            })
+        } else {
+            result
+        };
+        Self::check_control(control)?;
+        result
     }
 
     fn measure_route(
         &self,
         reqs: &[TileRequest],
         device_output: TileOutputPreference,
+        control: Option<&crate::ReadControl>,
     ) -> Result<MeasuredDecodeRoute, WsiError> {
         let sample_len = reqs.len().min(self.runtime.options.route_sample_size());
         let sample = &reqs[..sample_len];
 
         let device_started = Instant::now();
-        let device_result = self
-            .runtime
-            .with_current(|| self.inner.read_tiles(sample, device_output));
+        let device_result = self.read_inner(sample, device_output, control);
         let device_elapsed = device_started.elapsed();
+        if matches!(device_result, Err(WsiError::Cancelled)) {
+            return Err(WsiError::Cancelled);
+        }
         let device_tile_count = device_result
             .as_ref()
             .map(|tiles| {
@@ -444,9 +519,7 @@ impl AdaptiveDecodeReader {
         };
 
         let cpu_started = Instant::now();
-        let cpu_tiles = self
-            .runtime
-            .with_current(|| self.inner.read_tiles(sample, TileOutputPreference::cpu()))?;
+        let cpu_tiles = self.read_inner(sample, TileOutputPreference::cpu(), control)?;
         let cpu_elapsed = cpu_started.elapsed();
 
         let decision = DecodeRouteDecision::measured(
@@ -485,12 +558,23 @@ impl SlideReader for AdaptiveDecodeReader {
         self.inner.level_source_kind(scene, series, level)
     }
 
+    fn prepare_level_controlled(
+        &self,
+        scene: crate::core::types::SceneId,
+        series: crate::core::types::SeriesId,
+        level: crate::core::types::LevelIdx,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        self.inner
+            .prepare_level_controlled(scene, series, level, control)
+    }
+
     fn read_tiles(
         &self,
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        self.read_tiles_adaptive(reqs, output)
+        self.read_tiles_adaptive(reqs, output, None)
     }
 
     fn read_tiles_controlled(
@@ -499,12 +583,7 @@ impl SlideReader for AdaptiveDecodeReader {
         output: TileOutputPreference,
         control: &crate::ReadControl,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        control.check_cancelled()?;
-        let tiles = self
-            .runtime
-            .with_current(|| self.inner.read_tiles_controlled(reqs, output, control))?;
-        control.check_cancelled()?;
-        Ok(tiles)
+        self.read_tiles_adaptive(reqs, output, Some(control))
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {

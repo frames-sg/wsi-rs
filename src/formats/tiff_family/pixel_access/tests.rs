@@ -3184,15 +3184,32 @@ fn read_tiles_classifies_distinct_jpeg_tiled_ifd_requests_as_batchable() {
     );
 
     let batched = reader.read_tiles_cpu(&reqs).unwrap();
+    let controlled = reader
+        .read_tiles_controlled(
+            &reqs,
+            TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
+        )
+        .expect("controlled TIFF batch");
     let sequential = reqs
         .iter()
         .map(|req| reader.read_tile_cpu(req))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(batched.len(), sequential.len());
-    for (batched, sequential) in batched.iter().zip(sequential.iter()) {
+    assert_eq!(controlled.len(), reqs.len());
+    for ((batched, controlled), sequential) in
+        batched.iter().zip(controlled.iter()).zip(sequential.iter())
+    {
         assert_eq!((batched.width, batched.height), (8, 8));
         assert_eq!(batched.data.as_u8(), sequential.data.as_u8());
+        #[allow(unreachable_patterns)]
+        match controlled {
+            TilePixels::Cpu(controlled) => {
+                assert_eq!(controlled.data.as_u8(), sequential.data.as_u8());
+            }
+            TilePixels::Device(_) => panic!("CPU preference returned a device tile"),
+        }
     }
 }
 

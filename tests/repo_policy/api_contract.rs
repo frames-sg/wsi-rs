@@ -409,6 +409,7 @@ fn public_configuration_and_diagnostic_structs_are_non_exhaustive() {
         ("src/core/cache.rs", "CacheConfig"),
         ("src/core/decode_runtime.rs", "DecodeExecutionOptions"),
         ("src/core/decode_runtime.rs", "DecodeRouteDecision"),
+        ("src/core/read_control.rs", "DicomIndexDiagnostic"),
         ("src/core/registry/open_options.rs", "SlideOpenOptions"),
         ("src/core/types/output.rs", "DeviceOutputContext"),
         ("src/core/types/pixels.rs", "DisplayWindow"),

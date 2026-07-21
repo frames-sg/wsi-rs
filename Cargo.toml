@@ -1,6 +1,6 @@
 [package]
 name = "wsi-rs"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "wsi-rs whole-slide image reader"
@@ -33,8 +33,8 @@ fuzzing = []
 parity-openslide = []
 # Enables Metal-backed parity comparisons (j2k CPU vs Metal).
 # Off by default; macOS only; CI matrix runs with and without.
-parity-metal = []
-# Enables Metal-backed device payload plumbing for Phase 5.
+parity-metal = ["metal"]
+# Enables Metal-backed device payloads.
 metal = [
     "dep:metal",
     "dep:j2k-jpeg-metal",

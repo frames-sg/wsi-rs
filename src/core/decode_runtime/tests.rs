@@ -100,6 +100,26 @@ fn route_cache_is_bounded() {
         .is_some());
 }
 
+#[test]
+fn controlled_route_publication_rechecks_cancellation_under_the_cache_lock() {
+    let runtime = DecodeRuntime::new(DecodeExecutionOptions::default()).expect("runtime");
+    let key = route_key_for_test(99);
+    let token = crate::ReadCancellationToken::new();
+    let control = crate::ReadControl::new(token.clone());
+
+    let error = runtime
+        .store_route_controlled_with_hook(
+            key.clone(),
+            DecodeRouteDecision::measured(1, Duration::from_millis(2), Duration::from_millis(1), 1),
+            &control,
+            || token.cancel(),
+        )
+        .expect_err("cancellation at the locked publication boundary must prevent insertion");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert!(runtime.cached_route(&key).is_none());
+}
+
 fn route_key_for_test(sequence: usize) -> DecodeRouteKey {
     DecodeRouteKey {
         dataset_id: sequence as u128,
@@ -355,4 +375,167 @@ fn adaptive_route_samples_uncached_subthreshold_batches_before_routing_remainder
         "cached large-batch routes should not resample"
     );
     assert_eq!(requested_tiles.load(Ordering::SeqCst), 7);
+}
+
+#[test]
+fn adaptive_controlled_read_uses_the_same_sampling_and_cached_route_as_uncontrolled() {
+    let fixture = adaptive_route_fixture(4);
+    let reqs = vec![fixture.req.clone(); 7];
+    let output = TileOutputPreference::prefer_device_auto_with_compressed_decode();
+    let key = route_key_for_batch(fixture.reader.inner.as_ref(), &reqs, &output, 4)
+        .expect("route key is available for controlled JP2K batch");
+
+    let tiles = fixture
+        .reader
+        .read_tiles_controlled(&reqs, output.clone(), &crate::ReadControl::default())
+        .expect("controlled adaptive read");
+
+    assert_eq!(tiles.len(), reqs.len());
+    assert_eq!(
+        fixture.batch_reads.load(Ordering::SeqCst),
+        2,
+        "controlled reads must sample and route the remainder like uncontrolled reads"
+    );
+    assert_eq!(fixture.requested_tiles.load(Ordering::SeqCst), reqs.len());
+    assert!(fixture.runtime.cached_route(&key).is_some());
+
+    fixture.batch_reads.store(0, Ordering::SeqCst);
+    fixture.requested_tiles.store(0, Ordering::SeqCst);
+    let cached = fixture
+        .reader
+        .read_tiles_controlled(&reqs, output, &crate::ReadControl::default())
+        .expect("cached controlled adaptive read");
+
+    assert_eq!(cached.len(), reqs.len());
+    assert_eq!(fixture.batch_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.requested_tiles.load(Ordering::SeqCst), reqs.len());
+}
+
+struct CancellingAdaptiveSource {
+    inner: CountingAdaptiveSource,
+    token: crate::ReadCancellationToken,
+    controlled_reads: Arc<AtomicUsize>,
+}
+
+impl SlideReader for CancellingAdaptiveSource {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        self.inner.tile_codec_kind(req)
+    }
+
+    fn read_tiles_controlled(
+        &self,
+        _reqs: &[TileRequest],
+        _output: TileOutputPreference,
+        _control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.controlled_reads.fetch_add(1, Ordering::SeqCst);
+        self.token.cancel();
+        Err(WsiError::Cancelled)
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_tile_cpu(req)
+    }
+}
+
+#[test]
+fn adaptive_controlled_read_does_not_retry_or_cache_after_cancellation() {
+    let batch_reads = Arc::new(AtomicUsize::new(0));
+    let requested_tiles = Arc::new(AtomicUsize::new(0));
+    let controlled_reads = Arc::new(AtomicUsize::new(0));
+    let token = crate::ReadCancellationToken::new();
+    let runtime = Arc::new(
+        DecodeRuntime::new(DecodeExecutionOptions::default().with_route_sample_size(4))
+            .expect("decode runtime"),
+    );
+    let source = CancellingAdaptiveSource {
+        inner: CountingAdaptiveSource::new(batch_reads, requested_tiles),
+        token: token.clone(),
+        controlled_reads: Arc::clone(&controlled_reads),
+    };
+    let req = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    let reqs = vec![req; 4];
+    let output = TileOutputPreference::prefer_device_auto_with_compressed_decode();
+    let key = route_key_for_batch(&source, &reqs, &output, 4)
+        .expect("route key is available for cancelling JP2K batch");
+    let reader = AdaptiveDecodeReader::new(Box::new(source), Arc::clone(&runtime));
+
+    let error = reader
+        .read_tiles_controlled(&reqs, output, &crate::ReadControl::new(token))
+        .expect_err("cancellation must stop adaptive routing");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(controlled_reads.load(Ordering::SeqCst), 1);
+    assert!(runtime.cached_route(&key).is_none());
+}
+
+struct FailingCancellingAdaptiveSource {
+    inner: CountingAdaptiveSource,
+    token: crate::ReadCancellationToken,
+    controlled_reads: Arc<AtomicUsize>,
+}
+
+impl SlideReader for FailingCancellingAdaptiveSource {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        self.inner.tile_codec_kind(req)
+    }
+
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        _output: TileOutputPreference,
+        _control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.controlled_reads.fetch_add(1, Ordering::SeqCst);
+        self.token.cancel();
+        let req = reqs.first().expect("adaptive test submits tiles");
+        Err(WsiError::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason: "decode failed while cancellation was requested".into(),
+        })
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_tile_cpu(req)
+    }
+}
+
+#[test]
+fn adaptive_controlled_source_error_cannot_mask_terminal_cancellation() {
+    let batch_reads = Arc::new(AtomicUsize::new(0));
+    let requested_tiles = Arc::new(AtomicUsize::new(0));
+    let controlled_reads = Arc::new(AtomicUsize::new(0));
+    let token = crate::ReadCancellationToken::new();
+    let runtime = Arc::new(
+        DecodeRuntime::new(DecodeExecutionOptions::default().with_route_sample_size(4))
+            .expect("decode runtime"),
+    );
+    let source = FailingCancellingAdaptiveSource {
+        inner: CountingAdaptiveSource::new(batch_reads, requested_tiles),
+        token: token.clone(),
+        controlled_reads: Arc::clone(&controlled_reads),
+    };
+    let reqs = vec![TileRequest::new(0usize, 0usize, 0u32, 0, 0); 4];
+    let output = TileOutputPreference::prefer_device_auto_with_compressed_decode();
+    let key = route_key_for_batch(&source, &reqs, &output, 4)
+        .expect("route key is available for cancelling JP2K batch");
+    let reader = AdaptiveDecodeReader::new(Box::new(source), Arc::clone(&runtime));
+
+    let error = reader
+        .read_tiles_controlled(&reqs, output, &crate::ReadControl::new(token))
+        .expect_err("terminal cancellation must replace a simultaneous source error");
+
+    assert!(matches!(error, WsiError::Cancelled));
+    assert_eq!(controlled_reads.load(Ordering::SeqCst), 1);
+    assert!(runtime.cached_route(&key).is_none());
 }

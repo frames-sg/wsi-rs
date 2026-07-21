@@ -4,6 +4,8 @@ mod session;
 mod tile;
 mod ycbcr;
 
+#[cfg(test)]
+pub(crate) use interop::resident_bytes;
 pub use session::MetalBackendSessions;
 pub use tile::{MetalDeviceStorage, MetalDeviceTile};
 pub(crate) use ycbcr::YcbcrToRgb8Converter;

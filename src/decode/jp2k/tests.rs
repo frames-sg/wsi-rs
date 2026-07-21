@@ -20,6 +20,97 @@ fn test_metal_sessions() -> Option<crate::output::metal::MetalBackendSessions> {
     Some(crate::output::metal::MetalBackendSessions::new(device))
 }
 
+#[cfg(feature = "parity-metal")]
+#[test]
+fn j2k_metal_vs_cpu_within_tolerance() {
+    let Some(sessions) = test_metal_sessions() else {
+        eprintln!("skipping JP2K Metal parity test: no Metal device");
+        return;
+    };
+    let fixtures: &[(&str, &[u8], bool)] = &[
+        (
+            "rgb-nomct",
+            include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k"),
+            true,
+        ),
+        (
+            "ycbcr-444",
+            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_444.j2k"),
+            false,
+        ),
+        (
+            "ycbcr-422",
+            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_422.j2k"),
+            false,
+        ),
+        (
+            "ycbcr-420",
+            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_420.j2k"),
+            false,
+        ),
+    ];
+
+    for &(label, codestream, rgb_color_space) in fixtures {
+        assert_metal_decode_matches_cpu(label, codestream, rgb_color_space, &sessions);
+    }
+}
+
+#[cfg(feature = "parity-metal")]
+fn assert_metal_decode_matches_cpu(
+    label: &str,
+    codestream: &[u8],
+    rgb_color_space: bool,
+    sessions: &crate::output::metal::MetalBackendSessions,
+) {
+    let header = parse_codestream_header(codestream).expect("fixture header");
+    let job = |backend| Jp2kDecodeJob {
+        data: Cow::Borrowed(codestream),
+        expected_width: header.image_width,
+        expected_height: header.image_height,
+        rgb_color_space,
+        backend,
+    };
+    let TilePixels::Cpu(cpu) =
+        decode_one_jp2k_pixels(&job(J2kBackendRequest::Cpu), false, None, None)
+            .expect("CPU fixture decode")
+    else {
+        panic!("CPU fixture decode returned device pixels");
+    };
+    let TilePixels::Device(DeviceTile::Metal(metal)) =
+        decode_one_jp2k_pixels(&job(J2kBackendRequest::Auto), true, Some(sessions), None)
+            .expect("Metal fixture decode")
+    else {
+        panic!("Metal fixture decode did not return a Metal tile");
+    };
+    assert_eq!(metal.format, PixelFormat::Rgb8, "{label} pixel format");
+    assert_eq!(
+        metal.pitch_bytes,
+        metal.width as usize * 3,
+        "{label} fixture should have tightly packed Metal rows"
+    );
+    let image = metal
+        .validated_resident_image()
+        .expect("validated Metal fixture image");
+    let metal_bytes = crate::output::metal::resident_bytes(image);
+    let metal_cpu =
+        CpuTile::from_u8_interleaved(metal.width, metal.height, 3, ColorSpace::Rgb, metal_bytes)
+            .expect("Metal readback tile");
+    let cpu_rgb = image::RgbImage::from_raw(
+        cpu.width,
+        cpu.height,
+        cpu.data.as_u8().expect("CPU RGB8 fixture").to_vec(),
+    )
+    .expect("CPU fixture dimensions");
+
+    assert_cpu_tile_matches_rgb_fixture_with_tolerance(
+        &metal_cpu,
+        &cpu_rgb,
+        4,
+        100,
+        &format!("{label} Metal vs CPU"),
+    );
+}
+
 #[cfg(feature = "cuda")]
 fn cuda_unavailable_reason(reason: &str) -> bool {
     reason.contains("CUDA is unavailable") || reason.contains("CUDA runtime error")

@@ -312,7 +312,7 @@ pub enum TilePixels {
     Device(DeviceTile),
 }
 
-/// Renderer-uploadable device payload. Real payload fields land in Phase 5.
+/// Renderer-uploadable device payload.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum DeviceTile {

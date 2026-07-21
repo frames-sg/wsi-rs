@@ -64,7 +64,10 @@ pub(crate) mod test_support;
 
 pub use core::cache::CacheConfig;
 pub use core::decode_runtime::{DecodeExecutionOptions, DecodeRoute, DecodeRouteDecision};
-pub use core::read_control::{ReadCancellationToken, ReadControl};
+pub use core::read_control::{
+    DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadCancellationToken, ReadControl,
+    ReadDiagnostic, ReadDiagnosticSink,
+};
 pub use error::WsiError;
 pub use formats::svcache::{
     build_svcache, build_svcache_tile_payloads_merge, build_svcache_tile_payloads_replace,

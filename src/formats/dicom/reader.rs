@@ -17,51 +17,64 @@ impl SlideReader for DicomReader {
             .unwrap_or(TileCodecKind::Other)
     }
 
+    fn prepare_level_controlled(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        control.check_cancelled()?;
+        let scene_ref =
+            self.slide
+                .dataset
+                .scenes
+                .get(scene.get())
+                .ok_or(WsiError::SceneOutOfRange {
+                    index: scene.get(),
+                    count: self.slide.dataset.scenes.len(),
+                })?;
+        let series_ref = scene_ref
+            .series
+            .get(series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: series.get(),
+                count: scene_ref.series.len(),
+            })?;
+        let dicom_level =
+            self.slide
+                .levels
+                .get(level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: level.get(),
+                    count: series_ref.levels.len() as u32,
+                })?;
+        for image in &dicom_level.parts {
+            control.check_cancelled()?;
+            if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
+                image.ensure_encapsulated_frames_controlled(Some(control))?;
+            }
+        }
+        control.check_cancelled()
+    }
+
     fn read_tiles(
         &self,
         reqs: &[TileRequest],
         output: TileOutputPreference,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = output.backend().to_j2k();
+        self.read_tiles_with_control(reqs, output, None)
+    }
 
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        if output.prefers_device() {
-            match self.read_tiles_jp2k_device_batch(reqs, &output, backend) {
-                Ok(Some(tiles)) => return Ok(tiles),
-                Ok(None) => {}
-                Err(err) if output.requires_device() => return Err(err),
-                Err(err) => {
-                    tracing::debug!(
-                        error = %err,
-                        fallback_to_cpu = true,
-                        fallback_reason = "dicom_jp2k_device_batch_failed",
-                        "DICOM JP2K device batch failed; retrying through CPU output"
-                    );
-                }
-            }
-            match self.read_tiles_jpeg_device_batch(reqs, &output, backend) {
-                Ok(Some(tiles)) => return Ok(tiles),
-                Ok(None) => {}
-                Err(err) if output.requires_device() => return Err(err),
-                Err(err) => {
-                    tracing::debug!(
-                        error = %err,
-                        fallback_to_cpu = true,
-                        fallback_reason = "dicom_jpeg_device_batch_failed",
-                        "DICOM JPEG device batch failed; retrying through CPU output"
-                    );
-                }
-            }
-        }
-
-        if output.requires_device() {
-            return Err(WsiError::Unsupported {
-                reason: "RequireDevice not supported for DICOM CPU fallback".into(),
-            });
-        }
-
-        self.read_tiles_cpu_with_backend(reqs, backend)
-            .map(|tiles| tiles.into_iter().map(TilePixels::Cpu).collect())
+    fn read_tiles_controlled(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: &crate::ReadControl,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        let result = self.read_tiles_with_control(reqs, output, Some(control));
+        control.check_cancelled()?;
+        result
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -144,16 +157,23 @@ macro_rules! impl_dicom_frame_batch_meta {
 
 impl_dicom_frame_batch_meta!(DicomCpuBatchMeta);
 
+fn check_read_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
+    control.map_or(Ok(()), crate::ReadControl::check_cancelled)
+}
+
 fn attach_encapsulated_frame_bytes_for_meta<M>(
     metas: Vec<M>,
     cache_result: bool,
+    control: Option<&crate::ReadControl>,
     missing_frame_reason: impl Fn(u32) -> String,
 ) -> Result<Vec<DicomFrameBytes<M>>, WsiError>
 where
     M: DicomFrameBatchMeta,
 {
+    check_read_control(control)?;
     let mut groups: HashMap<usize, (Arc<DicomImage>, Vec<M>)> = HashMap::new();
     for meta in metas {
+        check_read_control(control)?;
         let image = meta.image().clone();
         let key = Arc::as_ptr(&image) as usize;
         groups
@@ -165,6 +185,7 @@ where
 
     let mut jobs = Vec::new();
     for (_, (image, mut metas)) in groups {
+        check_read_control(control)?;
         let cache_decoded_frame = image.should_cache_decoded_frames_for_batch(metas.len());
         for meta in &mut metas {
             meta.set_cache_decoded_frame(cache_decoded_frame);
@@ -174,12 +195,13 @@ where
             .map(DicomFrameBatchMeta::frame_index)
             .collect::<Vec<_>>();
         let first = metas[0].req();
-        let frames = image.extract_encapsulated_frames(
+        let frames = image.extract_encapsulated_frames_controlled(
             &frame_indices,
             first.level.get(),
             first.col,
             first.row,
             cache_result,
+            control,
         )?;
         for meta in metas {
             let frame_index = meta.frame_index();
@@ -196,14 +218,16 @@ where
         }
     }
     jobs.sort_by_key(|(meta, _)| meta.slot());
+    check_read_control(control)?;
     Ok(jobs)
 }
 
 fn attach_encapsulated_frame_bytes(
     metas: Vec<DicomCpuBatchMeta>,
     cache_result: bool,
+    control: Option<&crate::ReadControl>,
 ) -> Result<Vec<DicomCpuFrameBytes>, WsiError> {
-    attach_encapsulated_frame_bytes_for_meta(metas, cache_result, |frame_index| {
+    attach_encapsulated_frame_bytes_for_meta(metas, cache_result, control, |frame_index| {
         format!("DICOM batch frame {frame_index} was not extracted")
     })
 }
@@ -227,8 +251,9 @@ impl_dicom_frame_batch_meta!(DicomDeviceDecodeJob);
 fn attach_device_encapsulated_frame_bytes(
     metas: Vec<DicomDeviceDecodeJob>,
     cache_result: bool,
+    control: Option<&crate::ReadControl>,
 ) -> Result<Vec<DicomDeviceFrameBytes>, WsiError> {
-    attach_encapsulated_frame_bytes_for_meta(metas, cache_result, |frame_index| {
+    attach_encapsulated_frame_bytes_for_meta(metas, cache_result, control, |frame_index| {
         format!("DICOM device batch frame {frame_index} was not extracted")
     })
 }
@@ -241,11 +266,82 @@ struct DicomDeviceBatchSelection {
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
+struct DicomDeviceBatchCompletion {
+    results: Vec<Option<TilePixels>>,
+    job_meta: Vec<DicomDeviceFrameBytes>,
+    decoded: Vec<Result<TilePixels, WsiError>>,
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(super) fn complete_mixed_device_batch_with_cpu_remainder(
+    reqs: &[TileRequest],
+    output: &TileOutputPreference,
+    backend: BackendRequest,
+    results: Vec<Option<TilePixels>>,
+    control: Option<&crate::ReadControl>,
+    read_cpu_remainder: impl FnOnce(
+        &[TileRequest],
+        BackendRequest,
+        Option<&crate::ReadControl>,
+    ) -> Result<Vec<CpuTile>, WsiError>,
+) -> Result<Vec<TilePixels>, WsiError> {
+    check_read_control(control)?;
+    let mut results = crate::core::batch::expect_exact_count(
+        results,
+        reqs.len(),
+        "DICOM mixed device batch slots",
+    )?;
+    let mut remainder_slots = Vec::new();
+    let mut remainder_requests = Vec::new();
+    for (slot, (result, request)) in results.iter().zip(reqs).enumerate() {
+        check_read_control(control)?;
+        if result.is_none() {
+            remainder_slots.push(slot);
+            remainder_requests.push(request.clone());
+        }
+    }
+
+    check_read_control(control)?;
+    if !remainder_requests.is_empty() {
+        if output.requires_device() {
+            return Err(WsiError::Unsupported {
+                reason: "DICOM device batch contained a non-device-decodable tile".into(),
+            });
+        }
+        let cpu_tiles = read_cpu_remainder(&remainder_requests, backend, control)?;
+        check_read_control(control)?;
+        let cpu_tiles = crate::core::batch::expect_exact_count(
+            cpu_tiles,
+            remainder_slots.len(),
+            "DICOM mixed device CPU remainder batch",
+        )?;
+        for (slot, tile) in remainder_slots.into_iter().zip(cpu_tiles) {
+            results[slot] = Some(TilePixels::Cpu(tile));
+        }
+    }
+
+    check_read_control(control)?;
+    results
+        .into_iter()
+        .zip(reqs)
+        .map(|(tile, req)| {
+            tile.ok_or_else(|| WsiError::TileRead {
+                col: req.col,
+                row: req.row,
+                level: req.level.get(),
+                reason: "DICOM device batch result was not populated".into(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
 impl DicomReader {
     fn select_device_batch_jobs(
         &self,
         reqs: &[TileRequest],
         output: &TileOutputPreference,
+        control: Option<&crate::ReadControl>,
         is_device_decodable: impl Fn(&DicomImage) -> bool,
     ) -> Result<DicomDeviceBatchSelection, WsiError> {
         let mut results: Vec<Option<TilePixels>> = Vec::with_capacity(reqs.len());
@@ -254,6 +350,7 @@ impl DicomReader {
         let mut saw_device_candidate = false;
 
         for (slot, req) in reqs.iter().enumerate() {
+            check_read_control(control)?;
             let level = self.slide.levels.get(req.level.get() as usize).ok_or(
                 WsiError::LevelOutOfRange {
                     level: req.level.get(),
@@ -352,11 +449,16 @@ impl DicomReader {
         reqs: &[TileRequest],
         output: &TileOutputPreference,
         backend: BackendRequest,
-        mut results: Vec<Option<TilePixels>>,
-        job_meta: Vec<DicomDeviceFrameBytes>,
-        decoded: Vec<Result<TilePixels, WsiError>>,
+        completion: DicomDeviceBatchCompletion,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Option<Vec<TilePixels>>, WsiError> {
+        let DicomDeviceBatchCompletion {
+            mut results,
+            job_meta,
+            decoded,
+        } = completion;
         for ((meta, _), decoded) in job_meta.into_iter().zip(decoded) {
+            check_read_control(control)?;
             let tile = decoded?;
             if meta.cache_decoded_frame {
                 if let TilePixels::Cpu(cpu) = &tile {
@@ -367,32 +469,17 @@ impl DicomReader {
             results[meta.slot] = Some(tile);
         }
 
-        for (slot, result) in results.iter_mut().enumerate() {
-            if result.is_none() {
-                if output.requires_device() {
-                    return Err(WsiError::Unsupported {
-                        reason: "DICOM device batch contained a non-device-decodable tile".into(),
-                    });
-                }
-                *result = Some(TilePixels::Cpu(
-                    self.read_tile_with_backend(&reqs[slot], backend)?,
-                ));
-            }
-        }
-
-        Ok(Some(
-            results
-                .into_iter()
-                .map(|tile| {
-                    tile.ok_or_else(|| WsiError::TileRead {
-                        col: 0,
-                        row: 0,
-                        level: 0u32,
-                        reason: "DICOM device batch result was not populated".into(),
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        ))
+        complete_mixed_device_batch_with_cpu_remainder(
+            reqs,
+            output,
+            backend,
+            results,
+            control,
+            |remainder, backend, control| {
+                self.read_tiles_cpu_with_backend_controlled(remainder, backend, control)
+            },
+        )
+        .map(Some)
     }
 
     pub(super) fn read_tiles_jp2k_device_batch(
@@ -400,7 +487,9 @@ impl DicomReader {
         reqs: &[TileRequest],
         output: &TileOutputPreference,
         backend: BackendRequest,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Option<Vec<TilePixels>>, WsiError> {
+        check_read_control(control)?;
         if reqs.is_empty() {
             return Ok(Some(Vec::new()));
         }
@@ -426,7 +515,7 @@ impl DicomReader {
             return Ok(None);
         }
 
-        let batch = self.select_device_batch_jobs(reqs, output, |image| {
+        let batch = self.select_device_batch_jobs(reqs, output, control, |image| {
             dicom_jp2k_device_batch_allowed(image.transfer_syntax_uid.as_str(), output, reqs.len())
         })?;
 
@@ -440,7 +529,7 @@ impl DicomReader {
             );
         }
 
-        let job_meta = attach_device_encapsulated_frame_bytes(batch.job_meta, true)?;
+        let job_meta = attach_device_encapsulated_frame_bytes(batch.job_meta, true, control)?;
         let jobs = job_meta
             .iter()
             .map(|(meta, bytes)| Jp2kDecodeJob {
@@ -453,12 +542,14 @@ impl DicomReader {
                 backend,
             })
             .collect::<Vec<_>>();
+        check_read_control(control)?;
         let decoded = decode_batch_jp2k_pixels(
             &jobs,
             output.requires_device(),
             metal_sessions,
             cuda_sessions,
         );
+        check_read_control(control)?;
         if decoded.len() != job_meta.len() {
             return Err(WsiError::Jp2k(format!(
                 "DICOM JP2K device batch returned {} tiles for {} jobs",
@@ -467,7 +558,17 @@ impl DicomReader {
             )));
         }
 
-        self.finish_device_batch_results(reqs, output, backend, batch.results, job_meta, decoded)
+        self.finish_device_batch_results(
+            reqs,
+            output,
+            backend,
+            DicomDeviceBatchCompletion {
+                results: batch.results,
+                job_meta,
+                decoded,
+            },
+            control,
+        )
     }
 
     pub(super) fn read_tiles_jpeg_device_batch(
@@ -475,7 +576,9 @@ impl DicomReader {
         reqs: &[TileRequest],
         output: &TileOutputPreference,
         backend: BackendRequest,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Option<Vec<TilePixels>>, WsiError> {
+        check_read_control(control)?;
         if reqs.is_empty() {
             return Ok(Some(Vec::new()));
         }
@@ -501,7 +604,7 @@ impl DicomReader {
             return Ok(None);
         }
 
-        let batch = self.select_device_batch_jobs(reqs, output, |image| {
+        let batch = self.select_device_batch_jobs(reqs, output, control, |image| {
             image.transfer_syntax_uid == JPEG_TRANSFER_SYNTAX
         })?;
 
@@ -515,7 +618,7 @@ impl DicomReader {
             );
         }
 
-        let job_meta = attach_device_encapsulated_frame_bytes(batch.job_meta, true)?;
+        let job_meta = attach_device_encapsulated_frame_bytes(batch.job_meta, true, control)?;
         let jobs = job_meta
             .iter()
             .map(|(meta, bytes)| JpegDecodeJob {
@@ -528,6 +631,7 @@ impl DicomReader {
                 requested_size: None,
             })
             .collect::<Vec<_>>();
+        check_read_control(control)?;
         let decoded = decode_batch_jpeg_pixels(
             &jobs,
             backend,
@@ -535,6 +639,7 @@ impl DicomReader {
             metal_sessions,
             cuda_sessions,
         );
+        check_read_control(control)?;
         if decoded.len() != job_meta.len() {
             return Err(WsiError::Jpeg(format!(
                 "DICOM JPEG device batch returned {} tiles for {} jobs",
@@ -543,7 +648,17 @@ impl DicomReader {
             )));
         }
 
-        self.finish_device_batch_results(reqs, output, backend, batch.results, job_meta, decoded)
+        self.finish_device_batch_results(
+            reqs,
+            output,
+            backend,
+            DicomDeviceBatchCompletion {
+                results: batch.results,
+                job_meta,
+                decoded,
+            },
+            control,
+        )
     }
 }
 
@@ -565,11 +680,73 @@ pub(super) fn dicom_tile_codec_kind(transfer_syntax_uid: &str) -> TileCodecKind 
 }
 
 impl DicomReader {
-    pub(super) fn read_tiles_cpu_with_backend(
+    fn read_tiles_with_control(
+        &self,
+        reqs: &[TileRequest],
+        output: TileOutputPreference,
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        check_read_control(control)?;
+        let backend = output.backend().to_j2k();
+
+        #[cfg(any(feature = "metal", feature = "cuda"))]
+        if output.prefers_device() {
+            match self.read_tiles_jp2k_device_batch(reqs, &output, backend, control) {
+                Ok(Some(tiles)) => {
+                    check_read_control(control)?;
+                    return Ok(tiles);
+                }
+                Ok(None) => {}
+                Err(WsiError::Cancelled) => return Err(WsiError::Cancelled),
+                Err(err) if output.requires_device() => return Err(err),
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        fallback_to_cpu = true,
+                        fallback_reason = "dicom_jp2k_device_batch_failed",
+                        "DICOM JP2K device batch failed; retrying through CPU output"
+                    );
+                }
+            }
+            check_read_control(control)?;
+            match self.read_tiles_jpeg_device_batch(reqs, &output, backend, control) {
+                Ok(Some(tiles)) => {
+                    check_read_control(control)?;
+                    return Ok(tiles);
+                }
+                Ok(None) => {}
+                Err(WsiError::Cancelled) => return Err(WsiError::Cancelled),
+                Err(err) if output.requires_device() => return Err(err),
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        fallback_to_cpu = true,
+                        fallback_reason = "dicom_jpeg_device_batch_failed",
+                        "DICOM JPEG device batch failed; retrying through CPU output"
+                    );
+                }
+            }
+        }
+
+        check_read_control(control)?;
+        if output.requires_device() {
+            return Err(WsiError::Unsupported {
+                reason: "RequireDevice not supported for DICOM CPU fallback".into(),
+            });
+        }
+
+        let tiles = self.read_tiles_cpu_with_backend_controlled(reqs, backend, control)?;
+        check_read_control(control)?;
+        Ok(tiles.into_iter().map(TilePixels::Cpu).collect())
+    }
+
+    fn read_tiles_cpu_with_backend_controlled(
         &self,
         reqs: &[TileRequest],
         backend: BackendRequest,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
+        check_read_control(control)?;
         if reqs.is_empty() {
             return Ok(Vec::new());
         }
@@ -580,6 +757,7 @@ impl DicomReader {
         let mut rle_metas = Vec::new();
 
         for (slot, req) in reqs.iter().enumerate() {
+            check_read_control(control)?;
             let level = self.slide.levels.get(req.level.get() as usize).ok_or(
                 WsiError::LevelOutOfRange {
                     level: req.level.get(),
@@ -647,7 +825,7 @@ impl DicomReader {
             }
         }
 
-        let jpeg_jobs = attach_encapsulated_frame_bytes(jpeg_metas, false)?;
+        let jpeg_jobs = attach_encapsulated_frame_bytes(jpeg_metas, false, control)?;
         let jpeg_decode_jobs = jpeg_jobs
             .iter()
             .map(|(meta, bytes)| JpegDecodeJob {
@@ -660,11 +838,13 @@ impl DicomReader {
                 requested_size: None,
             })
             .collect::<Vec<_>>();
+        check_read_control(control)?;
         let jpeg_decoded = crate::core::batch::expect_exact_count(
             decode_batch_jpeg(&jpeg_decode_jobs),
             jpeg_decode_jobs.len(),
             "DICOM JPEG batch decode",
         )?;
+        check_read_control(control)?;
         for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
             let tile = decoded.map_err(|err| WsiError::TileRead {
                 col: meta.req.col,
@@ -683,7 +863,7 @@ impl DicomReader {
             )?);
         }
 
-        let jp2k_jobs = attach_encapsulated_frame_bytes(jp2k_metas, false)?;
+        let jp2k_jobs = attach_encapsulated_frame_bytes(jp2k_metas, false, control)?;
         let jp2k_decode_jobs = jp2k_jobs
             .iter()
             .map(|(meta, bytes)| Jp2kDecodeJob {
@@ -696,11 +876,13 @@ impl DicomReader {
                 backend,
             })
             .collect::<Vec<_>>();
+        check_read_control(control)?;
         let jp2k_decoded = crate::core::batch::expect_exact_count(
             decode_batch_jp2k(&jp2k_decode_jobs),
             jp2k_decode_jobs.len(),
             "DICOM JP2K batch decode",
         )?;
+        check_read_control(control)?;
         for ((meta, _), decoded) in jp2k_jobs.into_iter().zip(jp2k_decoded) {
             let tile = decoded.map_err(|err| WsiError::TileRead {
                 col: meta.req.col,
@@ -719,8 +901,9 @@ impl DicomReader {
             )?);
         }
 
-        let rle_jobs = attach_encapsulated_frame_bytes(rle_metas, false)?;
+        let rle_jobs = attach_encapsulated_frame_bytes(rle_metas, false, control)?;
         for (meta, bytes) in rle_jobs {
+            check_read_control(control)?;
             let tile = decode_rle_lossless_frame(
                 bytes.as_slice(),
                 meta.image.tile_width,
@@ -745,6 +928,7 @@ impl DicomReader {
             )?);
         }
 
+        check_read_control(control)?;
         results
             .into_iter()
             .zip(reqs.iter())

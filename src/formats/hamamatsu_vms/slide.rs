@@ -23,7 +23,7 @@ impl SlideReader for VmsReader {
         read_cpu_tiles_with_backend(
             reqs,
             output,
-            "RequireDevice not supported for VMS in Phase 2",
+            "RequireDevice is not supported for VMS",
             |req, backend| self.read_tile_with_backend(req, backend),
         )
     }
