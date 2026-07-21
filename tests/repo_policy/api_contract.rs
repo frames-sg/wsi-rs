@@ -812,28 +812,21 @@ fn optional_metal_public_surface_is_future_extensible() {
 
 #[test]
 fn optional_cuda_public_surface_matches_device_tile_contract() {
-    let cuda = read_repo_text("src/output/cuda.rs");
+    let cuda = fs::read_to_string(crate_root().join("api/wsi-rs-public-api-cuda.txt"))
+        .expect("read CUDA public API snapshot");
     for required in [
-        "pub width: u32",
-        "pub height: u32",
-        "pub pitch_bytes: usize",
-        "pub format: PixelFormat",
-        "pub storage: CudaDeviceStorage",
-        "j2k_jpeg_cuda::Surface",
-        "j2k_cuda::Surface",
-        "cuda_surface()",
+        "pub wsi_rs::output::cuda::CudaDeviceTile::width: u32",
+        "pub wsi_rs::output::cuda::CudaDeviceTile::height: u32",
+        "pub wsi_rs::output::cuda::CudaDeviceTile::pitch_bytes: usize",
+        "pub wsi_rs::output::cuda::CudaDeviceTile::format: wsi_rs::PixelFormat",
+        "pub wsi_rs::output::cuda::CudaDeviceTile::storage: wsi_rs::output::cuda::CudaDeviceStorage",
+        "pub fn wsi_rs::output::cuda::CudaDeviceTile::download_cpu(&self) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>",
     ] {
         assert!(
             cuda.contains(required),
-            "CUDA device tile output must expose resident surface contract; missing `{required}`"
+            "CUDA device tile output must expose its stable host-download contract; missing `{required}`"
         );
     }
-
-    let output = read_repo_text("src/core/types/output.rs");
-    assert!(
-        !output.contains("_phase5_placeholder"),
-        "CudaDeviceTile must not remain a placeholder"
-    );
 }
 
 #[test]

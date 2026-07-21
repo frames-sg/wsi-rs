@@ -103,12 +103,40 @@ pub(super) fn quickhash_file_part_cached(
             .get_mut(path)
             .expect("MIRAX quickhash file must exist after insertion")
     };
+    let file_len = file
+        .metadata()
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?
+        .len();
+    let range_end = offset
+        .checked_add(len)
+        .ok_or_else(|| WsiError::IoWithPath {
+            source: Arc::new(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("MIRAX quickhash range offset {offset} plus {len} bytes overflows"),
+            )),
+            path: path.to_path_buf(),
+        })?;
+    if range_end > file_len {
+        return Err(WsiError::IoWithPath {
+            source: Arc::new(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!(
+                    "MIRAX quickhash range at offset {offset} requires {len} bytes, but file length is {file_len}"
+                ),
+            )),
+            path: path.to_path_buf(),
+        });
+    }
     file.seek(SeekFrom::Start(offset))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
 
+    let mut staged = quickhash.clone();
     let mut remaining = len;
     let mut buf = [0u8; MIRAX_QUICKHASH_READ_BUFFER_BYTES];
     while remaining > 0 {
@@ -120,11 +148,21 @@ pub(super) fn quickhash_file_part_cached(
                 path: path.to_path_buf(),
             })?;
         if read == 0 {
-            break;
+            return Err(WsiError::IoWithPath {
+                source: Arc::new(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "MIRAX quickhash range at offset {offset} requires {len} bytes; {} bytes remain unread",
+                        remaining
+                    ),
+                )),
+                path: path.to_path_buf(),
+            });
         }
-        quickhash.update(&buf[..read]);
+        staged.update(&buf[..read]);
         remaining -= read as u64;
     }
+    *quickhash = staged;
     Ok(())
 }
 

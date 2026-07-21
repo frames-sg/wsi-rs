@@ -89,7 +89,9 @@ residency and codec backend selection are related but separate choices. Metal
 tiles normally retain an immutable resident allocation through downstream GPU
 use; within the main `wsi-rs` library crate, the only production unsafe-code
 exception is the audited Metal ownership adapter. CUDA payload support does not
-by itself provide cross-API renderer interoperability.
+by itself provide cross-API renderer interoperability. Consumers that present
+through another GPU API can call `CudaDeviceTile::download_cpu` for checked,
+pitch-aware, tightly packed host staging without accessing CUDA surface internals.
 
 Controlled-read diagnostics are opt-in and delivered outside internal locks.
 The library emits operational events through `tracing`, but installs no

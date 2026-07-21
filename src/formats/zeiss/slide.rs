@@ -76,6 +76,13 @@ pub(super) struct ZeissSlide {
 
 impl ZeissSlide {
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, CacheConfig::deterministic())
+    }
+
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
         let mut czi = CziFile::open(path)
             .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
 
@@ -229,12 +236,66 @@ impl ZeissSlide {
             source_icc_profiles: Vec::new(),
         };
 
+        let (tile_entry_bytes, level_entry_bytes) = dataset
+            .scenes
+            .first()
+            .and_then(|scene| scene.series.first())
+            .map(|series| {
+                let level_entry_bytes = series
+                    .levels
+                    .iter()
+                    .map(|level| {
+                        level
+                            .dimensions
+                            .0
+                            .saturating_mul(level.dimensions.1)
+                            .saturating_mul(3)
+                    })
+                    .max()
+                    .unwrap_or(1);
+                let tile_entry_bytes = series
+                    .levels
+                    .iter()
+                    .filter_map(|level| match level.tile_layout {
+                        TileLayout::Regular {
+                            tile_width,
+                            tile_height,
+                            ..
+                        } => Some(
+                            u64::from(tile_width)
+                                .saturating_mul(u64::from(tile_height))
+                                .saturating_mul(3),
+                        ),
+                        TileLayout::Irregular { .. } | TileLayout::WholeLevel { .. } => None,
+                    })
+                    .max()
+                    .unwrap_or(1);
+                (tile_entry_bytes, level_entry_bytes)
+            })
+            .unwrap_or((1, 1));
+        let associated_entry_bytes = dataset
+            .associated_images
+            .values()
+            .map(|image| {
+                u64::from(image.dimensions.0)
+                    .saturating_mul(u64::from(image.dimensions.1))
+                    .saturating_mul(u64::from(image.channels))
+            })
+            .max()
+            .unwrap_or(1);
+
         Ok(Self {
             dataset,
             czi: Mutex::new(czi),
-            level_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(1).unwrap())),
-            tile_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(8).unwrap())),
-            associated_cache: Mutex::new(LruCache::new(std::num::NonZeroUsize::new(4).unwrap())),
+            level_cache: Mutex::new(LruCache::new(
+                cache_config.private_entry_capacity(level_entry_bytes, 6),
+            )),
+            tile_cache: Mutex::new(LruCache::new(
+                cache_config.private_entry_capacity(tile_entry_bytes, 6),
+            )),
+            associated_cache: Mutex::new(LruCache::new(
+                cache_config.private_entry_capacity(associated_entry_bytes, 6),
+            )),
             associated_sources,
             subblock_origin,
             canvas_level_subblocks,

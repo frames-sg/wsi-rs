@@ -1,4 +1,5 @@
 use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use crate::core::types::{CpuTile, DatasetId};
@@ -21,6 +22,10 @@ const TILE_CACHE_BYTES_ENV: &str = "WSI_RS_TILE_CACHE_BYTES";
 /// immediate churn during zoom-out bursts.
 pub(crate) const DEFAULT_DISPLAY_TILE_CACHE_SIZE: u64 = 32 * 1024 * 1024;
 const DISPLAY_TILE_CACHE_BYTES_ENV: &str = "WSI_RS_DISPLAY_TILE_CACHE_BYTES";
+// Count-bounded private LRUs still allocate per-entry bookkeeping. Include a
+// conservative floor so tiny source tiles cannot turn a byte budget into an
+// enormous hash-table capacity at open time.
+const PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES: u64 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -57,6 +62,24 @@ impl CacheConfig {
         self.display_tile_bytes
             .unwrap_or(DEFAULT_DISPLAY_TILE_CACHE_SIZE)
     }
+
+    pub(crate) fn private_entry_capacity(
+        self,
+        estimated_entry_bytes: u64,
+        budget_share_count: u64,
+    ) -> NonZeroUsize {
+        let cache_budget = self
+            .shared_tile_budget(None)
+            .checked_div(budget_share_count.max(1))
+            .unwrap_or(0);
+        let entry_bytes = estimated_entry_bytes.max(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES);
+        let entries = cache_budget
+            .checked_div(entry_bytes)
+            .unwrap_or(0)
+            .max(1)
+            .min(usize::MAX as u64) as usize;
+        NonZeroUsize::new(entries).expect("private cache capacity is clamped to at least one")
+    }
 }
 
 impl Default for CacheConfig {
@@ -82,20 +105,30 @@ pub struct CacheKey {
     pub(crate) tile_row: i64,
 }
 
+/// Thread-safe, byte-bounded decoded tile cache that can be shared by slides.
 pub struct TileCache {
     inner: Mutex<TileCacheState>,
 }
 
+/// Snapshot of byte-sized decoded tile cache activity.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct CacheStats {
-    pub(crate) hits: u64,
-    pub(crate) misses: u64,
-    pub(crate) puts: u64,
-    pub(crate) evictions: u64,
-    pub(crate) rejected_oversize: u64,
-    pub(crate) capacity_bytes: u64,
-    pub(crate) current_bytes: u64,
-    pub(crate) entries: usize,
+pub struct TileCacheStats {
+    /// Successful lookups.
+    pub hits: u64,
+    /// Unsuccessful lookups.
+    pub misses: u64,
+    /// Entries admitted to the cache.
+    pub puts: u64,
+    /// Entries removed to remain within the byte capacity.
+    pub evictions: u64,
+    /// Entries rejected because one value exceeded the whole capacity.
+    pub rejected_oversize: u64,
+    /// Configured byte capacity.
+    pub capacity_bytes: u64,
+    /// Bytes currently retained by cached entries.
+    pub current_bytes: u64,
+    /// Number of entries currently retained.
+    pub entries: usize,
 }
 
 impl std::fmt::Debug for TileCache {
@@ -128,7 +161,8 @@ struct CachedTile {
 }
 
 impl TileCache {
-    pub(crate) fn new(capacity_bytes: u64) -> Self {
+    /// Create a thread-safe decoded tile cache with a byte capacity.
+    pub fn new(capacity_bytes: u64) -> Self {
         Self {
             inner: Mutex::new(TileCacheState {
                 // The cache is byte-budgeted only. The backing LRU stays unbounded
@@ -185,9 +219,10 @@ impl TileCache {
         cached
     }
 
-    pub(crate) fn stats(&self) -> CacheStats {
+    /// Return an atomic snapshot of cache capacity and activity counters.
+    pub fn stats(&self) -> TileCacheStats {
         let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        CacheStats {
+        TileCacheStats {
             hits: state.hits,
             misses: state.misses,
             puts: state.puts,
@@ -264,6 +299,23 @@ mod tile_cache_tests {
             tile_col: col,
             tile_row: row,
         }
+    }
+
+    #[test]
+    fn private_entry_capacity_tracks_shared_cache_budget() {
+        let small = CacheConfig::deterministic()
+            .with_shared_tile_bytes(8 * 1024)
+            .private_entry_capacity(1024, 2);
+        let large = CacheConfig::deterministic()
+            .with_shared_tile_bytes(32 * 1024)
+            .private_entry_capacity(1024, 2);
+        let sub_entry_budget = CacheConfig::deterministic()
+            .with_shared_tile_bytes(1)
+            .private_entry_capacity(1024, 4);
+
+        assert_eq!(small.get(), 4);
+        assert_eq!(large.get(), 16);
+        assert_eq!(sub_entry_budget.get(), 1);
     }
 
     #[test]

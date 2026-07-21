@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added checked CUDA-to-CPU tile download through `CudaDeviceTile::download_cpu`,
+  keeping device surface internals behind the WSI-RS boundary.
+- Added byte-sized shared cache ownership for the OpenSlide shim; attached
+  slides retain the cache after the C handle is released and may share entries.
+
+### Changed
+
+- Derived DICOM, MIRAX, VMS, and Zeiss private decoded-data cache capacities
+  from `CacheConfig`, and moved built-in backend composition out of core.
+- Matched OpenSlide's floor-like best-level selection at exact boundaries and
+  for non-finite requests.
+
+### Fixed
+
+- Rejected oversized or overflowing fragmented DICOM compressed frames before
+  allocation, and made truncated MIRAX quickhash ranges fail instead of hashing
+  a prefix.
+- Replaced predictable Zeiss attachment paths with exclusively created,
+  automatically removed temporary files.
+- Preserved recoverable shim installer backups and both typed failures through
+  the additive `execute_install_detailed` API when a primary install failure is
+  followed by rollback failure; the existing `execute_install` string-error API
+  remains source compatible.
+
 ## [0.5.2] - 2026-07-18
 
 ### Added

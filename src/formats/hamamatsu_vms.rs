@@ -11,7 +11,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -24,11 +23,12 @@ use j2k_jpeg::{
 };
 use lru::LruCache;
 
+use crate::core::cache::CacheConfig;
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    read_cpu_tiles_with_backend, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
-    SlideReader,
+    read_cpu_tiles_with_backend, ConfiguredDatasetReader, DatasetReader, FormatProbe,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -41,6 +41,9 @@ use ini::{parse_vms_ini, GROUP_VMS, KEY_NUM_JPEG_COLS, KEY_NUM_JPEG_ROWS};
 use model::VmsSlide;
 use slide::VmsReader;
 
+// Parsed probe entries retain shard indexes and open file owners, not pixels.
+const VMS_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 4 * 1024 * 1024;
+
 pub(crate) struct HamamatsuVmsBackend {
     probe_cache: Mutex<LruCache<FileIdentity, Arc<VmsSlide>>>,
 }
@@ -48,13 +51,49 @@ pub(crate) struct HamamatsuVmsBackend {
 impl HamamatsuVmsBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(NonZeroUsize::new(16).unwrap())),
+            probe_cache: Mutex::new(LruCache::new(
+                CacheConfig::deterministic()
+                    .private_entry_capacity(VMS_PROBE_ENTRY_ESTIMATE_BYTES, 1),
+            )),
         }
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<VmsSlide>, WsiError> {
         let slide = Arc::new(VmsSlide::parse(path)?);
         Ok(slide)
+    }
+
+    fn parse_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Arc<VmsSlide>, WsiError> {
+        Ok(Arc::new(VmsSlide::parse_with_cache_config(
+            path,
+            cache_config,
+        )?))
+    }
+
+    fn open_cached_or_parse(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        let key = FileIdentity::from_path(path)?;
+        let cached = self
+            .probe_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop(&key);
+        let slide = if cache_config == CacheConfig::deterministic() {
+            match cached {
+                Some(slide) => slide,
+                None => self.parse_with_cache_config(path, cache_config)?,
+            }
+        } else {
+            self.parse_with_cache_config(path, cache_config)?
+        };
+        Ok(Box::new(VmsReader { slide }))
     }
 }
 
@@ -116,16 +155,16 @@ impl FormatProbe for HamamatsuVmsBackend {
 
 impl DatasetReader for HamamatsuVmsBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = match cached {
-            Some(slide) => slide,
-            None => self.parse(path)?,
-        };
-        Ok(Box::new(VmsReader { slide }))
+        self.open_cached_or_parse(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredDatasetReader for HamamatsuVmsBackend {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.open_cached_or_parse(path, cache_config)
     }
 }

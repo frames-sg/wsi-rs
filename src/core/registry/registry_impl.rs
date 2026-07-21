@@ -16,6 +16,16 @@ impl<T: DatasetReader> DatasetReader for Arc<T> {
     }
 }
 
+impl<T: ConfiguredDatasetReader> ConfiguredDatasetReader for Arc<T> {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        (**self).open_with_cache_config(path, cache_config)
+    }
+}
+
 // ── Format registry ────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -33,7 +43,39 @@ impl std::fmt::Debug for FormatRegistry {
 
 struct RegisteredBackend {
     probe: Box<dyn FormatProbe>,
-    reader: Box<dyn DatasetReader>,
+    reader: Box<dyn RegistryDatasetReader>,
+}
+
+trait RegistryDatasetReader: Send + Sync {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError>;
+}
+
+struct DefaultRegistryReader<T>(T);
+
+impl<T: DatasetReader> RegistryDatasetReader for DefaultRegistryReader<T> {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        _cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.0.open(path)
+    }
+}
+
+struct CacheConfiguredRegistryReader<T>(T);
+
+impl<T: ConfiguredDatasetReader> RegistryDatasetReader for CacheConfiguredRegistryReader<T> {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.0.open_with_cache_config(path, cache_config)
+    }
 }
 
 impl FormatRegistry {
@@ -48,42 +90,19 @@ impl FormatRegistry {
     ) {
         self.backends.push(RegisteredBackend {
             probe: Box::new(probe),
-            reader: Box::new(reader),
+            reader: Box::new(DefaultRegistryReader(reader)),
         });
     }
 
-    /// Create a registry with all built-in backends registered.
-    pub fn builtin() -> Self {
-        let mut reg = Self::new();
-        let svcache = Arc::new(SvcacheBackend);
-        reg.register(svcache.clone(), svcache);
-        reg.register_native_backends();
-        reg
-    }
-
-    pub(crate) fn builtin_native() -> Self {
-        let mut reg = Self::new();
-        reg.register_native_backends();
-        reg
-    }
-
-    fn register_native_backends(&mut self) {
-        let dicom = Arc::new(DicomBackend::new());
-        self.register(dicom.clone(), dicom);
-        let mirax = Arc::new(MiraxBackend::new());
-        self.register(mirax.clone(), mirax);
-        let vms = Arc::new(HamamatsuVmsBackend::new());
-        self.register(vms.clone(), vms);
-        let vsi = Arc::new(OlympusVsiBackend);
-        self.register(vsi.clone(), vsi);
-        let raw_jp2k = Arc::new(RawJp2kBackend);
-        self.register(raw_jp2k.clone(), raw_jp2k);
-        let zeiss_zvi = Arc::new(ZeissZviBackend);
-        self.register(zeiss_zvi.clone(), zeiss_zvi);
-        let zeiss = Arc::new(ZeissBackend);
-        self.register(zeiss.clone(), zeiss);
-        let tiff = Arc::new(TiffFamilyBackend::new());
-        self.register(tiff.clone(), tiff);
+    pub(crate) fn register_cache_configured(
+        &mut self,
+        probe: impl FormatProbe + 'static,
+        reader: impl ConfiguredDatasetReader + 'static,
+    ) {
+        self.backends.push(RegisteredBackend {
+            probe: Box::new(probe),
+            reader: Box::new(CacheConfiguredRegistryReader(reader)),
+        });
     }
 
     /// Probe all backends and return the best detected format without opening it.
@@ -97,8 +116,19 @@ impl FormatRegistry {
     /// Probe all backends, open with best match.
     /// Definite confidence beats Likely. First-registered wins ties.
     pub fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.open_with_cache_config(path, CacheConfig::deterministic())
+    }
+
+    /// Probe all backends and open the best match with the supplied cache policy.
+    pub(crate) fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
         match self.best_probe(path)? {
-            Some((_, i)) => self.backends[i].reader.open(path),
+            Some((_, i)) => self.backends[i]
+                .reader
+                .open_with_cache_config(path, cache_config),
             None => Err(WsiError::UnsupportedFormat(path.display().to_string())),
         }
     }

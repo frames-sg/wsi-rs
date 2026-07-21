@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::core::cache::{CacheConfig, CacheKey, TileCache};
 use crate::core::decode_runtime::{AdaptiveDecodeReader, DecodeExecutionOptions, DecodeRuntime};
@@ -7,15 +7,6 @@ use crate::core::decode_runtime::{AdaptiveDecodeReader, DecodeExecutionOptions, 
 use crate::core::decode_runtime::{DecodeRoute, DecodeRouteDecision};
 use crate::core::types::*;
 use crate::error::WsiError;
-use crate::formats::dicom::DicomBackend;
-use crate::formats::hamamatsu_vms::HamamatsuVmsBackend;
-use crate::formats::mirax::MiraxBackend;
-use crate::formats::olympus_vsi::OlympusVsiBackend;
-use crate::formats::raw_jp2k::RawJp2kBackend;
-use crate::formats::svcache::SvcacheBackend;
-use crate::formats::tiff_family::TiffFamilyBackend;
-use crate::formats::zeiss::ZeissBackend;
-use crate::formats::zeiss_zvi::ZeissZviBackend;
 
 /// Default maximum region size in pixels. Prevents OOM from unreasonably large
 /// region requests (256 megapixels = ~768 MB for RGB8).
@@ -34,7 +25,7 @@ pub(crate) use composition::{
 pub use open_options::SlideOpenOptions;
 pub use registry_impl::FormatRegistry;
 pub use slide::Slide;
-pub(crate) use traits::read_cpu_tiles_with_backend;
+pub(crate) use traits::{read_cpu_tiles_with_backend, ConfiguredDatasetReader};
 pub use traits::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReadContext, SlideReader,
 };

@@ -5,7 +5,7 @@ use super::*;
 /// Top-level handle. Owns the SlideReader + shared cache.
 pub struct Slide {
     source: Box<dyn SlideReader>,
-    cache: Arc<TileCache>,
+    cache: RwLock<Arc<TileCache>>,
     display_cache: Arc<TileCache>,
     max_region_pixels: u64,
     decode_runtime: Arc<DecodeRuntime>,
@@ -25,7 +25,7 @@ impl Slide {
         let decode_runtime = DecodeRuntime::default_arc();
         Self {
             source: Box::new(AdaptiveDecodeReader::new(source, decode_runtime.clone())),
-            cache,
+            cache: RwLock::new(cache),
             display_cache: Arc::new(TileCache::display_default()),
             max_region_pixels: DEFAULT_MAX_REGION_PIXELS,
             decode_runtime,
@@ -41,7 +41,10 @@ impl Slide {
         let source_hint = source.recommended_shared_cache_bytes();
         Self {
             source: Box::new(AdaptiveDecodeReader::new(source, decode_runtime.clone())),
-            cache: Arc::new(TileCache::shared_with_config(cache_config, source_hint)),
+            cache: RwLock::new(Arc::new(TileCache::shared_with_config(
+                cache_config,
+                source_hint,
+            ))),
             display_cache: Arc::new(TileCache::display_with_config(cache_config)),
             max_region_pixels,
             decode_runtime,
@@ -66,7 +69,9 @@ impl Slide {
             path.as_ref(),
             options.svcache_policy,
         )?;
-        let source = options.registry.open(&resolved_path)?;
+        let source = options
+            .registry
+            .open_with_cache_config(&resolved_path, options.cache_config)?;
         let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
         Ok(Self::from_source_with_config_and_runtime(
             source,
@@ -135,6 +140,26 @@ impl Slide {
         self.source.tile_codec_kind(req)
     }
 
+    /// Replace the decoded tile cache attached to this slide.
+    ///
+    /// The slide clones the supplied owner, so callers may release their
+    /// [`Arc`] immediately. The detached cache is returned to make replacement
+    /// lifetime and accounting explicit.
+    pub fn replace_shared_tile_cache(&self, cache: Arc<TileCache>) -> Arc<TileCache> {
+        let mut attached = self
+            .cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::replace(&mut *attached, cache)
+    }
+
+    fn shared_tile_cache(&self) -> Arc<TileCache> {
+        self.cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     pub fn cached_tile_present(&self, req: &TileRequest) -> bool {
         let key = CacheKey {
             dataset_id: self.dataset().id,
@@ -147,7 +172,7 @@ impl Slide {
             tile_col: req.col,
             tile_row: req.row,
         };
-        self.cache.get(&key).is_some()
+        self.shared_tile_cache().get(&key).is_some()
     }
 
     pub fn source(&self) -> &dyn SlideReader {
@@ -272,8 +297,9 @@ impl Slide {
     /// tiles return `WsiError::DisplayConversion`.
     pub fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
         check_region_pixel_limit(req.size_px.0, req.size_px.1, self.max_region_pixels)?;
+        let cache = self.shared_tile_cache();
         let mut ctx = SlideReadContext::new(
-            Some(self.cache.as_ref()),
+            Some(cache.as_ref()),
             TileOutputPreference::cpu(),
             self.max_region_pixels,
         );
@@ -282,7 +308,7 @@ impl Slide {
         }
         composite_region_from_source(
             self.source.as_ref(),
-            Some(self.cache.as_ref()),
+            Some(cache.as_ref()),
             req,
             self.max_region_pixels,
         )

@@ -4,6 +4,9 @@ use crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance;
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::io::Cursor;
 
+#[cfg(feature = "cuda")]
+use j2k_core::{ImageDecode as _, ImageDecodeDevice as _};
+
 fn load_fixture_rgb(ppm_bytes: &[u8]) -> image::RgbImage {
     match image::load(Cursor::new(ppm_bytes), ImageFormat::Pnm).unwrap() {
         DynamicImage::ImageRgb8(image) => image,
@@ -180,6 +183,106 @@ fn htj2k_strict_cuda_decodes_to_cuda_surface() {
         stats.decode_kernel_dispatches() > 0,
         "strict CUDA HTJ2K should include CUDA decode dispatches"
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn htj2k_cuda_download_cpu_rgb8_matches_cpu_decode() {
+    let codestream = rgb8_htj2k_fixture(32, 32);
+    let job = |backend| Jp2kDecodeJob {
+        data: Cow::Borrowed(codestream.as_slice()),
+        expected_width: 32,
+        expected_height: 32,
+        rgb_color_space: true,
+        backend,
+    };
+    let expected = decode_batch_jp2k(&[job(J2kBackendRequest::Cpu)])
+        .pop()
+        .expect("one CPU result")
+        .expect("CPU HTJ2K decode");
+    let sessions = crate::output::cuda::CudaBackendSessions::new();
+    let decoded =
+        decode_one_jp2k_pixels(&job(J2kBackendRequest::Cuda), true, None, Some(&sessions));
+    let decoded = match decoded {
+        Ok(decoded) => decoded,
+        Err(WsiError::Unsupported { reason })
+            if cuda_unavailable_reason(&reason)
+                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
+        {
+            eprintln!("skipping CUDA HTJ2K host-download parity test: {reason}");
+            return;
+        }
+        Err(err) => panic!("strict CUDA HTJ2K decode failed unexpectedly: {err}"),
+    };
+    let TilePixels::Device(DeviceTile::Cuda(tile)) = decoded else {
+        panic!("strict CUDA HTJ2K decode must return DeviceTile::Cuda");
+    };
+    let actual = tile.download_cpu().expect("download CUDA HTJ2K tile");
+
+    assert_eq!(
+        (actual.width, actual.height),
+        (expected.width, expected.height)
+    );
+    assert_eq!(actual.channels, expected.channels);
+    assert_eq!(actual.color_space, expected.color_space);
+    assert_eq!(actual.layout, expected.layout);
+    assert_eq!(actual.data.as_u8(), expected.data.as_u8());
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn htj2k_cuda_download_cpu_rgb16_matches_cpu_decode() {
+    let width = 17;
+    let height = 19;
+    let samples = (0..width * height * 3)
+        .map(|index| u16::try_from((index * 257 + index / 7) & 0xffff).expect("u16 sample"))
+        .collect::<Vec<_>>();
+    let input = samples
+        .iter()
+        .flat_map(|sample| sample.to_ne_bytes())
+        .collect::<Vec<_>>();
+    let options = j2k_native::EncodeOptions {
+        reversible: true,
+        num_decomposition_levels: 1,
+        ..j2k_native::EncodeOptions::default()
+    };
+    let codestream = j2k_native::encode_htj2k(&input, width, height, 3, 16, false, &options)
+        .expect("encode RGB16 HTJ2K fixture");
+
+    let mut device_decoder = j2k_cuda::J2kDecoder::new(&codestream).expect("CUDA decoder");
+    let surface = match device_decoder
+        .decode_to_device(j2k_core::PixelFormat::Rgb16, J2kBackendRequest::Cuda)
+    {
+        Ok(surface) => surface,
+        Err(j2k_cuda::Error::CudaUnavailable | j2k_cuda::Error::CudaRuntime { .. })
+            if std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
+        {
+            eprintln!("skipping CUDA RGB16 host-download parity test: CUDA unavailable");
+            return;
+        }
+        Err(err) => panic!("strict CUDA RGB16 decode failed unexpectedly: {err}"),
+    };
+    let tile = crate::output::cuda::CudaDeviceTile::from_j2k(surface)
+        .expect("validate CUDA surface")
+        .expect("strict CUDA decode must be resident");
+    let actual = tile.download_cpu().expect("download CUDA RGB16 tile");
+
+    let row_bytes = width as usize * j2k_core::PixelFormat::Rgb16.bytes_per_pixel();
+    let mut expected_bytes = vec![0; row_bytes * height as usize];
+    let mut cpu_decoder = j2k_cuda::J2kDecoder::new(&codestream).expect("CPU decoder");
+    cpu_decoder
+        .decode_into(&mut expected_bytes, row_bytes, j2k_core::PixelFormat::Rgb16)
+        .expect("CPU RGB16 decode");
+    let expected = expected_bytes
+        .chunks_exact(2)
+        .map(|sample| u16::from_ne_bytes([sample[0], sample[1]]))
+        .collect::<Vec<_>>();
+
+    assert_eq!((actual.width, actual.height), (width, height));
+    assert_eq!(actual.channels, 3);
+    assert_eq!(actual.color_space, ColorSpace::Rgb);
+    assert_eq!(actual.layout, CpuTileLayout::Interleaved);
+    assert_eq!(actual.data.as_u16(), Some(expected.as_slice()));
 }
 
 #[cfg(feature = "cuda")]

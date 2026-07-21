@@ -10,6 +10,13 @@ const MAX_MIRAX_DATA_FILES: i32 = 4_096;
 
 impl MiraxSlide {
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, CacheConfig::deterministic())
+    }
+
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
         let slide_dir = slide_dir_from_entry(path)?;
         let slidedat_path = slide_dir.join(SLIDEDAT_INI);
         let slidedat = parse_mirax_ini(&slidedat_path)?;
@@ -403,6 +410,29 @@ impl MiraxSlide {
             });
         }
 
+        let decoded_image_bytes = levels
+            .iter()
+            .flat_map(|level| level.tiles.iter())
+            .map(|tile| {
+                u64::from(tile.image.expected_width)
+                    .saturating_mul(u64::from(tile.image.expected_height))
+                    .saturating_mul(3)
+            })
+            .max()
+            .unwrap_or(1);
+        let associated_image_bytes = associated_metadata
+            .values()
+            .map(|image| {
+                u64::from(image.dimensions.0)
+                    .saturating_mul(u64::from(image.dimensions.1))
+                    .saturating_mul(u64::from(image.channels))
+            })
+            .max()
+            .unwrap_or(1);
+        let decoded_cache_entries = cache_config.private_entry_capacity(decoded_image_bytes, 4);
+        let associated_cache_entries =
+            cache_config.private_entry_capacity(associated_image_bytes, 4);
+
         let dataset = Dataset {
             id: dataset_id,
             scenes: vec![Scene {
@@ -426,8 +456,8 @@ impl MiraxSlide {
             dataset,
             levels,
             associated,
-            decoded_images: Mutex::new(LruCache::new(NonZeroUsize::new(1).unwrap())),
-            associated_cache: Mutex::new(LruCache::new(NonZeroUsize::new(1).unwrap())),
+            decoded_images: Mutex::new(LruCache::new(decoded_cache_entries)),
+            associated_cache: Mutex::new(LruCache::new(associated_cache_entries)),
             open_files: Mutex::new(quickhash_files),
         })
     }
@@ -437,12 +467,14 @@ impl MiraxSlide {
         image: &Arc<MiraxImage>,
         _backend: BackendRequest,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        let mut cache = self
+        if let Some(buffer) = self
             .decoded_images
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(buffer) = cache.get(&image.id) {
-            return Ok(buffer.clone());
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&image.id)
+            .cloned()
+        {
+            return Ok(buffer);
         }
         let decoded = Arc::new(self.decode_record_to_sample_buffer(
             &image.record,
@@ -450,7 +482,10 @@ impl MiraxSlide {
             Some((image.expected_width, image.expected_height)),
             BackendRequest::Auto,
         )?);
-        cache.put(image.id, decoded.clone());
+        self.decoded_images
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(image.id, decoded.clone());
         Ok(decoded)
     }
 
@@ -459,16 +494,18 @@ impl MiraxSlide {
             .associated
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        let mut cache = self
+        if let Some(buffer) = self
             .associated_cache
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(buffer) = cache.get(name) {
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .cloned()
+        {
             #[cfg(test)]
             {
                 MIRAX_ASSOCIATED_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             }
-            return Ok((**buffer).clone());
+            return Ok((*buffer).clone());
         }
         let decoded = Arc::new(self.decode_record_to_sample_buffer(
             record,
@@ -476,7 +513,10 @@ impl MiraxSlide {
             None,
             BackendRequest::Auto,
         )?);
-        cache.put(name.to_string(), decoded.clone());
+        self.associated_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(name.to_string(), decoded.clone());
         Ok((*decoded).clone())
     }
 
@@ -527,27 +567,36 @@ impl MiraxSlide {
     }
 
     fn read_record_bytes(&self, record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
-        self.with_open_file(&record.path, |file| {
-            read_record_bytes_from_file(file, &record.path, record.offset, record.len)
-        })
+        let mut file = self.open_file_handle(&record.path)?;
+        read_record_bytes_from_file(&mut file, &record.path, record.offset, record.len)
     }
 
-    fn with_open_file<T>(
-        &self,
-        path: &Path,
-        f: impl FnOnce(&mut File) -> Result<T, WsiError>,
-    ) -> Result<T, WsiError> {
-        let mut files = self.open_files.lock().unwrap_or_else(|e| e.into_inner());
-        if !files.contains_key(path) {
-            let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+    fn open_file_handle(&self, path: &Path) -> Result<File, WsiError> {
+        if let Some(file) = self
+            .open_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+        {
+            return file.try_clone().map_err(|source| WsiError::IoWithPath {
                 source: Arc::new(source),
                 path: path.to_path_buf(),
-            })?;
-            files.insert(path.to_path_buf(), file);
+            });
         }
-        let file = files
-            .get_mut(path)
-            .expect("MIRAX cached file must exist after insertion");
-        f(file)
+
+        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+        let reader = file.try_clone().map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+        self.open_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(path.to_path_buf())
+            .or_insert(file);
+        Ok(reader)
     }
 }

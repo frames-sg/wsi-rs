@@ -27,6 +27,10 @@ pub wsi_rs::error::WsiError::PlaneOutOfRange
 pub wsi_rs::error::WsiError::PlaneOutOfRange::axis: alloc::string::String
 pub wsi_rs::error::WsiError::PlaneOutOfRange::max: u32
 pub wsi_rs::error::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::error::WsiError::ResourceLimit
+pub wsi_rs::error::WsiError::ResourceLimit::limit: u64
+pub wsi_rs::error::WsiError::ResourceLimit::requested: u64
+pub wsi_rs::error::WsiError::ResourceLimit::resource: &'static str
 pub wsi_rs::error::WsiError::SceneOutOfRange
 pub wsi_rs::error::WsiError::SceneOutOfRange::count: usize
 pub wsi_rs::error::WsiError::SceneOutOfRange::index: usize
@@ -164,6 +168,10 @@ pub wsi_rs::prelude::WsiError::PlaneOutOfRange
 pub wsi_rs::prelude::WsiError::PlaneOutOfRange::axis: alloc::string::String
 pub wsi_rs::prelude::WsiError::PlaneOutOfRange::max: u32
 pub wsi_rs::prelude::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::prelude::WsiError::ResourceLimit
+pub wsi_rs::prelude::WsiError::ResourceLimit::limit: u64
+pub wsi_rs::prelude::WsiError::ResourceLimit::requested: u64
+pub wsi_rs::prelude::WsiError::ResourceLimit::resource: &'static str
 pub wsi_rs::prelude::WsiError::SceneOutOfRange
 pub wsi_rs::prelude::WsiError::SceneOutOfRange::count: usize
 pub wsi_rs::prelude::WsiError::SceneOutOfRange::index: usize
@@ -324,6 +332,7 @@ pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputP
 pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles_controlled(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::TileCache>) -> alloc::sync::Arc<wsi_rs::TileCache>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 impl core::fmt::Debug for wsi_rs::Slide
@@ -582,6 +591,10 @@ pub wsi_rs::WsiError::PlaneOutOfRange
 pub wsi_rs::WsiError::PlaneOutOfRange::axis: alloc::string::String
 pub wsi_rs::WsiError::PlaneOutOfRange::max: u32
 pub wsi_rs::WsiError::PlaneOutOfRange::value: u32
+pub wsi_rs::WsiError::ResourceLimit
+pub wsi_rs::WsiError::ResourceLimit::limit: u64
+pub wsi_rs::WsiError::ResourceLimit::requested: u64
+pub wsi_rs::WsiError::ResourceLimit::resource: &'static str
 pub wsi_rs::WsiError::SceneOutOfRange
 pub wsi_rs::WsiError::SceneOutOfRange::count: usize
 pub wsi_rs::WsiError::SceneOutOfRange::index: usize
@@ -711,6 +724,7 @@ pub fn wsi_rs::DisplayWindow::new(f64, f64) -> core::result::Result<Self, wsi_rs
 pub struct wsi_rs::FormatRegistry
 impl wsi_rs::FormatRegistry
 pub fn wsi_rs::FormatRegistry::builtin() -> Self
+impl wsi_rs::FormatRegistry
 pub fn wsi_rs::FormatRegistry::detect_vendor(&self, &std::path::Path) -> core::result::Result<core::option::Option<wsi_rs::ProbeResult>, wsi_rs::error::WsiError>
 pub fn wsi_rs::FormatRegistry::new() -> Self
 pub fn wsi_rs::FormatRegistry::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
@@ -870,6 +884,7 @@ pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputP
 pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles_controlled(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::TileCache>) -> alloc::sync::Arc<wsi_rs::TileCache>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 impl core::fmt::Debug for wsi_rs::Slide
@@ -923,6 +938,23 @@ pub wsi_rs::SvcacheTileSelection::series: wsi_rs::SeriesId
 impl wsi_rs::SvcacheTileSelection
 pub fn wsi_rs::SvcacheTileSelection::new(impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, i64, i64) -> Self
 pub fn wsi_rs::SvcacheTileSelection::with_plane(self, impl core::convert::Into<wsi_rs::PlaneIdx>) -> Self
+pub struct wsi_rs::TileCache
+impl wsi_rs::TileCache
+pub fn wsi_rs::TileCache::new(u64) -> Self
+pub fn wsi_rs::TileCache::stats(&self) -> wsi_rs::TileCacheStats
+impl core::default::Default for wsi_rs::TileCache
+pub fn wsi_rs::TileCache::default() -> Self
+impl core::fmt::Debug for wsi_rs::TileCache
+pub fn wsi_rs::TileCache::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct wsi_rs::TileCacheStats
+pub wsi_rs::TileCacheStats::capacity_bytes: u64
+pub wsi_rs::TileCacheStats::current_bytes: u64
+pub wsi_rs::TileCacheStats::entries: usize
+pub wsi_rs::TileCacheStats::evictions: u64
+pub wsi_rs::TileCacheStats::hits: u64
+pub wsi_rs::TileCacheStats::misses: u64
+pub wsi_rs::TileCacheStats::puts: u64
+pub wsi_rs::TileCacheStats::rejected_oversize: u64
 #[non_exhaustive] pub struct wsi_rs::TileEntry
 pub wsi_rs::TileEntry::dimensions: (u32, u32)
 pub wsi_rs::TileEntry::offset: (f64, f64)

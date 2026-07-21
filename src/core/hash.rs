@@ -5,6 +5,7 @@ use std::io::ErrorKind;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Quickhash1 {
     hasher: Sha256,
     enabled: bool,

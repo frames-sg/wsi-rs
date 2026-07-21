@@ -93,3 +93,41 @@ fn vms_jpeg_decodes_restart_segment_tile() {
         1
     );
 }
+
+#[test]
+fn vms_private_tile_cache_capacity_tracks_cache_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tile.jpg");
+    write_restart_jpeg(&path, 128, 16);
+    let small = VmsJpeg::parse_with_cache_config(
+        &path,
+        Vec::new(),
+        CacheConfig::deterministic().with_shared_tile_bytes(12 * 1024),
+    )
+    .unwrap();
+    let large = VmsJpeg::parse_with_cache_config(
+        &path,
+        Vec::new(),
+        CacheConfig::deterministic().with_shared_tile_bytes(48 * 1024),
+    )
+    .unwrap();
+
+    assert_eq!(
+        small
+            .decoded_tile_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cap()
+            .get(),
+        2
+    );
+    assert_eq!(
+        large
+            .decoded_tile_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cap()
+            .get(),
+        8
+    );
+}

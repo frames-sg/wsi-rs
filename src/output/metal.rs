@@ -4,7 +4,7 @@ mod session;
 mod tile;
 mod ycbcr;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parity-metal"))]
 pub(crate) use interop::resident_bytes;
 pub use session::MetalBackendSessions;
 pub use tile::{MetalDeviceStorage, MetalDeviceTile};

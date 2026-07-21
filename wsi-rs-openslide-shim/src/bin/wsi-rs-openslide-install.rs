@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use wsi_rs_openslide_shim::install::{execute_install, execute_restore, PlatformLibraryNames};
+use wsi_rs_openslide_shim::install::{
+    execute_install_detailed, execute_restore, PlatformLibraryNames,
+};
 
 fn main() {
     if let Err(err) = run() {
@@ -41,7 +43,8 @@ fn run() -> Result<(), String> {
     match command.as_str() {
         "install" => {
             let shim = shim.ok_or_else(|| usage("install requires --shim <path>"))?;
-            let manifest = execute_install(&prefix, &shim, platform, stamp)?;
+            let manifest = execute_install_detailed(&prefix, &shim, platform, stamp)
+                .map_err(|error| error.to_string())?;
             println!(
                 "installed wsi_rs OpenSlide shim; restore manifest: {}",
                 manifest.display()

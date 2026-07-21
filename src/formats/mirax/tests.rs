@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Write;
 use std::sync::atomic::Ordering;
 
 fn mirax_sentinel_path() -> PathBuf {
@@ -30,5 +31,31 @@ fn associated_thumbnail_is_cached_after_first_read() {
         MIRAX_ASSOCIATED_CACHE_HITS.load(Ordering::Relaxed),
         1,
         "second thumbnail read should hit the cache"
+    );
+}
+
+#[test]
+fn truncated_quickhash_range_returns_contextual_unexpected_eof_without_prefix_hash() {
+    let mut source = tempfile::NamedTempFile::new().expect("temporary MIRAX data file");
+    source.write_all(b"abcd").expect("write MIRAX data");
+    source.flush().expect("flush MIRAX data");
+    let mut files = HashMap::new();
+    let mut quickhash = Quickhash1::new();
+
+    let error =
+        helpers::quickhash_file_part_cached(&mut quickhash, &mut files, source.path(), 2, 4)
+            .expect_err("declared MIRAX range past EOF must not produce a prefix hash");
+
+    let WsiError::IoWithPath { source: io, path } = error else {
+        panic!("expected contextual I/O error, got {error:?}");
+    };
+    assert_eq!(io.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert_eq!(path, source.path());
+    assert!(io.to_string().contains("offset 2"), "{io}");
+    assert!(io.to_string().contains("4 bytes"), "{io}");
+    assert_eq!(
+        quickhash.finish(),
+        Quickhash1::new().finish(),
+        "failed range must not commit a prefix into the dataset hash"
     );
 }

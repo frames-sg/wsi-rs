@@ -97,6 +97,40 @@ fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn baseline_jpeg_cuda_download_cpu_matches_cpu_decode() {
+    let job = baseline_cuda_jpeg_job();
+    let expected = decode_one_jpeg_job(&job).expect("CPU JPEG decode");
+    let sessions = crate::output::cuda::CudaBackendSessions::new();
+    let decoded =
+        decode_one_jpeg_pixels(&job, J2kBackendRequest::Cuda, true, None, Some(&sessions));
+    let decoded = match decoded {
+        Ok(decoded) => decoded,
+        Err(WsiError::Unsupported { reason })
+            if cuda_unavailable_reason(&reason)
+                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
+        {
+            eprintln!("skipping CUDA JPEG host-download parity test: {reason}");
+            return;
+        }
+        Err(err) => panic!("strict CUDA JPEG decode failed unexpectedly: {err}"),
+    };
+    let TilePixels::Device(DeviceTile::Cuda(tile)) = decoded else {
+        panic!("strict CUDA JPEG decode must return DeviceTile::Cuda");
+    };
+    let actual = tile.download_cpu().expect("download CUDA JPEG tile");
+
+    assert_eq!(
+        (actual.width, actual.height),
+        (expected.width, expected.height)
+    );
+    assert_eq!(actual.channels, expected.channels);
+    assert_eq!(actual.color_space, expected.color_space);
+    assert_eq!(actual.layout, expected.layout);
+    assert_eq!(actual.data.as_u8(), expected.data.as_u8());
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn require_cuda_jpeg_without_session_returns_unsupported() {
     let err = decode_one_jpeg_pixels(
         &baseline_cuda_jpeg_job(),

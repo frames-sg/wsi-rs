@@ -34,6 +34,16 @@ pub enum WsiError {
         path: PathBuf,
     },
 
+    /// An input or requested output exceeded a checked byte budget.
+    #[error(
+        "resource limit exceeded for {resource}: requested {requested} bytes, limit {limit} bytes"
+    )]
+    ResourceLimit {
+        resource: &'static str,
+        requested: u64,
+        limit: u64,
+    },
+
     // --- New variants for multi-dimensional engine ---
     #[error("scene index {index} out of range (dataset has {count} scenes)")]
     SceneOutOfRange { index: usize, count: usize },
@@ -151,6 +161,24 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("/tmp/slide.svs"), "got: {msg}");
         assert!(msg.contains("file not found"), "got: {msg}");
+    }
+
+    #[test]
+    fn resource_limit_preserves_typed_byte_counts() {
+        let err = WsiError::ResourceLimit {
+            resource: "compressed DICOM frame",
+            requested: 513,
+            limit: 512,
+        };
+        assert!(err.to_string().contains("compressed DICOM frame"));
+        assert!(matches!(
+            err,
+            WsiError::ResourceLimit {
+                requested: 513,
+                limit: 512,
+                ..
+            }
+        ));
     }
 
     #[test]

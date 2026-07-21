@@ -29,12 +29,64 @@ impl FormatProbe for FalseProbe {
     }
 }
 
+struct TrueProbe;
+
+impl FormatProbe for TrueProbe {
+    fn probe(&self, _path: &Path) -> Result<ProbeResult, WsiError> {
+        Ok(ProbeResult::detected("test", ProbeConfidence::Definite))
+    }
+}
+
+struct CacheConfigRecordingReader {
+    observed_shared_bytes: Arc<AtomicUsize>,
+}
+
+impl DatasetReader for CacheConfigRecordingReader {
+    fn open(&self, _path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
+        Ok(Box::new(MockSource::new()))
+    }
+}
+
+impl ConfiguredDatasetReader for CacheConfigRecordingReader {
+    fn open_with_cache_config(
+        &self,
+        _path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.observed_shared_bytes.store(
+            cache_config.shared_tile_bytes.unwrap_or_default() as usize,
+            Ordering::SeqCst,
+        );
+        Ok(Box::new(MockSource::new()))
+    }
+}
+
 struct MockReader;
 
 impl DatasetReader for MockReader {
     fn open(&self, _path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         Ok(Box::new(MockSource::new()))
     }
+}
+
+#[test]
+fn slide_open_options_passes_cache_config_to_the_selected_reader() {
+    let observed_shared_bytes = Arc::new(AtomicUsize::new(0));
+    let mut registry = FormatRegistry::new();
+    registry.register_cache_configured(
+        TrueProbe,
+        CacheConfigRecordingReader {
+            observed_shared_bytes: observed_shared_bytes.clone(),
+        },
+    );
+    let config = CacheConfig::deterministic().with_shared_tile_bytes(123_456);
+
+    let options = SlideOpenOptions::deterministic()
+        .with_registry(registry)
+        .with_cache_config(config);
+    Slide::open_with_options("ignored.test", options).expect("open configured test reader");
+
+    assert_eq!(observed_shared_bytes.load(Ordering::SeqCst), 123_456);
 }
 
 // Mock SlideReader for testing -- returns solid-color tiles based on (col, row).
@@ -567,6 +619,50 @@ fn slide_exposes_dataset() {
         handle.dataset().scenes[0].series[0].levels[0].dimensions,
         (512, 512)
     );
+}
+
+#[test]
+fn shared_tile_cache_attachment_survives_owner_drop_and_replacement() {
+    let first_reads = Arc::new(AtomicUsize::new(0));
+    let second_reads = Arc::new(AtomicUsize::new(0));
+    let first = Slide::from_source(
+        Box::new(CountingSource::new(
+            DatasetId::new(501),
+            first_reads.clone(),
+        )),
+        Arc::new(TileCache::new(1024)),
+    );
+    let second = Slide::from_source(
+        Box::new(CountingSource::new(
+            DatasetId::new(501),
+            second_reads.clone(),
+        )),
+        Arc::new(TileCache::new(1024)),
+    );
+    let shared = Arc::new(TileCache::new(256 * 256 * 3));
+    first.replace_shared_tile_cache(shared.clone());
+    second.replace_shared_tile_cache(shared.clone());
+    let req = region_request(0, 0, 0, PlaneSelection::default(), 0, 0, 256, 256);
+
+    first.read_region(&req).expect("cold shared-cache read");
+    assert_eq!(first_reads.load(Ordering::SeqCst), 1);
+    second.read_region(&req).expect("warm cross-slide read");
+    assert_eq!(second_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(shared.stats().hits, 1);
+    drop(shared);
+    second
+        .read_region(&req)
+        .expect("attached cache outlives released external owner");
+    assert_eq!(second_reads.load(Ordering::SeqCst), 0);
+
+    let replacement = Arc::new(TileCache::new(256 * 256 * 3));
+    let detached = second.replace_shared_tile_cache(replacement.clone());
+    assert_eq!(detached.stats().hits, 2);
+    second
+        .read_region(&req)
+        .expect("replacement cache cold read");
+    assert_eq!(second_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(replacement.stats().misses, 1);
 }
 
 #[test]

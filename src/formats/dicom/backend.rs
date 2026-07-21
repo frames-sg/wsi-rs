@@ -1,5 +1,9 @@
 use super::*;
 
+// Probe entries retain parsed frame metadata and sparse maps but no decoded
+// pixels. This conservative estimate keeps the count tied to CacheConfig.
+const DICOM_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 16 * 1024 * 1024;
+
 pub(super) fn is_encapsulated_transfer_syntax(uid: &str) -> bool {
     uid == JPEG_TRANSFER_SYNTAX
         || uid == RLE_TRANSFER_SYNTAX
@@ -71,12 +75,48 @@ pub(crate) struct DicomBackend {
 impl DicomBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(NonZeroUsize::new(4).unwrap())),
+            probe_cache: Mutex::new(LruCache::new(
+                CacheConfig::deterministic()
+                    .private_entry_capacity(DICOM_PROBE_ENTRY_ESTIMATE_BYTES, 1),
+            )),
         }
     }
 
     pub(super) fn parse(&self, path: &Path) -> Result<Arc<DicomSlide>, WsiError> {
         Ok(Arc::new(DicomSlide::parse(path)?))
+    }
+
+    fn parse_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Arc<DicomSlide>, WsiError> {
+        Ok(Arc::new(DicomSlide::parse_with_cache_config(
+            path,
+            cache_config,
+        )?))
+    }
+
+    fn open_cached_or_parse(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        let key = FileIdentity::from_path(path)?;
+        let cached = self
+            .probe_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop(&key);
+        let slide = if cache_config == CacheConfig::deterministic() {
+            match cached {
+                Some(slide) => slide,
+                None => self.parse_with_cache_config(path, cache_config)?,
+            }
+        } else {
+            self.parse_with_cache_config(path, cache_config)?
+        };
+        Ok(Box::new(DicomReader { slide }))
     }
 }
 
@@ -152,16 +192,16 @@ impl FormatProbe for DicomBackend {
 
 impl DatasetReader for DicomBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = match cached {
-            Some(slide) => slide,
-            None => self.parse(path)?,
-        };
-        Ok(Box::new(DicomReader { slide }))
+        self.open_cached_or_parse(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredDatasetReader for DicomBackend {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.open_cached_or_parse(path, cache_config)
     }
 }

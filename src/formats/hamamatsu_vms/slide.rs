@@ -3,7 +3,6 @@ use super::levels::{base_level_dimensions, expanded_levels, total_tiles_across, 
 use super::model::{dataset_id_from_quickhash, invalid_slide, VmsJpeg, VmsLevel, VmsSlide};
 use super::*;
 
-const VMS_ASSOCIATED_CACHE_ENTRIES: usize = 4;
 const MAX_VMS_JPEG_SHARDS: u64 = 65_536;
 
 pub(super) struct VmsReader {
@@ -159,6 +158,13 @@ impl VmsReader {
 
 impl VmsSlide {
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, CacheConfig::deterministic())
+    }
+
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
         let ini = parse_vms_ini(path)?;
         let group = ini
             .groups
@@ -238,9 +244,17 @@ impl VmsSlide {
         let mut base_images = Vec::with_capacity(image_paths.len());
         for (idx, image_path) in image_paths.iter().enumerate() {
             let row_starts = opt_offsets.get(idx).cloned().unwrap_or_default();
-            base_images.push(Arc::new(VmsJpeg::parse(image_path, row_starts)?));
+            base_images.push(Arc::new(VmsJpeg::parse_with_cache_config(
+                image_path,
+                row_starts,
+                cache_config,
+            )?));
         }
-        let map_image = Arc::new(VmsJpeg::parse(&map_path, Vec::new())?);
+        let map_image = Arc::new(VmsJpeg::parse_with_cache_config(
+            &map_path,
+            Vec::new(),
+            cache_config,
+        )?);
 
         let mut properties = Properties::new();
         properties.insert("openslide.vendor", "hamamatsu");
@@ -330,6 +344,18 @@ impl VmsSlide {
             associated_paths.insert("macro".into(), macro_path);
         }
 
+        let associated_entry_bytes = associated_images
+            .values()
+            .map(|image| {
+                u64::from(image.dimensions.0)
+                    .saturating_mul(u64::from(image.dimensions.1))
+                    .saturating_mul(u64::from(image.channels))
+            })
+            .max()
+            .unwrap_or(1);
+        let associated_cache_entries =
+            cache_config.private_entry_capacity(associated_entry_bytes, 4);
+
         let dataset = Dataset {
             id: dataset_id,
             scenes: vec![Scene {
@@ -353,9 +379,7 @@ impl VmsSlide {
             dataset,
             levels,
             associated_paths,
-            associated_cache: Mutex::new(LruCache::new(
-                NonZeroUsize::new(VMS_ASSOCIATED_CACHE_ENTRIES).unwrap(),
-            )),
+            associated_cache: Mutex::new(LruCache::new(associated_cache_entries)),
         })
     }
 }

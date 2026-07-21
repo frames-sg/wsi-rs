@@ -3,10 +3,17 @@ use super::*;
 
 const JPEG_HEADER_MAX_BYTES: usize = 1 << 20;
 const JPEG_SCAN_CHUNK_BYTES: usize = 64 << 10;
-const VMS_DECODED_TILE_CACHE_ENTRIES: usize = 64;
-
 impl VmsJpeg {
+    #[cfg(test)]
     pub(super) fn parse(path: &Path, row_starts: Vec<Option<u64>>) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, row_starts, CacheConfig::deterministic())
+    }
+
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        row_starts: Vec<Option<u64>>,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
         let header = read_vms_jpeg_header(path).map_err(|err| {
             invalid_slide(
                 path,
@@ -49,7 +56,12 @@ impl VmsJpeg {
             mcu_starts: Mutex::new(mcu_starts),
             unreliable_mcu_starts,
             decoded_tile_cache: Mutex::new(LruCache::new(
-                NonZeroUsize::new(VMS_DECODED_TILE_CACHE_ENTRIES).unwrap(),
+                cache_config.private_entry_capacity(
+                    u64::from(geometry.tile_width)
+                        .saturating_mul(u64::from(geometry.tile_height))
+                        .saturating_mul(3),
+                    4,
+                ),
             )),
             comment: header.comment,
         })

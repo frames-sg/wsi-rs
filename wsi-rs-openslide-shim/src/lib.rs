@@ -10,9 +10,10 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::Arc;
 
 use handle::{empty_names, OpenSlideHandle};
-use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId};
+use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, TileCache};
 
 const VERSION: &str = concat!(
     "OpenSlide-wsi-rs 4.0.0+wsi-rs-",
@@ -31,7 +32,7 @@ pub struct openslide_cache_t {
 }
 
 struct ShimCache {
-    _capacity: usize,
+    owner: Arc<TileCache>,
 }
 
 type FfiResult<T> = Result<T, FfiPanic>;
@@ -67,6 +68,15 @@ unsafe fn cache_from_raw(cache: *mut openslide_cache_t) -> Option<Box<ShimCache>
     // SAFETY: `openslide_cache_release` is the single owner that reconstructs
     // the Box from the raw cache pointer returned by `openslide_cache_create`.
     Some(unsafe { Box::from_raw(cache.cast::<ShimCache>()) })
+}
+
+unsafe fn cache_ref<'a>(cache: *mut openslide_cache_t) -> Option<&'a ShimCache> {
+    if cache.is_null() {
+        return None;
+    }
+    // SAFETY: The caller guarantees this is a live cache handle returned by
+    // `openslide_cache_create`; null was checked above.
+    Some(unsafe { &*cache.cast::<ShimCache>() })
 }
 
 unsafe fn path_from_c(filename: *const c_char) -> Option<PathBuf> {
@@ -115,6 +125,19 @@ fn first_series(handle: &OpenSlideHandle) -> Option<&wsi_rs::Series> {
         .scenes
         .first()
         .and_then(|scene| scene.series.first())
+}
+
+fn best_level_for_downsample(levels: &[f64], downsample: f64) -> Option<usize> {
+    let first = *levels.first()?;
+    if downsample < first {
+        return Some(0);
+    }
+    for (index, level_downsample) in levels.iter().copied().enumerate().skip(1) {
+        if downsample < level_downsample {
+            return Some(index - 1);
+        }
+    }
+    Some(levels.len() - 1)
 }
 
 #[no_mangle]
@@ -306,7 +329,7 @@ pub unsafe extern "C" fn openslide_get_level_downsample(
 }
 
 #[no_mangle]
-/// Select the closest level for a requested downsample.
+/// Select the highest-resolution level whose downsample does not exceed the request.
 ///
 /// # Safety
 /// `osr` must be null or a live handle returned by this library.
@@ -323,19 +346,14 @@ pub unsafe extern "C" fn openslide_get_best_level_for_downsample(
         let Some(series) = first_series(handle) else {
             return -1;
         };
-        if series.levels.is_empty() || !downsample.is_finite() {
-            return -1;
-        }
-        let mut best = 0usize;
-        let mut best_delta = f64::INFINITY;
-        for (idx, level) in series.levels.iter().enumerate() {
-            let delta = (level.downsample - downsample).abs();
-            if delta < best_delta {
-                best = idx;
-                best_delta = delta;
-            }
-        }
-        i32::try_from(best).unwrap_or(-1)
+        let downsample_levels = series
+            .levels
+            .iter()
+            .map(|level| level.downsample)
+            .collect::<Vec<_>>();
+        best_level_for_downsample(&downsample_levels, downsample)
+            .and_then(|level| i32::try_from(level).ok())
+            .unwrap_or(-1)
     })
 }
 
@@ -773,7 +791,7 @@ pub unsafe extern "C" fn openslide_read_associated_image_icc_profile(
 pub unsafe extern "C" fn openslide_cache_create(capacity: usize) -> *mut openslide_cache_t {
     guard(ptr::null_mut(), || {
         Box::into_raw(Box::new(ShimCache {
-            _capacity: capacity,
+            owner: Arc::new(TileCache::new(u64::try_from(capacity).unwrap_or(u64::MAX))),
         }))
         .cast::<openslide_cache_t>()
     })
@@ -784,17 +802,24 @@ pub unsafe extern "C" fn openslide_cache_create(capacity: usize) -> *mut opensli
 ///
 /// # Safety
 /// `osr` and `_cache` must be null or live pointers returned by this library.
-pub unsafe extern "C" fn openslide_set_cache(
-    osr: *mut openslide_t,
-    _cache: *mut openslide_cache_t,
-) {
+pub unsafe extern "C" fn openslide_set_cache(osr: *mut openslide_t, cache: *mut openslide_cache_t) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
         // borrowing the opaque handle.
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return;
         };
-        let _ = handle.has_error();
+        if handle.has_error() {
+            return;
+        }
+        // OpenSlide's cache parameter is required. Treat a contract-violating
+        // NULL as a safe no-op instead of detaching the currently live cache.
+        // SAFETY: A non-null cache must be a live handle created by
+        // `openslide_cache_create` under the C ABI contract.
+        let Some(cache) = (unsafe { cache_ref(cache) }) else {
+            return;
+        };
+        handle.replace_shared_cache(Arc::clone(&cache.owner));
     }));
 }
 
@@ -825,6 +850,89 @@ mod arithmetic_tests {
 
         if usize::BITS == 32 {
             assert_eq!(checked_u32_pixel_len(u32::MAX, 2), None);
+        }
+    }
+
+    #[test]
+    fn best_level_uses_openslide_floor_boundaries_and_special_values() {
+        let levels = [1.0, 4.0];
+        for (request, expected) in [
+            (f64::NEG_INFINITY, 0),
+            (0.0, 0),
+            (1.0, 0),
+            (3.0, 0),
+            (4.0, 1),
+            (f64::INFINITY, 1),
+            (f64::NAN, 1),
+        ] {
+            assert_eq!(
+                best_level_for_downsample(&levels, request),
+                Some(expected),
+                "request {request:?}"
+            );
+        }
+        assert_eq!(best_level_for_downsample(&[], 1.0), None);
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::Arc;
+
+    fn fixture_path() -> CString {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("jp2k")
+            .join("rgb_nomct.j2k");
+        CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
+    }
+
+    #[test]
+    fn ffi_cache_is_shared_released_safely_and_replaced() {
+        let path = fixture_path();
+        // SAFETY: Every pointer is created by this shim, remains live for each
+        // call, and is released or closed exactly once.
+        unsafe {
+            let first = openslide_open(path.as_ptr());
+            let second = openslide_open(path.as_ptr());
+            assert!(!first.is_null() && !second.is_null());
+            let cache = openslide_cache_create(1024);
+            let owner = Arc::clone(&cache_ref(cache).expect("live cache handle").owner);
+            openslide_set_cache(first, cache);
+            openslide_set_cache(second, cache);
+            openslide_cache_release(cache);
+
+            let mut pixels = [0u32; 16];
+            openslide_read_region(first, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
+            let cold = owner.stats();
+            assert_eq!(cold.misses, 1);
+            assert_eq!(cold.puts, 1);
+            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
+            assert_eq!(owner.stats().hits, 1, "second slide must share the entry");
+
+            let replacement = openslide_cache_create(1);
+            let replacement_owner =
+                Arc::clone(&cache_ref(replacement).expect("replacement cache").owner);
+            openslide_set_cache(second, replacement);
+            openslide_cache_release(replacement);
+            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
+            assert_eq!(replacement_owner.stats().misses, 1);
+            assert_eq!(replacement_owner.stats().rejected_oversize, 1);
+            let before_null = replacement_owner.stats();
+            openslide_set_cache(second, ptr::null_mut());
+            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
+            assert_eq!(
+                replacement_owner.stats().misses,
+                before_null.misses + 1,
+                "NULL cache is outside the OpenSlide contract and must not detach the live cache"
+            );
+
+            openslide_close(first);
+            openslide_close(second);
         }
     }
 }

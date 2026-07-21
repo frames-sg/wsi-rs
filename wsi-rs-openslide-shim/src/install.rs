@@ -45,6 +45,70 @@ pub struct RestoreEntry {
     pub backup: Option<PathBuf>,
 }
 
+/// Typed failure returned by the shim installer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InstallError {
+    Operation {
+        message: String,
+    },
+    RolledBack {
+        primary: String,
+    },
+    RollbackFailed {
+        primary: String,
+        rollback: String,
+        preserved_backups: Vec<PathBuf>,
+        recovery_manifest: PathBuf,
+    },
+}
+
+impl InstallError {
+    /// Compatibility convenience for callers that previously inspected the
+    /// installer's string error.
+    pub fn contains(&self, pattern: &str) -> bool {
+        self.to_string().contains(pattern)
+    }
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation { message } => formatter.write_str(message),
+            Self::RolledBack { primary } => {
+                write!(formatter, "install failed and was rolled back: {primary}")
+            }
+            Self::RollbackFailed {
+                primary,
+                rollback,
+                preserved_backups,
+                recovery_manifest,
+            } => {
+                write!(
+                    formatter,
+                    "install failed: {primary}; rollback also failed: {rollback}; recovery manifest: {}",
+                    recovery_manifest.display()
+                )?;
+                if !preserved_backups.is_empty() {
+                    write!(formatter, "; preserved backups:")?;
+                    for backup in preserved_backups {
+                        write!(formatter, " {}", backup.display())?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for InstallError {}
+
+impl From<String> for InstallError {
+    fn from(message: String) -> Self {
+        Self::Operation { message }
+    }
+}
+
 pub fn install_destinations(prefix: &Path, platform: PlatformLibraryNames) -> Vec<PathBuf> {
     platform
         .names()
@@ -82,8 +146,19 @@ pub fn execute_install(
     platform: PlatformLibraryNames,
     stamp: u64,
 ) -> Result<PathBuf, String> {
+    execute_install_detailed(prefix, shim, platform, stamp).map_err(|error| error.to_string())
+}
+
+/// Execute an install while preserving typed recovery information when both
+/// the primary operation and rollback fail.
+pub fn execute_install_detailed(
+    prefix: &Path,
+    shim: &Path,
+    platform: PlatformLibraryNames,
+    stamp: u64,
+) -> Result<PathBuf, InstallError> {
     if !shim.is_file() {
-        return Err(format!("shim library does not exist: {}", shim.display()));
+        return Err(format!("shim library does not exist: {}", shim.display()).into());
     }
     let lib_dir = prefix.join("lib");
     fs::create_dir_all(&lib_dir).map_err(|err| format!("create {}: {err}", lib_dir.display()))?;
@@ -115,19 +190,20 @@ pub fn execute_install(
         return Err(format!(
             "an installation manifest already exists; restore it first: {}",
             manifest.display()
-        ));
+        )
+        .into());
     }
     preflight_install(&entries, &stages)?;
 
     for stage in &stages {
         if let Err(err) = copy_and_sync(shim, stage) {
             cleanup_paths(&stages);
-            return Err(err);
+            return Err(err.into());
         }
     }
     if let Err(err) = write_manifest(&manifest, &entries, "prepared") {
         cleanup_paths(&stages);
-        return Err(err);
+        return Err(err.into());
     }
 
     let commit_result = (|| {
@@ -161,10 +237,12 @@ pub fn execute_install(
 
     if let Err(err) = commit_result {
         return match rollback_install(&entries, &stages, &manifest) {
-            Ok(()) => Err(format!("install failed and was rolled back: {err}")),
-            Err(rollback_err) => Err(format!(
-                "install failed: {err}; rollback also failed: {rollback_err}; recovery manifest: {}",
-                manifest.display()
+            Ok(()) => Err(InstallError::RolledBack { primary: err }),
+            Err(rollback_err) => Err(combined_install_error(
+                err,
+                rollback_err,
+                &entries,
+                &manifest,
             )),
         };
     }
@@ -344,16 +422,32 @@ fn rollback_install(
     stages: &[PathBuf],
     manifest: &Path,
 ) -> Result<(), String> {
+    rollback_install_with(
+        entries,
+        stages,
+        manifest,
+        |path| fs::remove_file(path),
+        |from, to| fs::rename(from, to),
+    )
+}
+
+fn rollback_install_with(
+    entries: &[RestoreEntry],
+    stages: &[PathBuf],
+    manifest: &Path,
+    mut remove_file: impl FnMut(&Path) -> std::io::Result<()>,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
     let mut errors = Vec::new();
     for (entry, stage) in entries.iter().zip(stages).rev() {
         if let Some(backup) = entry.backup.as_ref().filter(|backup| backup.exists()) {
             if entry.destination.exists() {
-                if let Err(err) = fs::remove_file(&entry.destination) {
+                if let Err(err) = remove_file(&entry.destination) {
                     errors.push(format!("remove {}: {err}", entry.destination.display()));
                     continue;
                 }
             }
-            if let Err(err) = fs::rename(backup, &entry.destination) {
+            if let Err(err) = rename(backup, &entry.destination) {
                 errors.push(format!(
                     "restore {} to {}: {err}",
                     backup.display(),
@@ -361,23 +455,43 @@ fn rollback_install(
                 ));
             }
         } else if entry.backup.is_none() && entry.destination.exists() {
-            if let Err(err) = fs::remove_file(&entry.destination) {
+            if let Err(err) = remove_file(&entry.destination) {
                 errors.push(format!("remove {}: {err}", entry.destination.display()));
             }
         }
         if stage.exists() {
-            if let Err(err) = fs::remove_file(stage) {
+            if let Err(err) = remove_file(stage) {
                 errors.push(format!("remove {}: {err}", stage.display()));
             }
         }
     }
     if errors.is_empty() && manifest.exists() {
-        fs::remove_file(manifest).map_err(|err| format!("remove {}: {err}", manifest.display()))?;
+        remove_file(manifest).map_err(|err| format!("remove {}: {err}", manifest.display()))?;
     }
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+fn combined_install_error(
+    primary: String,
+    rollback: String,
+    entries: &[RestoreEntry],
+    manifest: &Path,
+) -> InstallError {
+    let preserved_backups = entries
+        .iter()
+        .filter_map(|entry| entry.backup.as_ref())
+        .filter(|backup| backup.exists())
+        .cloned()
+        .collect();
+    InstallError::RollbackFailed {
+        primary,
+        rollback,
+        preserved_backups,
+        recovery_manifest: manifest.to_path_buf(),
     }
 }
 
@@ -494,4 +608,62 @@ fn verify_library_version(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollback_failure_is_typed_and_preserves_recoverable_backup() {
+        let directory = tempfile::tempdir().expect("temporary install directory");
+        let destination = directory.path().join("libopenslide.so");
+        let backup = directory.path().join("libopenslide.so.wsi_rs-backup-42");
+        let stage = directory.path().join("libopenslide.so.wsi_rs-stage-42");
+        let manifest = directory.path().join("install.tsv");
+        std::fs::write(&destination, b"installed shim").expect("installed shim");
+        std::fs::write(&backup, b"original library").expect("preserved original");
+        std::fs::write(&manifest, b"prepared journal").expect("recovery journal");
+        let entries = vec![RestoreEntry {
+            destination: destination.clone(),
+            backup: Some(backup.clone()),
+        }];
+
+        let rollback = rollback_install_with(
+            &entries,
+            &[stage],
+            &manifest,
+            |path| std::fs::remove_file(path),
+            |_from, _to| Err(std::io::Error::other("injected restore failure")),
+        )
+        .expect_err("injected restoration failure must be observable");
+        let error = combined_install_error(
+            "injected primary install failure".into(),
+            rollback,
+            &entries,
+            &manifest,
+        );
+
+        let InstallError::RollbackFailed {
+            primary,
+            rollback,
+            preserved_backups,
+            recovery_manifest,
+        } = error
+        else {
+            panic!("expected typed rollback failure");
+        };
+        assert!(primary.contains("primary install failure"));
+        assert!(rollback.contains("injected restore failure"));
+        assert_eq!(preserved_backups, vec![backup.clone()]);
+        assert_eq!(recovery_manifest, manifest);
+        assert_eq!(
+            std::fs::read(&backup).expect("recoverable backup remains"),
+            b"original library"
+        );
+        assert!(
+            recovery_manifest.exists(),
+            "journal must remain for recovery"
+        );
+    }
 }

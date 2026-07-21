@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use wsi_rs::{FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileLayout, WsiError};
+use wsi_rs::{
+    FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileCache, TileLayout, WsiError,
+};
 
 static DETECTED_VENDORS: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
 
@@ -134,6 +136,12 @@ impl OpenSlideHandle {
             return None;
         }
         self.slide.as_ref()
+    }
+
+    pub(crate) fn replace_shared_cache(&self, cache: Arc<TileCache>) {
+        if let Some(slide) = self.slide() {
+            slide.replace_shared_tile_cache(cache);
+        }
     }
 
     pub(crate) fn set_error(&self, message: impl Into<String>) {

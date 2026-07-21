@@ -10,8 +10,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -24,10 +25,11 @@ use j2k_core::BackendRequest;
 use lru::LruCache;
 use std::collections::HashMap as StdHashMap;
 
+use crate::core::cache::CacheConfig;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, DatasetReader, FormatProbe,
-    ProbeConfidence, ProbeResult, SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
+    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -72,6 +74,17 @@ impl FormatProbe for ZeissBackend {
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         let slide = Arc::new(ZeissSlide::parse(path)?);
+        Ok(Box::new(ZeissReader { slide }))
+    }
+}
+
+impl ConfiguredDatasetReader for ZeissBackend {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        let slide = Arc::new(ZeissSlide::parse_with_cache_config(path, cache_config)?);
         Ok(Box::new(ZeissReader { slide }))
     }
 }

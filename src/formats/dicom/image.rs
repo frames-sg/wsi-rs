@@ -46,7 +46,10 @@ pub(super) struct DicomEncapsulatedFrames {
 }
 
 impl DicomImage {
-    pub(super) fn from_metadata(meta: ParsedDicomMetadata) -> Result<Self, WsiError> {
+    pub(super) fn from_metadata_with_cache_config(
+        meta: ParsedDicomMetadata,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
         let width = meta.total_pixel_matrix_columns.unwrap_or(meta.columns);
         let height = meta.total_pixel_matrix_rows.unwrap_or(meta.rows);
         let tile_width = meta.columns;
@@ -58,12 +61,12 @@ impl DicomImage {
         } else {
             DicomGrid::Full
         };
-        let frame_cache_entries =
-            if JP2K_TRANSFER_SYNTAXES.contains(&meta.transfer_syntax_uid.as_str()) {
-                2
-            } else {
-                1
-            };
+        let frame_cache_entries = dicom_frame_cache_capacity(
+            cache_config,
+            tile_width,
+            tile_height,
+            meta.samples_per_pixel,
+        );
         Ok(Self {
             path: meta.path,
             sop_instance_uid: meta.sop_instance_uid,
@@ -82,12 +85,8 @@ impl DicomImage {
             pixel_spacing: meta.pixel_spacing,
             objective_lens_power: meta.objective_lens_power,
             encapsulated_frames: Mutex::new(None),
-            encapsulated_frame_cache: Mutex::new(LruCache::new(
-                NonZeroUsize::new(frame_cache_entries).unwrap(),
-            )),
-            decoded_frame_cache: Mutex::new(LruCache::new(
-                NonZeroUsize::new(frame_cache_entries).unwrap(),
-            )),
+            encapsulated_frame_cache: Mutex::new(LruCache::new(frame_cache_entries)),
+            decoded_frame_cache: Mutex::new(LruCache::new(frame_cache_entries)),
         })
     }
 
@@ -441,17 +440,23 @@ impl DicomImage {
             .unwrap_or(1);
 
         if number_of_frames == 1 && fragments.len() > 1 {
-            let total_len = fragments.iter().map(Vec::len).sum();
-            let mut data = Vec::with_capacity(total_len);
+            let total_len =
+                preflight_compressed_lengths(&self.path, fragments.iter().map(Vec::len))?;
+            let mut data = Vec::new();
+            data.try_reserve_exact(total_len)
+                .map_err(|_| WsiError::ResourceLimit {
+                    resource: "compressed DICOM frame",
+                    requested: total_len as u64,
+                    limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+                })?;
             for fragment in fragments {
                 data.extend_from_slice(fragment);
             }
             return Ok(Arc::new(data));
         }
 
-        fragments
+        let fragment = fragments
             .get(frame_index as usize)
-            .map(|fragment| Arc::new(fragment.as_slice().to_vec()))
             .ok_or_else(|| WsiError::TileRead {
                 col,
                 row,
@@ -460,7 +465,17 @@ impl DicomImage {
                     "encapsulated frame {frame_index} out of range for {} fragments",
                     fragments.len()
                 ),
-            })
+            })?;
+        let total_len = preflight_compressed_lengths(&self.path, [fragment.len()])?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(total_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "compressed DICOM frame",
+                requested: total_len as u64,
+                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+            })?;
+        data.extend_from_slice(fragment);
+        Ok(Arc::new(data))
     }
 
     #[cfg(test)]
@@ -708,12 +723,21 @@ impl DicomImage {
         file: &mut File,
         fragments: &[DicomFragmentRef],
     ) -> Result<Vec<u8>, WsiError> {
+        let preflight = preflight_compressed_frame(&self.path, fragments)?;
         self.validate_encapsulated_fragment_headers_with_file(file, fragments)?;
-        let total_len: usize = fragments.iter().map(|fragment| fragment.len as usize).sum();
-        let mut data = Vec::with_capacity(total_len);
+        let mut data = Vec::new();
+        data.try_reserve_exact(preflight.total_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "compressed DICOM frame",
+                requested: preflight.total_len as u64,
+                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+            })?;
         for fragment in fragments {
             let start = data.len();
-            data.resize(start + fragment.len as usize, 0);
+            let end = start.checked_add(fragment.len as usize).ok_or_else(|| {
+                invalid_slide(&self.path, "DICOM compressed frame length overflow")
+            })?;
+            data.resize(end, 0);
             read_exact_at(
                 file,
                 &self.path,
@@ -742,6 +766,7 @@ impl DicomImage {
                 level,
                 reason: format!("encapsulated frame {frame_index} has invalid fragment range"),
             })?;
+        preflight_compressed_frame(&self.path, fragments)?;
         let first = fragments.first().ok_or_else(|| WsiError::TileRead {
             col,
             row,
@@ -791,7 +816,22 @@ impl DicomImage {
             .ok_or_else(|| invalid_slide(&self.path, "DICOM batch frame read span underflow"))?;
         let span_len = usize::try_from(span_len)
             .map_err(|_| invalid_slide(&self.path, "DICOM batch frame read span overflow"))?;
-        let mut window = vec![0u8; span_len];
+        if span_len as u64 > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
+            return Err(WsiError::ResourceLimit {
+                resource: "compressed DICOM batch read span",
+                requested: span_len as u64,
+                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+            });
+        }
+        let mut window = Vec::new();
+        window
+            .try_reserve_exact(span_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "compressed DICOM batch read span",
+                requested: span_len as u64,
+                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+            })?;
+        window.resize(span_len, 0);
         read_exact_at(file, &self.path, group.start, &mut window)?;
 
         group
@@ -875,4 +915,19 @@ impl DicomImage {
         }
         Ok(())
     }
+}
+
+pub(super) fn dicom_frame_cache_capacity(
+    cache_config: CacheConfig,
+    tile_width: u32,
+    tile_height: u32,
+    samples_per_pixel: u16,
+) -> NonZeroUsize {
+    let estimated_frame_bytes = u64::from(tile_width)
+        .saturating_mul(u64::from(tile_height))
+        .saturating_mul(u64::from(samples_per_pixel))
+        // Keep the estimate safe for both the supported 8-bit transfer
+        // syntaxes and future 16-bit decoded storage.
+        .saturating_mul(2);
+    cache_config.private_entry_capacity(estimated_frame_bytes, 4)
 }

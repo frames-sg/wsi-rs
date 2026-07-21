@@ -51,6 +51,14 @@ pub trait DatasetReader: Send + Sync {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError>;
 }
 
+pub(crate) trait ConfiguredDatasetReader: DatasetReader {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError>;
+}
+
 // ── Read interface ─────────────────────────────────────────────────
 
 pub(crate) fn read_cpu_tiles_with_backend(

@@ -1,4 +1,5 @@
 pub(crate) mod companion_path;
+mod composition;
 pub(crate) mod dicom;
 mod geometry;
 pub(crate) mod hamamatsu_vms;

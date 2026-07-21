@@ -14,11 +14,12 @@ use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry
 use j2k_core::BackendRequest;
 use lru::LruCache;
 
+use crate::core::cache::CacheConfig;
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
-    SlideReader,
+    crop_rgb_interleaved_u8_buffer, ConfiguredDatasetReader, DatasetReader, FormatProbe,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 #[cfg(any(feature = "metal", feature = "cuda"))]

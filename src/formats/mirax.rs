@@ -11,7 +11,6 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,11 +20,12 @@ use flate2::read::ZlibDecoder;
 use j2k_core::BackendRequest;
 use lru::LruCache;
 
+use crate::core::cache::CacheConfig;
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::Quickhash1;
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, DatasetReader, FormatProbe,
-    ProbeConfidence, ProbeResult, SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
+    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
@@ -43,6 +43,8 @@ const KEY_FILE_MAX_SIZE: u64 = 1 << 20;
 const SLIDE_POSITION_RECORD_SIZE: usize = 9;
 const MIRAX_ASSOCIATED_DIMENSION_PROBE_BYTES: u64 = 64 << 10;
 const MIRAX_QUICKHASH_READ_BUFFER_BYTES: usize = 64 << 10;
+// Parsed probe entries retain MIRAX level/index metadata but no decoded pixels.
+const MIRAX_PROBE_ENTRY_ESTIMATE_BYTES: u64 = 4 * 1024 * 1024;
 
 const GROUP_GENERAL: &str = "GENERAL";
 const KEY_SLIDE_ID: &str = "SLIDE_ID";
@@ -97,12 +99,48 @@ pub(crate) struct MiraxBackend {
 impl MiraxBackend {
     pub(crate) fn new() -> Self {
         Self {
-            probe_cache: Mutex::new(LruCache::new(NonZeroUsize::new(16).unwrap())),
+            probe_cache: Mutex::new(LruCache::new(
+                CacheConfig::deterministic()
+                    .private_entry_capacity(MIRAX_PROBE_ENTRY_ESTIMATE_BYTES, 1),
+            )),
         }
     }
 
     fn parse(&self, path: &Path) -> Result<Arc<MiraxSlide>, WsiError> {
         Ok(Arc::new(MiraxSlide::parse(path)?))
+    }
+
+    fn parse_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Arc<MiraxSlide>, WsiError> {
+        Ok(Arc::new(MiraxSlide::parse_with_cache_config(
+            path,
+            cache_config,
+        )?))
+    }
+
+    fn open_cached_or_parse(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        let key = FileIdentity::from_path(path)?;
+        let cached = self
+            .probe_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop(&key);
+        let slide = if cache_config == CacheConfig::deterministic() {
+            match cached {
+                Some(slide) => slide,
+                None => self.parse_with_cache_config(path, cache_config)?,
+            }
+        } else {
+            self.parse_with_cache_config(path, cache_config)?
+        };
+        Ok(Box::new(MiraxReader { slide }))
     }
 }
 
@@ -149,17 +187,17 @@ impl FormatProbe for MiraxBackend {
 
 impl DatasetReader for MiraxBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = FileIdentity::from_path(path)?;
-        let cached = self
-            .probe_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop(&key);
-        let slide = match cached {
-            Some(slide) => slide,
-            None => self.parse(path)?,
-        };
-        Ok(Box::new(MiraxReader { slide }))
+        self.open_cached_or_parse(path, CacheConfig::deterministic())
+    }
+}
+
+impl ConfiguredDatasetReader for MiraxBackend {
+    fn open_with_cache_config(
+        &self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        self.open_cached_or_parse(path, cache_config)
     }
 }
 

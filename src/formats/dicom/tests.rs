@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn private_frame_cache_capacity_tracks_cache_config_bytes() {
+    let small = dicom_frame_cache_capacity(
+        CacheConfig::deterministic().with_shared_tile_bytes(12 * 1024),
+        16,
+        16,
+        3,
+    );
+    let large = dicom_frame_cache_capacity(
+        CacheConfig::deterministic().with_shared_tile_bytes(48 * 1024),
+        16,
+        16,
+        3,
+    );
+
+    assert_eq!(small.get(), 2);
+    assert_eq!(large.get(), 8);
+}
 use crate::core::registry::Slide;
 use dicom_core::value::fragments::Fragments;
 use dicom_core::value::DataSetSequence;
@@ -714,7 +733,17 @@ fn crop_sample_buffer_rgb_borrows_source_and_preserves_contiguous_rows() {
 }
 
 fn reader_and_first_image(path: &Path) -> (DicomReader, Arc<DicomImage>) {
-    let slide = Arc::new(DicomSlide::parse(path).expect("parse generated DICOM slide"));
+    reader_and_first_image_with_cache_config(path, CacheConfig::deterministic())
+}
+
+fn reader_and_first_image_with_cache_config(
+    path: &Path,
+    cache_config: CacheConfig,
+) -> (DicomReader, Arc<DicomImage>) {
+    let slide = Arc::new(
+        DicomSlide::parse_with_cache_config(path, cache_config)
+            .expect("parse generated DICOM slide"),
+    );
     let image = slide.levels[0].parts[0].clone();
     (DicomReader { slide }, image)
 }
@@ -1394,7 +1423,10 @@ fn read_tiles_cpu_skips_decoded_cache_when_batch_exceeds_cache_capacity() {
         TestPixelData::EncapsulatedFrames(vec![codestream.clone(), codestream.clone(), codestream]);
     write_test_dicom(&path, options);
 
-    let (reader, image) = reader_and_first_image(&path);
+    let (reader, image) = reader_and_first_image_with_cache_config(
+        &path,
+        CacheConfig::deterministic().with_shared_tile_bytes(9 * 1024),
+    );
     let tiles = reader
         .read_tiles(
             &[tile_request(0, 0), tile_request(1, 0), tile_request(2, 0)],
@@ -2000,6 +2032,76 @@ fn oversized_basic_offset_table_is_rejected_without_allocating_its_payload() {
         error.to_string().contains("exceeds safety limit"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn compressed_frame_preflight_enforces_exact_limit_for_every_fragment() {
+    let path = Path::new("compressed-frame-limit.dcm");
+    let exact = DicomFragmentRef {
+        item_offset: 0,
+        payload_offset: 8,
+        len: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as u32,
+    };
+    let preflight = preflight_compressed_frame(path, &[exact])
+        .expect("the exact compressed-frame limit must be accepted");
+    assert_eq!(
+        preflight.total_len,
+        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as usize
+    );
+
+    for fragments in [
+        vec![DicomFragmentRef {
+            item_offset: 0,
+            payload_offset: 8,
+            len: (crate::core::limits::MAX_COMPRESSED_INPUT_BYTES + 1) as u32,
+        }],
+        vec![
+            DicomFragmentRef {
+                item_offset: 0,
+                payload_offset: 8,
+                len: 1,
+            },
+            DicomFragmentRef {
+                item_offset: 9,
+                payload_offset: 17,
+                len: (crate::core::limits::MAX_COMPRESSED_INPUT_BYTES + 1) as u32,
+            },
+        ],
+        vec![
+            DicomFragmentRef {
+                item_offset: 0,
+                payload_offset: 8,
+                len: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as u32,
+            },
+            DicomFragmentRef {
+                item_offset: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES + 8,
+                payload_offset: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES + 16,
+                len: 1,
+            },
+        ],
+    ] {
+        let error = preflight_compressed_frame(path, &fragments)
+            .expect_err("over-limit frame must be rejected before allocation");
+        assert!(
+            matches!(error, WsiError::ResourceLimit { .. }),
+            "expected typed resource limit, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn compressed_frame_preflight_rejects_offset_arithmetic_overflow() {
+    let error = preflight_compressed_frame(
+        Path::new("compressed-frame-overflow.dcm"),
+        &[DicomFragmentRef {
+            item_offset: u64::MAX - 9,
+            payload_offset: u64::MAX - 1,
+            len: 4,
+        }],
+    )
+    .expect_err("fragment end overflow must fail before any read or allocation");
+
+    assert!(error.to_string().contains("offset overflow"), "{error}");
 }
 
 #[test]

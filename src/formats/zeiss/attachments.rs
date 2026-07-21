@@ -2,7 +2,6 @@ use super::tiles::bitmap_to_sample_buffer;
 use super::*;
 
 const ASSOCIATED_JPEG_PROBE_BYTES: u64 = 256 << 10;
-static TEMP_BLOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn associated_name(name: &str) -> Option<&'static str> {
     match name {
@@ -45,13 +44,8 @@ pub(super) fn decode_associated_attachment(
     }
 
     if attachment.content_file_type.eq_ignore_ascii_case("CZI") {
-        let temp_path = temp_czi_path(attachment.index);
-        fs::write(&temp_path, &blob.data).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: temp_path.clone(),
-        })?;
-        let result = (|| {
-            let mut embedded = CziFile::open(&temp_path)
+        return with_temporary_czi_blob(&blob.data, |temp_path| {
+            let mut embedded = CziFile::open(temp_path)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
             let bitmap = embedded
                 .read_frame_2d(0, 0, 0, 0)
@@ -65,9 +59,8 @@ pub(super) fn decode_associated_attachment(
                 },
                 buffer,
             ))
-        })();
-        let _ = fs::remove_file(&temp_path);
-        return result.map(Some);
+        })
+        .map(Some);
     }
 
     Ok(None)
@@ -124,14 +117,33 @@ fn read_attachment_prefix(
     Ok(buffer)
 }
 
-fn temp_czi_path(index: usize) -> PathBuf {
-    let counter = TEMP_BLOB_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "wsi_rs-zeiss-{}-{}-{}.czi",
-        std::process::id(),
-        index,
-        counter
-    ))
+fn with_temporary_czi_blob<T>(
+    data: &[u8],
+    operation: impl FnOnce(&Path) -> Result<T, WsiError>,
+) -> Result<T, WsiError> {
+    with_temporary_czi_blob_in(&std::env::temp_dir(), data, operation)
+}
+
+fn with_temporary_czi_blob_in<T>(
+    directory: &Path,
+    data: &[u8],
+    operation: impl FnOnce(&Path) -> Result<T, WsiError>,
+) -> Result<T, WsiError> {
+    let mut temporary = tempfile::Builder::new()
+        .prefix("wsi-rs-zeiss-")
+        .suffix(".czi")
+        .tempfile_in(directory)
+        .map_err(WsiError::Io)?;
+    let path = temporary.path().to_path_buf();
+    temporary
+        .as_file_mut()
+        .write_all(data)
+        .and_then(|()| temporary.as_file_mut().flush())
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path,
+        })?;
+    operation(temporary.path())
 }
 
 pub(super) fn guid_bytes(value: &str) -> Result<[u8; 16], WsiError> {
@@ -171,4 +183,61 @@ pub(super) fn guid_bytes(value: &str) -> Result<[u8; 16], WsiError> {
         bytes[10 + idx] = parse_hex_pair(parts[4], idx * 2)?;
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temporary_czi_blob_is_removed_after_success_and_failure() {
+        let directory = tempfile::tempdir().expect("temporary attachment directory");
+        for should_fail in [false, true] {
+            let mut temporary_path = None;
+            let result = with_temporary_czi_blob_in(directory.path(), b"embedded-czi", |path| {
+                temporary_path = Some(path.to_path_buf());
+                assert_eq!(
+                    std::fs::read(path).expect("read open temporary blob"),
+                    b"embedded-czi"
+                );
+                if should_fail {
+                    Err(WsiError::DisplayConversion("injected parse failure".into()))
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(result.is_err(), should_fail);
+            assert!(
+                !temporary_path.expect("closure observed path").exists(),
+                "temporary CZI attachment must be removed by Drop"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn precreated_symlink_cannot_redirect_temporary_attachment_write() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary attachment directory");
+        let outside = directory.path().join("outside");
+        std::fs::write(&outside, b"preserve-me").expect("write outside sentinel");
+        let predictable = directory.path().join("wsi-rs-zeiss-attachment.czi");
+        symlink(&outside, &predictable).expect("create hostile symlink");
+
+        let mut actual = None;
+        with_temporary_czi_blob_in(directory.path(), b"embedded-czi", |path| {
+            actual = Some(path.to_path_buf());
+            assert_ne!(path, predictable);
+            Ok(())
+        })
+        .expect("exclusive temporary attachment write");
+
+        assert_eq!(
+            std::fs::read(&outside).expect("outside sentinel"),
+            b"preserve-me"
+        );
+        assert!(!actual.expect("temporary path").exists());
+        assert!(predictable.is_symlink());
+    }
 }

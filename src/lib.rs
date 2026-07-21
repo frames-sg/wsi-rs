@@ -62,7 +62,7 @@ pub mod properties;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use core::cache::CacheConfig;
+pub use core::cache::{CacheConfig, TileCache, TileCacheStats};
 pub use core::decode_runtime::{DecodeExecutionOptions, DecodeRoute, DecodeRouteDecision};
 pub use core::read_control::{
     DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadCancellationToken, ReadControl,

@@ -1,5 +1,7 @@
 use super::support::*;
 use std::fs;
+use std::io::Write;
+use wsi_rs::FormatRegistry;
 
 #[test]
 fn public_manifest_does_not_depend_on_local_path_patches() {
@@ -136,42 +138,29 @@ fn referenced_parity_corpus_fetch_script_exists() {
     }
 }
 
-#[test]
-fn public_docs_do_not_advertise_unregistered_zeiss_support() {
-    let formats_mod =
-        fs::read_to_string(crate_root().join("src/formats/mod.rs")).expect("read formats mod");
-    let registry = read_repo_text("src/core/registry");
-    let zeiss_registered = formats_mod.contains("mod zeiss") && registry.contains("ZeissBackend");
+fn assert_builtin_registry_detects_zeiss(suffix: &str) {
+    let mut file = tempfile::Builder::new()
+        .suffix(suffix)
+        .tempfile()
+        .expect("create Zeiss probe fixture");
+    file.write_all(b"ZISRAWFILE\0\0\0\0\0\0")
+        .expect("write Zeiss file magic");
+    file.flush().expect("flush Zeiss probe fixture");
 
-    if !zeiss_registered {
-        let docs = [(
-            "README.md",
-            fs::read_to_string(crate_root().join("README.md")).expect("read README"),
-        )];
-        let offenders = docs
-            .iter()
-            .filter_map(|(path, text)| text.contains("Zeiss").then_some(*path))
-            .collect::<Vec<_>>();
-        assert!(
-            offenders.is_empty(),
-            "public docs must not advertise Zeiss until the backend is registered: {}",
-            offenders.join(", ")
-        );
-    }
+    let detected = FormatRegistry::builtin()
+        .detect_vendor(file.path())
+        .expect("probe Zeiss fixture")
+        .expect("built-in registry must detect Zeiss magic");
+    assert!(detected.detected);
+    assert_eq!(detected.vendor, "zeiss");
 }
 
 #[test]
-fn unregistered_zeiss_backend_is_not_left_as_packaged_source() {
-    let zeiss_source = crate_root().join("src/formats/zeiss.rs");
-    if !zeiss_source.exists() {
-        return;
-    }
+fn builtin_registry_detects_zeiss_magic_by_behavior() {
+    assert_builtin_registry_detects_zeiss(".czi");
+}
 
-    let formats_mod =
-        fs::read_to_string(crate_root().join("src/formats/mod.rs")).expect("read formats mod");
-    let registry = read_repo_text("src/core/registry");
-    assert!(
-        formats_mod.contains("mod zeiss") && registry.contains("ZeissBackend"),
-        "src/formats/zeiss.rs exists but the Zeiss backend is not registered"
-    );
+#[test]
+fn zeiss_magic_detection_does_not_depend_on_the_filename_extension() {
+    assert_builtin_registry_detects_zeiss(".svs");
 }

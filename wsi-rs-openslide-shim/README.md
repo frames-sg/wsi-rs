@@ -29,4 +29,6 @@ OpenSlide library.
 
 Implemented ABI surface: vendor detection, open/close/error/version, level
 metadata, `read_region`, properties, associated images, ICC defaults, and cache
-compatibility hooks.
+compatibility hooks. Cache handles own byte-bounded shared caches; attaching a
+cache clones its owner into the slide, so releasing the C cache handle does not
+invalidate slides that still use it.
