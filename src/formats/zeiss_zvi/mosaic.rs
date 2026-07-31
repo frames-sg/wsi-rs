@@ -96,7 +96,7 @@ fn dedup_positions(mut values: Vec<i64>) -> Vec<i64> {
     for value in values {
         if out
             .last()
-            .is_none_or(|last| (value - *last).abs() > POSITION_DEDUP_TOLERANCE_PX)
+            .is_none_or(|last| value.abs_diff(*last) > POSITION_DEDUP_TOLERANCE_PX as u64)
         {
             out.push(value);
         }
@@ -108,7 +108,7 @@ fn nearest_position_index(values: &[i64], target: i64) -> usize {
     values
         .iter()
         .enumerate()
-        .min_by_key(|(_, value)| (target - **value).abs())
+        .min_by_key(|(_, value)| target.abs_diff(**value))
         .map(|(idx, _)| idx)
         .unwrap_or(0)
 }
@@ -120,8 +120,8 @@ fn median_step(values: &[i64]) -> Option<f64> {
     let mut steps = values
         .windows(2)
         .filter_map(|pair| {
-            let step = pair[1] - pair[0];
-            (step > POSITION_DEDUP_TOLERANCE_PX).then_some(step as f64)
+            let step = pair[1].abs_diff(pair[0]);
+            (step > POSITION_DEDUP_TOLERANCE_PX as u64).then_some(step as f64)
         })
         .collect::<Vec<_>>();
     if steps.is_empty() {
@@ -143,4 +143,17 @@ pub(super) fn build_zvi_channels(planes: &[ZviPlane], size_c: u32) -> Vec<Channe
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extreme_positions_do_not_overflow_distance_calculations() {
+        let positions = dedup_positions(vec![i64::MAX, i64::MIN]);
+        assert_eq!(positions, vec![i64::MIN, i64::MAX]);
+        assert_eq!(nearest_position_index(&positions, i64::MAX - 1), 1);
+        assert!(median_step(&positions).is_some());
+    }
 }

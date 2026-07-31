@@ -178,6 +178,19 @@ fn restore_rejects_manifest_paths_outside_prefix() {
     );
 }
 
+#[test]
+fn restore_rejects_oversized_manifest_before_parsing_entries() {
+    let temp = tempfile::tempdir().expect("temp directory");
+    let prefix = temp.path().join("prefix");
+    std::fs::create_dir_all(prefix.join("lib")).expect("library directory");
+    let mut manifest = b"wsi-rs-openslide-shim\t1\tinstalled\n".to_vec();
+    manifest.resize(64 * 1024 + 1, b'x');
+    std::fs::write(manifest_path(&prefix), manifest).expect("oversized manifest");
+
+    let error = execute_restore(&prefix, 9).expect_err("oversized manifest must be rejected");
+    assert!(error.contains("65536 byte safety limit"), "{error}");
+}
+
 #[cfg(unix)]
 #[test]
 fn install_rejects_symlink_destinations_before_mutation() {
@@ -200,4 +213,102 @@ fn install_rejects_symlink_destinations_before_mutation() {
         std::fs::read(&outside).expect("outside remains"),
         b"outside"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_broken_stage_symlink_without_writing_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temp directory");
+    let prefix = temp.path().join("prefix");
+    let lib = prefix.join("lib");
+    std::fs::create_dir_all(&lib).expect("library directory");
+    let outside = temp.path().join("outside-stage-target.so");
+    let stage = lib.join("libopenslide.so.1.wsi_rs-stage-5");
+    symlink(&outside, &stage).expect("broken stage symlink");
+    let shim = temp.path().join("shim.so");
+    std::fs::write(&shim, b"shim").expect("shim file");
+
+    let error = execute_install(&prefix, &shim, PlatformLibraryNames::Linux, 5)
+        .expect_err("pre-existing stage path must be rejected");
+
+    assert!(error.contains("stage path already exists"), "{error}");
+    assert!(
+        !outside.exists(),
+        "broken symlink target must not be created"
+    );
+    assert!(
+        stage.is_symlink(),
+        "pre-existing stage link must be preserved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_broken_manifest_temp_symlink_without_writing_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temp directory");
+    let prefix = temp.path().join("prefix");
+    let lib = prefix.join("lib");
+    std::fs::create_dir_all(&lib).expect("library directory");
+    let outside = temp.path().join("outside-manifest-target.tsv");
+    let temporary_manifest = lib.join(".wsi-rs-openslide-shim-install.tsv.tmp");
+    symlink(&outside, &temporary_manifest).expect("broken manifest-temp symlink");
+    let shim = temp.path().join("shim.so");
+    std::fs::write(&shim, b"shim").expect("shim file");
+
+    let error = execute_install(&prefix, &shim, PlatformLibraryNames::Linux, 6)
+        .expect_err("pre-existing manifest temp path must be rejected");
+
+    assert!(error.contains("already exists"), "{error}");
+    assert!(
+        !outside.exists(),
+        "broken symlink target must not be created"
+    );
+    assert!(
+        temporary_manifest.is_symlink(),
+        "pre-existing manifest-temp link must be preserved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_rejects_symlink_backup_before_mutation() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temp directory");
+    let prefix = temp.path().join("prefix");
+    let lib = prefix.join("lib");
+    std::fs::create_dir_all(&lib).expect("library directory");
+    let canonical_lib = lib.canonicalize().expect("canonical library directory");
+    let destination = canonical_lib.join("libopenslide.so.1");
+    std::fs::write(&destination, b"installed-shim").expect("installed shim");
+    let outside = temp.path().join("outside-original.so");
+    std::fs::write(&outside, b"outside-original").expect("outside file");
+    let backup = canonical_lib.join("libopenslide.so.1.wsi_rs-backup-41");
+    symlink(&outside, &backup).expect("backup symlink");
+    std::fs::write(
+        manifest_path(&prefix),
+        format!(
+            "wsi-rs-openslide-shim\t1\tinstalled\n{}\t{}\n",
+            destination.display(),
+            backup.display()
+        ),
+    )
+    .expect("forged manifest");
+
+    let error = execute_restore(&prefix, 42).expect_err("backup symlink must be rejected");
+
+    assert!(error.contains("must not be a symlink"), "{error}");
+    assert_eq!(
+        std::fs::read(&destination).expect("installed shim remains"),
+        b"installed-shim"
+    );
+    assert_eq!(
+        std::fs::read(&outside).expect("outside remains"),
+        b"outside-original"
+    );
+    assert!(backup.is_symlink());
 }

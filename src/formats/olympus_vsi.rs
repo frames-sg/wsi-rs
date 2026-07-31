@@ -23,6 +23,12 @@ use crate::error::WsiError;
 use crate::properties::Properties;
 
 const OLYMPUS_JPEG_2000: u32 = 3;
+const ETS_BACKGROUND_BYTES: u64 = 40;
+const MAX_ETS_DIMENSIONS: u32 = 16;
+const MAX_ETS_TILES: u32 = 1_000_000;
+const MAX_ETS_LEVEL_INDEX: u32 = 1_023;
+const MAX_ETS_AXIS_INDEX: u32 = 65_535;
+const MAX_ETS_SCENES: usize = 1_024;
 
 pub(crate) struct OlympusVsiBackend;
 
@@ -235,6 +241,7 @@ impl EtsScene {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
+        let file_len = file.metadata()?.len();
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
         if !fourcc_matches(&magic, b"SIS") {
@@ -267,10 +274,18 @@ impl EtsScene {
         file.seek(SeekFrom::Current(4 * 17))?;
 
         let sample_type = sample_type_from_ets(pixel_type)?;
-        let background_len = samples_per_pixel as usize * sample_type.byte_size();
+        let background_len = validate_ets_header_limits(
+            n_dimensions,
+            n_used_chunks,
+            samples_per_pixel,
+            sample_type.byte_size(),
+            tile_width,
+            tile_height,
+        )
+        .map_err(|message| invalid_slide(path, message))?;
         let mut background = vec![0; background_len];
         file.read_exact(&mut background)?;
-        let remaining_background = 40usize.saturating_sub(background_len);
+        let remaining_background = ETS_BACKGROUND_BYTES as usize - background_len;
         file.seek(SeekFrom::Current(remaining_background as i64))?;
         let _component_order = file.read_u32::<LittleEndian>()?;
         let use_pyramid = file.read_u32::<LittleEndian>()? != 0;
@@ -281,15 +296,22 @@ impl EtsScene {
                 format!("unsupported ETS compression {compression}"),
             ));
         }
-        if n_dimensions < 3 {
-            return Err(invalid_slide(
-                path,
-                "ETS coordinate dimensionality is too small",
-            ));
-        }
+        validate_ets_chunk_table(file_len, used_chunk_offset, n_dimensions, n_used_chunks)
+            .map_err(|message| invalid_slide(path, message))?;
 
         file.seek(SeekFrom::Start(used_chunk_offset))?;
-        let mut raw_tiles = Vec::with_capacity(n_used_chunks as usize);
+        let tile_index_limit = u64::from(MAX_ETS_TILES)
+            * u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX);
+        let tile_index_bytes = u64::from(n_used_chunks)
+            * u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX);
+        let mut tiles = HashMap::new();
+        tiles
+            .try_reserve(n_used_chunks as usize)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS tile index",
+                requested: tile_index_bytes,
+                limit: tile_index_limit,
+            })?;
         let mut max_level = 0u32;
         let mut max_z = 0u32;
         let mut max_c = 0u32;
@@ -305,47 +327,88 @@ impl EtsScene {
             file.seek(SeekFrom::Current(4))?;
 
             let key = key_from_coords(&coords, use_pyramid)?;
+            checked_ets_level_count(key.level).map_err(|message| invalid_slide(path, message))?;
+            for (name, value) in [("z", key.z), ("c", key.c), ("t", key.t)] {
+                checked_ets_axis_len(value, name)
+                    .map_err(|message| invalid_slide(path, message))?;
+            }
+            if byte_count == 0 {
+                return Err(invalid_slide(path, "ETS tile payload is empty"));
+            }
+            let tile_end = offset
+                .checked_add(u64::from(byte_count))
+                .ok_or_else(|| invalid_slide(path, "ETS tile payload range overflows"))?;
+            if tile_end > file_len {
+                return Err(invalid_slide(
+                    path,
+                    format!(
+                        "ETS tile payload range {offset}..{tile_end} exceeds file length {file_len}"
+                    ),
+                ));
+            }
             max_level = max_level.max(key.level);
             max_z = max_z.max(key.z);
             max_c = max_c.max(key.c);
             max_t = max_t.max(key.t);
-            raw_tiles.push((key, offset, byte_count));
+            if tiles.insert(key, EtsTile { offset, byte_count }).is_some() {
+                return Err(invalid_slide(path, "duplicate ETS tile coordinates"));
+            }
         }
 
-        let mut max_col_by_level = vec![0u32; max_level as usize + 1];
-        let mut max_row_by_level = vec![0u32; max_level as usize + 1];
-        let mut tiles = HashMap::with_capacity(raw_tiles.len());
-        for (key, offset, byte_count) in raw_tiles {
+        let level_count =
+            checked_ets_level_count(max_level).map_err(|message| invalid_slide(path, message))?;
+        let mut max_col_by_level = vec![0u32; level_count];
+        let mut max_row_by_level = vec![0u32; level_count];
+        for key in tiles.keys() {
             let idx = key.level as usize;
             max_col_by_level[idx] = max_col_by_level[idx].max(key.col);
             max_row_by_level[idx] = max_row_by_level[idx].max(key.row);
-            tiles.insert(key, EtsTile { offset, byte_count });
         }
 
         let levels = max_col_by_level
             .into_iter()
             .zip(max_row_by_level)
-            .map(|(max_col, max_row)| EtsLevel {
-                width: (max_col + 1) * tile_width,
-                height: (max_row + 1) * tile_height,
-                tile_width,
-                tile_height,
-                tiles_across: max_col + 1,
-                tiles_down: max_row + 1,
+            .map(|(max_col, max_row)| {
+                Ok(EtsLevel {
+                    width: checked_ets_extent(max_col, tile_width, "width")?,
+                    height: checked_ets_extent(max_row, tile_height, "height")?,
+                    tile_width,
+                    tile_height,
+                    tiles_across: max_col + 1,
+                    tiles_down: max_row + 1,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(|message| invalid_slide(path, message))?;
+
+        let axes = AxesShape {
+            z: checked_ets_axis_len(max_z, "z").map_err(|message| invalid_slide(path, message))?,
+            c: checked_ets_axis_len(max_c, "c").map_err(|message| invalid_slide(path, message))?,
+            t: checked_ets_axis_len(max_t, "t").map_err(|message| invalid_slide(path, message))?,
+        };
 
         let channels = if samples_per_pixel == 3 {
             Vec::new()
         } else {
-            (0..=max_c)
-                .map(|c| ChannelInfo {
-                    name: Some(format!("Channel {c}")),
-                    color: None,
-                    excitation_nm: None,
-                    emission_nm: None,
-                })
-                .collect()
+            let channel_bytes = u64::from(axes.c)
+                * u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX);
+            let channel_limit = u64::from(MAX_ETS_AXIS_INDEX + 1)
+                * u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX);
+            let mut channels = Vec::new();
+            channels
+                .try_reserve_exact(axes.c as usize)
+                .map_err(|_| WsiError::ResourceLimit {
+                    resource: "Olympus ETS channel metadata",
+                    requested: channel_bytes,
+                    limit: channel_limit,
+                })?;
+            channels.extend((0..axes.c).map(|c| ChannelInfo {
+                name: Some(format!("Channel {c}")),
+                color: None,
+                excitation_nm: None,
+                emission_nm: None,
+            }));
+            channels
         };
 
         Ok(Self {
@@ -357,11 +420,7 @@ impl EtsScene {
                 .map(ToOwned::to_owned),
             levels,
             tiles,
-            axes: AxesShape {
-                z: max_z + 1,
-                c: max_c + 1,
-                t: max_t + 1,
-            },
+            axes,
             sample_type,
             samples_per_pixel,
             background,
@@ -462,7 +521,101 @@ struct EtsTile {
     byte_count: u32,
 }
 
+fn validate_ets_header_limits(
+    n_dimensions: u32,
+    n_used_chunks: u32,
+    samples_per_pixel: u32,
+    sample_bytes: usize,
+    tile_width: u32,
+    tile_height: u32,
+) -> Result<usize, String> {
+    if !(3..=MAX_ETS_DIMENSIONS).contains(&n_dimensions) {
+        return Err(format!(
+            "ETS coordinate dimensionality {n_dimensions} is outside the supported range 3..={MAX_ETS_DIMENSIONS}"
+        ));
+    }
+    if !(1..=MAX_ETS_TILES).contains(&n_used_chunks) {
+        return Err(format!(
+            "ETS tile count {n_used_chunks} is outside the supported range 1..={MAX_ETS_TILES}"
+        ));
+    }
+    if samples_per_pixel == 0 {
+        return Err("ETS samples per pixel must be nonzero".into());
+    }
+    if tile_width == 0 || tile_height == 0 {
+        return Err(format!(
+            "ETS tile dimensions must be nonzero, got {tile_width}x{tile_height}"
+        ));
+    }
+    checked_product_to_usize(
+        &[
+            u64::from(samples_per_pixel),
+            u64::try_from(sample_bytes).unwrap_or(u64::MAX),
+        ],
+        ETS_BACKGROUND_BYTES,
+        "Olympus ETS background",
+    )
+}
+
+fn validate_ets_chunk_table(
+    file_len: u64,
+    offset: u64,
+    n_dimensions: u32,
+    n_used_chunks: u32,
+) -> Result<(), String> {
+    let entry_bytes = u64::from(n_dimensions)
+        .checked_mul(4)
+        .and_then(|coordinate_bytes| coordinate_bytes.checked_add(20))
+        .ok_or_else(|| "ETS chunk-table entry size overflows".to_string())?;
+    let table_bytes = entry_bytes
+        .checked_mul(u64::from(n_used_chunks))
+        .ok_or_else(|| "ETS chunk-table size overflows".to_string())?;
+    let table_end = offset
+        .checked_add(table_bytes)
+        .ok_or_else(|| "ETS chunk-table range overflows".to_string())?;
+    if table_end > file_len {
+        return Err(format!(
+            "ETS chunk-table range {offset}..{table_end} exceeds file length {file_len}"
+        ));
+    }
+    Ok(())
+}
+
+fn checked_ets_level_count(max_level: u32) -> Result<usize, String> {
+    if max_level > MAX_ETS_LEVEL_INDEX {
+        return Err(format!(
+            "ETS level index {max_level} exceeds the supported maximum {MAX_ETS_LEVEL_INDEX}"
+        ));
+    }
+    usize::try_from(max_level + 1)
+        .map_err(|_| "ETS level count is not addressable on this platform".into())
+}
+
+fn checked_ets_axis_len(max_index: u32, name: &str) -> Result<u32, String> {
+    if max_index > MAX_ETS_AXIS_INDEX {
+        return Err(format!(
+            "ETS {name} index {max_index} exceeds the supported maximum {MAX_ETS_AXIS_INDEX}"
+        ));
+    }
+    max_index
+        .checked_add(1)
+        .ok_or_else(|| format!("ETS {name} axis length overflows"))
+}
+
+fn checked_ets_extent(max_tile_index: u32, tile_size: u32, name: &str) -> Result<u32, String> {
+    max_tile_index
+        .checked_add(1)
+        .and_then(|tile_count| tile_count.checked_mul(tile_size))
+        .ok_or_else(|| format!("ETS {name} overflows 32-bit dimensions"))
+}
+
 fn key_from_coords(coords: &[i32], use_pyramid: bool) -> Result<EtsTileKey, WsiError> {
+    if coords.len() < 3 {
+        return Err(invalid_slide(
+            Path::new(""),
+            "ETS coordinate dimensionality is too small",
+        ));
+    }
     let upper = if use_pyramid {
         coords.len().saturating_sub(1)
     } else {
@@ -558,6 +711,12 @@ fn find_ets_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
         }
         let frame = path.join("frame_t.ets");
         if frame.is_file() {
+            if paths.len() == MAX_ETS_SCENES {
+                return Err(invalid_slide(
+                    dir,
+                    format!("Olympus dataset exceeds the {MAX_ETS_SCENES}-scene limit"),
+                ));
+            }
             paths.push(frame);
         }
     }
@@ -602,6 +761,35 @@ fn fourcc_matches(bytes: &[u8; 4], tag: &[u8; 3]) -> bool {
 mod tests {
     use super::*;
     use crate::core::registry::Slide;
+
+    #[test]
+    fn ets_header_limits_accept_boundaries_and_reject_one_over() {
+        validate_ets_header_limits(3, 1, 1, 1, 1, 1).expect("minimal ETS header");
+        validate_ets_header_limits(MAX_ETS_DIMENSIONS, MAX_ETS_TILES, 40, 1, u32::MAX, u32::MAX)
+            .expect("declared ETS limits");
+
+        assert!(validate_ets_header_limits(MAX_ETS_DIMENSIONS + 1, 1, 1, 1, 1, 1).is_err());
+        assert!(validate_ets_header_limits(3, 0, 1, 1, 1, 1).is_err());
+        assert!(validate_ets_header_limits(3, MAX_ETS_TILES + 1, 1, 1, 1, 1).is_err());
+        assert!(validate_ets_header_limits(3, 1, 0, 1, 1, 1).is_err());
+        assert!(validate_ets_header_limits(3, 1, 41, 1, 1, 1).is_err());
+        assert!(validate_ets_header_limits(3, 1, 1, 1, 0, 1).is_err());
+    }
+
+    #[test]
+    fn ets_derived_dimensions_are_checked_before_allocation() {
+        assert_eq!(
+            checked_ets_axis_len(MAX_ETS_AXIS_INDEX, "z").expect("maximum ETS axis"),
+            MAX_ETS_AXIS_INDEX + 1
+        );
+        assert!(checked_ets_axis_len(MAX_ETS_AXIS_INDEX + 1, "z").is_err());
+        assert_eq!(
+            checked_ets_extent(15, 256, "width").expect("valid ETS width"),
+            4096
+        );
+        assert!(checked_ets_extent(u32::MAX, 1, "width").is_err());
+        assert!(checked_ets_extent(1, u32::MAX, "width").is_err());
+    }
 
     #[test]
     fn opens_olympus_vsi_when_corpus_is_available() {

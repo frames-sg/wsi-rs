@@ -206,8 +206,14 @@ impl<'a> ByteReader<'a> {
 }
 
 fn checked_axis(value: i32) -> Result<u32, WsiError> {
-    u32::try_from(value)
-        .map_err(|_| WsiError::DisplayConversion("negative ZVI axis coordinate".into()))
+    let value = u32::try_from(value)
+        .map_err(|_| WsiError::DisplayConversion("negative ZVI axis coordinate".into()))?;
+    if value > MAX_ZVI_AXIS_INDEX {
+        return Err(WsiError::DisplayConversion(format!(
+            "ZVI axis coordinate {value} exceeds the supported maximum {MAX_ZVI_AXIS_INDEX}"
+        )));
+    }
+    Ok(value)
 }
 
 fn checked_dimension(value: i32) -> Result<u32, WsiError> {
@@ -226,4 +232,15 @@ pub(super) fn decode_utf16le_lossy(raw: &[u8]) -> String {
         .take_while(|value| *value != 0)
         .collect::<Vec<_>>();
     String::from_utf16_lossy(&words)
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn zvi_axis_coordinates_are_bounded_before_channel_allocation() {
+        assert_eq!(checked_axis(65_535).unwrap(), 65_535);
+        assert!(checked_axis(65_536).is_err());
+    }
 }

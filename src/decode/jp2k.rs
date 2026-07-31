@@ -6,8 +6,6 @@ use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::core::types::{DeviceTile, TilePixels};
 use crate::decode::jp2k_backend::{effective_output_colorspace, DecodedInterleavedImage};
 use crate::decode::jp2k_codestream::{parse_codestream_header, validate_narrow_subset};
-#[cfg(debug_assertions)]
-use crate::decode::jp2k_packet::parse_tile_part_packets;
 use crate::decode::jp2k_raster::{crop_sample_buffer, interleaved_image_to_sample_buffer};
 use crate::error::WsiError;
 #[cfg(test)]
@@ -585,11 +583,6 @@ fn validate_jp2k_decode_request(
             "expected 3 components, found {}",
             header.components.len()
         )));
-    }
-
-    #[cfg(debug_assertions)]
-    if let Some(tile_part) = header.tile_parts.first() {
-        let _ = parse_tile_part_packets(data, &header, tile_part);
     }
 
     Ok(header)

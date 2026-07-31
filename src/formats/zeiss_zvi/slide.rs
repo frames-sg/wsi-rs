@@ -1,4 +1,4 @@
-use super::compound::{compound_stream_paths, item_contents_index, read_stream_to_end};
+use super::compound::{compound_stream_paths, item_contents_index, read_stream_bounded};
 use super::header::read_zvi_header;
 use super::model::{ZviCompression, ZviPlane, ZviSlide};
 use super::mosaic::{apply_mosaic_positions, build_mosaic_grid, build_zvi_channels};
@@ -32,7 +32,7 @@ impl SlideReader for ZviReader {
 impl ZviSlide {
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
         let mut compound = cfb::open(path).map_err(|source| invalid_slide(path, source))?;
-        let stream_paths = compound_stream_paths(&compound);
+        let stream_paths = compound_stream_paths(&compound)?;
         let global_tags = read_tags_if_present(&mut compound, "/Image/Tags/Contents")?;
         let global_width = tag_u32(&global_tags, 515);
         let global_height = tag_u32(&global_tags, 516);
@@ -45,6 +45,15 @@ impl ZviSlide {
                 item_contents_index(stream_path).map(|idx| (idx, stream_path.clone()))
             })
             .collect::<Vec<_>>();
+        if item_streams.len() > MAX_ZVI_PLANES {
+            return Err(invalid_slide(
+                path,
+                format!(
+                    "ZVI plane count {} exceeds the {MAX_ZVI_PLANES}-plane safety limit",
+                    item_streams.len()
+                ),
+            ));
+        }
         item_streams.sort_by_key(|(idx, _)| *idx);
         if item_streams.is_empty() {
             return Err(invalid_slide(path, "ZVI has no image item streams"));
@@ -313,7 +322,12 @@ fn associated_images(
     if !compound.is_stream("/Thumbnail") {
         return Ok(HashMap::new());
     }
-    let data = read_stream_to_end(compound, "/Thumbnail")?;
+    let data = read_stream_bounded(
+        compound,
+        "/Thumbnail",
+        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+        "ZVI thumbnail stream",
+    )?;
     let Some(bmp_start) = data.windows(2).position(|bytes| bytes == b"BM") else {
         return Ok(HashMap::new());
     };
@@ -375,17 +389,24 @@ fn validated_payload_length(
             "ZVI plane payload exceeds safety limit",
         ));
     }
-    if header.compression == ZviCompression::Raw {
-        let expected = u64::from(header.width)
-            .checked_mul(u64::from(header.height))
-            .and_then(|value| value.checked_mul(u64::from(header.bytes_per_sample)))
-            .ok_or_else(|| invalid_slide(path, "ZVI raw payload length overflow"))?;
-        if payload_length != expected {
-            return Err(invalid_slide(
-                path,
-                format!("ZVI raw payload has {payload_length} bytes, expected {expected}"),
-            ));
-        }
+    let decoded_length = u64::from(header.width)
+        .checked_mul(u64::from(header.height))
+        .and_then(|value| value.checked_mul(u64::from(header.bytes_per_sample)))
+        .ok_or_else(|| invalid_slide(path, "ZVI decoded payload length overflow"))?;
+    if decoded_length > crate::core::limits::MAX_DECODED_IMAGE_BYTES {
+        return Err(invalid_slide(
+            path,
+            format!(
+                "ZVI decoded plane requires {decoded_length} bytes, exceeding the {}-byte safety limit",
+                crate::core::limits::MAX_DECODED_IMAGE_BYTES
+            ),
+        ));
+    }
+    if header.compression == ZviCompression::Raw && payload_length != decoded_length {
+        return Err(invalid_slide(
+            path,
+            format!("ZVI raw payload has {payload_length} bytes, expected {decoded_length}"),
+        ));
     }
     Ok(payload_length)
 }
@@ -431,5 +452,10 @@ mod payload_tests {
             &header(ZviCompression::Zlib),
         )
         .is_err());
+
+        let mut oversized_decoded = header(ZviCompression::Zlib);
+        oversized_decoded.width = u32::MAX;
+        oversized_decoded.height = u32::MAX;
+        assert!(validated_payload_length(path, 11, &oversized_decoded).is_err());
     }
 }

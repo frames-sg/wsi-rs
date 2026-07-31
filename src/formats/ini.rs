@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::core::limits::read_file_bounded;
 use crate::error::WsiError;
 
 #[derive(Default)]
@@ -15,15 +16,20 @@ pub(crate) fn parse_ini_file(
     too_large: impl FnOnce(&Path) -> WsiError,
     strip_utf8_bom: bool,
 ) -> Result<ParsedIni, WsiError> {
-    let metadata = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if metadata.len() > max_size {
-        return Err(too_large(path));
-    }
-    let text = std::fs::read_to_string(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
+    let bytes = match read_file_bounded(path, max_size, "INI file") {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == std::io::ErrorKind::InvalidData => {
+            return Err(too_large(path));
+        }
+        Err(source) => {
+            return Err(WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.to_path_buf(),
+            });
+        }
+    };
+    let text = String::from_utf8(bytes).map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(std::io::Error::new(std::io::ErrorKind::InvalidData, source)),
         path: path.to_path_buf(),
     })?;
     let text = if strip_utf8_bom {

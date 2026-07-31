@@ -23,7 +23,10 @@ use lru::LruCache;
 use rayon::prelude::*;
 
 use crate::core::cache::CacheKey;
-use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
+use crate::core::limits::{
+    checked_product_to_usize, read_file_bounded, MAX_COMPRESSED_INPUT_BYTES,
+    MAX_DECODED_IMAGE_BYTES,
+};
 use crate::core::registry::{
     composite_region_from_source, crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
     SlideReader, DEFAULT_MAX_REGION_PIXELS,

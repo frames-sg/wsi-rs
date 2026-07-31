@@ -85,6 +85,36 @@ fn level0_properties_from_metadata_match_full_parse() {
     );
 }
 
+#[test]
+fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
+    const METADATA_ELEMENT_LIMIT: u32 = 16 * 1024 * 1024;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized-metadata.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    let pixel_header = [0xE0, 0x7F, 0x10, 0x00, b'O', b'B', 0, 0];
+    let pixel_offset = bytes
+        .windows(pixel_header.len())
+        .position(|candidate| candidate == pixel_header)
+        .expect("test DICOM should contain explicit-VR Pixel Data");
+    let mut hostile_header = vec![0x77, 0x77, 0x10, 0x00, b'O', b'B', 0, 0];
+    hostile_header.extend_from_slice(&(METADATA_ELEMENT_LIMIT + 1).to_le_bytes());
+    bytes.splice(pixel_offset..pixel_offset, hostile_header);
+    std::fs::write(&path, bytes).unwrap();
+
+    let error = match parse_metadata_object_full(&path) {
+        Ok(_) => panic!("oversized metadata value must be rejected before allocation"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("metadata element value limit"),
+        "unexpected error: {error}"
+    );
+}
+
 enum TestPixelData {
     Native(Vec<u8>),
     Encapsulated(Vec<u8>),
@@ -666,6 +696,7 @@ fn test_dicom_image_with_transfer_syntax(
         tiles_across: 8,
         tiles_down: 8,
         number_of_frames: 1,
+        native_pixel_data: None,
         grid,
         pixel_spacing: None,
         objective_lens_power: None,
@@ -2088,10 +2119,10 @@ fn compressed_frame_preflight_enforces_exact_limit_for_every_fragment() {
         payload_offset: 8,
         len: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as u32,
     };
-    let preflight = preflight_compressed_frame(path, &[exact])
+    let total_len = preflight_compressed_frame(path, &[exact])
         .expect("the exact compressed-frame limit must be accepted");
     assert_eq!(
-        preflight.total_len,
+        total_len,
         crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as usize
     );
 

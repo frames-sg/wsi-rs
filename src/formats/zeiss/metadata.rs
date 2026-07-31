@@ -1,6 +1,8 @@
 use super::attachments::guid_bytes;
 use super::*;
 
+pub(super) type CanvasTileSubblockMap = StdHashMap<(i64, i64), Vec<usize>>;
+
 const DEFAULT_TILE_PX: u32 = 256;
 
 pub(super) fn build_channels(summary: &czi_rs::MetadataSummary) -> Vec<ChannelInfo> {
@@ -37,12 +39,20 @@ fn parse_channel_color(value: &str) -> Option<[u8; 3]> {
 pub(super) fn scene_indices(
     statistics: &czi_rs::SubBlockStatistics,
     summary: &czi_rs::MetadataSummary,
-) -> Vec<usize> {
-    let mut indices: BTreeSet<usize> = statistics
-        .scene_bounding_boxes
-        .keys()
-        .filter_map(|scene| (*scene >= 0).then_some(*scene as usize))
-        .collect();
+) -> Result<Vec<usize>, WsiError> {
+    let mut indices = BTreeSet::new();
+    for scene in statistics.scene_bounding_boxes.keys().copied() {
+        if scene < 0 {
+            continue;
+        }
+        let scene = scene as usize;
+        if !indices.contains(&scene) && indices.len() == MAX_CZI_SCENES {
+            return Err(WsiError::DisplayConversion(format!(
+                "CZI scene count exceeds the {MAX_CZI_SCENES}-scene safety limit"
+            )));
+        }
+        indices.insert(scene);
+    }
     if indices.is_empty() {
         let count = summary
             .image
@@ -50,9 +60,20 @@ pub(super) fn scene_indices(
             .get(&CziDimension::S)
             .copied()
             .unwrap_or(1);
+        if count > MAX_CZI_SCENES {
+            return Err(WsiError::DisplayConversion(format!(
+                "CZI scene count {count} exceeds the {MAX_CZI_SCENES}-scene safety limit"
+            )));
+        }
         indices.extend(0..count);
     }
-    indices.into_iter().collect()
+    if indices.len() > MAX_CZI_SCENES {
+        return Err(WsiError::DisplayConversion(format!(
+            "CZI scene count {} exceeds the {MAX_CZI_SCENES}-scene safety limit",
+            indices.len()
+        )));
+    }
+    Ok(indices.into_iter().collect())
 }
 
 pub(super) fn scene_slot_for_subblock(
@@ -163,7 +184,7 @@ pub(super) fn common_level_ratios(
     subblocks: &[czi_rs::DirectorySubBlockInfo],
     scene_indices: &[usize],
     statistics: &czi_rs::SubBlockStatistics,
-) -> Vec<u32> {
+) -> Result<Vec<u32>, WsiError> {
     let mut scene_sets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); scene_indices.len()];
     for sb in subblocks {
         let Some(scene_slot) = scene_slot_for_subblock(scene_indices, sb) else {
@@ -173,7 +194,13 @@ pub(super) fn common_level_ratios(
             continue;
         }
         if let Some(ratio) = subblock_ratio(sb) {
-            scene_sets[scene_slot].insert(ratio);
+            let set = &mut scene_sets[scene_slot];
+            if !set.contains(&ratio) && set.len() == MAX_CZI_LEVELS {
+                return Err(WsiError::DisplayConversion(format!(
+                    "CZI level count exceeds the {MAX_CZI_LEVELS}-level safety limit"
+                )));
+            }
+            set.insert(ratio);
         }
     }
 
@@ -191,7 +218,7 @@ pub(super) fn common_level_ratios(
         fallback
     });
     ratios.insert(1);
-    ratios.into_iter().collect()
+    Ok(ratios.into_iter().collect())
 }
 
 pub(super) fn build_canvas_level_tile_subblocks(
@@ -199,8 +226,9 @@ pub(super) fn build_canvas_level_tile_subblocks(
     canvas_level_subblocks: &[Vec<usize>],
     levels: &[Level],
     subblock_origin: (i32, i32),
-) -> Vec<StdHashMap<(i64, i64), Vec<usize>>> {
+) -> Result<Vec<CanvasTileSubblockMap>, WsiError> {
     let mut out = vec![StdHashMap::<(i64, i64), Vec<usize>>::new(); levels.len()];
+    let mut association_count = 0usize;
     for (level_idx, indices) in canvas_level_subblocks.iter().enumerate() {
         let Some(level) = levels.get(level_idx) else {
             continue;
@@ -220,8 +248,8 @@ pub(super) fn build_canvas_level_tile_subblocks(
             let Some(info) = subblocks.get(index) else {
                 continue;
             };
-            let x = i64::from(info.rect.x - subblock_origin.0).div_euclid(level_ratio);
-            let y = i64::from(info.rect.y - subblock_origin.1).div_euclid(level_ratio);
+            let x = (i64::from(info.rect.x) - i64::from(subblock_origin.0)).div_euclid(level_ratio);
+            let y = (i64::from(info.rect.y) - i64::from(subblock_origin.1)).div_euclid(level_ratio);
             let w = i64::from(info.stored_size.w);
             let h = i64::from(info.stored_size.h);
             if w <= 0 || h <= 0 {
@@ -231,6 +259,29 @@ pub(super) fn build_canvas_level_tile_subblocks(
             let end_col = (x + w - 1).div_euclid(tile_w);
             let start_row = y.div_euclid(tile_h);
             let end_row = (y + h - 1).div_euclid(tile_h);
+            let columns = end_col
+                .checked_sub(start_col)
+                .and_then(|value| value.checked_add(1))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    WsiError::DisplayConversion("CZI tile-column span overflows".into())
+                })?;
+            let rows = end_row
+                .checked_sub(start_row)
+                .and_then(|value| value.checked_add(1))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| WsiError::DisplayConversion("CZI tile-row span overflows".into()))?;
+            let additions = columns.checked_mul(rows).ok_or_else(|| {
+                WsiError::DisplayConversion("CZI tile-association count overflows".into())
+            })?;
+            association_count = association_count.checked_add(additions).ok_or_else(|| {
+                WsiError::DisplayConversion("CZI tile-association count overflows".into())
+            })?;
+            if association_count > MAX_CZI_TILE_ASSOCIATIONS {
+                return Err(WsiError::DisplayConversion(format!(
+                    "CZI tile index exceeds the {MAX_CZI_TILE_ASSOCIATIONS}-association safety limit"
+                )));
+            }
             let map = &mut out[level_idx];
             for col in start_col..=end_col {
                 for row in start_row..=end_row {
@@ -239,7 +290,7 @@ pub(super) fn build_canvas_level_tile_subblocks(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 pub(super) fn subblock_ratio(subblock: &czi_rs::DirectorySubBlockInfo) -> Option<u32> {

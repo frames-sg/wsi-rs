@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use dicom_dictionary_std::{tags, uids};
-use dicom_object::{meta::FileMetaTable, DefaultDicomObject, OpenFileOptions};
+use dicom_object::{DefaultDicomObject, OpenFileOptions};
 use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
 use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
@@ -83,6 +83,7 @@ mod frame_index;
 mod image;
 mod manifest;
 mod metadata;
+mod preflight;
 mod reader;
 
 pub(crate) use backend::DicomBackend;
@@ -92,6 +93,7 @@ use frame_index::*;
 use image::*;
 use manifest::*;
 use metadata::*;
+use preflight::*;
 use reader::*;
 
 #[cfg(test)]

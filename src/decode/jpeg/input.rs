@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
 use crate::error::WsiError;
 use j2k_jpeg::{
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
@@ -11,13 +12,41 @@ use j2k_jpeg::{
 use super::JpegTileGeometry;
 use super::{DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES};
 
+pub(super) fn checked_jpeg_preparation_len(
+    data_len: usize,
+    tables_len: usize,
+) -> Result<usize, WsiError> {
+    let requested = data_len
+        .checked_add(tables_len)
+        .and_then(|len| len.checked_add(2))
+        .ok_or(WsiError::ResourceLimit {
+            resource: "prepared JPEG input",
+            requested: u64::MAX,
+            limit: MAX_COMPRESSED_INPUT_BYTES,
+        })?;
+    let requested_u64 = u64::try_from(requested).map_err(|_| WsiError::ResourceLimit {
+        resource: "prepared JPEG input",
+        requested: u64::MAX,
+        limit: MAX_COMPRESSED_INPUT_BYTES,
+    })?;
+    if requested_u64 > MAX_COMPRESSED_INPUT_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "prepared JPEG input",
+            requested: requested_u64,
+            limit: MAX_COMPRESSED_INPUT_BYTES,
+        });
+    }
+    Ok(requested)
+}
+
 pub(super) fn prepare_jpeg_input<'a>(
     data: &'a [u8],
     tables: Option<&[u8]>,
     expected_width: u32,
     expected_height: u32,
     force_dimensions: bool,
-) -> Cow<'a, [u8]> {
+) -> Result<Cow<'a, [u8]>, WsiError> {
+    let _ = checked_jpeg_preparation_len(data.len(), tables.map_or(0, <[u8]>::len))?;
     let input = if let Some(tbl) = tables {
         let tbl_end = if tbl.len() >= 2 && tbl[tbl.len() - 2..] == [0xFF, 0xD9] {
             tbl.len() - 2
@@ -39,13 +68,13 @@ pub(super) fn prepare_jpeg_input<'a>(
         expected_height,
         force_dimensions,
     );
-    match ensure_jpeg_eoi(patched.as_ref()) {
+    Ok(match ensure_jpeg_eoi(patched.as_ref()) {
         Cow::Borrowed(bytes) if tables.is_none() && bytes.as_ptr() == data.as_ptr() => {
             Cow::Borrowed(data)
         }
         Cow::Borrowed(bytes) => Cow::Owned(bytes.to_vec()),
         Cow::Owned(bytes) => Cow::Owned(bytes),
-    }
+    })
 }
 
 fn find_sof_position(header: &[u8]) -> Option<usize> {
@@ -120,7 +149,7 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_width,
         expected_height,
         force_dimensions,
-    );
+    )?;
     validate_j2k_jpeg_output_size(input.as_ref())?;
     let view = JpegView::parse_with_options(
         input.as_ref(),
@@ -185,7 +214,7 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         req.expected_width,
         req.expected_height,
         req.force_dimensions,
-    );
+    )?;
     validate_j2k_jpeg_output_size(input.as_ref())?;
     let view = JpegView::parse_with_options(
         input.as_ref(),

@@ -313,7 +313,8 @@ fn prepare_j2k_batch_jpeg_job<'j, 'a>(job: &'j JpegDecodeJob<'a>) -> Option<Prep
         job.expected_width,
         job.expected_height,
         job.force_dimensions,
-    );
+    )
+    .ok()?;
     let encoded_dimensions = inspect_j2k_jpeg_output_size(input.as_ref()).ok()?;
     if encoded_dimensions != (job.expected_width, job.expected_height) {
         return None;

@@ -777,7 +777,12 @@ impl SlideReader for TiffPixelReader {
                 )
             }
             TileSource::ExternalJpeg { path } => {
-                let data = std::fs::read(path).map_err(|err| WsiError::InvalidSlide {
+                let data = read_file_bounded(
+                    path,
+                    MAX_COMPRESSED_INPUT_BYTES,
+                    "external TIFF JPEG associated image",
+                )
+                .map_err(|err| WsiError::InvalidSlide {
                     path: path.clone(),
                     message: format!(
                         "failed to read external JPEG associated image '{}': {err}",

@@ -134,7 +134,8 @@ fn decode_jpeg_tile_batch_to_device_pixels<'a>(
             job.expected_width,
             job.expected_height,
             job.force_dimensions,
-        );
+        )
+        .ok()?;
         let Ok(dimensions) = inspect_j2k_jpeg_output_size(input.as_ref()) else {
             return None;
         };
@@ -264,7 +265,7 @@ fn decode_one_jpeg_pixels_metal(
         job.expected_width,
         job.expected_height,
         job.force_dimensions,
-    );
+    )?;
     validate_j2k_jpeg_output_size(input.as_ref())?;
     let view = J2kJpegView::parse_with_options(
         input.as_ref(),
@@ -356,7 +357,7 @@ fn decode_one_jpeg_pixels_cuda(
         job.expected_width,
         job.expected_height,
         job.force_dimensions,
-    );
+    )?;
     validate_j2k_jpeg_output_size(input.as_ref())?;
     let view = J2kJpegView::parse_with_options(
         input.as_ref(),

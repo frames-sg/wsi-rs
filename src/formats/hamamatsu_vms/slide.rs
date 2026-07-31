@@ -47,10 +47,11 @@ impl SlideReader for VmsReader {
             .associated_paths
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        let data = std::fs::read(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.clone(),
-        })?;
+        let data = read_file_bounded(path, MAX_COMPRESSED_INPUT_BYTES, "VMS associated JPEG")
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.clone(),
+            })?;
         crate::core::batch::exactly_one(
             decode_batch_jpeg(&[JpegDecodeJob {
                 data: Cow::Borrowed(&data),
@@ -326,10 +327,11 @@ impl VmsSlide {
         let mut associated_paths = HashMap::new();
         if let Some(macro_path) = macro_path.filter(|p| p.is_file()) {
             let macro_bytes =
-                std::fs::read(&macro_path).map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: macro_path.clone(),
-                })?;
+                read_file_bounded(&macro_path, MAX_COMPRESSED_INPUT_BYTES, "VMS macro JPEG")
+                    .map_err(|source| WsiError::IoWithPath {
+                        source: Arc::new(source),
+                        path: macro_path.clone(),
+                    })?;
             let macro_dims = jpeg_dimensions(&macro_bytes)?;
             associated_images.insert(
                 "macro".into(),

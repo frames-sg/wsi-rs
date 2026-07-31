@@ -1,23 +1,17 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CompressedFramePreflight {
-    pub(super) total_len: usize,
-}
-
 /// Validate one compressed frame's complete fragment graph before any payload
 /// buffer is reserved, copied, or passed to a decoder.
 pub(super) fn preflight_compressed_frame(
     path: &Path,
     fragments: &[DicomFragmentRef],
-) -> Result<CompressedFramePreflight, WsiError> {
+) -> Result<usize, WsiError> {
     if fragments.is_empty() {
         return Err(invalid_slide(
             path,
             "compressed DICOM frame has no fragments",
         ));
     }
-    let mut total = 0u64;
     for fragment in fragments {
         let expected_payload_offset = fragment
             .item_offset
@@ -33,28 +27,8 @@ pub(super) fn preflight_compressed_frame(
             .payload_offset
             .checked_add(u64::from(fragment.len))
             .ok_or_else(|| invalid_slide(path, "DICOM fragment payload offset overflow"))?;
-        let fragment_len = u64::from(fragment.len);
-        if fragment_len > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-            return Err(WsiError::ResourceLimit {
-                resource: "compressed DICOM frame",
-                requested: fragment_len,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            });
-        }
-        total = total
-            .checked_add(fragment_len)
-            .ok_or_else(|| invalid_slide(path, "DICOM compressed frame length overflow"))?;
-        if total > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-            return Err(WsiError::ResourceLimit {
-                resource: "compressed DICOM frame",
-                requested: total,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            });
-        }
     }
-    let total_len = usize::try_from(total)
-        .map_err(|_| invalid_slide(path, "DICOM compressed frame is not addressable"))?;
-    Ok(CompressedFramePreflight { total_len })
+    preflight_compressed_lengths(path, fragments.iter().map(|fragment| fragment.len as usize))
 }
 
 pub(super) fn preflight_compressed_lengths(
@@ -139,12 +113,12 @@ pub(super) fn copy_fragments_from_window(
     window: &[u8],
     fragments: &[DicomFragmentRef],
 ) -> Result<Vec<u8>, WsiError> {
-    let preflight = preflight_compressed_frame(path, fragments)?;
+    let total_len = preflight_compressed_frame(path, fragments)?;
     let mut data = Vec::new();
-    data.try_reserve_exact(preflight.total_len)
+    data.try_reserve_exact(total_len)
         .map_err(|_| WsiError::ResourceLimit {
             resource: "compressed DICOM frame",
-            requested: preflight.total_len as u64,
+            requested: total_len as u64,
             limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
         })?;
     for fragment in fragments {
@@ -290,9 +264,15 @@ fn scan_encapsulated_frames_tokenized(
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?);
-    position_reader_for_dicom_magic(&mut reader, path)?;
-    let _meta = FileMetaTable::from_reader(&mut reader)
-        .map_err(|source| invalid_slide(path, format!("cannot parse DICOM file meta: {source}")))?;
+    let actual_transfer_syntax = preflight_file_meta(&mut reader, path)?;
+    if actual_transfer_syntax != transfer_syntax_uid {
+        return Err(invalid_slide(
+            path,
+            format!(
+                "DICOM transfer syntax changed from {transfer_syntax_uid} to {actual_transfer_syntax}"
+            ),
+        ));
+    }
     let mut tokens = LazyDataSetReader::new_with_ts(reader, transfer_syntax)
         .map_err(|source| invalid_slide(path, format!("cannot stream DICOM dataset: {source}")))?;
 
@@ -986,36 +966,31 @@ fn position_at_explicit_little_endian_dataset(
     file: &mut File,
     path: &Path,
 ) -> Result<(), WsiError> {
-    file.seek(SeekFrom::Start(0))
+    if preflight_file_meta(file, path).is_ok() {
+        return Ok(());
+    }
+
+    // The raw scanner is also exercised against header-only synthetic inputs
+    // which intentionally omit a complete File Meta Information group. Keep
+    // that low-level compatibility path bounded by positioning directly after
+    // a valid preamble instead of invoking the allocating metadata parser.
+    file.seek(SeekFrom::Start(128))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
-    let mut preamble = [0u8; 132];
-    let has_magic = file
-        .read_exact(&mut preamble)
-        .is_ok_and(|()| &preamble[128..] == b"DICM");
-    if has_magic {
-        file.seek(SeekFrom::Start(128))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-        if FileMetaTable::from_reader(&mut *file).is_ok() {
-            return Ok(());
-        }
-        file.seek(SeekFrom::Start(132))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-    } else {
-        file.seek(SeekFrom::Start(0))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-    }
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+    let dataset_offset = if &magic == b"DICM" { 132 } else { 0 };
+    file.seek(SeekFrom::Start(dataset_offset))
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
     Ok(())
 }
 
@@ -1681,26 +1656,5 @@ fn validate_extended_frame_length(
             ),
         ));
     }
-    Ok(())
-}
-
-pub(super) fn position_reader_for_dicom_magic<R: Read + Seek>(
-    reader: &mut R,
-    path: &Path,
-) -> Result<(), WsiError> {
-    let mut preamble = [0u8; 132];
-    reader
-        .read_exact(&mut preamble)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
-    let start = if &preamble[128..] == b"DICM" { 128 } else { 0 };
-    reader
-        .seek(SeekFrom::Start(start))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
     Ok(())
 }

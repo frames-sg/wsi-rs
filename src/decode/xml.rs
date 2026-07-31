@@ -178,7 +178,15 @@ fn make_empty_node(
     budget.add_node()?;
     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut attributes = HashMap::new();
+    let mut attribute_count = 0usize;
     for attr in e.attributes() {
+        attribute_count += 1;
+        if attribute_count > MAX_XML_ATTRIBUTES_PER_NODE {
+            return Err(WsiError::Xml(format!(
+                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
+            )));
+        }
+        budget.add_attributes(1)?;
         let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
@@ -187,7 +195,6 @@ fn make_empty_node(
             .into_owned();
         attributes.insert(key, val);
     }
-    budget.add_attributes(attributes.len())?;
     Ok(XmlNode {
         tag,
         attributes,
@@ -211,7 +218,15 @@ fn parse_node_recursive(
     budget.add_node()?;
     let tag = String::from_utf8_lossy(start.name().as_ref()).into_owned();
     let mut attributes = HashMap::new();
+    let mut attribute_count = 0usize;
     for attr in start.attributes() {
+        attribute_count += 1;
+        if attribute_count > MAX_XML_ATTRIBUTES_PER_NODE {
+            return Err(WsiError::Xml(format!(
+                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
+            )));
+        }
+        budget.add_attributes(1)?;
         let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
@@ -220,7 +235,6 @@ fn parse_node_recursive(
             .into_owned();
         attributes.insert(key, val);
     }
-    budget.add_attributes(attributes.len())?;
     let mut children = Vec::new();
     let mut text = None;
     let mut buf = Vec::new();

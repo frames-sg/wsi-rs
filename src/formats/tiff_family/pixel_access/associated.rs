@@ -87,16 +87,12 @@ impl TiffPixelReader {
             .get_u32(ifd_id, tags::ROWS_PER_STRIP)
             .unwrap_or(height)
             .max(1);
-        let total_bytes = usize::try_from(width)
-            .ok()
-            .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-            .and_then(|px| px.checked_mul(3))
-            .ok_or_else(|| {
-                WsiError::UnsupportedFormat(format!(
-                    "associated image '{}' dimensions overflow RGB buffer size",
-                    name
-                ))
-            })?;
+        let total_bytes = checked_product_to_usize(
+            &[u64::from(width), u64::from(height), 3],
+            MAX_DECODED_IMAGE_BYTES,
+            "associated TIFF image",
+        )
+        .map_err(WsiError::DisplayConversion)?;
         let dst_stride = width as usize * 3;
         let strip_count = height.div_ceil(rows_per_strip) as usize;
         if strip_offsets.len() < strip_count || strip_byte_counts.len() < strip_count {

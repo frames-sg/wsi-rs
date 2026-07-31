@@ -7,14 +7,20 @@ pub(super) fn looks_like_zvi(compound: &mut CompoundFile<File>) -> bool {
             .any(|entry| entry.is_stream() && item_contents_index(&entry_path(&entry)).is_some())
 }
 
-pub(super) fn compound_stream_paths(compound: &CompoundFile<File>) -> Vec<String> {
-    let mut paths = compound
-        .walk()
-        .filter(|entry| entry.is_stream())
-        .map(|entry| entry_path(&entry))
-        .collect::<Vec<_>>();
+pub(super) fn compound_stream_paths(
+    compound: &CompoundFile<File>,
+) -> Result<Vec<String>, WsiError> {
+    let mut paths = Vec::new();
+    for entry in compound.walk().filter(|entry| entry.is_stream()) {
+        if paths.len() == MAX_ZVI_STREAMS {
+            return Err(WsiError::DisplayConversion(format!(
+                "ZVI compound file exceeds the {MAX_ZVI_STREAMS}-stream safety limit"
+            )));
+        }
+        paths.push(entry_path(&entry));
+    }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 fn entry_path(entry: &cfb::Entry) -> String {
@@ -41,14 +47,14 @@ pub(super) fn read_stream_prefix(
     Ok(data)
 }
 
-pub(super) fn read_stream_to_end(
+pub(super) fn read_stream_bounded(
     compound: &mut CompoundFile<File>,
     path: &str,
+    limit: u64,
+    label: &str,
 ) -> Result<Vec<u8>, WsiError> {
     let stream = compound.open_stream(path)?;
     Ok(crate::core::limits::read_to_end_bounded(
-        stream,
-        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-        "ZVI compound stream",
+        stream, limit, label,
     )?)
 }

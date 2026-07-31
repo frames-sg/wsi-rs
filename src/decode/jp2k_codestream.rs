@@ -1,3 +1,4 @@
+use crate::core::limits::MAX_DECODED_IMAGE_BYTES;
 use crate::error::WsiError;
 
 const MARKER_SOC: u16 = 0xFF4F;
@@ -10,6 +11,9 @@ const MARKER_SOT: u16 = 0xFF90;
 const MARKER_SOD: u16 = 0xFF93;
 const MARKER_EOC: u16 = 0xFFD9;
 const MARKER_EPH: u16 = 0xFF92;
+const MAX_JP2K_MARKERS: usize = 65_536;
+const MAX_JP2K_TILE_PARTS: usize = 1_024;
+const MAX_JP2K_DECOMPOSITION_LEVELS: u8 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Jp2kProgressionOrder {
@@ -215,15 +219,17 @@ impl<'a> Reader<'a> {
 }
 
 impl Jp2kCodingStyleInfo {
-    #[cfg(any(debug_assertions, test))]
+    #[cfg(test)]
     pub fn resolution_count(&self) -> u8 {
         self.decomposition_levels + 1
     }
 
+    #[cfg(test)]
     pub fn code_block_width(&self) -> u32 {
         1u32 << (self.code_block_width_exponent as u32 + 2)
     }
 
+    #[cfg(test)]
     pub fn code_block_height(&self) -> u32 {
         1u32 << (self.code_block_height_exponent as u32 + 2)
     }
@@ -394,6 +400,16 @@ fn parse_sot(segment: &[u8]) -> Result<Jp2kTilePartHeader, WsiError> {
     })
 }
 
+fn record_marker(markers: &mut Vec<u16>, marker: u16) -> Result<(), WsiError> {
+    if markers.len() == MAX_JP2K_MARKERS {
+        return Err(WsiError::Jp2k(format!(
+            "JP2K marker count exceeds the {MAX_JP2K_MARKERS}-marker safety limit"
+        )));
+    }
+    markers.push(marker);
+    Ok(())
+}
+
 pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo, WsiError> {
     let mut reader = Reader::new(data);
     let soc = reader.read_u16()?;
@@ -413,7 +429,7 @@ pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo,
     while reader.remaining() >= 2 {
         let marker_offset = reader.offset();
         let marker = reader.read_u16()?;
-        seen_markers.push(marker);
+        record_marker(&mut seen_markers, marker)?;
         match marker {
             MARKER_SOD | MARKER_EOC => {
                 main_header_length = marker_offset;
@@ -433,7 +449,7 @@ pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo,
                         ));
                     }
                     let inner_marker = reader.read_u16()?;
-                    seen_markers.push(inner_marker);
+                    record_marker(&mut seen_markers, inner_marker)?;
                     match inner_marker {
                         MARKER_SOD => {
                             let data_offset = reader.offset();
@@ -450,6 +466,11 @@ pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo,
                                 return Err(WsiError::Jp2k(
                                     "invalid JP2K tile-part payload bounds".into(),
                                 ));
+                            }
+                            if tile_parts.len() == MAX_JP2K_TILE_PARTS {
+                                return Err(WsiError::Jp2k(format!(
+                                    "JP2K tile-part count exceeds the {MAX_JP2K_TILE_PARTS}-part safety limit"
+                                )));
                             }
                             tile_parts.push(Jp2kTilePartInfo {
                                 header: tile_part_header,
@@ -502,6 +523,21 @@ pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo,
 }
 
 pub(crate) fn validate_narrow_subset(info: &Jp2kCodestreamInfo) -> Result<(), WsiError> {
+    let decoded_bytes = u64::from(info.image_width)
+        .checked_mul(u64::from(info.image_height))
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or(WsiError::ResourceLimit {
+            resource: "decoded JP2K image",
+            requested: u64::MAX,
+            limit: MAX_DECODED_IMAGE_BYTES,
+        })?;
+    if decoded_bytes > MAX_DECODED_IMAGE_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "decoded JP2K image",
+            requested: decoded_bytes,
+            limit: MAX_DECODED_IMAGE_BYTES,
+        });
+    }
     if info.tile_count_x != 1 || info.tile_count_y != 1 {
         return Err(WsiError::Jp2k(format!(
             "unsupported JP2K tile grid: expected single tile, found {}x{}",
@@ -577,7 +613,15 @@ pub(crate) fn validate_narrow_subset(info: &Jp2kCodestreamInfo) -> Result<(), Ws
                 .into(),
         ));
     }
-    if info.coding_style.code_block_width() > 64 || info.coding_style.code_block_height() > 64 {
+    if info.coding_style.decomposition_levels > MAX_JP2K_DECOMPOSITION_LEVELS {
+        return Err(WsiError::Jp2k(format!(
+            "unsupported JP2K decomposition level count {}; maximum is {MAX_JP2K_DECOMPOSITION_LEVELS}",
+            info.coding_style.decomposition_levels
+        )));
+    }
+    if info.coding_style.code_block_width_exponent > 4
+        || info.coding_style.code_block_height_exponent > 4
+    {
         return Err(WsiError::Jp2k(
             "unsupported JP2K code-block size; expected at most 64x64".into(),
         ));
@@ -764,6 +808,40 @@ mod tests {
         assert_eq!(info.tile_parts.len(), 1);
         assert_eq!(info.tile_parts[0].header.tile_part_index, 0);
         assert_eq!(info.tile_parts[0].data_length, 4);
+    }
+
+    #[test]
+    fn narrow_subset_rejects_decoded_images_over_the_global_budget() {
+        let stream = build_supported_codestream(2, 2, true, 512, 256, 1);
+        let mut info = parse_codestream_header(&stream).unwrap();
+        info.image_width = (512 * 1024 * 1024 / 3) + 1;
+        info.image_height = 1;
+        info.tile_width = info.image_width;
+        info.tile_height = 1;
+
+        assert!(matches!(
+            validate_narrow_subset(&info),
+            Err(WsiError::ResourceLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn narrow_subset_rejects_unsafe_coding_style_exponents() {
+        let stream = build_supported_codestream(2, 2, true, 512, 256, 1);
+        let mut info = parse_codestream_header(&stream).unwrap();
+        info.coding_style.code_block_width_exponent = u8::MAX;
+        assert!(validate_narrow_subset(&info).is_err());
+
+        let mut info = parse_codestream_header(&stream).unwrap();
+        info.coding_style.decomposition_levels = 31;
+        info.quantization.steps = vec![
+            Jp2kQuantStep {
+                exponent: 1,
+                mantissa: 0,
+            };
+            info.coding_style.expected_expounded_quant_steps()
+        ];
+        assert!(validate_narrow_subset(&info).is_err());
     }
 
     #[test]

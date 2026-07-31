@@ -1,4 +1,5 @@
 use std::io::{self, Read};
+use std::path::Path;
 
 pub(crate) const MAX_COMPRESSED_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) const MAX_DECODED_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
@@ -34,6 +35,11 @@ pub(crate) fn read_to_end_bounded(reader: impl Read, max: u64, label: &str) -> i
     Ok(output)
 }
 
+pub(crate) fn read_file_bounded(path: &Path, max: u64, label: &str) -> io::Result<Vec<u8>> {
+    let file = std::fs::File::open(path)?;
+    read_to_end_bounded(file, max, label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +61,20 @@ mod tests {
             b"1234"
         );
         assert!(read_to_end_bounded(&b"12345"[..], 4, "input").is_err());
+    }
+
+    #[test]
+    fn bounded_file_read_uses_the_open_handle_and_rejects_oversize_input() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("input.bin");
+        std::fs::write(&path, b"12345").expect("write bounded-read fixture");
+
+        assert_eq!(read_file_bounded(&path, 5, "input").unwrap(), b"12345");
+        assert_eq!(
+            read_file_bounded(&path, 4, "input")
+                .expect_err("one byte over the limit must fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }

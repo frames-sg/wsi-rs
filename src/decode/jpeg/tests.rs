@@ -6,7 +6,10 @@ use super::device::progressive_jpeg_requires_cpu_device_route;
 use super::device::{
     jpeg_device_batch_attempts_for_test, reset_jpeg_device_batch_attempts_for_test,
 };
-use super::input::{ensure_jpeg_eoi, patch_jpeg_dimensions, try_decode_jpeg_rgb_scaled};
+use super::input::{
+    checked_jpeg_preparation_len, ensure_jpeg_eoi, patch_jpeg_dimensions,
+    try_decode_jpeg_rgb_scaled,
+};
 use super::*;
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::core::types::{DeviceTile, TilePixels};
@@ -616,6 +619,14 @@ fn ensure_jpeg_eoi_keeps_valid_trailer() {
     let jpeg = vec![0xFF, 0xD8, 0xFF, 0xD9];
     let repaired = ensure_jpeg_eoi(&jpeg);
     assert!(matches!(repaired, Cow::Borrowed(_)));
+}
+
+#[test]
+fn jpeg_preparation_length_reserves_space_for_repaired_eoi() {
+    let limit = crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as usize;
+    assert_eq!(checked_jpeg_preparation_len(limit - 2, 0).unwrap(), limit);
+    assert!(checked_jpeg_preparation_len(limit - 1, 0).is_err());
+    assert!(checked_jpeg_preparation_len(usize::MAX, 1).is_err());
 }
 
 #[test]

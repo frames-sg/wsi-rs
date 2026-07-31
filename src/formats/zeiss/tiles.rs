@@ -1,3 +1,4 @@
+use super::preflight::preflight_czi_subblock;
 use super::slide::ZeissSlide;
 #[cfg(test)]
 use super::slide::{
@@ -218,6 +219,7 @@ impl ZeissSlide {
         if direct_uncompressed_rgb {
             let mut destination = vec![0u8; tile_rgb_len];
             for info in subblocks {
+                preflight_czi_subblock(&self.source_path, info.file_position)?;
                 let raw = czi
                     .read_subblock(info.index)
                     .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -237,6 +239,7 @@ impl ZeissSlide {
 
         let mut destination = vec![0u8; tile_rgb_len];
         for info in subblocks {
+            preflight_czi_subblock(&self.source_path, info.file_position)?;
             let raw = czi
                 .read_subblock(info.index)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -366,6 +369,7 @@ impl ZeissSlide {
             .map_err(WsiError::DisplayConversion)?;
             let mut destination = vec![0u8; destination_len];
             for info in subblocks {
+                preflight_czi_subblock(&self.source_path, info.file_position)?;
                 let raw = czi
                     .read_subblock(info.index)
                     .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -390,6 +394,7 @@ impl ZeissSlide {
 
         let mut destination: Option<czi_rs::Bitmap> = None;
         for info in subblocks {
+            preflight_czi_subblock(&self.source_path, info.file_position)?;
             let raw = {
                 let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
                 czi.read_subblock(info.index)

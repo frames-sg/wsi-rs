@@ -18,12 +18,20 @@ pub(super) struct DicomImage {
     pub(super) tiles_across: u32,
     pub(super) tiles_down: u32,
     pub(super) number_of_frames: u32,
+    pub(super) native_pixel_data: Option<NativePixelData>,
     pub(super) grid: DicomGrid,
     pub(super) pixel_spacing: Option<(f64, f64)>,
     pub(super) objective_lens_power: Option<f64>,
     pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
     pub(super) encapsulated_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
     pub(super) decoded_frame_cache: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
+}
+
+#[derive(Debug)]
+pub(super) struct NativePixelData {
+    source_identity: FileIdentity,
+    value_offset: u64,
+    value_len: u32,
 }
 
 #[derive(Debug)]
@@ -67,6 +75,31 @@ impl DicomImage {
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
         let decoded_frame_cache =
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
+        let native_pixel_data = if is_encapsulated_transfer_syntax(&meta.transfer_syntax_uid) {
+            if meta.pixel_data != DicomPixelDataLocation::Encapsulated {
+                return Err(invalid_slide(
+                    &meta.path,
+                    "encapsulated transfer syntax does not have encapsulated Pixel Data",
+                ));
+            }
+            None
+        } else {
+            let DicomPixelDataLocation::Native {
+                value_offset,
+                value_len,
+            } = meta.pixel_data
+            else {
+                return Err(invalid_slide(
+                    &meta.path,
+                    "native transfer syntax does not have native Pixel Data",
+                ));
+            };
+            Some(NativePixelData {
+                source_identity: meta.source_identity,
+                value_offset,
+                value_len,
+            })
+        };
         Ok(Self {
             path: meta.path,
             sop_instance_uid: meta.sop_instance_uid,
@@ -81,6 +114,7 @@ impl DicomImage {
             tiles_across,
             tiles_down,
             number_of_frames: meta.number_of_frames,
+            native_pixel_data,
             grid,
             pixel_spacing: meta.pixel_spacing,
             objective_lens_power: meta.objective_lens_power,
@@ -216,33 +250,23 @@ impl DicomImage {
         col: i64,
         row: i64,
     ) -> Result<CpuTile, WsiError> {
-        let obj = reopen_dicom_object(&self.path)?;
-        let pixel_data = obj
-            .element(tags::PIXEL_DATA)
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!("missing pixel data: {err}"),
-            })?
-            .to_bytes()
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!("failed to read DICOM pixel data: {err}"),
-            })?;
-        let frame_len = (self.tile_width as usize)
-            .checked_mul(self.tile_height as usize)
-            .and_then(|pixels| pixels.checked_mul(self.samples_per_pixel as usize))
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame size overflow".into(),
-            })?;
-        let start = (frame_index as usize)
-            .checked_mul(frame_len)
+        let frame_len = crate::core::limits::checked_product_to_usize(
+            &[
+                u64::from(self.tile_width),
+                u64::from(self.tile_height),
+                u64::from(self.samples_per_pixel),
+            ],
+            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            "native DICOM frame",
+        )
+        .map_err(|reason| WsiError::TileRead {
+            col,
+            row,
+            level,
+            reason,
+        })?;
+        let start = u64::from(frame_index)
+            .checked_mul(frame_len as u64)
             .ok_or_else(|| WsiError::TileRead {
                 col,
                 row,
@@ -250,28 +274,64 @@ impl DicomImage {
                 reason: "DICOM frame offset overflow".into(),
             })?;
         let end = start
-            .checked_add(frame_len)
+            .checked_add(frame_len as u64)
             .ok_or_else(|| WsiError::TileRead {
                 col,
                 row,
                 level,
                 reason: "DICOM frame byte range overflow".into(),
             })?;
-        if end > pixel_data.len() {
+        let native_pixel_data =
+            self.native_pixel_data
+                .as_ref()
+                .ok_or_else(|| WsiError::TileRead {
+                    col,
+                    row,
+                    level,
+                    reason: "native DICOM Pixel Data location is unavailable".into(),
+                })?;
+        if end > u64::from(native_pixel_data.value_len) {
             return Err(WsiError::TileRead {
                 col,
                 row,
                 level,
                 reason: format!(
                     "DICOM frame {frame_index} byte range {}..{} exceeds pixel data length {}",
-                    start,
-                    end,
-                    pixel_data.len()
+                    start, end, native_pixel_data.value_len
                 ),
             });
         }
+        let absolute_start = native_pixel_data
+            .value_offset
+            .checked_add(start)
+            .ok_or_else(|| WsiError::TileRead {
+                col,
+                row,
+                level,
+                reason: "DICOM frame file offset overflow".into(),
+            })?;
+        let mut frame = Vec::new();
+        frame
+            .try_reserve_exact(frame_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "native DICOM frame",
+                requested: frame_len as u64,
+                limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            })?;
+        frame.resize(frame_len, 0);
+        let mut file = File::open(&self.path).map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: self.path.clone(),
+        })?;
+        if FileIdentity::from_open_file(&self.path, &file)? != native_pixel_data.source_identity {
+            return Err(invalid_slide(
+                &self.path,
+                "DICOM source changed after metadata was parsed",
+            ));
+        }
+        read_exact_at(&mut file, &self.path, absolute_start, &mut frame)?;
         frame_bytes_to_rgb_tile(
-            &pixel_data[start..end],
+            &frame,
             self.tile_width,
             self.tile_height,
             self.samples_per_pixel,
@@ -722,13 +782,13 @@ impl DicomImage {
         file: &mut File,
         fragments: &[DicomFragmentRef],
     ) -> Result<Vec<u8>, WsiError> {
-        let preflight = preflight_compressed_frame(&self.path, fragments)?;
+        let total_len = preflight_compressed_frame(&self.path, fragments)?;
         self.validate_encapsulated_fragment_headers_with_file(file, fragments)?;
         let mut data = Vec::new();
-        data.try_reserve_exact(preflight.total_len)
+        data.try_reserve_exact(total_len)
             .map_err(|_| WsiError::ResourceLimit {
                 resource: "compressed DICOM frame",
-                requested: preflight.total_len as u64,
+                requested: total_len as u64,
                 limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
             })?;
         for fragment in fragments {

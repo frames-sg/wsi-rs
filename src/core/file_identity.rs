@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
@@ -29,18 +30,35 @@ impl FileIdentity {
                 source: Arc::new(source),
                 path: canonical_path.clone(),
             })?;
+        Ok(Self::from_metadata(canonical_path, metadata))
+    }
+
+    pub(crate) fn from_open_file(path: &Path, file: &File) -> Result<Self, WsiError> {
+        let canonical_path =
+            std::fs::canonicalize(path).map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.to_path_buf(),
+            })?;
+        let metadata = file.metadata().map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: canonical_path.clone(),
+        })?;
+        Ok(Self::from_metadata(canonical_path, metadata))
+    }
+
+    fn from_metadata(canonical_path: PathBuf, metadata: std::fs::Metadata) -> Self {
         let modified_ns = metadata
             .modified()
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_nanos());
 
-        Ok(Self {
+        Self {
             canonical_path,
             length: metadata.len(),
             modified_ns,
             is_dir: metadata.is_dir(),
-        })
+        }
     }
 }
 

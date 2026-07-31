@@ -1,3 +1,4 @@
+use super::preflight::preflight_czi_file;
 use super::tiles::bitmap_to_sample_buffer;
 use super::*;
 
@@ -45,8 +46,27 @@ pub(super) fn decode_associated_attachment(
 
     if attachment.content_file_type.eq_ignore_ascii_case("CZI") {
         return with_temporary_czi_blob(&blob.data, |temp_path| {
+            preflight_czi_file(temp_path)?;
             let mut embedded = CziFile::open(temp_path)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+            ensure_uncompressed_embedded_czi(
+                embedded.subblocks().iter().map(|info| info.compression),
+            )?;
+            let plane_rect = embedded
+                .statistics()
+                .bounding_box_layer0
+                .or(embedded.statistics().bounding_box)
+                .ok_or_else(|| {
+                    WsiError::DisplayConversion("embedded CZI has no plane bounding box".into())
+                })?;
+            let max_bytes_per_pixel = embedded
+                .subblocks()
+                .iter()
+                .filter(|info| info.is_layer0())
+                .map(|info| info.pixel_type.bytes_per_pixel())
+                .max()
+                .unwrap_or(1);
+            ensure_embedded_czi_plane_budget((plane_rect.w, plane_rect.h), max_bytes_per_pixel)?;
             let bitmap = embedded
                 .read_frame_2d(0, 0, 0, 0)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -64,6 +84,48 @@ pub(super) fn decode_associated_attachment(
     }
 
     Ok(None)
+}
+
+fn ensure_uncompressed_embedded_czi(
+    compressions: impl IntoIterator<Item = CziCompressionMode>,
+) -> Result<(), WsiError> {
+    if let Some(compression) = compressions
+        .into_iter()
+        .find(|compression| *compression != CziCompressionMode::UnCompressed)
+    {
+        return Err(WsiError::UnsupportedFormat(format!(
+            "compressed embedded CZI associated images are not supported safely ({compression})"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_embedded_czi_plane_budget(
+    dimensions: (i32, i32),
+    bytes_per_pixel: usize,
+) -> Result<(), WsiError> {
+    let width = u64::try_from(dimensions.0).map_err(|_| {
+        WsiError::DisplayConversion("embedded CZI plane has a non-positive width".into())
+    })?;
+    let height = u64::try_from(dimensions.1).map_err(|_| {
+        WsiError::DisplayConversion("embedded CZI plane has a non-positive height".into())
+    })?;
+    if width == 0 || height == 0 {
+        return Err(WsiError::DisplayConversion(
+            "embedded CZI plane has zero dimensions".into(),
+        ));
+    }
+    checked_product_to_usize(
+        &[
+            width,
+            height,
+            u64::try_from(bytes_per_pixel).unwrap_or(u64::MAX),
+        ],
+        MAX_DECODED_IMAGE_BYTES,
+        "embedded CZI plane",
+    )
+    .map(|_| ())
+    .map_err(WsiError::DisplayConversion)
 }
 
 pub(super) fn probe_associated_attachment(
@@ -188,6 +250,26 @@ pub(super) fn guid_bytes(value: &str) -> Result<[u8; 16], WsiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_czi_rejects_compressed_subblocks_before_decode() {
+        assert!(ensure_uncompressed_embedded_czi([
+            CziCompressionMode::UnCompressed,
+            CziCompressionMode::UnCompressed,
+        ])
+        .is_ok());
+        let error = ensure_uncompressed_embedded_czi([CziCompressionMode::Zstd0])
+            .expect_err("compressed embedded CZI must not reach unbounded dependency decode");
+        assert!(error.to_string().contains("compressed embedded CZI"));
+    }
+
+    #[test]
+    fn embedded_czi_rejects_oversized_plane_before_dependency_allocation() {
+        assert!(ensure_embedded_czi_plane_budget((512, 512), 4).is_ok());
+        let error = ensure_embedded_czi_plane_budget((32_768, 32_768), 1)
+            .expect_err("oversized embedded plane must be rejected before allocation");
+        assert!(error.to_string().contains("embedded CZI plane"));
+    }
 
     #[test]
     fn temporary_czi_blob_is_removed_after_success_and_failure() {

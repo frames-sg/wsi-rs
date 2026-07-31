@@ -1,5 +1,6 @@
 mod attachments;
 mod metadata;
+mod preflight;
 mod slide;
 mod tiles;
 
@@ -11,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,7 @@ use std::collections::HashMap as StdHashMap;
 
 use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::hash::Quickhash1;
+use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
     ConfiguredFormatProbe, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
@@ -38,6 +40,13 @@ use crate::properties::Properties;
 use slide::{ZeissReader, ZeissSlide};
 
 const FILE_MAGIC: &[u8; 16] = b"ZISRAWFILE\0\0\0\0\0\0";
+const MAX_CZI_METADATA_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_CZI_DIRECTORY_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_CZI_SUBBLOCKS: usize = 1_000_000;
+const MAX_CZI_ATTACHMENTS: usize = 1_024;
+const MAX_CZI_SCENES: usize = 1_024;
+const MAX_CZI_LEVELS: usize = 1_024;
+const MAX_CZI_TILE_ASSOCIATIONS: usize = 4_000_000;
 
 pub(crate) struct ZeissBackend;
 

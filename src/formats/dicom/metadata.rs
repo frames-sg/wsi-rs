@@ -3,6 +3,8 @@ use super::*;
 pub(super) struct ParsedDicomMetadata {
     pub(super) path: PathBuf,
     pub(super) obj: DefaultDicomObject,
+    pub(super) pixel_data: DicomPixelDataLocation,
+    pub(super) source_identity: FileIdentity,
     pub(super) study_instance_uid: Option<String>,
     pub(super) series_instance_uid: String,
     pub(super) frame_of_reference_uid: Option<String>,
@@ -70,10 +72,7 @@ pub(super) fn parse_metadata_object_full(path: &Path) -> Result<ParsedDicomMetad
 pub(super) type Level0Properties = (Option<(f64, f64)>, Option<f64>);
 
 pub(super) fn parse_level0_properties(path: &Path) -> Result<Level0Properties, WsiError> {
-    let obj = OpenFileOptions::new()
-        .read_until(tags::PIXEL_DATA)
-        .open_file(path)
-        .map_err(|source| invalid_slide(path, format!("cannot parse DICOM metadata: {source}")))?;
+    let obj = open_metadata_object_until(path, tags::PIXEL_DATA)?.object;
     let pixel_spacing = optional_pixel_spacing_mpp(&obj)?;
     let objective_lens_power = optional_f64_at(
         &obj,
@@ -127,10 +126,8 @@ pub(super) fn parse_metadata_object_until(
         )));
     }
 
-    let obj = OpenFileOptions::new()
-        .read_until(stop_tag)
-        .open_file(path)
-        .map_err(|source| invalid_slide(path, format!("cannot parse DICOM metadata: {source}")))?;
+    let opened = open_metadata_object_until(path, stop_tag)?;
+    let obj = opened.object;
 
     if !is_vl_wsi(obj.meta().media_storage_sop_class_uid()) {
         return Err(WsiError::UnsupportedFormat(path.display().to_string()));
@@ -179,6 +176,8 @@ pub(super) fn parse_metadata_object_until(
     Ok(ParsedDicomMetadata {
         path: path.to_path_buf(),
         obj,
+        pixel_data: opened.pixel_data,
+        source_identity: opened.source_identity,
         study_instance_uid,
         series_instance_uid,
         frame_of_reference_uid,

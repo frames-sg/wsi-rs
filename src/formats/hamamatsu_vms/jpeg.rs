@@ -3,6 +3,7 @@ use super::*;
 
 const JPEG_HEADER_MAX_BYTES: usize = 1 << 20;
 const JPEG_SCAN_CHUNK_BYTES: usize = 64 << 10;
+const MAX_VMS_TILE_INDEX_BYTES: u64 = 128 * 1024 * 1024;
 impl VmsJpeg {
     #[cfg(test)]
     pub(super) fn parse(path: &Path, row_starts: Vec<Option<u64>>) -> Result<Self, WsiError> {
@@ -33,16 +34,31 @@ impl VmsJpeg {
         let geometry = header.geometry;
         let tiles_across = geometry.width.div_ceil(geometry.tile_width);
         let tiles_down = geometry.height.div_ceil(geometry.tile_height);
-        let tile_count = usize::try_from(u64::from(tiles_across) * u64::from(tiles_down))
-            .map_err(|_| invalid_slide(path, "VMS JPEG tile count exceeds address space"))?;
-        let mut unreliable_mcu_starts = vec![None; tile_count];
+        let tile_count = checked_vms_tile_count(path, tiles_across, tiles_down)?;
+        let mut unreliable_mcu_starts = Vec::new();
+        unreliable_mcu_starts
+            .try_reserve_exact(tile_count)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "VMS JPEG tile index",
+                requested: MAX_VMS_TILE_INDEX_BYTES,
+                limit: MAX_VMS_TILE_INDEX_BYTES,
+            })?;
+        unreliable_mcu_starts.resize(tile_count, None);
         for (row, offset) in row_starts.into_iter().enumerate().take(tiles_down as usize) {
             let idx = row * tiles_across as usize;
             if idx < unreliable_mcu_starts.len() {
                 unreliable_mcu_starts[idx] = offset;
             }
         }
-        let mut mcu_starts = vec![None; tile_count];
+        let mut mcu_starts = Vec::new();
+        mcu_starts
+            .try_reserve_exact(tile_count)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "VMS JPEG tile index",
+                requested: MAX_VMS_TILE_INDEX_BYTES,
+                limit: MAX_VMS_TILE_INDEX_BYTES,
+            })?;
+        mcu_starts.resize(tile_count, None);
         if !mcu_starts.is_empty() {
             mcu_starts[0] = Some(header.scan_data_offset);
         }
@@ -159,9 +175,16 @@ impl VmsJpeg {
                 self.path.display()
             )));
         }
-        let data_len = usize::try_from(stop - start)
-            .map_err(|_| WsiError::Jpeg("VMS JPEG entropy segment is too large".into()))?;
-        let mut entropy = vec![0u8; data_len];
+        let data_len = checked_vms_entropy_len(stop - start, self.header.len())?;
+        let mut entropy = Vec::new();
+        entropy
+            .try_reserve_exact(data_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "VMS JPEG tile",
+                requested: data_len as u64,
+                limit: MAX_COMPRESSED_INPUT_BYTES,
+            })?;
+        entropy.resize(data_len, 0);
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(start))
             .map_err(|source| WsiError::IoWithPath {
@@ -184,6 +207,13 @@ impl VmsJpeg {
 
         let mut header = self.header.clone();
         patch_sof_dimensions(&mut header, self.sof_dimensions_offset, width, height)?;
+        header
+            .try_reserve_exact(entropy.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "VMS JPEG tile",
+                requested: header.len() as u64 + entropy.len() as u64,
+                limit: MAX_COMPRESSED_INPUT_BYTES,
+            })?;
         header.extend_from_slice(&entropy);
         Ok(header)
     }
@@ -301,6 +331,46 @@ impl VmsJpeg {
             })?;
         Ok(marker[0] == 0xFF && (0xD0..=0xD7).contains(&marker[1]))
     }
+}
+
+fn checked_vms_tile_count(
+    path: &Path,
+    tiles_across: u32,
+    tiles_down: u32,
+) -> Result<usize, WsiError> {
+    let tile_count = u64::from(tiles_across)
+        .checked_mul(u64::from(tiles_down))
+        .ok_or_else(|| invalid_slide(path, "VMS JPEG tile count overflow"))?;
+    let index_bytes = tile_count
+        .checked_mul(2)
+        .and_then(|count| count.checked_mul(std::mem::size_of::<Option<u64>>() as u64))
+        .ok_or_else(|| invalid_slide(path, "VMS JPEG tile index size overflow"))?;
+    if index_bytes > MAX_VMS_TILE_INDEX_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "VMS JPEG tile index",
+            requested: index_bytes,
+            limit: MAX_VMS_TILE_INDEX_BYTES,
+        });
+    }
+    usize::try_from(tile_count)
+        .map_err(|_| invalid_slide(path, "VMS JPEG tile count exceeds address space"))
+}
+
+fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize, WsiError> {
+    let header_len = u64::try_from(header_len)
+        .map_err(|_| WsiError::Jpeg("VMS JPEG header length exceeds u64".into()))?;
+    let total_len = segment_len
+        .checked_add(header_len)
+        .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile length overflow".into()))?;
+    if total_len > MAX_COMPRESSED_INPUT_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "VMS JPEG tile",
+            requested: total_len,
+            limit: MAX_COMPRESSED_INPUT_BYTES,
+        });
+    }
+    usize::try_from(segment_len)
+        .map_err(|_| WsiError::Jpeg("VMS JPEG entropy segment exceeds address space".into()))
 }
 
 pub(super) struct VmsJpegHeader {
@@ -570,5 +640,37 @@ fn find_next_restart_offset(
                 pending_ff = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn entropy_budget_includes_the_reconstructed_header() {
+        assert_eq!(
+            checked_vms_entropy_len(MAX_COMPRESSED_INPUT_BYTES - 4, 4).unwrap(),
+            (MAX_COMPRESSED_INPUT_BYTES - 4) as usize
+        );
+        assert!(matches!(
+            checked_vms_entropy_len(MAX_COMPRESSED_INPUT_BYTES - 3, 4),
+            Err(WsiError::ResourceLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn tile_index_budget_counts_both_dense_offset_vectors() {
+        let path = Path::new("huge-vms.jpg");
+        let entries_at_limit =
+            MAX_VMS_TILE_INDEX_BYTES / (2 * std::mem::size_of::<Option<u64>>() as u64);
+        assert_eq!(
+            checked_vms_tile_count(path, entries_at_limit as u32, 1).unwrap(),
+            entries_at_limit as usize
+        );
+        assert!(matches!(
+            checked_vms_tile_count(path, entries_at_limit as u32 + 1, 1),
+            Err(WsiError::ResourceLimit { .. })
+        ));
     }
 }

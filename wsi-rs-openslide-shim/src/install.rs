@@ -4,6 +4,9 @@ use std::io::{Read, Write};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
+const MAX_INSTALL_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_INSTALL_MANIFEST_ENTRIES: usize = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformLibraryNames {
     MacOS,
@@ -186,10 +189,18 @@ pub fn execute_install_detailed(
         .map(|entry| stage_path(&entry.destination, stamp))
         .collect::<Vec<_>>();
     let manifest = lib_dir.join(".wsi-rs-openslide-shim-install.tsv");
-    if manifest.exists() {
+    if path_entry_exists(&manifest)? {
         return Err(format!(
             "an installation manifest already exists; restore it first: {}",
             manifest.display()
+        )
+        .into());
+    }
+    let temporary_manifest = manifest.with_extension("tsv.tmp");
+    if path_entry_exists(&temporary_manifest)? {
+        return Err(format!(
+            "manifest temporary path already exists: {}",
+            temporary_manifest.display()
         )
         .into());
     }
@@ -329,40 +340,52 @@ fn stage_path(destination: &Path, stamp: u64) -> PathBuf {
 
 fn write_manifest(path: &Path, entries: &[RestoreEntry], state: &str) -> Result<(), String> {
     let temporary = path.with_extension("tsv.tmp");
-    let mut file = fs::File::options()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|err| format!("create {}: {err}", temporary.display()))?;
-    writeln!(file, "wsi-rs-openslide-shim\t1\t{state}")
-        .map_err(|err| format!("write {}: {err}", temporary.display()))?;
-    for entry in entries {
-        let backup = entry
-            .backup
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        writeln!(file, "{}\t{}", entry.destination.display(), backup)
+    let result = (|| {
+        let mut file = fs::File::options()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|err| format!("create {}: {err}", temporary.display()))?;
+        writeln!(file, "wsi-rs-openslide-shim\t1\t{state}")
             .map_err(|err| format!("write {}: {err}", temporary.display()))?;
+        for entry in entries {
+            let backup = entry
+                .backup
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            writeln!(file, "{}\t{}", entry.destination.display(), backup)
+                .map_err(|err| format!("write {}: {err}", temporary.display()))?;
+        }
+        file.sync_all()
+            .map_err(|err| format!("sync {}: {err}", temporary.display()))?;
+        drop(file);
+        fs::rename(&temporary, path)
+            .map_err(|err| format!("commit manifest {}: {err}", path.display()))?;
+        sync_directory(
+            path.parent()
+                .ok_or_else(|| "manifest has no parent".to_string())?,
+        )
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    file.sync_all()
-        .map_err(|err| format!("sync {}: {err}", temporary.display()))?;
-    fs::rename(&temporary, path)
-        .map_err(|err| format!("commit manifest {}: {err}", path.display()))?;
-    sync_directory(
-        path.parent()
-            .ok_or_else(|| "manifest has no parent".to_string())?,
-    )?;
-    Ok(())
+    result
 }
 
 fn read_manifest(path: &Path) -> Result<(String, Vec<RestoreEntry>), String> {
-    let mut text = String::new();
-    fs::File::open(path)
-        .map_err(|err| format!("open {}: {err}", path.display()))?
-        .read_to_string(&mut text)
+    let file = fs::File::open(path).map_err(|err| format!("open {}: {err}", path.display()))?;
+    let mut bytes = Vec::with_capacity(4 * 1024);
+    file.take(MAX_INSTALL_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|err| format!("read {}: {err}", path.display()))?;
+    if bytes.len() as u64 > MAX_INSTALL_MANIFEST_BYTES {
+        return Err(format!(
+            "restore manifest exceeds {MAX_INSTALL_MANIFEST_BYTES} byte safety limit"
+        ));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|err| format!("read {} as UTF-8: {err}", path.display()))?;
     let mut lines = text.lines();
     let header = lines
         .next()
@@ -375,6 +398,11 @@ fn read_manifest(path: &Path) -> Result<(String, Vec<RestoreEntry>), String> {
     };
     let mut entries = Vec::new();
     for (idx, line) in lines.enumerate() {
+        if entries.len() == MAX_INSTALL_MANIFEST_ENTRIES {
+            return Err(format!(
+                "manifest has more than {MAX_INSTALL_MANIFEST_ENTRIES} entries"
+            ));
+        }
         let Some((destination, backup)) = line.split_once('\t') else {
             return Err(format!("manifest line {} is malformed", idx + 2));
         };
@@ -388,16 +416,15 @@ fn read_manifest(path: &Path) -> Result<(String, Vec<RestoreEntry>), String> {
 
 fn preflight_install(entries: &[RestoreEntry], stages: &[PathBuf]) -> Result<(), String> {
     for (entry, stage) in entries.iter().zip(stages) {
-        if entry.destination.exists() {
+        if path_entry_exists(&entry.destination)? {
             reject_symlink(&entry.destination, "install destination")?;
         }
-        if entry.backup.as_ref().is_some_and(|backup| backup.exists()) {
-            return Err(format!(
-                "backup path already exists: {}",
-                entry.backup.as_ref().unwrap().display()
-            ));
+        if let Some(backup) = &entry.backup {
+            if path_entry_exists(backup)? {
+                return Err(format!("backup path already exists: {}", backup.display()));
+            }
         }
-        if stage.exists() {
+        if path_entry_exists(stage)? {
             return Err(format!("stage path already exists: {}", stage.display()));
         }
     }
@@ -405,16 +432,31 @@ fn preflight_install(entries: &[RestoreEntry], stages: &[PathBuf]) -> Result<(),
 }
 
 fn copy_and_sync(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::copy(source, destination).map_err(|err| {
+    let mut source_file =
+        fs::File::open(source).map_err(|err| format!("open shim {}: {err}", source.display()))?;
+    let mut destination_file = fs::File::options()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(|err| format!("create staged shim {}: {err}", destination.display()))?;
+    std::io::copy(&mut source_file, &mut destination_file).map_err(|err| {
         format!(
             "stage {} to {}: {err}",
             source.display(),
             destination.display()
         )
     })?;
-    fs::File::open(destination)
-        .and_then(|file| file.sync_all())
+    destination_file
+        .sync_all()
         .map_err(|err| format!("sync staged shim {}: {err}", destination.display()))
+}
+
+fn path_entry_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("inspect {}: {error}", path.display())),
+    }
 }
 
 fn rollback_install(
@@ -539,6 +581,9 @@ fn read_and_validate_manifest(
                 entry.destination.display()
             ));
         }
+        if path_entry_exists(&entry.destination)? {
+            reject_symlink(&entry.destination, "restore destination")?;
+        }
         if let Some(backup) = &entry.backup {
             let destination_name = entry.destination.file_name().unwrap().to_string_lossy();
             let expected_prefix = format!("{destination_name}.wsi_rs-backup-");
@@ -551,6 +596,9 @@ fn read_and_validate_manifest(
                 });
             if backup.parent() != Some(lib_dir.as_path()) || !valid_name {
                 return Err(format!("invalid restore backup path: {}", backup.display()));
+            }
+            if path_entry_exists(backup)? {
+                reject_symlink(backup, "restore backup")?;
             }
         }
     }

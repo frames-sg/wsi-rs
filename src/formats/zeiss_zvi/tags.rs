@@ -1,4 +1,4 @@
-use super::compound::read_stream_to_end;
+use super::compound::read_stream_bounded;
 use super::header::ByteReader;
 use super::*;
 
@@ -9,7 +9,12 @@ pub(super) fn read_tags_if_present(
     if !compound.is_stream(path) {
         return Ok(HashMap::new());
     }
-    let data = read_stream_to_end(compound, path)?;
+    let data = read_stream_bounded(
+        compound,
+        path,
+        MAX_ZVI_METADATA_BYTES,
+        "ZVI metadata stream",
+    )?;
     parse_zvi_tags(&data)
 }
 
@@ -17,7 +22,18 @@ fn parse_zvi_tags(data: &[u8]) -> Result<HashMap<i32, String>, WsiError> {
     let mut reader = ByteReader::new(data);
     reader.skip(8)?;
     let count = reader.read_i32()?.max(0) as usize;
+    if count > MAX_ZVI_TAGS {
+        return Err(WsiError::DisplayConversion(format!(
+            "ZVI tag count {count} exceeds the {MAX_ZVI_TAGS}-tag safety limit"
+        )));
+    }
     let mut tags = HashMap::new();
+    tags.try_reserve(count)
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "ZVI tag index",
+            requested: (count * std::mem::size_of::<(i32, String)>()) as u64,
+            limit: (MAX_ZVI_TAGS * std::mem::size_of::<(i32, String)>()) as u64,
+        })?;
     for _ in 0..count {
         if reader.remaining() < 2 {
             break;
@@ -66,4 +82,16 @@ pub(super) fn tag_color(tags: &HashMap<i32, String>, tag_id: i32) -> Option<[u8;
         ((value >> 8) & 0xff) as u8,
         (value & 0xff) as u8,
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_parser_rejects_excessive_declared_entry_count() {
+        let mut data = vec![0; 12];
+        data[8..12].copy_from_slice(&16_385_i32.to_le_bytes());
+        assert!(parse_zvi_tags(&data).is_err());
+    }
 }

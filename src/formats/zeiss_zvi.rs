@@ -30,6 +30,11 @@ use model::ZviSlide;
 use slide::ZviReader;
 
 const CFB_MAGIC: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
+const MAX_ZVI_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ZVI_STREAMS: usize = 32_768;
+const MAX_ZVI_PLANES: usize = 16_384;
+const MAX_ZVI_TAGS: usize = 16_384;
+const MAX_ZVI_AXIS_INDEX: u32 = 65_535;
 
 pub(crate) struct ZeissZviBackend;
 
