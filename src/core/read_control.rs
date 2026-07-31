@@ -50,26 +50,8 @@ impl DicomIndexDiagnostic {
     }
 }
 
-/// Optional diagnostics emitted by cancellation-aware reads and preparation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ReadDiagnostic {
-    DicomIndex(DicomIndexDiagnostic),
-}
-
 /// Receives opt-in controlled-read diagnostics.
-pub trait ReadDiagnosticSink: Send + Sync {
-    fn record(&self, diagnostic: ReadDiagnostic);
-}
-
-impl<F> ReadDiagnosticSink for F
-where
-    F: Fn(ReadDiagnostic) + Send + Sync,
-{
-    fn record(&self, diagnostic: ReadDiagnostic) {
-        self(diagnostic);
-    }
-}
+pub type ReadDiagnosticSink = dyn Fn(DicomIndexDiagnostic) + Send + Sync;
 
 /// Cloneable cooperative cancellation signal for controlled reads.
 #[derive(Debug, Default)]
@@ -108,12 +90,12 @@ impl ReadCancellationToken {
 #[derive(Clone, Default)]
 pub struct ReadControl {
     cancellation: ReadCancellationToken,
-    diagnostic_sink: Option<Arc<dyn ReadDiagnosticSink>>,
+    diagnostic_sink: Option<Arc<ReadDiagnosticSink>>,
 }
 
 pub(crate) struct DeferredReadDiagnostics {
-    sink: Option<Arc<dyn ReadDiagnosticSink>>,
-    diagnostics: Option<Arc<Mutex<Vec<ReadDiagnostic>>>>,
+    sink: Option<Arc<ReadDiagnosticSink>>,
+    diagnostics: Option<Arc<Mutex<Vec<DicomIndexDiagnostic>>>>,
 }
 
 impl DeferredReadDiagnostics {
@@ -127,7 +109,7 @@ impl DeferredReadDiagnostics {
         };
         if let Some(sink) = self.sink {
             for diagnostic in diagnostics {
-                sink.record(diagnostic);
+                sink(diagnostic);
             }
         }
     }
@@ -155,7 +137,7 @@ impl ReadControl {
     /// Attaches an opt-in diagnostic sink while preserving the cancellation
     /// token and controlled-read behavior.
     #[must_use]
-    pub fn with_diagnostic_sink(mut self, sink: Arc<dyn ReadDiagnosticSink>) -> Self {
+    pub fn with_diagnostic_sink(mut self, sink: Arc<ReadDiagnosticSink>) -> Self {
         self.diagnostic_sink = Some(sink);
         self
     }
@@ -173,9 +155,9 @@ impl ReadControl {
 
     /// Records one diagnostic when a sink is attached. This is a no-op for
     /// the default control.
-    pub fn record_diagnostic(&self, diagnostic: ReadDiagnostic) {
+    pub fn record_diagnostic(&self, diagnostic: DicomIndexDiagnostic) {
         if let Some(sink) = &self.diagnostic_sink {
-            sink.record(diagnostic);
+            sink(diagnostic);
         }
     }
 
@@ -192,12 +174,12 @@ impl ReadControl {
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let diagnostic_sink = {
             let diagnostics = Arc::clone(&diagnostics);
-            Some(Arc::new(move |diagnostic: ReadDiagnostic| {
+            Some(Arc::new(move |diagnostic: DicomIndexDiagnostic| {
                 diagnostics
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .push(diagnostic);
-            }) as Arc<dyn ReadDiagnosticSink>)
+            }) as Arc<ReadDiagnosticSink>)
         };
         let deferred = DeferredReadDiagnostics {
             sink: Some(Arc::clone(sink)),
@@ -241,9 +223,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use super::{
-        DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadControl, ReadDiagnostic,
-    };
+    use super::{DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadControl};
 
     #[test]
     fn diagnostic_sink_is_opt_in_and_receives_typed_index_events() {
@@ -257,12 +237,12 @@ mod tests {
         }));
         assert!(control.diagnostics_enabled());
 
-        let diagnostic = ReadDiagnostic::DicomIndex(DicomIndexDiagnostic {
+        let diagnostic = DicomIndexDiagnostic {
             outcome: DicomIndexOutcome::BuiltFast {
                 mapping: DicomIndexMapping::BasicOffsetTableItems,
             },
             elapsed: Duration::from_millis(7),
-        });
+        };
         control.record_diagnostic(diagnostic);
 
         assert_eq!(events.lock().unwrap().as_slice(), &[diagnostic]);

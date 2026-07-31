@@ -733,11 +733,9 @@ impl DicomImage {
             );
             drop(guard);
             if let (Some(control), Some(started)) = (control, reuse_started) {
-                control.record_diagnostic(crate::ReadDiagnostic::DicomIndex(
-                    crate::DicomIndexDiagnostic::new(
-                        crate::DicomIndexOutcome::Reused,
-                        started.elapsed(),
-                    ),
+                control.record_diagnostic(crate::DicomIndexDiagnostic::new(
+                    crate::DicomIndexOutcome::Reused,
+                    started.elapsed(),
                 ));
             }
             return Ok(frames);

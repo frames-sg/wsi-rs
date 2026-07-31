@@ -66,14 +66,6 @@ pub enum InstallError {
     },
 }
 
-impl InstallError {
-    /// Compatibility convenience for callers that previously inspected the
-    /// installer's string error.
-    pub fn contains(&self, pattern: &str) -> bool {
-        self.to_string().contains(pattern)
-    }
-}
-
 impl std::fmt::Display for InstallError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

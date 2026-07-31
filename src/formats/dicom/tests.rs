@@ -1717,7 +1717,7 @@ fn controlled_indexing_reports_basic_offset_table_mapping() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&events);
     let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
-        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+        move |event: crate::DicomIndexDiagnostic| captured.lock().unwrap().push(event),
     ));
 
     let index = scan_encapsulated_frames_controlled(
@@ -1733,9 +1733,7 @@ fn controlled_indexing_reports_basic_offset_table_mapping() {
         .lock()
         .unwrap()
         .iter()
-        .map(|event| match event {
-            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
-        })
+        .map(|event| event.outcome)
         .collect::<Vec<_>>();
     assert_eq!(
         outcomes,
@@ -3007,7 +3005,7 @@ fn controlled_preparation_reports_fast_index_build_then_reuse() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&events);
     let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
-        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+        move |event: crate::DicomIndexDiagnostic| captured.lock().unwrap().push(event),
     ));
 
     for _ in 0..2 {
@@ -3025,9 +3023,7 @@ fn controlled_preparation_reports_fast_index_build_then_reuse() {
         .lock()
         .unwrap()
         .iter()
-        .map(|event| match event {
-            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
-        })
+        .map(|event| event.outcome)
         .collect::<Vec<_>>();
     assert_eq!(
         outcomes,
@@ -3065,7 +3061,7 @@ fn controlled_preparation_invokes_diagnostic_sink_after_releasing_index_lock() {
     let observed = Arc::clone(&callback_observed_unlocked);
     let callback_image = image.clone();
     let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
-        move |_event: crate::ReadDiagnostic| {
+        move |_event: crate::DicomIndexDiagnostic| {
             let lock_available = callback_image.encapsulated_frames.try_lock().is_ok();
             observed.store(lock_available, std::sync::atomic::Ordering::Release);
         },
@@ -3106,7 +3102,7 @@ fn controlled_indexing_reports_token_fallback_for_implicit_vr_layout() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&events);
     let control = crate::ReadControl::default().with_diagnostic_sink(Arc::new(
-        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+        move |event: crate::DicomIndexDiagnostic| captured.lock().unwrap().push(event),
     ));
 
     let frames = scan_encapsulated_frames_controlled(
@@ -3122,9 +3118,7 @@ fn controlled_indexing_reports_token_fallback_for_implicit_vr_layout() {
         .lock()
         .unwrap()
         .iter()
-        .map(|event| match event {
-            crate::ReadDiagnostic::DicomIndex(diagnostic) => diagnostic.outcome,
-        })
+        .map(|event| event.outcome)
         .collect::<Vec<_>>();
     assert_eq!(
         outcomes,
@@ -3210,7 +3204,7 @@ fn cancelled_level_preparation_does_not_publish_an_index() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&events);
     let control = crate::ReadControl::new(cancellation).with_diagnostic_sink(Arc::new(
-        move |event: crate::ReadDiagnostic| captured.lock().unwrap().push(event),
+        move |event: crate::DicomIndexDiagnostic| captured.lock().unwrap().push(event),
     ));
 
     let error = reader

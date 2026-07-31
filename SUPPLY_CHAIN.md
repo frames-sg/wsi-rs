@@ -9,6 +9,12 @@ Alliance, Google, and Mozilla. Uncovered crates are explicit
 `safe-to-deploy` exemptions, not implicit trust. Dependency updates must rerun
 `cargo vet --locked`; new exemptions require review in the same change.
 
+The exact-version exemptions for the `j2k 0.8.0` family record acceptance of a
+separately released first-party codec workspace, including its strict-by-default
+decode policy and maintained unsafe-boundary inventory. They are local release
+policy decisions, not transferable third-party Cargo Vet certifications; any
+later `j2k` version requires another explicit review and pin update.
+
 ## Time-bound upstream exceptions
 
 | Dependency | Surface and control | Owner | Review or expiry |

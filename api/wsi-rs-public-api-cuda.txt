@@ -488,8 +488,6 @@ pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Sel
 impl core::error::Error for wsi_rs::RawCompressedTileBuildError
 impl core::fmt::Display for wsi_rs::RawCompressedTileBuildError
 pub fn wsi_rs::RawCompressedTileBuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-#[non_exhaustive] pub enum wsi_rs::ReadDiagnostic
-pub wsi_rs::ReadDiagnostic::DicomIndex(wsi_rs::DicomIndexDiagnostic)
 #[non_exhaustive] pub enum wsi_rs::RequestBuildError
 pub wsi_rs::RequestBuildError::MissingColumn
 pub wsi_rs::RequestBuildError::MissingOrigin
@@ -822,8 +820,8 @@ pub fn wsi_rs::ReadControl::cancellation(&self) -> &wsi_rs::ReadCancellationToke
 pub fn wsi_rs::ReadControl::check_cancelled(&self) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::ReadControl::diagnostics_enabled(&self) -> bool
 pub const fn wsi_rs::ReadControl::new(wsi_rs::ReadCancellationToken) -> Self
-pub fn wsi_rs::ReadControl::record_diagnostic(&self, wsi_rs::ReadDiagnostic)
-pub fn wsi_rs::ReadControl::with_diagnostic_sink(self, alloc::sync::Arc<dyn wsi_rs::ReadDiagnosticSink>) -> Self
+pub fn wsi_rs::ReadControl::record_diagnostic(&self, wsi_rs::DicomIndexDiagnostic)
+pub fn wsi_rs::ReadControl::with_diagnostic_sink(self, alloc::sync::Arc<wsi_rs::ReadDiagnosticSink>) -> Self
 impl core::fmt::Debug for wsi_rs::ReadControl
 pub fn wsi_rs::ReadControl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct wsi_rs::RegionRequest
@@ -1027,10 +1025,6 @@ pub trait wsi_rs::FormatProbe: core::marker::Send + core::marker::Sync
 pub fn wsi_rs::FormatProbe::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
 impl<T: wsi_rs::FormatProbe> wsi_rs::FormatProbe for alloc::sync::Arc<T>
 pub fn alloc::sync::Arc<T>::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
-pub trait wsi_rs::ReadDiagnosticSink: core::marker::Send + core::marker::Sync
-pub fn wsi_rs::ReadDiagnosticSink::record(&self, wsi_rs::ReadDiagnostic)
-impl<F> wsi_rs::ReadDiagnosticSink for F where F: core::ops::function::Fn(wsi_rs::ReadDiagnostic) + core::marker::Send + core::marker::Sync
-pub fn F::record(&self, wsi_rs::ReadDiagnostic)
 pub trait wsi_rs::SlideReader: core::marker::Send + core::marker::Sync
 pub fn wsi_rs::SlideReader::associated_image(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
@@ -1059,3 +1053,4 @@ pub fn wsi_rs::cache_dir_svcache_path(&std::path::Path) -> std::path::PathBuf
 pub fn wsi_rs::default_svcache_path(&std::path::Path) -> std::path::PathBuf
 pub fn wsi_rs::svcache_candidate_paths(&std::path::Path) -> [std::path::PathBuf; 2]
 pub fn wsi_rs::svcache_matches_source(&std::path::Path, &std::path::Path) -> core::result::Result<bool, wsi_rs::error::WsiError>
+pub type wsi_rs::ReadDiagnosticSink = (dyn core::ops::function::Fn(wsi_rs::DicomIndexDiagnostic) + core::marker::Send + core::marker::Sync)

@@ -25,7 +25,7 @@ cargo add wsi-rs
 ```
 
 Supported architectures are x86_64 and aarch64. The JPEG backend in the
-required j2k 0.7 series does not support 32-bit targets.
+required j2k 0.8 series does not support 32-bit targets.
 
 ## Quick Start
 

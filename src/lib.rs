@@ -66,7 +66,7 @@ pub use core::cache::{CacheConfig, TileCache, TileCacheStats};
 pub use core::decode_runtime::{DecodeExecutionOptions, DecodeRoute, DecodeRouteDecision};
 pub use core::read_control::{
     DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadCancellationToken, ReadControl,
-    ReadDiagnostic, ReadDiagnosticSink,
+    ReadDiagnosticSink,
 };
 pub use error::WsiError;
 pub use formats::svcache::{

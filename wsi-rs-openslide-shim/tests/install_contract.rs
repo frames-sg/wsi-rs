@@ -97,7 +97,7 @@ fn failed_verification_rolls_back_every_destination() {
     let error = execute_install(&prefix, &shim, PlatformLibraryNames::Linux, 42)
         .expect_err("verification must fail");
 
-    assert!(error.contains("rolled back"), "{error}");
+    assert!(error.to_string().contains("rolled back"), "{error}");
     for (index, destination) in destinations.iter().enumerate() {
         assert_eq!(
             std::fs::read_to_string(destination).expect("restored original"),
@@ -171,7 +171,10 @@ fn restore_rejects_manifest_paths_outside_prefix() {
     .expect("malicious manifest");
 
     let error = execute_restore(&prefix, 9).expect_err("outside path must be rejected");
-    assert!(error.contains("outside the supported prefix"), "{error}");
+    assert!(
+        error.to_string().contains("outside the supported prefix"),
+        "{error}"
+    );
     assert_eq!(
         std::fs::read(&outside).expect("outside remains"),
         b"outside"
@@ -208,7 +211,10 @@ fn install_rejects_symlink_destinations_before_mutation() {
 
     let error = execute_install(&prefix, &shim, PlatformLibraryNames::Linux, 4)
         .expect_err("symlink must be rejected");
-    assert!(error.contains("must not be a symlink"), "{error}");
+    assert!(
+        error.to_string().contains("must not be a symlink"),
+        "{error}"
+    );
     assert_eq!(
         std::fs::read(&outside).expect("outside remains"),
         b"outside"

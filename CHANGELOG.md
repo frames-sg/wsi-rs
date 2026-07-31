@@ -4,15 +4,24 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-31
+
 ### Added
 
 - Added checked CUDA-to-CPU tile download through `CudaDeviceTile::download_cpu`,
   keeping device surface internals behind the WSI-RS boundary.
 - Added byte-sized shared cache ownership for the OpenSlide shim; attached
   slides retain the cache after the C handle is released and may share entries.
+- Added cancellation-aware level preparation so DICOM frame indexes can be
+  built once in the background and reused by concurrent reads.
+- Added opt-in typed controlled-read diagnostics for DICOM frame-index
+  strategy, fallback, reuse, and timing; the default path does not sample a
+  clock or allocate diagnostic storage.
 
 ### Changed
 
+- Upgraded the complete `j2k` codec family to 0.8. Raw JPEG 2000 codestream
+  reads retain the codec's strict, fail-closed decode policy.
 - Derived DICOM, MIRAX, VMS, and Zeiss private decoded-data cache capacities
   from one aggregate `CacheConfig` budget, including zero-capacity caches for
   excess images or shards, and moved built-in backend composition out of core.
@@ -20,6 +29,11 @@
   configured parse during open instead of first constructing default caches.
 - Matched OpenSlide's floor-like best-level selection at exact boundaries and
   for non-finite requests.
+- Controlled tile reads now preserve the original batch order and cardinality,
+  share adaptive CPU/device routing with existing reads, and treat cancellation
+  as terminal before additional probes, fallback, or cache publication.
+- Split TIFF-family layout construction into focused format modules while
+  preserving the existing public reader behavior.
 
 ### Fixed
 
@@ -32,27 +46,6 @@
   the additive `execute_install_detailed` API when a primary install failure is
   followed by rollback failure; the existing `execute_install` string-error API
   remains source compatible.
-
-## [0.5.2] - 2026-07-18
-
-### Added
-
-- Added cancellation-aware level preparation so DICOM frame indexes can be
-  built once in the background and reused by concurrent reads.
-- Added opt-in typed controlled-read diagnostics for DICOM frame-index
-  strategy, fallback, reuse, and timing; the default path does not sample a
-  clock or allocate diagnostic storage.
-
-### Changed
-
-- Controlled tile reads now preserve the original batch order and cardinality,
-  share adaptive CPU/device routing with existing reads, and treat cancellation
-  as terminal before additional probes, fallback, or cache publication.
-- Split TIFF-family layout construction into focused format modules while
-  preserving the existing public reader behavior.
-
-### Fixed
-
 - Replaced the normal DICOM compressed-frame scan with validated seek-based
   Extended/Basic Offset Table indexing and grouped frame I/O, retaining the
   token parser as a fallback for unusual supported layouts.

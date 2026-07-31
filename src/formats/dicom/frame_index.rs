@@ -233,9 +233,7 @@ fn record_index_diagnostic(
     elapsed: Option<std::time::Duration>,
 ) {
     if let (Some(control), Some(elapsed)) = (control, elapsed) {
-        control.record_diagnostic(crate::ReadDiagnostic::DicomIndex(
-            crate::DicomIndexDiagnostic::new(outcome, elapsed),
-        ));
+        control.record_diagnostic(crate::DicomIndexDiagnostic::new(outcome, elapsed));
     }
 }
 

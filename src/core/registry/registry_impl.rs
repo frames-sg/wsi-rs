@@ -52,73 +52,13 @@ impl std::fmt::Debug for FormatRegistry {
 }
 
 struct RegisteredBackend {
-    probe: Box<dyn RegistryFormatProbe>,
-    reader: Box<dyn RegistryDatasetReader>,
+    probe: Box<RegistryProbe>,
+    reader: Box<RegistryReader>,
 }
 
-trait RegistryFormatProbe: Send + Sync {
-    fn probe_with_cache_config(
-        &self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<ProbeResult, WsiError>;
-}
-
-struct DefaultRegistryProbe<T>(T);
-
-impl<T: FormatProbe> RegistryFormatProbe for DefaultRegistryProbe<T> {
-    fn probe_with_cache_config(
-        &self,
-        path: &Path,
-        _cache_config: CacheConfig,
-    ) -> Result<ProbeResult, WsiError> {
-        self.0.probe(path)
-    }
-}
-
-struct CacheConfiguredRegistryProbe<T>(T);
-
-impl<T: ConfiguredFormatProbe> RegistryFormatProbe for CacheConfiguredRegistryProbe<T> {
-    fn probe_with_cache_config(
-        &self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<ProbeResult, WsiError> {
-        self.0.probe_with_cache_config(path, cache_config)
-    }
-}
-
-trait RegistryDatasetReader: Send + Sync {
-    fn open_with_cache_config(
-        &self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError>;
-}
-
-struct DefaultRegistryReader<T>(T);
-
-impl<T: DatasetReader> RegistryDatasetReader for DefaultRegistryReader<T> {
-    fn open_with_cache_config(
-        &self,
-        path: &Path,
-        _cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.0.open(path)
-    }
-}
-
-struct CacheConfiguredRegistryReader<T>(T);
-
-impl<T: ConfiguredDatasetReader> RegistryDatasetReader for CacheConfiguredRegistryReader<T> {
-    fn open_with_cache_config(
-        &self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.0.open_with_cache_config(path, cache_config)
-    }
-}
+type RegistryProbe = dyn Fn(&Path, CacheConfig) -> Result<ProbeResult, WsiError> + Send + Sync;
+type RegistryReader =
+    dyn Fn(&Path, CacheConfig) -> Result<Box<dyn SlideReader>, WsiError> + Send + Sync;
 
 impl FormatRegistry {
     pub fn new() -> Self {
@@ -131,8 +71,8 @@ impl FormatRegistry {
         reader: impl DatasetReader + 'static,
     ) {
         self.backends.push(RegisteredBackend {
-            probe: Box::new(DefaultRegistryProbe(probe)),
-            reader: Box::new(DefaultRegistryReader(reader)),
+            probe: Box::new(move |path, _cache_config| probe.probe(path)),
+            reader: Box::new(move |path, _cache_config| reader.open(path)),
         });
     }
 
@@ -142,8 +82,12 @@ impl FormatRegistry {
         reader: impl ConfiguredDatasetReader + 'static,
     ) {
         self.backends.push(RegisteredBackend {
-            probe: Box::new(CacheConfiguredRegistryProbe(probe)),
-            reader: Box::new(CacheConfiguredRegistryReader(reader)),
+            probe: Box::new(move |path, cache_config| {
+                probe.probe_with_cache_config(path, cache_config)
+            }),
+            reader: Box::new(move |path, cache_config| {
+                reader.open_with_cache_config(path, cache_config)
+            }),
         });
     }
 
@@ -168,9 +112,7 @@ impl FormatRegistry {
         cache_config: CacheConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
         match self.best_probe(path, cache_config)? {
-            Some((_, i)) => self.backends[i]
-                .reader
-                .open_with_cache_config(path, cache_config),
+            Some((_, i)) => (self.backends[i].reader)(path, cache_config),
             None => Err(WsiError::UnsupportedFormat(path.display().to_string())),
         }
     }
@@ -184,7 +126,7 @@ impl FormatRegistry {
         let mut first_error: Option<WsiError> = None;
 
         for (i, backend) in self.backends.iter().enumerate() {
-            match backend.probe.probe_with_cache_config(path, cache_config) {
+            match (backend.probe)(path, cache_config) {
                 Ok(result) => {
                     if result.detected {
                         let should_replace = match best.as_ref() {
