@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::types::*;
 use crate::test_support::{regular_rgb_dataset_for_test, RegularLevelForTest};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct CountingAdaptiveSource {
@@ -74,6 +75,230 @@ fn default_decode_options_reuse_shared_runtime() {
         DecodeRuntime::arc_for_options(DecodeExecutionOptions::default()).expect("runtime");
 
     assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn explicit_cpu_pool_options_and_inline_runtime_preserve_their_contracts() {
+    let threads = NonZeroUsize::new(2).unwrap();
+    let options = DecodeExecutionOptions::default().with_jp2k_cpu_threads(threads);
+    assert_eq!(options.jp2k_cpu_threads(), Some(threads));
+
+    let runtime = DecodeRuntime::inline(options);
+    assert!(!runtime.has_jp2k_cpu_pool());
+    assert_eq!(runtime.install_jp2k_cpu(|| 23), 23);
+    assert_eq!(runtime.options().jp2k_cpu_threads(), Some(threads));
+}
+
+struct PoolRecordingSource {
+    dataset: Dataset,
+    observed_threads: Arc<AtomicUsize>,
+}
+
+impl PoolRecordingSource {
+    fn new(dataset_id: u128, observed_threads: Arc<AtomicUsize>) -> Self {
+        Self {
+            dataset: regular_rgb_dataset_for_test(
+                DatasetId::new(dataset_id),
+                "scene",
+                "series",
+                RegularLevelForTest {
+                    dimensions: (1, 1),
+                    tile_width: 1,
+                    tile_height: 1,
+                    tiles_across: 1,
+                    tiles_down: 1,
+                },
+            ),
+            observed_threads,
+        }
+    }
+}
+
+impl SlideReader for PoolRecordingSource {
+    fn dataset(&self) -> &Dataset {
+        &self.dataset
+    }
+
+    fn tile_codec_kind(&self, _req: &TileRequest) -> TileCodecKind {
+        TileCodecKind::Jp2k
+    }
+
+    fn read_tiles(
+        &self,
+        reqs: &[TileRequest],
+        _output: TileOutputPreference,
+    ) -> Result<Vec<TilePixels>, WsiError> {
+        self.observed_threads
+            .store(rayon::current_num_threads(), Ordering::SeqCst);
+        Ok(reqs
+            .iter()
+            .map(|_| {
+                TilePixels::Cpu(
+                    CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![1, 2, 3]).unwrap(),
+                )
+            })
+            .collect())
+    }
+
+    fn read_tile_cpu(&self, _req: &TileRequest) -> Result<CpuTile, WsiError> {
+        unreachable!("the test exercises the batch boundary")
+    }
+}
+
+#[test]
+fn adaptive_jp2k_reads_use_their_explicit_runtime_without_cross_read_leakage() {
+    let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    for (dataset_id, threads) in [(101, 1), (102, 2), (103, 1)] {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let options = DecodeExecutionOptions::default()
+            .with_jp2k_cpu_threads(NonZeroUsize::new(threads).unwrap());
+        let runtime = Arc::new(DecodeRuntime::new(options).unwrap());
+        let reader = AdaptiveDecodeReader::new(
+            Box::new(PoolRecordingSource::new(dataset_id, Arc::clone(&observed))),
+            runtime,
+        );
+
+        reader
+            .read_tiles(std::slice::from_ref(&request), TileOutputPreference::cpu())
+            .unwrap();
+
+        assert_eq!(observed.load(Ordering::SeqCst), threads);
+    }
+}
+
+#[test]
+fn matching_rayon_width_avoids_reentering_an_equivalent_decode_pool() {
+    let threads = NonZeroUsize::new(rayon::current_num_threads()).unwrap();
+    let runtime =
+        DecodeRuntime::new(DecodeExecutionOptions::default().with_jp2k_cpu_threads(threads))
+            .unwrap();
+    let caller_thread = std::thread::current().id();
+
+    let operation_thread = runtime.install_jp2k_cpu(|| std::thread::current().id());
+
+    assert_eq!(operation_thread, caller_thread);
+}
+
+#[test]
+fn route_cache_operations_recover_after_mutex_poisoning() {
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
+    let poisoned = Arc::clone(&runtime);
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoned.route_cache.lock().unwrap();
+        panic!("poison route cache");
+    })
+    .join();
+
+    let first_key = route_key_for_test(20_001);
+    let first =
+        DecodeRouteDecision::measured(1, Duration::from_millis(2), Duration::from_millis(1), 1);
+    runtime.store_route(first_key.clone(), first.clone());
+    assert_eq!(runtime.cached_route(&first_key), Some(first));
+
+    let second_key = route_key_for_test(20_002);
+    runtime
+        .store_route_controlled(
+            second_key.clone(),
+            DecodeRouteDecision::measured(1, Duration::from_millis(3), Duration::from_millis(1), 1),
+            &crate::ReadControl::default(),
+        )
+        .unwrap();
+    assert!(runtime.cached_route(&second_key).is_some());
+}
+
+struct DelegatingSource {
+    dataset: Dataset,
+}
+
+impl DelegatingSource {
+    fn new() -> Self {
+        Self {
+            dataset: regular_rgb_dataset_for_test(
+                DatasetId::new(99),
+                "scene",
+                "series",
+                RegularLevelForTest {
+                    dimensions: (1, 1),
+                    tile_width: 1,
+                    tile_height: 1,
+                    tiles_across: 1,
+                    tiles_down: 1,
+                },
+            ),
+        }
+    }
+
+    fn tile() -> CpuTile {
+        CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![7, 8, 9]).unwrap()
+    }
+}
+
+impl SlideReader for DelegatingSource {
+    fn dataset(&self) -> &Dataset {
+        &self.dataset
+    }
+
+    fn read_tile_cpu(&self, _req: &TileRequest) -> Result<CpuTile, WsiError> {
+        Ok(Self::tile())
+    }
+
+    fn read_raw_compressed_display_tile(
+        &self,
+        _req: &TileViewRequest,
+    ) -> Result<RawCompressedTile, WsiError> {
+        RawCompressedTile::builder(Compression::Jpeg)
+            .dimensions(1, 1)
+            .bits_allocated(8)
+            .samples_per_pixel(3)
+            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
+            .data(vec![0xff, 0xd8, 0xff, 0xd9])
+            .build()
+            .map_err(|error| WsiError::Jpeg(error.to_string()))
+    }
+
+    fn read_region(
+        &self,
+        _req: &RegionRequest,
+        _output: TileOutputPreference,
+    ) -> Result<TilePixels, WsiError> {
+        Ok(TilePixels::Cpu(Self::tile()))
+    }
+
+    fn read_display_tile(&self, _req: &TileViewRequest) -> Result<CpuTile, WsiError> {
+        Ok(Self::tile())
+    }
+
+    fn recommended_shared_cache_bytes(&self) -> Option<u64> {
+        Some(4096)
+    }
+}
+
+#[test]
+fn adaptive_reader_preserves_nonadaptive_reader_boundaries() {
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
+    let reader = AdaptiveDecodeReader::new(Box::new(DelegatingSource::new()), runtime);
+    let view = TileViewRequest::new(0usize, 0usize, 0u32, 0, 0, 1, 1);
+    let region = RegionRequest::new(0usize, 0usize, 0u32, (0, 0), (1, 1));
+
+    let raw = reader
+        .read_raw_compressed_display_tile(&view)
+        .expect("raw display tile delegation");
+    assert_eq!(raw.data(), &[0xff, 0xd8, 0xff, 0xd9]);
+
+    let region_pixels = reader
+        .read_region(&region, TileOutputPreference::cpu())
+        .expect("region delegation");
+    #[allow(unreachable_patterns)]
+    let region_tile = match region_pixels {
+        TilePixels::Cpu(tile) => tile,
+        TilePixels::Device(_) => panic!("test reader returns a CPU region"),
+    };
+    assert_eq!(region_tile.as_u8(), Some(&[7, 8, 9][..]));
+    assert_eq!(
+        reader.read_display_tile(&view).unwrap().as_u8(),
+        Some(&[7, 8, 9][..])
+    );
+    assert_eq!(reader.recommended_shared_cache_bytes(), Some(4096));
 }
 
 #[test]

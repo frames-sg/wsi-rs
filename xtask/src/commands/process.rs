@@ -1,10 +1,16 @@
 use std::env;
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::Command;
 
 pub(super) fn ensure_clean_worktree() -> Result<(), String> {
+    ensure_clean_worktree_at(Path::new("."))
+}
+
+fn ensure_clean_worktree_at(path: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .args(["status", "--porcelain"])
+        .current_dir(path)
         .output()
         .map_err(|err| format!("failed to start `git status --porcelain`: {err}"))?;
     if !output.status.success() {
@@ -83,3 +89,6 @@ pub(super) fn run_program_capture(
 fn cargo() -> OsString {
     env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
+
+#[cfg(test)]
+mod tests;

@@ -57,11 +57,7 @@ impl TiffPixelReader {
         else {
             return false;
         };
-        self.synthetic_level_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .max_bytes
-            >= bytes
+        self.synthetic_level_cache.max_bytes() >= bytes
     }
 
     pub(super) fn try_decode_synthetic_level_with_j2k(
@@ -208,7 +204,6 @@ impl TiffPixelReader {
 
         let (x, y) = req.origin_px;
         let (w, h) = req.size_px;
-        let plane = req.plane.get();
         let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
             [req.level.get() as usize];
         if x != 0
@@ -226,17 +221,7 @@ impl TiffPixelReader {
             );
         }
 
-        let key = CacheKey {
-            dataset_id: self.layout.dataset.id,
-            scene: req.scene.get() as u32,
-            series: req.series.get() as u32,
-            level: req.level.get(),
-            z: plane.z,
-            c: plane.c,
-            t: plane.t,
-            tile_col: 0,
-            tile_row: 0,
-        };
+        let key = CacheKey::from_region_tile(self.layout.dataset.id, req, 0, 0);
         if let Some(cache) = cache {
             if let Some(cached) = cache.get(&key) {
                 return Ok(cached.as_ref().clone());
@@ -255,7 +240,7 @@ impl TiffPixelReader {
             scene: req.scene.get().into(),
             series: req.series.get().into(),
             level: base_level.into(),
-            plane: plane.into(),
+            plane: req.plane,
             col: 0,
             row: 0,
         };
@@ -332,24 +317,11 @@ impl TiffPixelReader {
             return zero_rgb_interleaved_u8_tile(w, h);
         }
 
-        let valid_w = u32::try_from(clipped_x1 - clipped_x0).map_err(|_| {
-            WsiError::DisplayConversion(format!(
-                "synthetic NDPI ROI width exceeds region API bounds: {}",
-                clipped_x1 - clipped_x0
-            ))
-        })?;
-        let valid_h = u32::try_from(clipped_y1 - clipped_y0).map_err(|_| {
-            WsiError::DisplayConversion(format!(
-                "synthetic NDPI ROI height exceeds region API bounds: {}",
-                clipped_y1 - clipped_y0
-            ))
-        })?;
-        let dst_x = u32::try_from(clipped_x0 - x0).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI destination x overflow".into())
-        })?;
-        let dst_y = u32::try_from(clipped_y0 - y0).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI destination y overflow".into())
-        })?;
+        // Clipping can only shrink the u32-sized request, so these deltas fit u32.
+        let valid_w = (clipped_x1 - clipped_x0) as u32;
+        let valid_h = (clipped_y1 - clipped_y0) as u32;
+        let dst_x = (clipped_x0 - x0) as u32;
+        let dst_y = (clipped_y0 - y0) as u32;
 
         let base_tile_req = TileRequest {
             scene: req.scene.get().into(),
@@ -413,37 +385,17 @@ impl TiffPixelReader {
                     level: base_level,
                     count: series.levels.len() as u32,
                 })?;
-        let clipped_x0 = u128::try_from(clipped_x0).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI source x is negative".into())
-        })?;
-        let clipped_y0 = u128::try_from(clipped_y0).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI source y is negative".into())
-        })?;
-        let clipped_x1 = u128::try_from(clipped_x1).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI source right is negative".into())
-        })?;
-        let clipped_y1 = u128::try_from(clipped_y1).map_err(|_| {
-            WsiError::DisplayConversion("synthetic NDPI ROI source bottom is negative".into())
-        })?;
+        // Each coordinate was clamped to the nonnegative u64 target dimensions.
+        let clipped_x0 = clipped_x0 as u128;
+        let clipped_y0 = clipped_y0 as u128;
+        let clipped_x1 = clipped_x1 as u128;
+        let clipped_y1 = clipped_y1 as u128;
         let factor = u128::from(factor);
-        let base_x0 = clipped_x0.checked_mul(factor).ok_or_else(|| {
-            WsiError::DisplayConversion("synthetic NDPI base ROI x overflow".into())
-        })?;
-        let base_y0 = clipped_y0.checked_mul(factor).ok_or_else(|| {
-            WsiError::DisplayConversion("synthetic NDPI base ROI y overflow".into())
-        })?;
-        let base_x1 = clipped_x1
-            .checked_mul(factor)
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("synthetic NDPI base ROI right overflow".into())
-            })?
-            .min(u128::from(base.dimensions.0));
-        let base_y1 = clipped_y1
-            .checked_mul(factor)
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("synthetic NDPI base ROI bottom overflow".into())
-            })?
-            .min(u128::from(base.dimensions.1));
+        // A u64 coordinate multiplied by a u32 factor cannot overflow u128.
+        let base_x0 = clipped_x0 * factor;
+        let base_y0 = clipped_y0 * factor;
+        let base_x1 = (clipped_x1 * factor).min(u128::from(base.dimensions.0));
+        let base_y1 = (clipped_y1 * factor).min(u128::from(base.dimensions.1));
         if base_x1 <= base_x0 || base_y1 <= base_y0 {
             return zero_rgb_interleaved_u8_tile(w, h);
         }
@@ -576,82 +528,11 @@ impl TiffPixelReader {
         factor: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
         let key = Self::synthetic_level_key_for_tile(req, base_level);
-
-        if let Some(image) = {
-            let mut cache = self
-                .synthetic_level_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.get(&key)
-        } {
-            return Ok(image);
-        }
-
-        let mut flights = self
-            .synthetic_level_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut registered_waiter = false;
-        loop {
-            match flights.get_mut(&key) {
-                Some(flight) => {
-                    if !registered_waiter {
-                        flight.waiters += 1;
-                        registered_waiter = true;
-                    }
-                    if let Some(result) = flight.result.clone() {
-                        flight.waiters -= 1;
-                        if flight.waiters == 0 {
-                            flights.remove(&key);
-                        }
-                        return result.map_err(|reason| Self::ndpi_full_decode_error(req, reason));
-                    }
-                    flights = self
-                        .synthetic_level_ready
-                        .wait(flights)
-                        .unwrap_or_else(|e| e.into_inner());
-                }
-                None if registered_waiter => {
-                    return Err(Self::ndpi_full_decode_error(
-                        req,
-                        format!(
-                            "synthetic NDPI level decode flight for {:?} disappeared",
-                            key
-                        ),
-                    ));
-                }
-                None => {
-                    flights.insert(key, SyntheticLevelFlight::default());
-                    break;
-                }
-            }
-        }
-        drop(flights);
-
-        let decode_result = self
-            .decode_synthetic_level(req, base_level, factor)
-            .map_err(|err| err.to_string());
-        if let Ok(image) = decode_result.as_ref() {
-            let mut cache = self
-                .synthetic_level_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.put(key, image.clone());
-        }
-
-        let mut flights = self
-            .synthetic_level_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(flight) = flights.get_mut(&key) {
-            flight.result = Some(decode_result.clone());
-            if flight.waiters == 0 {
-                flights.remove(&key);
-            }
-        }
-        drop(flights);
-        self.synthetic_level_ready.notify_all();
-
-        decode_result.map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+        self.synthetic_level_cache
+            .get_or_try_insert_with(key, || {
+                self.decode_synthetic_level(req, base_level, factor)
+                    .map_err(|err| err.to_string())
+            })
+            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
 }

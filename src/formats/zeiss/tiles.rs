@@ -108,22 +108,17 @@ impl ZeissSlide {
             };
             let tile_x = (col as u64).saturating_mul(u64::from(tile_width));
             let tile_y = (row as u64).saturating_mul(u64::from(tile_height));
-            let tile_w = u32::try_from(
-                level_ref
-                    .dimensions
-                    .0
-                    .saturating_sub(tile_x)
-                    .min(u64::from(tile_width)),
-            )
-            .map_err(|_| WsiError::DisplayConversion("Zeiss tile width overflow".into()))?;
-            let tile_h = u32::try_from(
-                level_ref
-                    .dimensions
-                    .1
-                    .saturating_sub(tile_y)
-                    .min(u64::from(tile_height)),
-            )
-            .map_err(|_| WsiError::DisplayConversion("Zeiss tile height overflow".into()))?;
+            // Each value is explicitly capped by its u32 tile dimension.
+            let tile_w = level_ref
+                .dimensions
+                .0
+                .saturating_sub(tile_x)
+                .min(u64::from(tile_width)) as u32;
+            let tile_h = level_ref
+                .dimensions
+                .1
+                .saturating_sub(tile_y)
+                .min(u64::from(tile_height)) as u32;
             (tile_width, tile_height, tile_x, tile_y, tile_w, tile_h)
         };
         let candidate_indices = self
@@ -198,14 +193,9 @@ impl ZeissSlide {
                 "zeiss local tile fallback: no subblocks intersect tile ({}, {}) level {}",
                 tile_origin_x, tile_origin_y, level
             );
-            let pixel_type = candidate_infos
-                .first()
-                .map(|info| info.pixel_type)
-                .ok_or_else(|| {
-                    WsiError::DisplayConversion(
-                        "Zeiss local tile path lost candidate pixel type".into(),
-                    )
-                })?;
+            // The candidate loop either returns early or selects every input,
+            // and this branch is only reached from a nonempty candidate list.
+            let pixel_type = candidate_infos[0].pixel_type;
             return czi_rs::Bitmap::zeros(pixel_type, tile_w, tile_h)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))
                 .and_then(bitmap_to_sample_buffer)
@@ -652,7 +642,7 @@ pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile,
         CziPixelType::Bgr48 => {
             let values = bitmap
                 .to_u16_vec()
-                .map_err(|err| WsiError::DisplayConversion(err.to_string()))?;
+                .expect("Bgr48 samples always have an even byte width");
             let mut rgb = Vec::with_capacity(values.len());
             for chunk in values.chunks_exact(3) {
                 rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
@@ -681,21 +671,29 @@ pub(super) fn bitmap_from_raw_uncompressed_subblock(
             raw.info.compression.as_str()
         )));
     }
-    let expected_len = (raw.info.stored_size.w as usize)
-        .checked_mul(raw.info.stored_size.h as usize)
-        .and_then(|value| value.checked_mul(raw.info.pixel_type.bytes_per_pixel()))
-        .ok_or_else(|| WsiError::DisplayConversion("Zeiss bitmap size overflow".into()))?;
+    let Some(stride) =
+        (raw.info.stored_size.w as usize).checked_mul(raw.info.pixel_type.bytes_per_pixel())
+    else {
+        return Err(WsiError::DisplayConversion(
+            "Zeiss bitmap size overflow".into(),
+        ));
+    };
+    let Some(expected_len) = stride.checked_mul(raw.info.stored_size.h as usize) else {
+        return Err(WsiError::DisplayConversion(
+            "Zeiss bitmap size overflow".into(),
+        ));
+    };
     let mut decoded = raw.data.clone();
     if decoded.len() < expected_len {
         decoded.resize(expected_len, 0);
     } else {
         decoded.truncate(expected_len);
     }
-    czi_rs::Bitmap::new(
-        raw.info.pixel_type,
-        raw.info.stored_size.w,
-        raw.info.stored_size.h,
-        decoded,
-    )
-    .map_err(|source| WsiError::DisplayConversion(source.to_string()))
+    Ok(czi_rs::Bitmap {
+        pixel_type: raw.info.pixel_type,
+        width: raw.info.stored_size.w,
+        height: raw.info.stored_size.h,
+        stride,
+        data: decoded,
+    })
 }

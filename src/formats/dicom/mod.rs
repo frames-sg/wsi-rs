@@ -1,9 +1,10 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
@@ -12,20 +13,16 @@ use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
 use j2k_core::BackendRequest;
 
-use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
+use crate::core::cache::CacheConfig;
+#[cfg(test)]
+use crate::core::cache::PrivateCache;
 use crate::core::file_identity::FileIdentity;
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, ConfiguredDatasetReader, ConfiguredFormatProbe,
     ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use crate::decode::jp2k::decode_batch_jp2k_pixels;
-use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use crate::decode::jpeg::decode_batch_jpeg_pixels;
-use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
 use crate::properties::Properties;
 
@@ -89,6 +86,7 @@ mod reader;
 pub(crate) use backend::DicomBackend;
 use backend::*;
 use decode::*;
+#[cfg(test)]
 use frame_index::*;
 use image::*;
 use manifest::*;

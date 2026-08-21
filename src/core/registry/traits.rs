@@ -250,22 +250,17 @@ pub trait SlideReader: Send + Sync {
         req: &TileRequest,
         output: TileOutputPreference,
     ) -> Result<TilePixels, WsiError> {
-        let mut tiles = self.read_tiles(std::slice::from_ref(req), output)?;
-        match tiles.len() {
-            1 => Ok(tiles.remove(0)),
-            0 => Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "empty tile batch result".into(),
-            }),
-            count => Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("single tile read returned {count} tiles"),
-            }),
-        }
+        let tiles = self.read_tiles(std::slice::from_ref(req), output)?;
+        crate::core::batch::exactly_one_or_else(tiles, |count| WsiError::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason: if count == 0 {
+                "empty tile batch result".into()
+            } else {
+                format!("single tile read returned {count} tiles")
+            },
+        })
     }
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError>;
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {

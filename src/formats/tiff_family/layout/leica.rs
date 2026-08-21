@@ -249,8 +249,13 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
             });
         }
 
-        let mut properties =
-            self.parse_public_properties(collection, &main_images, level0_cpp_x, level0_cpp_y)?;
+        let mut properties = self.parse_public_properties(
+            collection,
+            collection_size,
+            &main_images,
+            level0_cpp_x,
+            level0_cpp_y,
+        )?;
         if let Some(quickhash1) = identity.quickhash1.as_deref() {
             properties.insert("openslide.quickhash-1", quickhash1);
         }
@@ -535,6 +540,7 @@ impl LeicaInterpreter {
     fn parse_public_properties(
         &self,
         collection: &xml::XmlNode,
+        collection_size: (u64, u64),
         main_images: &[LeicaImageInfo],
         level0_cpp_x: f64,
         level0_cpp_y: f64,
@@ -577,12 +583,30 @@ impl LeicaInterpreter {
         }
         properties.insert("openslide.mpp-x", (level0_cpp_x / 1000.0).to_string());
         properties.insert("openslide.mpp-y", (level0_cpp_y / 1000.0).to_string());
+        properties.insert("leica.collection-size-x", collection_size.0.to_string());
+        properties.insert("leica.collection-size-y", collection_size.1.to_string());
 
         let mut bounds_x = i64::MAX;
         let mut bounds_y = i64::MAX;
         let mut bounds_right = i64::MIN;
         let mut bounds_bottom = i64::MIN;
         for (idx, image) in main_images.iter().enumerate() {
+            properties.insert(
+                format!("leica.scene[{idx}].view-size-x"),
+                image.view_size.0.to_string(),
+            );
+            properties.insert(
+                format!("leica.scene[{idx}].view-size-y"),
+                image.view_size.1.to_string(),
+            );
+            properties.insert(
+                format!("leica.scene[{idx}].offset-x"),
+                image.view_offset.0.to_string(),
+            );
+            properties.insert(
+                format!("leica.scene[{idx}].offset-y"),
+                image.view_offset.1.to_string(),
+            );
             let level0 = image
                 .ifd_levels
                 .iter()

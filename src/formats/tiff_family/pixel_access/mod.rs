@@ -19,10 +19,9 @@ use j2k_jpeg::{
 use j2k_tilecodec::{
     DeflateCodec, DeflatePool, LzwCodec, LzwPool, TileDecompress, ZstdCodec, ZstdPool,
 };
-use lru::LruCache;
 use rayon::prelude::*;
 
-use crate::core::cache::CacheKey;
+use crate::core::cache::{CacheKey, WeightedLru};
 use crate::core::limits::{
     checked_product_to_usize, read_file_bounded, MAX_COMPRESSED_INPUT_BYTES,
     MAX_DECODED_IMAGE_BYTES,
@@ -67,14 +66,8 @@ use jpeg_frame::*;
 use ndpi_retile::*;
 pub(crate) use reader::TiffPixelReader;
 
-#[cfg(feature = "metal")]
-type MetalBackendSessionsRef<'a> = Option<&'a crate::output::metal::MetalBackendSessions>;
-#[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "metal")))]
-type MetalBackendSessionsRef<'a> = Option<&'a ()>;
-#[cfg(feature = "cuda")]
-type CudaBackendSessionsRef<'a> = Option<&'a crate::output::cuda::CudaBackendSessions>;
-#[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "cuda")))]
-type CudaBackendSessionsRef<'a> = Option<&'a ()>;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use crate::output::{CudaBackendSessionsRef, MetalBackendSessionsRef};
 
 #[cfg(test)]
 mod tests;

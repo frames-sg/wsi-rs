@@ -6,14 +6,14 @@ impl FormatProbe for SvcacheBackend {
         let mut file = File::open(path)?;
         let mut magic = [0_u8; 8];
         if file.read_exact(&mut magic).is_err() {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: "svcache".into(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected("svcache"));
         }
+        if &magic == MAGIC {
+            return Ok(ProbeResult::detected("svcache", ProbeConfidence::Definite));
+        }
+        // Preserve the existing externally observable negative confidence.
         Ok(ProbeResult {
-            detected: &magic == MAGIC,
+            detected: false,
             vendor: "svcache".into(),
             confidence: ProbeConfidence::Definite,
         })

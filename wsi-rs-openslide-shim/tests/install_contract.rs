@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use wsi_rs_openslide_shim::install::{
     execute_install, execute_restore, install_destinations, manifest_path, plan_install,
@@ -19,6 +20,13 @@ fn built_shim_library() -> PathBuf {
         library.display()
     );
     library
+}
+
+fn run_installer(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_wsi-rs-openslide-install"))
+        .args(arguments)
+        .output()
+        .expect("run installer CLI")
 }
 
 #[test]
@@ -317,4 +325,110 @@ fn restore_rejects_symlink_backup_before_mutation() {
         b"outside-original"
     );
     assert!(backup.is_symlink());
+}
+
+#[test]
+fn installer_cli_reports_each_argument_and_operation_error_with_usage() {
+    let temp = tempfile::tempdir().expect("temporary CLI directory");
+    let prefix = temp.path().join("prefix");
+    let prefix_text = prefix.to_str().expect("UTF-8 temporary prefix");
+
+    let cases: &[(&[&str], &str, bool)] = &[
+        (&[], "missing command", true),
+        (&["install", "--prefix"], "--prefix requires a path", true),
+        (&["install", "--shim"], "--shim requires a path", true),
+        (&["install", "--help"], "usage:", true),
+        (&["unknown"], "unknown command: unknown", true),
+        (
+            &["restore", "--unknown"],
+            "unknown argument: --unknown",
+            true,
+        ),
+        (
+            &["install", "--prefix", prefix_text],
+            "install requires --shim",
+            true,
+        ),
+        (
+            &[
+                "install",
+                "--shim",
+                "/definitely/missing/wsi-rs-shim",
+                "--prefix",
+                prefix_text,
+            ],
+            "shim library does not exist",
+            false,
+        ),
+        (
+            &["restore", "--prefix", prefix_text],
+            "restore manifest",
+            false,
+        ),
+    ];
+
+    for (arguments, expected, expects_usage) in cases {
+        let output = run_installer(arguments);
+        assert!(
+            !output.status.success(),
+            "arguments unexpectedly passed: {arguments:?}"
+        );
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 CLI stderr");
+        assert!(stderr.contains(expected), "unexpected stderr: {stderr}");
+        assert_eq!(
+            stderr.contains("usage:"),
+            *expects_usage,
+            "unexpected usage handling for {arguments:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn installer_cli_round_trip_restores_every_original_library() {
+    let temp = tempfile::tempdir().expect("temporary CLI install directory");
+    let prefix = temp.path().join("prefix");
+    let lib = prefix.join("lib");
+    std::fs::create_dir_all(&lib).expect("library directory");
+    let platform = PlatformLibraryNames::current().expect("supported test platform");
+    let destinations = install_destinations(&prefix, platform);
+    for (index, destination) in destinations.iter().enumerate() {
+        std::fs::write(destination, format!("cli-original-{index}"))
+            .expect("write original library");
+    }
+
+    let shim = built_shim_library();
+    let install = run_installer(&[
+        "install",
+        "--shim",
+        shim.to_str().expect("UTF-8 shim path"),
+        "--prefix",
+        prefix.to_str().expect("UTF-8 prefix path"),
+    ]);
+    assert!(
+        install.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(String::from_utf8_lossy(&install.stdout).contains("restore manifest"));
+    assert!(manifest_path(&prefix).is_file());
+
+    let restore = run_installer(&[
+        "restore",
+        "--prefix",
+        prefix.to_str().expect("UTF-8 prefix path"),
+    ]);
+    assert!(
+        restore.status.success(),
+        "restore failed: {}",
+        String::from_utf8_lossy(&restore.stderr)
+    );
+    assert!(String::from_utf8_lossy(&restore.stdout).contains("restored OpenSlide libraries"));
+
+    for (index, destination) in destinations.iter().enumerate() {
+        assert_eq!(
+            std::fs::read_to_string(destination).expect("restored original library"),
+            format!("cli-original-{index}")
+        );
+    }
+    assert!(!manifest_path(&prefix).exists());
 }

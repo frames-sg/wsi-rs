@@ -344,18 +344,6 @@ pub(super) fn quickhash_for_zeiss(
         .ok_or_else(|| WsiError::DisplayConversion("failed to compute Zeiss quickhash".into()))
 }
 
-pub(super) fn dataset_id_from_quickhash(
-    path: &Path,
-    quickhash: &str,
-) -> Result<DatasetId, WsiError> {
-    if quickhash.len() < 32 {
-        return Err(invalid_slide(path, "quickhash too short"));
-    }
-    let value = u128::from_str_radix(&quickhash[..32], 16)
-        .map_err(|_| invalid_slide(path, "quickhash is not valid hex"))?;
-    Ok(DatasetId::new(value))
-}
-
 pub(super) fn extract_objective_magnification(xml: &str) -> Option<String> {
     let ref_id = extract_attribute(xml, "ObjectiveRef", "Id")?;
     let objective_marker = format!(r#"<Objective Id="{}""#, ref_id);

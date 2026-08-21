@@ -1,33 +1,11 @@
 use super::model::VmsJpeg;
 use super::{jpeg::read_vms_jpeg_header, *};
 
-fn write_restart_jpeg(path: &Path, width: u32, height: u32) -> Vec<u8> {
-    let mut pixels = vec![0u8; width as usize * height as usize * 3];
-    for y in 0..height {
-        for x in 0..width {
-            let off = (y as usize * width as usize + x as usize) * 3;
-            pixels[off] = x as u8;
-            pixels[off + 1] = y as u8;
-            pixels[off + 2] = x.wrapping_add(y) as u8;
-        }
-    }
-    let encoded = j2k_jpeg::encode_jpeg_baseline(
-        j2k_jpeg::JpegSamples::Rgb8 {
-            data: &pixels,
-            width,
-            height,
-        },
-        j2k_jpeg::JpegEncodeOptions {
-            quality: 90,
-            subsampling: j2k_jpeg::JpegSubsampling::Ybr444,
-            restart_interval: Some(8),
-            backend: j2k_jpeg::JpegBackend::Cpu,
-        },
-    )
-    .unwrap();
-    std::fs::write(path, &encoded.data).unwrap();
-    encoded.data
-}
+mod backend;
+mod errors;
+pub(super) mod fixtures;
+
+use fixtures::write_restart_jpeg;
 
 #[test]
 fn vms_jpeg_header_probe_reads_only_header() {

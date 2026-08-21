@@ -1,6 +1,20 @@
 use std::io::Write;
 
+use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 use tempfile::NamedTempFile;
+
+pub(crate) fn encode_test_jpeg(image: &image::RgbImage) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    JpegEncoder::new(&mut encoded, 50)
+        .encode(
+            image.as_raw().as_slice(),
+            image.width() as u16,
+            image.height() as u16,
+            JpegColorType::Rgb,
+        )
+        .unwrap();
+    encoded
+}
 
 pub(crate) struct SyntheticTag {
     tag: u16,
@@ -18,6 +32,30 @@ impl SyntheticTag {
             count: 1,
             inline_value: value.to_le_bytes(),
             ool_data: None,
+        }
+    }
+
+    pub(crate) fn short(tag: u16, value: u16) -> Self {
+        let mut inline_value = [0; 4];
+        inline_value[..2].copy_from_slice(&value.to_le_bytes());
+        Self {
+            tag,
+            tiff_type: 3,
+            count: 1,
+            inline_value,
+            ool_data: None,
+        }
+    }
+
+    pub(crate) fn ascii(tag: u16, value: &str) -> Self {
+        let mut data = value.as_bytes().to_vec();
+        data.push(0);
+        Self {
+            tag,
+            tiff_type: 2,
+            count: data.len() as u32,
+            inline_value: [0; 4],
+            ool_data: Some(data),
         }
     }
 

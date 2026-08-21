@@ -99,6 +99,126 @@ fn grid_tiles_for_region(region: GridRegion, bounds: GridTileBounds) -> Vec<Tile
                     dest_y,
                     dest_x_f64: dest_x as f64,
                     dest_y_f64: dest_y as f64,
+                    cairo_fixed_dest: None,
+                });
+            }
+        }
+    }
+    hits
+}
+
+fn fractional_grid_tiles_for_region(
+    origin: (f64, f64),
+    size: (u32, u32),
+    tile_width: u32,
+    tile_height: u32,
+    tiles_across: u64,
+    tiles_down: u64,
+) -> Vec<TileHit> {
+    let (x, y) = origin;
+    let (width, height) = size;
+    if !x.is_finite()
+        || !y.is_finite()
+        || tile_width == 0
+        || tile_height == 0
+        || tiles_across == 0
+        || tiles_down == 0
+    {
+        return Vec::new();
+    }
+
+    let tile_width = f64::from(tile_width);
+    let tile_height = f64::from(tile_height);
+    let start_col = (x / tile_width).floor().max(0.0) as u64;
+    let start_row = (y / tile_height).floor().max(0.0) as u64;
+    let end_col = ((x + f64::from(width)) / tile_width).ceil().max(0.0) as u64;
+    let end_row = ((y + f64::from(height)) / tile_height).ceil().max(0.0) as u64;
+    let offset_x = x - start_col as f64 * tile_width;
+    let offset_y = y - start_row as f64 * tile_height;
+    let mut hits = Vec::new();
+    for row in (start_row.min(tiles_down)..end_row.min(tiles_down)).rev() {
+        for col in (start_col.min(tiles_across)..end_col.min(tiles_across)).rev() {
+            // Preserve OpenSlide's operation order: its grid first computes
+            // the offset within the starting tile, then advances relative to
+            // that tile. The mathematically equivalent `col * width - x`
+            // can cross a 16.16 rounding boundary after floating cancellation.
+            let dest_x_f64 = (col - start_col) as f64 * tile_width - offset_x;
+            let dest_y_f64 = (row - start_row) as f64 * tile_height - offset_y;
+            let (Ok(col), Ok(row)) = (i64::try_from(col), i64::try_from(row)) else {
+                continue;
+            };
+            hits.push(TileHit {
+                col,
+                row,
+                dest_x: dest_x_f64.round() as i64,
+                dest_y: dest_y_f64.round() as i64,
+                dest_x_f64,
+                dest_y_f64,
+                cairo_fixed_dest: Some((
+                    cairo_bilinear_destination(dest_x_f64),
+                    cairo_bilinear_destination(dest_y_f64),
+                )),
+            });
+        }
+    }
+    hits
+}
+
+fn cairo_bilinear_destination(destination: f64) -> f64 {
+    // Cairo splits a non-integral translation between Pixman's integer source
+    // offset and a 16.16 transform. Reproducing that split per tile preserves
+    // translation invariance that would be lost by rounding the full origin.
+    let integer_offset = (destination / 2.0).floor();
+    let transform = ((-destination + integer_offset) * 65_536.0).round_ties_even() / 65_536.0;
+    integer_offset - transform
+}
+
+fn irregular_tiles_for_fractional_region(
+    tile_advance: (f64, f64),
+    extra_tiles: (u32, u32, u32, u32),
+    tiles: &HashMap<(i64, i64), TileEntry>,
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+) -> Vec<TileHit> {
+    let (adv_x, adv_y) = tile_advance;
+    if !(x.is_finite() && y.is_finite() && adv_x.is_finite() && adv_y.is_finite())
+        || adv_x <= 0.0
+        || adv_y <= 0.0
+    {
+        return Vec::new();
+    }
+
+    let (extra_top, extra_bottom, extra_left, extra_right) = extra_tiles;
+    let region_x2 = x + f64::from(width);
+    let region_y2 = y + f64::from(height);
+    let start_col = (x / adv_x) as i64 - i64::from(extra_left);
+    let end_col = (region_x2 / adv_x).ceil() as i64 + i64::from(extra_right);
+    let start_row = (y / adv_y) as i64 - i64::from(extra_top);
+    let end_row = (region_y2 / adv_y).ceil() as i64 + i64::from(extra_bottom);
+    let mut hits = Vec::new();
+    for row in start_row..end_row {
+        for col in start_col..end_col {
+            let Some(entry) = tiles.get(&(col, row)) else {
+                continue;
+            };
+            let tile_x = col as f64 * adv_x + entry.offset.0;
+            let tile_y = row as f64 * adv_y + entry.offset.1;
+            let tile_x2 = tile_x + f64::from(entry.dimensions.0);
+            let tile_y2 = tile_y + f64::from(entry.dimensions.1);
+
+            if tile_x2 > x && tile_x < region_x2 && tile_y2 > y && tile_y < region_y2 {
+                let dest_x_f64 = tile_x - x;
+                let dest_y_f64 = tile_y - y;
+                hits.push(TileHit {
+                    col,
+                    row,
+                    dest_x: dest_x_f64.round() as i64,
+                    dest_y: dest_y_f64.round() as i64,
+                    dest_x_f64,
+                    dest_y_f64,
+                    cairo_fixed_dest: None,
                 });
             }
         }
@@ -118,6 +238,8 @@ pub struct TileHit {
     /// Floating-point placement used by irregular tilemaps.
     pub dest_x_f64: f64,
     pub dest_y_f64: f64,
+    /// Cairo's fixed-point raster position for regular fractional grids.
+    pub(crate) cairo_fixed_dest: Option<(f64, f64)>,
 }
 
 impl TileLayout {
@@ -190,50 +312,65 @@ impl TileLayout {
                 tile_advance,
                 extra_tiles,
                 tiles,
-            } => {
-                let adv_x = tile_advance.0;
-                let adv_y = tile_advance.1;
-                if !(adv_x.is_finite() && adv_y.is_finite()) || adv_x <= 0.0 || adv_y <= 0.0 {
-                    return Vec::new();
-                }
+            } => irregular_tiles_for_fractional_region(
+                *tile_advance,
+                *extra_tiles,
+                tiles,
+                x as f64,
+                y as f64,
+                w,
+                h,
+            ),
+        }
+    }
 
-                let (extra_top, extra_bottom, extra_left, extra_right) = *extra_tiles;
-                let region_x = x as f64;
-                let region_y = y as f64;
-                let region_x2 = region_x + w as f64;
-                let region_y2 = region_y + h as f64;
-                let start_col = (region_x / adv_x) as i64 - i64::from(extra_left);
-                let end_col = (region_x2 / adv_x).ceil() as i64 + i64::from(extra_right);
-                let start_row = (region_y / adv_y) as i64 - i64::from(extra_top);
-                let end_row = (region_y2 / adv_y).ceil() as i64 + i64::from(extra_bottom);
-                let mut hits = Vec::new();
-                for row in start_row..end_row {
-                    for col in start_col..end_col {
-                        if let Some(entry) = tiles.get(&(col, row)) {
-                            let tile_x = col as f64 * adv_x + entry.offset.0;
-                            let tile_y = row as f64 * adv_y + entry.offset.1;
-                            let tile_x2 = tile_x + entry.dimensions.0 as f64;
-                            let tile_y2 = tile_y + entry.dimensions.1 as f64;
-
-                            if tile_x2 > region_x
-                                && tile_x < region_x2
-                                && tile_y2 > region_y
-                                && tile_y < region_y2
-                            {
-                                hits.push(TileHit {
-                                    col,
-                                    row,
-                                    dest_x: (tile_x - region_x).round() as i64,
-                                    dest_y: (tile_y - region_y).round() as i64,
-                                    dest_x_f64: tile_x - region_x,
-                                    dest_y_f64: tile_y - region_y,
-                                });
-                            }
-                        }
-                    }
-                }
-                hits
-            }
+    pub(crate) fn tiles_for_fractional_region(
+        &self,
+        x: f64,
+        y: f64,
+        w: u32,
+        h: u32,
+    ) -> Vec<TileHit> {
+        match self {
+            TileLayout::Regular {
+                tile_width,
+                tile_height,
+                tiles_across,
+                tiles_down,
+            } => fractional_grid_tiles_for_region(
+                (x, y),
+                (w, h),
+                *tile_width,
+                *tile_height,
+                *tiles_across,
+                *tiles_down,
+            ),
+            TileLayout::WholeLevel {
+                width,
+                height,
+                virtual_tile_width,
+                virtual_tile_height,
+            } => fractional_grid_tiles_for_region(
+                (x, y),
+                (w, h),
+                *virtual_tile_width,
+                *virtual_tile_height,
+                width.div_ceil(u64::from(*virtual_tile_width)),
+                height.div_ceil(u64::from(*virtual_tile_height)),
+            ),
+            TileLayout::Irregular {
+                tile_advance,
+                extra_tiles,
+                tiles,
+            } => irregular_tiles_for_fractional_region(
+                *tile_advance,
+                *extra_tiles,
+                tiles,
+                x,
+                y,
+                w,
+                h,
+            ),
         }
     }
 }

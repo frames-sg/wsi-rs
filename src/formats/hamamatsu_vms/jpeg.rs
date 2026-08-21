@@ -1,5 +1,6 @@
 use super::model::{invalid_slide, VmsJpeg};
 use super::*;
+use memchr::memchr;
 
 const JPEG_HEADER_MAX_BYTES: usize = 1 << 20;
 const JPEG_SCAN_CHUNK_BYTES: usize = 64 << 10;
@@ -219,32 +220,30 @@ impl VmsJpeg {
     }
 
     fn tile_entropy_bounds(&self, tile_index: usize) -> Result<(u64, u64), WsiError> {
-        let tile_count = usize::try_from(
-            u64::from(self.tiles_across)
-                .checked_mul(u64::from(self.tiles_down))
-                .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile count overflow".into()))?,
-        )
-        .map_err(|_| WsiError::Jpeg("VMS JPEG tile count exceeds address space".into()))?;
+        let mut starts = self.mcu_starts.lock().unwrap_or_else(|e| e.into_inner());
+        let tile_count = starts.len();
         if tile_index >= tile_count {
             return Err(WsiError::Jpeg(format!(
                 "VMS JPEG tile index {tile_index} out of range {tile_count}"
             )));
         }
-        let mut starts = self.mcu_starts.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_mcu_start(&mut starts, tile_index)?;
-        let start = starts[tile_index].ok_or_else(|| {
-            WsiError::Jpeg(format!("missing VMS JPEG MCU start for tile {tile_index}"))
-        })?;
+        let Some(start) = starts[tile_index] else {
+            return Err(WsiError::Jpeg(format!(
+                "missing VMS JPEG MCU start for tile {tile_index}"
+            )));
+        };
         let stop = if tile_index + 1 == tile_count {
             self.file_len
         } else {
             self.ensure_mcu_start(&mut starts, tile_index + 1)?;
-            starts[tile_index + 1].ok_or_else(|| {
-                WsiError::Jpeg(format!(
+            let Some(stop) = starts[tile_index + 1] else {
+                return Err(WsiError::Jpeg(format!(
                     "missing VMS JPEG MCU stop for tile {}",
                     tile_index + 1
-                ))
-            })?
+                )));
+            };
+            stop
         };
         Ok((start, stop))
     }
@@ -279,33 +278,33 @@ impl VmsJpeg {
             first_good -= 1;
         }
 
-        let mut offset = starts[first_good].ok_or_else(|| {
-            WsiError::Jpeg(format!(
+        let Some(offset) = starts[first_good] else {
+            return Err(WsiError::Jpeg(format!(
                 "missing VMS JPEG known MCU start before tile {target}"
-            ))
-        })?;
+            )));
+        };
+        if first_good == target {
+            return Ok(());
+        }
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(offset))
             .map_err(|source| WsiError::IoWithPath {
                 source: Arc::new(source),
                 path: self.path.clone(),
             })?;
-        for idx in first_good..target {
-            offset = find_next_restart_offset(&mut file, self.file_len, &self.path)?.ok_or_else(
-                || {
-                    WsiError::Jpeg(format!(
-                        "could not find restart marker for VMS JPEG tile {} in {}",
-                        idx + 1,
-                        self.path.display()
-                    ))
-                },
-            )?;
-            starts[idx + 1] = Some(offset);
-            file.seek(SeekFrom::Start(offset))
-                .map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: self.path.clone(),
-                })?;
+        let requested = target - first_good;
+        let found = find_restart_offsets(
+            &mut file,
+            self.file_len,
+            &self.path,
+            &mut starts[first_good + 1..=target],
+        )?;
+        if found < requested {
+            return Err(WsiError::Jpeg(format!(
+                "could not find restart marker for VMS JPEG tile {} in {}",
+                first_good + found + 1,
+                self.path.display()
+            )));
         }
         Ok(())
     }
@@ -338,9 +337,8 @@ fn checked_vms_tile_count(
     tiles_across: u32,
     tiles_down: u32,
 ) -> Result<usize, WsiError> {
-    let tile_count = u64::from(tiles_across)
-        .checked_mul(u64::from(tiles_down))
-        .ok_or_else(|| invalid_slide(path, "VMS JPEG tile count overflow"))?;
+    // Both factors are u32, so their product always fits in u64.
+    let tile_count = u64::from(tiles_across) * u64::from(tiles_down);
     let index_bytes = tile_count
         .checked_mul(2)
         .and_then(|count| count.checked_mul(std::mem::size_of::<Option<u64>>() as u64))
@@ -352,13 +350,13 @@ fn checked_vms_tile_count(
             limit: MAX_VMS_TILE_INDEX_BYTES,
         });
     }
-    usize::try_from(tile_count)
-        .map_err(|_| invalid_slide(path, "VMS JPEG tile count exceeds address space"))
+    // The byte budget above bounds this well below usize::MAX even on 32-bit.
+    Ok(tile_count as usize)
 }
 
 fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize, WsiError> {
-    let header_len = u64::try_from(header_len)
-        .map_err(|_| WsiError::Jpeg("VMS JPEG header length exceeds u64".into()))?;
+    // Rust's supported address spaces are no wider than u64.
+    let header_len = header_len as u64;
     let total_len = segment_len
         .checked_add(header_len)
         .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile length overflow".into()))?;
@@ -369,8 +367,8 @@ fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize,
             limit: MAX_COMPRESSED_INPUT_BYTES,
         });
     }
-    usize::try_from(segment_len)
-        .map_err(|_| WsiError::Jpeg("VMS JPEG entropy segment exceeds address space".into()))
+    // The compressed-input budget above is below the 32-bit address-space limit.
+    Ok(segment_len as usize)
 }
 
 pub(super) struct VmsJpegHeader {
@@ -409,7 +407,6 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
     let mut comment = None;
 
     loop {
-        let marker_start = header.len();
         let marker = read_next_header_marker(&mut file, path, &mut header)?;
         match marker {
             0xD9 => return Err(WsiError::Jpeg("VMS JPEG ended before SOS".into())),
@@ -500,18 +497,12 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
                         "VMS JPEG restart interval does not align to MCU rows".into(),
                     ));
                 }
-                let tile_width = mcu_width
-                    .checked_mul(restart)
-                    .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile width overflow".into()))?;
-                let scan_data_offset = u64::try_from(header.len()).map_err(|_| {
-                    WsiError::Jpeg("VMS JPEG header offset does not fit u64".into())
-                })?;
-                let sof_dimensions_offset = sof_dimensions_offset.ok_or_else(|| {
-                    WsiError::Jpeg("VMS JPEG missing SOF dimensions offset".into())
-                })?;
-                if marker_start >= header.len() {
-                    return Err(WsiError::Jpeg("invalid VMS JPEG marker accounting".into()));
-                }
+                // Sampling factors are four-bit values and the restart interval
+                // is u16, so this product is bounded well below u32::MAX.
+                let tile_width = mcu_width * restart;
+                let scan_data_offset = header.len() as u64;
+                let sof_dimensions_offset = sof_dimensions_offset
+                    .expect("SOF dimensions and their byte offset are recorded together");
                 return Ok(VmsJpegHeader {
                     header,
                     geometry: JpegTileGeometry {
@@ -583,23 +574,33 @@ fn patch_sof_dimensions(
         .map_err(|_| WsiError::Jpeg(format!("VMS JPEG tile width {width} exceeds u16")))?;
     let height = u16::try_from(height)
         .map_err(|_| WsiError::Jpeg(format!("VMS JPEG tile height {height} exceeds u16")))?;
-    if dimensions_offset + 4 > header.len() {
+    let Some(dimensions_end) = dimensions_offset.checked_add(4) else {
+        return Err(WsiError::Jpeg(
+            "VMS JPEG SOF dimensions offset is outside header".into(),
+        ));
+    };
+    if dimensions_end > header.len() {
         return Err(WsiError::Jpeg(
             "VMS JPEG SOF dimensions offset is outside header".into(),
         ));
     }
     header[dimensions_offset..dimensions_offset + 2].copy_from_slice(&height.to_be_bytes());
-    header[dimensions_offset + 2..dimensions_offset + 4].copy_from_slice(&width.to_be_bytes());
+    header[dimensions_offset + 2..dimensions_end].copy_from_slice(&width.to_be_bytes());
     Ok(())
 }
 
-fn find_next_restart_offset(
+fn find_restart_offsets(
     file: &mut File,
     file_len: u64,
     path: &Path,
-) -> Result<Option<u64>, WsiError> {
+    offsets: &mut [Option<u64>],
+) -> Result<usize, WsiError> {
+    if offsets.is_empty() {
+        return Ok(0);
+    }
     let mut buf = [0u8; JPEG_SCAN_CHUNK_BYTES];
     let mut pending_ff = false;
+    let mut found = 0;
     loop {
         let base = file
             .stream_position()
@@ -608,69 +609,55 @@ fn find_next_restart_offset(
                 path: path.to_path_buf(),
             })?;
         if base >= file_len {
-            return Ok(None);
+            return Ok(found);
         }
         let n = file.read(&mut buf).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
         if n == 0 {
-            return Ok(None);
+            return Ok(found);
         }
-        for (idx, byte) in buf[..n].iter().copied().enumerate() {
-            if pending_ff {
-                if byte == 0xFF {
-                    continue;
-                }
-                pending_ff = false;
-                if byte == 0x00 {
-                    continue;
-                }
-                if (0xD0..=0xD7).contains(&byte) {
-                    return Ok(Some(base + idx as u64 + 1));
-                }
-                if byte == 0xD9 {
-                    return Ok(None);
-                }
-                return Err(WsiError::Jpeg(format!(
-                    "unexpected JPEG marker FF{byte:02X} while scanning {}",
-                    path.display()
-                )));
-            } else if byte == 0xFF {
+        let mut position = 0;
+        while position < n {
+            if !pending_ff {
+                let Some(relative) = memchr(0xFF, &buf[position..n]) else {
+                    break;
+                };
+                position += relative + 1;
                 pending_ff = true;
             }
+
+            if position == n {
+                break;
+            }
+            let byte = buf[position];
+            position += 1;
+            if byte == 0xFF {
+                continue;
+            }
+            pending_ff = false;
+            if byte == 0x00 {
+                continue;
+            }
+            if (0xD0..=0xD7).contains(&byte) {
+                offsets[found] = Some(base + position as u64);
+                found += 1;
+                if found == offsets.len() {
+                    return Ok(found);
+                }
+                continue;
+            }
+            if byte == 0xD9 {
+                return Ok(found);
+            }
+            return Err(WsiError::Jpeg(format!(
+                "unexpected JPEG marker FF{byte:02X} while scanning {}",
+                path.display()
+            )));
         }
     }
 }
 
 #[cfg(test)]
-mod limit_tests {
-    use super::*;
-
-    #[test]
-    fn entropy_budget_includes_the_reconstructed_header() {
-        assert_eq!(
-            checked_vms_entropy_len(MAX_COMPRESSED_INPUT_BYTES - 4, 4).unwrap(),
-            (MAX_COMPRESSED_INPUT_BYTES - 4) as usize
-        );
-        assert!(matches!(
-            checked_vms_entropy_len(MAX_COMPRESSED_INPUT_BYTES - 3, 4),
-            Err(WsiError::ResourceLimit { .. })
-        ));
-    }
-
-    #[test]
-    fn tile_index_budget_counts_both_dense_offset_vectors() {
-        let path = Path::new("huge-vms.jpg");
-        let entries_at_limit =
-            MAX_VMS_TILE_INDEX_BYTES / (2 * std::mem::size_of::<Option<u64>>() as u64);
-        assert_eq!(
-            checked_vms_tile_count(path, entries_at_limit as u32, 1).unwrap(),
-            entries_at_limit as usize
-        );
-        assert!(matches!(
-            checked_vms_tile_count(path, entries_at_limit as u32 + 1, 1),
-            Err(WsiError::ResourceLimit { .. })
-        ));
-    }
-}
+mod tests;

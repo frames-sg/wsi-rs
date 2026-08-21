@@ -219,32 +219,4 @@ impl ReadControl {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    use super::{DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadControl};
-
-    #[test]
-    fn diagnostic_sink_is_opt_in_and_receives_typed_index_events() {
-        let disabled = ReadControl::default();
-        assert!(!disabled.diagnostics_enabled());
-
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let captured = Arc::clone(&events);
-        let control = ReadControl::default().with_diagnostic_sink(Arc::new(move |event| {
-            captured.lock().unwrap().push(event);
-        }));
-        assert!(control.diagnostics_enabled());
-
-        let diagnostic = DicomIndexDiagnostic {
-            outcome: DicomIndexOutcome::BuiltFast {
-                mapping: DicomIndexMapping::BasicOffsetTableItems,
-            },
-            elapsed: Duration::from_millis(7),
-        };
-        control.record_diagnostic(diagnostic);
-
-        assert_eq!(events.lock().unwrap().as_slice(), &[diagnostic]);
-    }
-}
+mod tests;

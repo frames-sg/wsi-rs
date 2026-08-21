@@ -45,7 +45,7 @@ pub(crate) struct TiffFamilyBackend {
 }
 
 impl TiffFamilyBackend {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             probe_cache: Mutex::new(LruCache::new(NonZeroUsize::new(16).unwrap())),
             interpreters: vec![
@@ -84,11 +84,7 @@ impl FormatProbe for TiffFamilyBackend {
                 {
                     return Err(err.into_wsi_error(path));
                 }
-                return Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                });
+                return Ok(ProbeResult::not_detected(""));
             }
         };
 
@@ -100,18 +96,10 @@ impl FormatProbe for TiffFamilyBackend {
             let mut cache = self.probe_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.put(key, Arc::new(container));
 
-            Ok(ProbeResult {
-                detected: true,
-                vendor,
-                confidence: ProbeConfidence::Definite,
-            })
+            Ok(ProbeResult::detected(vendor, ProbeConfidence::Definite))
         } else {
             // No interpreter matched — container dropped, not cached
-            Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            })
+            Ok(ProbeResult::not_detected(""))
         }
     }
 }

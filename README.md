@@ -14,7 +14,8 @@ and HTJ2K decode is delegated to the
 [J2K pure-Rust JPEG 2000 codec](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/)
 crates.
 
-The main crate forbids `unsafe` code.
+The main crate denies `unsafe` code by default, with a narrowly scoped,
+audited exception for Metal interoperability.
 Unsupported or incomplete sources return `WsiError`; they should not silently
 produce black or partial pixels.
 
@@ -25,7 +26,7 @@ cargo add wsi-rs
 ```
 
 Supported architectures are x86_64 and aarch64. The JPEG backend in the
-required j2k 0.8 series does not support 32-bit targets.
+required j2k 0.10 series does not support 32-bit targets.
 
 ## Quick Start
 
@@ -60,6 +61,8 @@ lookup, custom registries, region limits, or decode execution settings.
 and source I/O; the shared core owns typed requests, byte-bounded caches,
 decode policy, and CPU or device output types. Unsupported or invalid input
 returns a typed `WsiError` instead of silently producing a partial tile.
+The detailed internal ownership map is in
+[`docs/architecture.md`](docs/architecture.md).
 
 Batch reads preserve request order and cardinality. The default controlled-read
 adapter checks cancellation, submits the complete request slice once, validates

@@ -4,7 +4,8 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use crate::core::types::{CpuTile, DatasetId};
+use crate::core::environment;
+use crate::core::types::{CpuTile, DatasetId, RegionRequest, TileRequest};
 
 // ── TileCache (axis-aware) ────────────────────────────────────────
 
@@ -178,12 +179,87 @@ impl<K: Hash + Eq, V> PrivateCache<K, V> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WeightedLruPut {
+    Inserted { evictions: u64 },
+    RejectedOversize,
+}
+
+struct WeightedEntry<V> {
+    value: V,
+    bytes: u64,
+}
+
+/// An LRU whose capacity is the retained byte weight, not its entry count.
+///
+/// Callers own synchronization and statistics. Replacing a key does not count
+/// as an eviction, and an oversized replacement leaves the existing value
+/// untouched.
+pub(crate) struct WeightedLru<K: Hash + Eq, V> {
+    entries: LruCache<K, WeightedEntry<V>>,
+    capacity_bytes: u64,
+    current_bytes: u64,
+}
+
+impl<K: Hash + Eq, V> WeightedLru<K, V> {
+    pub(crate) fn new(capacity_bytes: u64) -> Self {
+        Self {
+            entries: LruCache::unbounded(),
+            capacity_bytes,
+            current_bytes: 0,
+        }
+    }
+
+    pub(crate) fn get<'a, Q>(&'a mut self, key: &Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.entries.get(key).map(|entry| &entry.value)
+    }
+
+    pub(crate) fn put(&mut self, key: K, value: V, bytes: u64) -> WeightedLruPut {
+        if bytes > self.capacity_bytes {
+            return WeightedLruPut::RejectedOversize;
+        }
+
+        if let Some((_, existing)) = self.entries.pop_entry(&key) {
+            self.current_bytes -= existing.bytes;
+        }
+
+        let mut evictions = 0;
+        while self.current_bytes > self.capacity_bytes - bytes {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.current_bytes -= evicted.bytes;
+            evictions += 1;
+        }
+
+        self.entries.put(key, WeightedEntry { value, bytes });
+        self.current_bytes += bytes;
+        WeightedLruPut::Inserted { evictions }
+    }
+
+    pub(crate) fn capacity_bytes(&self) -> u64 {
+        self.capacity_bytes
+    }
+
+    pub(crate) fn current_bytes(&self) -> u64 {
+        self.current_bytes
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 /// Note: scene/series are u32 here (not usize) to keep CacheKey compact and
 /// Hash-friendly. TileRequest/RegionRequest use usize for ergonomic indexing.
 /// Slide converts usize → u32 via `as u32` when constructing cache keys.
 /// Overflow is not a practical concern (>4B scenes/series is impossible).
-pub struct CacheKey {
+pub(crate) struct CacheKey {
     pub(crate) dataset_id: DatasetId,
     pub(crate) scene: u32,
     pub(crate) series: u32,
@@ -193,6 +269,42 @@ pub struct CacheKey {
     pub(crate) t: u32,
     pub(crate) tile_col: i64,
     pub(crate) tile_row: i64,
+}
+
+impl CacheKey {
+    pub(crate) fn from_tile_request(dataset_id: DatasetId, request: &TileRequest) -> Self {
+        let plane = request.plane.get();
+        Self {
+            dataset_id,
+            scene: request.scene.get() as u32,
+            series: request.series.get() as u32,
+            level: request.level.get(),
+            z: plane.z,
+            c: plane.c,
+            t: plane.t,
+            tile_col: request.col,
+            tile_row: request.row,
+        }
+    }
+
+    pub(crate) fn from_region_tile(
+        dataset_id: DatasetId,
+        request: &RegionRequest,
+        col: i64,
+        row: i64,
+    ) -> Self {
+        Self::from_tile_request(
+            dataset_id,
+            &TileRequest {
+                scene: request.scene,
+                series: request.series,
+                level: request.level,
+                plane: request.plane,
+                col,
+                row,
+            },
+        )
+    }
 }
 
 /// Thread-safe, byte-bounded decoded tile cache that can be shared by slides.
@@ -225,8 +337,8 @@ impl std::fmt::Debug for TileCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("TileCache")
-            .field("capacity_bytes", &state.capacity_bytes)
-            .field("current_bytes", &state.current_bytes)
+            .field("capacity_bytes", &state.lru.capacity_bytes())
+            .field("current_bytes", &state.lru.current_bytes())
             .field("entries", &state.lru.len())
             .field("hits", &state.hits)
             .field("misses", &state.misses)
@@ -235,9 +347,7 @@ impl std::fmt::Debug for TileCache {
 }
 
 struct TileCacheState {
-    lru: LruCache<CacheKey, CachedTile>,
-    capacity_bytes: u64,
-    current_bytes: u64,
+    lru: WeightedLru<CacheKey, Arc<CpuTile>>,
     hits: u64,
     misses: u64,
     puts: u64,
@@ -245,21 +355,12 @@ struct TileCacheState {
     rejected_oversize: u64,
 }
 
-struct CachedTile {
-    data: Arc<CpuTile>,
-    byte_size: u64,
-}
-
 impl TileCache {
     /// Create a thread-safe decoded tile cache with a byte capacity.
     pub fn new(capacity_bytes: u64) -> Self {
         Self {
             inner: Mutex::new(TileCacheState {
-                // The cache is byte-budgeted only. The backing LRU stays unbounded
-                // and eviction is driven by `capacity_bytes`.
-                lru: LruCache::unbounded(),
-                capacity_bytes,
-                current_bytes: 0,
+                lru: WeightedLru::new(capacity_bytes),
                 hits: 0,
                 misses: 0,
                 puts: 0,
@@ -272,35 +373,18 @@ impl TileCache {
     pub(crate) fn put(&self, key: CacheKey, data: Arc<CpuTile>) {
         let byte_size = data.data.byte_size() as u64;
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-
-        if byte_size > state.capacity_bytes {
-            state.rejected_oversize += 1;
-            return;
-        }
-
-        // Remove existing entry if present
-        if let Some((_, existing)) = state.lru.pop_entry(&key) {
-            state.current_bytes -= existing.byte_size;
-        }
-
-        // Evict LRU entries until there's room
-        while state.current_bytes + byte_size > state.capacity_bytes {
-            if let Some((_, evicted)) = state.lru.pop_lru() {
-                state.current_bytes -= evicted.byte_size;
-                state.evictions += 1;
-            } else {
-                break;
+        match state.lru.put(key, data, byte_size) {
+            WeightedLruPut::Inserted { evictions } => {
+                state.evictions += evictions;
+                state.puts += 1;
             }
+            WeightedLruPut::RejectedOversize => state.rejected_oversize += 1,
         }
-
-        state.lru.put(key, CachedTile { data, byte_size });
-        state.current_bytes += byte_size;
-        state.puts += 1;
     }
 
     pub(crate) fn get(&self, key: &CacheKey) -> Option<Arc<CpuTile>> {
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let cached = state.lru.get(key).map(|entry| entry.data.clone());
+        let cached = state.lru.get(key).cloned();
         if cached.is_some() {
             state.hits += 1;
         } else {
@@ -318,14 +402,14 @@ impl TileCache {
             puts: state.puts,
             evictions: state.evictions,
             rejected_oversize: state.rejected_oversize,
-            capacity_bytes: state.capacity_bytes,
-            current_bytes: state.current_bytes,
+            capacity_bytes: state.lru.capacity_bytes(),
+            current_bytes: state.lru.current_bytes(),
             entries: state.lru.len(),
         }
     }
 
     pub(crate) fn display_default() -> Self {
-        Self::new(capacity_from_env(
+        Self::new(environment::positive_u64(
             DISPLAY_TILE_CACHE_BYTES_ENV,
             DEFAULT_DISPLAY_TILE_CACHE_SIZE,
         ))
@@ -336,7 +420,10 @@ impl TileCache {
     }
 
     pub(crate) fn shared_default_with_hint(default_bytes: u64) -> Self {
-        Self::new(capacity_from_env(TILE_CACHE_BYTES_ENV, default_bytes))
+        Self::new(environment::positive_u64(
+            TILE_CACHE_BYTES_ENV,
+            default_bytes,
+        ))
     }
 
     pub(crate) fn shared_with_config(config: CacheConfig, source_hint: Option<u64>) -> Self {
@@ -350,194 +437,6 @@ impl Default for TileCache {
     }
 }
 
-fn capacity_from_env(env_name: &str, default_bytes: u64) -> u64 {
-    std::env::var(env_name)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|bytes| *bytes > 0)
-        .unwrap_or(default_bytes)
-}
-
 #[cfg(test)]
-mod tile_cache_tests {
-    use super::*;
-    use crate::core::types::*;
-
-    const SVS_RGB_240_TILE_BYTES: usize = 240 * 240 * 3;
-    const COMMON_ZOOM_VIEWPORT_TILE_COUNT: i64 = 96;
-
-    fn make_sample_buffer(size: usize) -> CpuTile {
-        CpuTile {
-            width: 256,
-            height: 256,
-            channels: 3,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8(vec![0u8; size]),
-        }
-    }
-
-    fn make_key(dataset_id: u128, level: u32, col: i64, row: i64) -> CacheKey {
-        CacheKey {
-            dataset_id: DatasetId::new(dataset_id),
-            scene: 0,
-            series: 0,
-            level,
-            z: 0,
-            c: 0,
-            t: 0,
-            tile_col: col,
-            tile_row: row,
-        }
-    }
-
-    #[test]
-    fn private_cache_budget_bounds_aggregate_capacity_and_disables_excess_caches() {
-        let config = CacheConfig::deterministic().with_shared_tile_bytes(8 * 1024);
-        let mut budget = config.private_cache_budget(8);
-        let mut caches = (0..8)
-            .map(|_| PrivateCache::<u32, u32>::new(budget.allocate(1024)))
-            .collect::<Vec<_>>();
-
-        assert!(
-            caches
-                .iter()
-                .map(PrivateCache::accounted_capacity_bytes)
-                .sum::<u64>()
-                <= config.private_cache_budget_bytes()
-        );
-        assert_eq!(
-            caches
-                .iter()
-                .map(PrivateCache::capacity_entries)
-                .sum::<usize>(),
-            2
-        );
-        assert_eq!(
-            caches
-                .iter()
-                .filter(|cache| cache.capacity_entries() == 0)
-                .count(),
-            6
-        );
-
-        let disabled = caches
-            .iter_mut()
-            .find(|cache| cache.capacity_entries() == 0)
-            .expect("small aggregate budget disables at least one cache");
-        disabled.put(1, 2);
-        assert_eq!(disabled.len(), 0, "disabled caches retain no entries");
-    }
-
-    #[test]
-    fn put_and_get() {
-        let cache = TileCache::new(1024 * 1024);
-        let buf = Arc::new(make_sample_buffer(100));
-        let key = make_key(1, 0, 0, 0);
-        cache.put(key.clone(), buf.clone());
-        let result = cache.get(&key).unwrap();
-        assert_eq!(result.width, 256);
-    }
-
-    #[test]
-    fn miss_returns_none() {
-        let cache = TileCache::new(1024);
-        let key = make_key(1, 0, 0, 0);
-        assert!(cache.get(&key).is_none());
-    }
-
-    #[test]
-    fn eviction_by_byte_size() {
-        let cache = TileCache::new(250);
-        cache.put(make_key(1, 0, 0, 0), Arc::new(make_sample_buffer(100)));
-        cache.put(make_key(1, 0, 1, 0), Arc::new(make_sample_buffer(100)));
-        // Both fit: 200 bytes
-        assert!(cache.get(&make_key(1, 0, 0, 0)).is_some());
-        assert!(cache.get(&make_key(1, 0, 1, 0)).is_some());
-
-        // Third pushes over 250
-        cache.put(make_key(1, 0, 2, 0), Arc::new(make_sample_buffer(100)));
-        assert!(cache.get(&make_key(1, 0, 0, 0)).is_none()); // evicted
-        assert!(cache.get(&make_key(1, 0, 1, 0)).is_some());
-        assert!(cache.get(&make_key(1, 0, 2, 0)).is_some());
-    }
-
-    #[test]
-    fn different_datasets_are_independent() {
-        let cache = TileCache::new(1024);
-        cache.put(make_key(1, 0, 0, 0), Arc::new(make_sample_buffer(10)));
-        cache.put(make_key(2, 0, 0, 0), Arc::new(make_sample_buffer(10)));
-        assert!(cache.get(&make_key(1, 0, 0, 0)).is_some());
-        assert!(cache.get(&make_key(2, 0, 0, 0)).is_some());
-    }
-
-    #[test]
-    fn axis_aware_keys() {
-        let cache = TileCache::new(1024);
-        let mut key_z0 = make_key(1, 0, 0, 0);
-        key_z0.z = 0;
-        let mut key_z1 = make_key(1, 0, 0, 0);
-        key_z1.z = 1;
-        cache.put(key_z0.clone(), Arc::new(make_sample_buffer(10)));
-        cache.put(key_z1.clone(), Arc::new(make_sample_buffer(10)));
-        assert!(cache.get(&key_z0).is_some());
-        assert!(cache.get(&key_z1).is_some());
-    }
-
-    #[test]
-    fn oversize_entry_rejected() {
-        let cache = TileCache::new(50);
-        cache.put(make_key(1, 0, 0, 0), Arc::new(make_sample_buffer(100)));
-        assert!(cache.get(&make_key(1, 0, 0, 0)).is_none());
-    }
-
-    #[test]
-    fn shared_across_threads() {
-        let cache = Arc::new(TileCache::new(4096));
-        let cache_clone = cache.clone();
-        let handle = std::thread::spawn(move || {
-            cache_clone.put(make_key(1, 0, 5, 5), Arc::new(make_sample_buffer(10)));
-        });
-        handle.join().unwrap();
-        assert!(cache.get(&make_key(1, 0, 5, 5)).is_some());
-    }
-
-    #[test]
-    fn display_default_holds_common_svs_zoom_viewport_working_set() {
-        let cache = TileCache::new(DEFAULT_DISPLAY_TILE_CACHE_SIZE);
-        for col in 0..COMMON_ZOOM_VIEWPORT_TILE_COUNT {
-            cache.put(
-                make_key(1, 0, col, 0),
-                Arc::new(make_sample_buffer(SVS_RGB_240_TILE_BYTES)),
-            );
-        }
-
-        let stats = cache.stats();
-        assert_eq!(stats.entries, COMMON_ZOOM_VIEWPORT_TILE_COUNT as usize);
-        assert_eq!(stats.evictions, 0);
-        assert_eq!(stats.rejected_oversize, 0);
-    }
-
-    #[test]
-    fn stats_count_hits_misses_puts_evictions_and_oversize_rejections() {
-        let cache = TileCache::new(150);
-        let missing = make_key(1, 0, 9, 9);
-        assert!(cache.get(&missing).is_none());
-
-        cache.put(make_key(1, 0, 0, 0), Arc::new(make_sample_buffer(100)));
-        assert!(cache.get(&make_key(1, 0, 0, 0)).is_some());
-
-        cache.put(make_key(1, 0, 1, 0), Arc::new(make_sample_buffer(100)));
-        cache.put(make_key(1, 0, 2, 0), Arc::new(make_sample_buffer(200)));
-
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 1);
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.puts, 2);
-        assert_eq!(stats.evictions, 1);
-        assert_eq!(stats.rejected_oversize, 1);
-        assert_eq!(stats.capacity_bytes, 150);
-        assert_eq!(stats.current_bytes, 100);
-        assert_eq!(stats.entries, 1);
-    }
-}
+#[path = "cache/tests/tile_cache.rs"]
+mod tile_cache_tests;

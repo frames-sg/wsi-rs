@@ -1,6 +1,6 @@
 [package]
 name = "wsi-rs-openslide-shim"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "OpenSlide-compatible C ABI shim backed by wsi-rs"
@@ -20,6 +20,7 @@ tempfile = { workspace = true }
 [lints.rust]
 unsafe_code = "allow"
 unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"

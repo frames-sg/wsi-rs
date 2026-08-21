@@ -8,12 +8,7 @@ pub(super) fn is_encapsulated_transfer_syntax(uid: &str) -> bool {
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
 pub(super) fn dicom_jp2k_device_decode_enabled() -> bool {
-    std::env::var(DICOM_JP2K_DEVICE_DECODE_ENV).is_ok_and(|value| {
-        value.eq_ignore_ascii_case("1")
-            || value.eq_ignore_ascii_case("true")
-            || value.eq_ignore_ascii_case("yes")
-            || value.eq_ignore_ascii_case("on")
-    })
+    crate::core::environment::flag(DICOM_JP2K_DEVICE_DECODE_ENV)
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -120,27 +115,15 @@ impl ConfiguredFormatProbe for DicomBackend {
     ) -> Result<ProbeResult, WsiError> {
         let key = FileIdentity::from_path(path)?;
         if self.probe_cache.get(&key, cache_config).is_some() {
-            return Ok(ProbeResult {
-                detected: true,
-                vendor: "dicom".into(),
-                confidence: ProbeConfidence::Definite,
-            });
+            return Ok(ProbeResult::detected("dicom", ProbeConfidence::Definite));
         }
         if path.is_dir() {
             return match self.parse_with_cache_config(path, cache_config) {
                 Ok(slide) => {
                     self.probe_cache.insert(key, cache_config, slide);
-                    Ok(ProbeResult {
-                        detected: true,
-                        vendor: "dicom".into(),
-                        confidence: ProbeConfidence::Definite,
-                    })
+                    Ok(ProbeResult::detected("dicom", ProbeConfidence::Definite))
                 }
-                Err(WsiError::UnsupportedFormat(_)) => Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                }),
+                Err(WsiError::UnsupportedFormat(_)) => Ok(ProbeResult::not_detected("")),
                 Err(err) => Err(err),
             };
         }
@@ -148,22 +131,9 @@ impl ConfiguredFormatProbe for DicomBackend {
             Ok(meta) if is_vl_wsi(meta.obj.meta().media_storage_sop_class_uid()) => {
                 let slide = self.parse_with_cache_config(path, cache_config)?;
                 self.probe_cache.insert(key, cache_config, slide);
-                Ok(ProbeResult {
-                    detected: true,
-                    vendor: "dicom".into(),
-                    confidence: ProbeConfidence::Definite,
-                })
+                Ok(ProbeResult::detected("dicom", ProbeConfidence::Definite))
             }
-            Ok(_) => Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            }),
-            Err(_) => Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            }),
+            Ok(_) | Err(_) => Ok(ProbeResult::not_detected("")),
         }
     }
 }

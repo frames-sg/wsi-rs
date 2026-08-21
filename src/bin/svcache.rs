@@ -299,8 +299,7 @@ fn build_window(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn run() -> Result<(), String> {
-    let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+fn dispatch(mut args: Vec<String>) -> Result<(), String> {
     if args.is_empty() {
         return Err(usage().to_string());
     }
@@ -316,6 +315,10 @@ fn run() -> Result<(), String> {
     }
 }
 
+fn run() -> Result<(), String> {
+    dispatch(std::env::args().skip(1).collect())
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
@@ -324,71 +327,5 @@ fn main() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cache_grid_uses_regular_layout_geometry() {
-        let level = wsi_rs::Level::new(
-            (1024, 768),
-            1.0,
-            TileLayout::Regular {
-                tile_width: 128,
-                tile_height: 256,
-                tiles_across: 8,
-                tiles_down: 3,
-            },
-        );
-
-        assert_eq!(cache_grid(&level).unwrap(), (128, 256, 8, 3));
-    }
-
-    #[test]
-    fn cache_grid_uses_virtual_tiles_for_whole_level_layout() {
-        let level = wsi_rs::Level::new(
-            (513, 257),
-            1.0,
-            TileLayout::WholeLevel {
-                width: 513,
-                height: 257,
-                virtual_tile_width: 512,
-                virtual_tile_height: 512,
-            },
-        );
-
-        assert_eq!(cache_grid(&level).unwrap(), (256, 256, 3, 2));
-    }
-
-    #[test]
-    fn cache_grid_uses_level_dimensions_for_irregular_layout() {
-        let level = wsi_rs::Level::new(
-            (513, 257),
-            1.0,
-            TileLayout::Irregular {
-                tile_advance: (128.0, 128.0),
-                extra_tiles: (0, 0, 0, 0),
-                tiles: std::collections::HashMap::new(),
-            },
-        );
-
-        assert_eq!(cache_grid(&level).unwrap(), (256, 256, 3, 2));
-    }
-
-    #[test]
-    fn parse_build_window_requires_size() {
-        let err = parse_build_window_args(&["slide.svs".into()]).unwrap_err();
-        assert!(err.contains("--size"));
-    }
-
-    #[test]
-    fn centered_window_defaults_to_middle_origin() {
-        assert_eq!(
-            window_origin((1000, 800), (200, 100), None, None),
-            (400, 350)
-        );
-        assert_eq!(
-            window_origin((1000, 800), (200, 100), None, Some((100, 50))),
-            (0, 0)
-        );
-    }
-}
+#[path = "svcache/tests.rs"]
+mod tests;

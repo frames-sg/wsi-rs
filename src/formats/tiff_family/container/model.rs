@@ -15,34 +15,34 @@ pub(crate) enum Endian {
 // ── TIFF tag constants ─────────────────────────────────────────────
 
 pub(crate) mod tags {
-    pub const IMAGE_WIDTH: u16 = 256;
-    pub const IMAGE_LENGTH: u16 = 257;
-    pub const BITS_PER_SAMPLE: u16 = 258;
-    pub const COMPRESSION: u16 = 259;
-    pub const PHOTOMETRIC: u16 = 262;
-    pub const IMAGE_DESCRIPTION: u16 = 270;
-    pub const STRIP_OFFSETS: u16 = 273;
-    pub const ORIENTATION: u16 = 274;
-    pub const SAMPLES_PER_PIXEL: u16 = 277;
-    pub const ROWS_PER_STRIP: u16 = 278;
-    pub const STRIP_BYTE_COUNTS: u16 = 279;
-    pub const PLANAR_CONFIGURATION: u16 = 284;
+    pub(crate) const IMAGE_WIDTH: u16 = 256;
+    pub(crate) const IMAGE_LENGTH: u16 = 257;
+    pub(crate) const BITS_PER_SAMPLE: u16 = 258;
+    pub(crate) const COMPRESSION: u16 = 259;
+    pub(crate) const PHOTOMETRIC: u16 = 262;
+    pub(crate) const IMAGE_DESCRIPTION: u16 = 270;
+    pub(crate) const STRIP_OFFSETS: u16 = 273;
+    pub(crate) const ORIENTATION: u16 = 274;
+    pub(crate) const SAMPLES_PER_PIXEL: u16 = 277;
+    pub(crate) const ROWS_PER_STRIP: u16 = 278;
+    pub(crate) const STRIP_BYTE_COUNTS: u16 = 279;
+    pub(crate) const PLANAR_CONFIGURATION: u16 = 284;
     #[cfg(test)]
-    pub const SUB_IFDS: u16 = 330;
-    pub const TILE_WIDTH: u16 = 322;
-    pub const TILE_LENGTH: u16 = 323;
-    pub const TILE_OFFSETS: u16 = 324;
-    pub const TILE_BYTE_COUNTS: u16 = 325;
-    pub const X_RESOLUTION: u16 = 282;
-    pub const Y_RESOLUTION: u16 = 283;
-    pub const RESOLUTION_UNIT: u16 = 296;
-    pub const PREDICTOR: u16 = 317;
-    pub const SAMPLE_FORMAT: u16 = 339;
-    pub const JPEG_TABLES: u16 = 347;
-    pub const XMP: u16 = 700;
-    pub const ICC_PROFILE: u16 = 34675;
+    pub(crate) const SUB_IFDS: u16 = 330;
+    pub(crate) const TILE_WIDTH: u16 = 322;
+    pub(crate) const TILE_LENGTH: u16 = 323;
+    pub(crate) const TILE_OFFSETS: u16 = 324;
+    pub(crate) const TILE_BYTE_COUNTS: u16 = 325;
+    pub(crate) const X_RESOLUTION: u16 = 282;
+    pub(crate) const Y_RESOLUTION: u16 = 283;
+    pub(crate) const RESOLUTION_UNIT: u16 = 296;
+    pub(crate) const PREDICTOR: u16 = 317;
+    pub(crate) const SAMPLE_FORMAT: u16 = 339;
+    pub(crate) const JPEG_TABLES: u16 = 347;
+    pub(crate) const XMP: u16 = 700;
+    pub(crate) const ICC_PROFILE: u16 = 34675;
     /// Hamamatsu NDPI marker tag.
-    pub const NDPI_MARKER: u16 = 65420;
+    pub(crate) const NDPI_MARKER: u16 = 65420;
 }
 
 // ── TiffType ───────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ pub(crate) enum TiffType {
 }
 
 impl TiffType {
-    pub fn from_u16(id: u16) -> Option<TiffType> {
+    pub(crate) fn from_u16(id: u16) -> Option<TiffType> {
         match id {
             1 => Some(TiffType::Byte),
             2 => Some(TiffType::Ascii),
@@ -90,7 +90,7 @@ impl TiffType {
         }
     }
 
-    pub fn byte_size(&self) -> u64 {
+    pub(crate) fn byte_size(&self) -> u64 {
         match self {
             TiffType::Byte | TiffType::Ascii | TiffType::SByte | TiffType::Undefined => 1,
             TiffType::Short | TiffType::SShort => 2,
@@ -116,7 +116,7 @@ pub(crate) struct InlineValue {
 }
 
 impl InlineValue {
-    pub fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         assert!(data.len() <= 12, "InlineValue data exceeds 12 bytes");
         let mut bytes = [0u8; 12];
         bytes[..data.len()].copy_from_slice(data);
@@ -126,7 +126,7 @@ impl InlineValue {
         }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }
 }
@@ -177,7 +177,7 @@ impl std::fmt::Debug for TagEntry {
 }
 
 impl TagEntry {
-    pub fn new_inline(tiff_type: TiffType, count: u64, data: &[u8]) -> Self {
+    pub(crate) fn new_inline(tiff_type: TiffType, count: u64, data: &[u8]) -> Self {
         TagEntry {
             tiff_type,
             count,
@@ -186,7 +186,7 @@ impl TagEntry {
         }
     }
 
-    pub fn new_lazy(tiff_type: TiffType, count: u64, offset: u64, byte_len: u64) -> Self {
+    pub(crate) fn new_lazy(tiff_type: TiffType, count: u64, offset: u64, byte_len: u64) -> Self {
         TagEntry {
             tiff_type,
             count,

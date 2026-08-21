@@ -9,7 +9,7 @@ use std::sync::Arc;
 use byteorder::{LittleEndian, ReadBytesExt};
 use j2k_core::BackendRequest;
 
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{
     checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES, MAX_DECODED_IMAGE_BYTES,
 };
@@ -35,9 +35,13 @@ pub(crate) struct OlympusVsiBackend;
 impl FormatProbe for OlympusVsiBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let detected = is_vsi_path(path) && companion_dir(path).is_some_and(|dir| dir.is_dir());
+        if detected {
+            return Ok(ProbeResult::detected("olympus", ProbeConfidence::Definite));
+        }
+        // Preserve the existing externally observable negative confidence.
         Ok(ProbeResult {
-            detected,
-            vendor: if detected { "olympus" } else { "" }.into(),
+            detected: false,
+            vendor: String::new(),
             confidence: ProbeConfidence::Definite,
         })
     }
@@ -174,7 +178,7 @@ impl OlympusVsiSlide {
         let quickhash = quickhash
             .finish()
             .ok_or_else(|| invalid_slide(path, "failed to compute Olympus quickhash"))?;
-        let dataset_id = dataset_id_from_quickhash(path, &quickhash)?;
+        let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
 
         let public_scenes = scenes
             .iter()
@@ -737,15 +741,6 @@ fn is_vsi_path(path: &Path) -> bool {
     )
 }
 
-fn dataset_id_from_quickhash(path: &Path, quickhash: &str) -> Result<DatasetId, WsiError> {
-    if quickhash.len() < 32 {
-        return Err(invalid_slide(path, "quickhash too short"));
-    }
-    let value = u128::from_str_radix(&quickhash[..32], 16)
-        .map_err(|_| invalid_slide(path, "quickhash is not valid hex"))?;
-    Ok(DatasetId::new(value))
-}
-
 fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
     WsiError::InvalidSlide {
         path: path.to_path_buf(),
@@ -758,65 +753,4 @@ fn fourcc_matches(bytes: &[u8; 4], tag: &[u8; 3]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::registry::Slide;
-
-    #[test]
-    fn ets_header_limits_accept_boundaries_and_reject_one_over() {
-        validate_ets_header_limits(3, 1, 1, 1, 1, 1).expect("minimal ETS header");
-        validate_ets_header_limits(MAX_ETS_DIMENSIONS, MAX_ETS_TILES, 40, 1, u32::MAX, u32::MAX)
-            .expect("declared ETS limits");
-
-        assert!(validate_ets_header_limits(MAX_ETS_DIMENSIONS + 1, 1, 1, 1, 1, 1).is_err());
-        assert!(validate_ets_header_limits(3, 0, 1, 1, 1, 1).is_err());
-        assert!(validate_ets_header_limits(3, MAX_ETS_TILES + 1, 1, 1, 1, 1).is_err());
-        assert!(validate_ets_header_limits(3, 1, 0, 1, 1, 1).is_err());
-        assert!(validate_ets_header_limits(3, 1, 41, 1, 1, 1).is_err());
-        assert!(validate_ets_header_limits(3, 1, 1, 1, 0, 1).is_err());
-    }
-
-    #[test]
-    fn ets_derived_dimensions_are_checked_before_allocation() {
-        assert_eq!(
-            checked_ets_axis_len(MAX_ETS_AXIS_INDEX, "z").expect("maximum ETS axis"),
-            MAX_ETS_AXIS_INDEX + 1
-        );
-        assert!(checked_ets_axis_len(MAX_ETS_AXIS_INDEX + 1, "z").is_err());
-        assert_eq!(
-            checked_ets_extent(15, 256, "width").expect("valid ETS width"),
-            4096
-        );
-        assert!(checked_ets_extent(u32::MAX, 1, "width").is_err());
-        assert!(checked_ets_extent(1, u32::MAX, "width").is_err());
-    }
-
-    #[test]
-    fn opens_olympus_vsi_when_corpus_is_available() {
-        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-        let path = workspace_root
-            .join("downloads/openslide-testdata-extracted/full/Olympus/OS-1/OS-1.vsi");
-        if !path.exists() {
-            return;
-        }
-
-        let slide = Slide::open(&path).expect("open Olympus VSI");
-        let dataset = slide.dataset();
-        assert!(!dataset.scenes.is_empty());
-        assert!(dataset.scenes[0].series[0].levels.len() >= 2);
-        let tile = slide
-            .read_tile(
-                &TileRequest {
-                    scene: 0usize.into(),
-                    series: 0usize.into(),
-                    level: 0u32.into(),
-                    plane: PlaneSelection::default().into(),
-                    col: 0,
-                    row: 0,
-                },
-                TileOutputPreference::cpu(),
-            )
-            .expect("read Olympus VSI tile");
-        assert!(matches!(tile, TilePixels::Cpu(_)));
-    }
-}
+mod tests;

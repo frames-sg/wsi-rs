@@ -129,14 +129,10 @@ impl FormatRegistry {
             match (backend.probe)(path, cache_config) {
                 Ok(result) => {
                     if result.detected {
-                        let should_replace = match best.as_ref() {
-                            None => true,
-                            Some((existing, _)) => {
-                                existing.confidence == ProbeConfidence::Likely
-                                    && result.confidence == ProbeConfidence::Definite
-                            }
-                        };
-                        if should_replace {
+                        if result.confidence == ProbeConfidence::Definite {
+                            return Ok(Some((result, i)));
+                        }
+                        if best.is_none() {
                             best = Some((result, i));
                         }
                     }

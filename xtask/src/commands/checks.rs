@@ -1,5 +1,6 @@
 use std::{env, ffi::OsString, fs, path::Path};
 
+use super::coverage;
 use super::process::{
     ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
@@ -96,31 +97,14 @@ pub(super) fn nextest() -> Result<(), String> {
 }
 
 pub(super) fn bench_check() -> Result<(), String> {
-    run_cargo(&["bench", "--locked", "--benches", "--no-run"])?;
     run_cargo(&[
-        "bench",
+        "build",
         "--locked",
-        "--benches",
-        "--features",
-        "parity-openslide",
-        "--no-run",
-    ])
-}
-
-pub(super) fn bench() -> Result<(), String> {
-    run_cargo(&[
-        "bench",
-        "--locked",
-        "--bench",
-        "read_paths",
-        "--",
-        "synthetic_read_paths",
-        "--sample-size",
-        "10",
-        "--warm-up-time",
-        "1",
-        "--measurement-time",
-        "1",
+        "--release",
+        "-p",
+        "wsi-rs-perf",
+        "-p",
+        "wsi-rs-openslide-shim",
     ])
 }
 
@@ -133,7 +117,7 @@ pub(super) fn feature_check() -> Result<(), String> {
         "--all-targets",
         "--feature-powerset",
         "--exclude-features",
-        "openslide-bench,metal,parity-metal",
+        "metal,parity-metal",
     ])
 }
 
@@ -327,9 +311,20 @@ fn run_semver_check() -> Result<(), String> {
 }
 
 fn check_public_api_snapshot(actual: &str, snapshot_path: &str) -> Result<(), String> {
-    let snapshot_path = Path::new(snapshot_path);
+    check_public_api_snapshot_with_update(
+        actual,
+        Path::new(snapshot_path),
+        env::var("WSI_RS_UPDATE_PUBLIC_API").as_deref() == Ok("1"),
+    )
+}
+
+fn check_public_api_snapshot_with_update(
+    actual: &str,
+    snapshot_path: &Path,
+    update: bool,
+) -> Result<(), String> {
     let normalized_actual = normalize_snapshot(actual);
-    if env::var("WSI_RS_UPDATE_PUBLIC_API").as_deref() == Ok("1") {
+    if update {
         if let Some(parent) = snapshot_path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 format!(
@@ -372,17 +367,34 @@ pub(super) fn release_test() -> Result<(), String> {
     run_cargo(&["test", "--locked", "--lib", "--tests", "--release"])
 }
 
+const COVERAGE_BASE_ARGS: &[&str] = &[
+    "llvm-cov",
+    "--locked",
+    "--workspace",
+    "--lcov",
+    "--output-path",
+    "lcov.info",
+];
+const COVERAGE_REPORT_ARGS: &[&str] = &[
+    "llvm-cov",
+    "report",
+    "-p",
+    "wsi-rs",
+    "-p",
+    "wsi-rs-openslide-shim",
+    "-p",
+    "xtask",
+    "-p",
+    "wsi-rs-perf",
+    "--lcov",
+    "--output-path",
+    "lcov.info",
+];
+
 pub(super) fn coverage() -> Result<(), String> {
-    run_cargo(&[
-        "llvm-cov",
-        "--locked",
-        "--workspace",
-        "--lib",
-        "--tests",
-        "--lcov",
-        "--output-path",
-        "lcov.info",
-    ])?;
+    // Do not narrow this to `--lib --tests`: xtask, the OpenSlide shim, and the
+    // performance worker all contain production binary code with unit tests.
+    run_cargo(COVERAGE_BASE_ARGS)?;
 
     if std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()) {
         let report = [
@@ -437,20 +449,10 @@ pub(super) fn coverage() -> Result<(), String> {
             args.extend(*run);
             run_cargo(&args)?;
         }
-        run_cargo(&[
-            "llvm-cov",
-            "report",
-            "-p",
-            "wsi-rs",
-            "-p",
-            "wsi-rs-openslide-shim",
-            "--lcov",
-            "--output-path",
-            "lcov.info",
-        ])?;
+        run_cargo(COVERAGE_REPORT_ARGS)?;
     }
 
-    Ok(())
+    coverage::enforce_workspace(Path::new("lcov.info"))
 }
 
 pub(super) fn package() -> Result<(), String> {
@@ -460,51 +462,4 @@ pub(super) fn package() -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn nightly_tools_use_the_ci_pinned_toolchain() {
-        assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-04-17");
-        assert_eq!(
-            pinned_nightly_cargo_args(&["public-api", "-p", "wsi-rs"]),
-            [
-                "run",
-                "nightly-2026-04-17",
-                "cargo",
-                "public-api",
-                "-p",
-                "wsi-rs"
-            ]
-        );
-    }
-
-    #[test]
-    fn semver_check_uses_checksum_pinned_published_baseline() {
-        let script = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
-        )
-        .expect("read semver script");
-        assert!(script.contains("BASELINE_VERSION=\"0.4.0\""));
-        assert!(script.contains("BASELINE_SHA256="));
-        assert!(script.contains("--baseline-rustdoc"));
-        assert!(script.contains("cargo +nightly-2026-04-17 rustdoc"));
-        assert!(!script.contains("cargo +nightly rustdoc"));
-        assert!(!script.contains("skipping cargo-semver-checks"));
-    }
-
-    #[test]
-    fn semver_check_covers_default_and_device_profiles_as_minor_compatibility() {
-        let script = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
-        )
-        .expect("read semver script");
-        assert!(script.contains("profiles=(default cuda)"));
-        assert!(script.contains("profiles+=(metal)"));
-        assert!(script.contains("if [[ \"$(uname -s)\" == \"Darwin\" ]]"));
-        assert!(script.contains("for profile in \"${profiles[@]}\""));
-        assert!(!script.contains("for profile in default cuda metal"));
-        assert!(script.contains("--release-type minor"));
-    }
-}
+mod tests;

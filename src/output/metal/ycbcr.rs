@@ -1,15 +1,24 @@
 use crate::{error::WsiError, PixelFormat};
 use j2k_core::DeviceSubmission;
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState,
+};
 use std::sync::OnceLock;
 
 use super::{interop, MetalDeviceTile};
 
 pub(crate) struct YcbcrToRgb8Converter {
-    library: metal::Library,
-    pipeline_u32: metal::ComputePipelineState,
-    pipeline_u64: OnceLock<Result<metal::ComputePipelineState, String>>,
-    queue: metal::CommandQueue,
+    loader: j2k_metal_support::MetalPipelineLoader,
+    pipeline_u32: Pipeline,
+    pipeline_u64: OnceLock<Result<Pipeline, String>>,
+    queue: CommandQueue,
 }
+
+type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
+type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
+type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 
 impl core::fmt::Debug for YcbcrToRgb8Converter {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -20,36 +29,16 @@ impl core::fmt::Debug for YcbcrToRgb8Converter {
 
 impl YcbcrToRgb8Converter {
     pub(super) fn new(session: &j2k_metal::MetalBackendSession) -> Result<Self, WsiError> {
-        let options = metal::CompileOptions::new();
-        let library = session
-            .device()
-            .new_library_with_source(YCBCR_TO_RGB8_METAL, &options)
-            .map_err(|message| WsiError::Codec {
-                codec: "j2k",
-                source: Box::new(WsiError::Jp2k(format!(
-                    "Metal YCbCr conversion shader failed to compile: {message}"
-                ))),
-            })?;
-        let function = library
-            .get_function("wsi_rs_ycbcr8_to_rgb8_u32", None)
-            .map_err(|message| WsiError::Codec {
-                codec: "j2k",
-                source: Box::new(WsiError::Jp2k(format!(
-                    "Metal u32 YCbCr conversion function unavailable: {message}"
-                ))),
-            })?;
-        let pipeline_u32 = session
-            .device()
-            .new_compute_pipeline_state_with_function(&function)
-            .map_err(|message| WsiError::Codec {
-                codec: "j2k",
-                source: Box::new(WsiError::Jp2k(format!(
-                    "Metal u32 YCbCr conversion pipeline unavailable: {message}"
-                ))),
-            })?;
-        let queue = session.device().new_command_queue();
+        let loader =
+            j2k_metal_support::MetalPipelineLoader::new(session.device(), YCBCR_TO_RGB8_METAL)
+                .map_err(|source| interop::support_error("metal-ycbcr-shader", source))?;
+        let pipeline_u32 = loader
+            .pipeline("wsi_rs_ycbcr8_to_rgb8_u32")
+            .map_err(|source| interop::support_error("metal-ycbcr-u32-pipeline", source))?;
+        let queue = j2k_metal_support::checked_command_queue(session.device())
+            .map_err(|source| interop::support_error("metal-ycbcr-command-queue", source))?;
         Ok(Self {
-            library,
+            loader,
             pipeline_u32,
             pipeline_u64: OnceLock::new(),
             queue,
@@ -85,8 +74,8 @@ impl YcbcrToRgb8Converter {
             .into_iter()
             .map(|job| (job.dst_buffer, job.output_layout))
             .collect();
-        let submitted =
-            interop::submit_ycbcr_images(self.queue.device(), command_buffer, outputs, inputs)?;
+        let device = self.queue.device();
+        let submitted = interop::submit_ycbcr_images(&device, command_buffer, outputs, inputs)?;
         submitted
             .wait()
             .map_err(|source| interop::support_error("metal-ycbcr-completion", source))?
@@ -104,16 +93,16 @@ impl YcbcrToRgb8Converter {
                 ),
             });
         }
-        let image = tile.resident_image_for_device(self.queue.device())?;
+        let device = self.queue.device();
+        let image = tile.resident_image_for_device(&device)?;
         let address_plan =
             YcbcrAddressPlan::new(tile.width, tile.height, tile.pitch_bytes, image.byte_len())?;
         let row_bytes = address_plan.dst_pitch;
         let dst_len = address_plan.dst_len;
-        let dst_buffer =
-            j2k_metal_support::checked_shared_buffer_for_len::<u8>(self.queue.device(), dst_len)
-                .map_err(|source| {
-                    interop::support_error("metal-ycbcr-output-allocation", source)
-                })?;
+        let dst_buffer = j2k_metal_support::checked_shared_buffer_for_len::<u8>(&device, dst_len)
+            .map_err(|source| {
+            interop::support_error("metal-ycbcr-output-allocation", source)
+        })?;
         let output_layout = j2k_metal_support::MetalImageLayout::new(
             0,
             (tile.width, tile.height),
@@ -141,55 +130,37 @@ impl YcbcrToRgb8Converter {
 
     fn encode_job(
         &self,
-        command_buffer: &metal::CommandBufferRef,
+        command_buffer: &ProtocolObject<dyn MTLCommandBuffer>,
         job: &YcbcrToRgb8Job,
     ) -> Result<(), WsiError> {
-        let encoder = command_buffer.new_compute_command_encoder();
+        let encoder = j2k_metal_support::checked_compute_command_encoder(command_buffer)
+            .map_err(|source| interop::support_error("metal-ycbcr-command-encoder", source))?;
         let pipeline = match job.address_width {
             YcbcrAddressWidth::U32 => self.pipeline_u32.as_ref(),
             YcbcrAddressWidth::U64 => self.pipeline_u64()?,
         };
-        encoder.set_compute_pipeline_state(pipeline);
-        interop::bind_resident_compute_input(encoder, 0, &job.input);
-        encoder.set_buffer(1, Some(&job.dst_buffer), 0);
-        encoder.set_bytes(
-            2,
-            core::mem::size_of::<YcbcrToRgb8Params>() as u64,
-            std::ptr::from_ref(&job.params).cast(),
+        encoder.setComputePipelineState(pipeline);
+        interop::bind_resident_compute_input(&encoder, 0, &job.input);
+        interop::bind_compute_buffer(&encoder, 1, &job.dst_buffer);
+        interop::bind_ycbcr_params(&encoder, 2, &job.params);
+        j2k_metal_support::dispatch_2d_pipeline(
+            &encoder,
+            pipeline,
+            (job.params.width, job.params.height),
         );
-        let width = pipeline.thread_execution_width().max(1);
-        let max_threads = pipeline.max_total_threads_per_threadgroup().max(width);
-        let height = (max_threads / width).max(1);
-        encoder.dispatch_threads(
-            metal::MTLSize {
-                width: u64::from(job.params.width),
-                height: u64::from(job.params.height),
-                depth: 1,
-            },
-            metal::MTLSize {
-                width,
-                height,
-                depth: 1,
-            },
-        );
-        encoder.end_encoding();
+        encoder.endEncoding();
         Ok(())
     }
 
-    fn pipeline_u64(&self) -> Result<&metal::ComputePipelineStateRef, WsiError> {
+    pub(super) fn pipeline_u64(
+        &self,
+    ) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, WsiError> {
         self.pipeline_u64
             .get_or_init(|| {
-                let function = self
-                    .library
-                    .get_function("wsi_rs_ycbcr8_to_rgb8", None)
-                    .map_err(|message| {
-                        format!("Metal u64 YCbCr conversion function unavailable: {message}")
-                    })?;
-                self.queue
-                    .device()
-                    .new_compute_pipeline_state_with_function(&function)
-                    .map_err(|message| {
-                        format!("Metal u64 YCbCr conversion pipeline unavailable: {message}")
+                self.loader
+                    .pipeline("wsi_rs_ycbcr8_to_rgb8")
+                    .map_err(|source| {
+                        format!("Metal u64 YCbCr conversion pipeline unavailable: {source}")
                     })
             })
             .as_deref()
@@ -202,7 +173,7 @@ impl YcbcrToRgb8Converter {
 
 struct YcbcrToRgb8Job {
     input: j2k_metal_support::ResidentMetalImage,
-    dst_buffer: metal::Buffer,
+    dst_buffer: Buffer,
     output_layout: j2k_metal_support::MetalImageLayout,
     params: YcbcrToRgb8Params,
     address_width: YcbcrAddressWidth,
@@ -254,26 +225,17 @@ impl YcbcrAddressPlan {
                 .ok_or_else(|| WsiError::Unsupported {
                     reason: "Metal YCbCr conversion output byte count overflow".into(),
                 })?;
-        let max_src_byte = Self::max_byte(width, height, src_pitch_u32)?;
-        let dst_pitch_u32 = u32::try_from(dst_pitch).map_err(|_| WsiError::Unsupported {
-            reason: "Metal YCbCr conversion destination pitch exceeds the shader ABI".into(),
-        })?;
-        let max_dst_byte = Self::max_byte(width, height, dst_pitch_u32)?;
-        let required_src = max_src_byte
-            .checked_add(1)
-            .ok_or_else(|| WsiError::Unsupported {
-                reason: "Metal YCbCr conversion source span overflows u64".into(),
-            })?;
+        let max_src_byte = Self::max_byte(width, height, src_pitch_u32);
+        // `src_pitch` was converted to u32 above and is at least `dst_pitch`.
+        let dst_pitch_u32 = u32::try_from(dst_pitch).expect("validated destination pitch");
+        let max_dst_byte = Self::max_byte(width, height, dst_pitch_u32);
+        let required_src = max_src_byte + 1;
         if required_src > src_len as u64 {
             return Err(WsiError::Unsupported {
                 reason: "Metal YCbCr conversion source span exceeds the resident image".into(),
             });
         }
-        let required_dst = max_dst_byte
-            .checked_add(1)
-            .ok_or_else(|| WsiError::Unsupported {
-                reason: "Metal YCbCr conversion destination span overflows u64".into(),
-            })?;
+        let required_dst = max_dst_byte + 1;
         if required_dst > dst_len as u64 {
             return Err(WsiError::Unsupported {
                 reason: "Metal YCbCr conversion destination span exceeds its allocation".into(),
@@ -293,14 +255,9 @@ impl YcbcrAddressPlan {
         })
     }
 
-    pub(super) fn max_byte(width: u32, height: u32, pitch: u32) -> Result<u64, WsiError> {
-        u64::from(height - 1)
-            .checked_mul(u64::from(pitch))
-            .and_then(|row| row.checked_add(u64::from(width - 1).checked_mul(3)?))
-            .and_then(|first_channel| first_channel.checked_add(2))
-            .ok_or_else(|| WsiError::Unsupported {
-                reason: "Metal YCbCr conversion address calculation overflow".into(),
-            })
+    pub(super) fn max_byte(width: u32, height: u32, pitch: u32) -> u64 {
+        // With u32 dimensions and pitch, the maximum expression is u64::MAX - 1.
+        u64::from(height - 1) * u64::from(pitch) + u64::from(width - 1) * 3 + 2
     }
 }
 

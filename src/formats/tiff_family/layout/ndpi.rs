@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use crate::core::types::*;
+use crate::decode::jpeg::is_sof_marker;
 use crate::formats::tiff_family::container::tags;
 use crate::formats::tiff_family::container::TiffContainer;
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
@@ -127,7 +128,7 @@ fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe,
             )));
         }
         let payload = &header[i + 2..i + seg_len];
-        if is_jpeg_sof_marker(marker) {
+        if is_sof_marker(marker) {
             if payload.len() < 6 {
                 return Err(TiffParseError::Structure(
                     "NDPI JPEG SOF segment too short".into(),
@@ -201,13 +202,6 @@ fn jpeg_header_prefix(header: &[u8]) -> Result<&[u8], TiffParseError> {
     Err(TiffParseError::Structure(
         "NDPI JPEG header missing SOS marker".into(),
     ))
-}
-
-fn is_jpeg_sof_marker(marker: u8) -> bool {
-    matches!(
-        marker,
-        0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
-    )
 }
 
 // ── NdpiInterpreter ───────────────────────────────────────────────

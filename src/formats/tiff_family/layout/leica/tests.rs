@@ -50,6 +50,194 @@ fn leica_image_for_ifd(ifd_index: usize) -> LeicaImageInfo {
     }
 }
 
+fn tiled_ifd(width: u32, height: u32, sample_bits: u16, icc: Option<Vec<u8>>) -> Vec<SyntheticTag> {
+    let mut tiff_tags = vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, width),
+        SyntheticTag::long(tags::IMAGE_LENGTH, height),
+        SyntheticTag::long(tags::TILE_WIDTH, 128),
+        SyntheticTag::long(tags::TILE_LENGTH, 64),
+        SyntheticTag::short(tags::COMPRESSION, 7),
+        SyntheticTag::short(tags::BITS_PER_SAMPLE, sample_bits),
+    ];
+    if let Some(icc) = icc {
+        tiff_tags.push(SyntheticTag::bytes(tags::ICC_PROFILE, icc));
+    }
+    tiff_tags
+}
+
+fn full_leica_xml() -> &'static str {
+    r##"<scn xmlns="http://www.leica-microsystems.com/scn/2010/10/01">
+        <collection sizeX="600000" sizeY="400000">
+            <barcode>U0xJREUxMjM=</barcode>
+            <image name="Fluorescence scene">
+                <dimension ifd="0" sizeX="512" sizeY="256" r="0" z="0" c="0"/>
+                <dimension ifd="1" sizeX="256" sizeY="128" r="1" z="0" c="0"/>
+                <dimension ifd="2" sizeX="512" sizeY="256" r="0" z="0" c="1"/>
+                <view sizeX="512000" sizeY="256000" offsetX="1000" offsetY="2000"/>
+                <creationDate>2026-01-02T03:04:05Z</creationDate>
+                <device model="GT450" version="1.2.3"/>
+                <scanSettings>
+                    <objectiveSettings><objective>40</objective></objectiveSettings>
+                    <illuminationSettings>
+                        <numericalAperture>0.95</numericalAperture>
+                        <illuminationSource>fluorescence</illuminationSource>
+                    </illuminationSettings>
+                    <channelSettings>
+                        <channel index="0" name="DAPI" rgb="#0000ff"/>
+                        <channel index="1" name="FITC" rgb="00ff00"/>
+                    </channelSettings>
+                </scanSettings>
+            </image>
+            <image name="Overview">
+                <dimension ifd="3" sizeX="120" sizeY="80" r="0" z="0" c="0"/>
+                <view type="macro" sizeX="600000" sizeY="400000" offsetX="0" offsetY="0"/>
+            </image>
+        </collection>
+    </scn>"##
+}
+
+#[test]
+fn interpret_builds_multichannel_scene_macro_and_public_metadata() {
+    let scene_icc = vec![1, 3, 5, 7, 9];
+    let mut first = tiled_ifd(512, 256, 16, Some(scene_icc.clone()));
+    first.push(SyntheticTag::ascii(
+        tags::IMAGE_DESCRIPTION,
+        full_leica_xml(),
+    ));
+    let file = build_tiff(&[
+        first,
+        tiled_ifd(256, 128, 16, None),
+        tiled_ifd(512, 256, 16, None),
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 120),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 80),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 0),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 0),
+            SyntheticTag::short(tags::BITS_PER_SAMPLE, 16),
+            SyntheticTag::short(tags::SAMPLES_PER_PIXEL, 4),
+        ],
+    ]);
+    let container = TiffContainer::open(file.path()).unwrap();
+    let interpreter = LeicaInterpreter;
+
+    assert!(interpreter.detect(&container));
+    assert_eq!(interpreter.vendor_name(), "leica");
+    let layout = interpreter.interpret(&container).unwrap();
+
+    assert_eq!(layout.dataset.scenes.len(), 1);
+    let scene = &layout.dataset.scenes[0];
+    assert_eq!(scene.name.as_deref(), Some("Fluorescence scene"));
+    let series = &scene.series[0];
+    assert_eq!(series.axes, AxesShape { z: 1, c: 2, t: 1 });
+    assert_eq!(series.sample_type, SampleType::Uint16);
+    assert_eq!(series.levels.len(), 2);
+    assert_eq!(series.levels[0].dimensions, (512, 256));
+    assert_eq!(series.levels[1].dimensions, (256, 128));
+    assert_eq!(series.channels[0].name.as_deref(), Some("DAPI"));
+    assert_eq!(series.channels[0].color, Some([0, 0, 255]));
+    assert_eq!(series.channels[1].name.as_deref(), Some("FITC"));
+    assert_eq!(series.channels[1].color, Some([0, 255, 0]));
+    assert_eq!(layout.tile_sources.len(), 3);
+
+    let macro_image = &layout.dataset.associated_images["macro"];
+    assert_eq!(macro_image.dimensions, (120, 80));
+    assert_eq!(macro_image.sample_type, SampleType::Uint16);
+    assert_eq!(macro_image.channels, 4);
+    assert!(matches!(
+        layout.associated_sources["macro"],
+        TileSource::Stripped { .. }
+    ));
+
+    let properties = &layout.dataset.properties;
+    assert_eq!(properties.get("leica.barcode"), Some("SLIDE123"));
+    assert_eq!(
+        properties.get("leica.creation-date"),
+        Some("2026-01-02T03:04:05Z")
+    );
+    assert_eq!(properties.get("leica.device-model"), Some("GT450"));
+    assert_eq!(properties.get("leica.device-version"), Some("1.2.3"));
+    assert_eq!(properties.get("leica.objective"), Some("40"));
+    assert_eq!(properties.get("leica.aperture"), Some("0.95"));
+    assert_eq!(
+        properties.get("leica.illumination-source"),
+        Some("fluorescence")
+    );
+    assert_eq!(properties.get("openslide.mpp-x"), Some("1"));
+    assert_eq!(properties.get("openslide.mpp-y"), Some("1"));
+    assert_eq!(properties.get("openslide.region[0].x"), Some("1"));
+    assert_eq!(properties.get("openslide.region[0].y"), Some("2"));
+    assert_eq!(properties.get("leica.collection-size-x"), Some("600000"));
+    assert_eq!(properties.get("leica.collection-size-y"), Some("400000"));
+    assert_eq!(properties.get("leica.scene[0].view-size-x"), Some("512000"));
+    assert_eq!(properties.get("leica.scene[0].view-size-y"), Some("256000"));
+    assert_eq!(properties.get("leica.scene[0].offset-x"), Some("1000"));
+    assert_eq!(properties.get("leica.scene[0].offset-y"), Some("2000"));
+    assert_eq!(layout.dataset.source_icc_profiles[0].bytes, scene_icc);
+}
+
+#[test]
+fn interpret_rejects_invalid_xml_structure_and_ifd_references() {
+    for (description, expected) in [
+        ("<scn/>", "no <collection>"),
+        ("<collection sizeX=\"1\" sizeY=\"1\"/>", "no <image>"),
+        (
+            "<collection sizeX=\"bad\" sizeY=\"1\"><image/></collection>",
+            "invalid integer 'bad'",
+        ),
+    ] {
+        let file = build_tiff(&[vec![SyntheticTag::ascii(
+            tags::IMAGE_DESCRIPTION,
+            description,
+        )]]);
+        let container = TiffContainer::open(file.path()).unwrap();
+        assert!(LeicaInterpreter
+            .interpret(&container)
+            .unwrap_err()
+            .to_string()
+            .contains(expected));
+    }
+
+    let xml = r#"<collection sizeX="100" sizeY="100"><image>
+        <dimension ifd="9" sizeX="10" sizeY="10" r="0"/>
+        <view sizeX="50" sizeY="50" offsetX="1" offsetY="1"/>
+    </image></collection>"#;
+    let file = build_tiff(&[vec![
+        SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, xml),
+        SyntheticTag::long(tags::TILE_WIDTH, 8),
+        SyntheticTag::long(tags::TILE_LENGTH, 8),
+    ]]);
+    let container = TiffContainer::open(file.path()).unwrap();
+    assert!(LeicaInterpreter
+        .interpret(&container)
+        .unwrap_err()
+        .to_string()
+        .contains("out-of-range IFD index 9"));
+}
+
+#[test]
+fn parse_image_info_collects_dimensions_once_and_propagates_errors() {
+    let image = xml::parse_xml(
+        r#"<image><dimension ifd="bad" sizeX="10" sizeY="10"/><view sizeX="10" sizeY="10"/></image>"#,
+    )
+    .unwrap();
+    let error = match LeicaInterpreter.parse_image_info(&image, (20, 20)) {
+        Err(error) => error,
+        Ok(_) => panic!("invalid IFD index unexpectedly parsed"),
+    };
+    assert!(error.to_string().contains("invalid ifd index 'bad'"));
+
+    let image = xml::parse_xml(
+        r#"<image><dimension ifd="0" sizeX="10" sizeY="10"/><view sizeX="10" sizeY="10"/></image>"#,
+    )
+    .unwrap();
+    let parsed = LeicaInterpreter
+        .parse_image_info(&image, (20, 20))
+        .unwrap()
+        .unwrap();
+    assert_eq!(parsed.ifd_levels.len(), 1);
+}
+
 #[test]
 fn detect_scn_with_namespace() {
     let xml = format!(
@@ -217,7 +405,7 @@ fn public_properties_use_axis_specific_cpp() {
     }];
 
     let props = interp
-        .parse_public_properties(&collection, &main_images, 10.0, 12.0)
+        .parse_public_properties(&collection, (2_000, 1_200), &main_images, 10.0, 12.0)
         .unwrap();
     assert_eq!(props.get("openslide.mpp-x"), Some("0.01"));
     assert_eq!(props.get("openslide.mpp-y"), Some("0.012"));

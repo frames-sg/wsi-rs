@@ -24,6 +24,6 @@ generally within 30 days for high-severity issues.
 
 ## Supported Versions
 
-The supported line is the latest published release, the 0.4 stabilization line, and main.
+The supported line is the latest published release, the 0.5 stabilization line, and main.
 Optional Metal behavior is triaged on supported macOS hardware when that
 hardware is available.

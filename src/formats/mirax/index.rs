@@ -264,8 +264,9 @@ pub(super) fn insert_tile(
 ) {
     let offset_x = pos_x - tile_x as f64 * params.tile_advance_x;
     let offset_y = pos_y - tile_y as f64 * params.tile_advance_y;
-    let width = level.tile_width.ceil() as u32;
-    let height = level.tile_height.ceil() as u32;
+    let width = (level.tile_width.ceil() as u32).min(level.raw_image_width.saturating_sub(src_x));
+    let height =
+        (level.tile_height.ceil() as u32).min(level.raw_image_height.saturating_sub(src_y));
     let descriptor_index = level.descriptors.len();
     level.descriptors.push(MiraxTile {
         image,
@@ -691,20 +692,5 @@ pub(super) fn get_nonhier_name_offset_helper(
 }
 
 #[cfg(test)]
-mod budget_tests {
-    use super::*;
-
-    #[test]
-    fn index_budget_rejects_cycles_negative_and_huge_pages() {
-        let path = Path::new("slide.mrxs");
-        let mut budget = MiraxIndexBudget::default();
-        assert_eq!(budget.record_page(path, 100, 2).expect("first page"), 2);
-        assert!(budget.record_page(path, 100, 0).is_err());
-
-        let mut budget = MiraxIndexBudget::default();
-        assert!(budget.record_page(path, 1, -1).is_err());
-        assert!(budget
-            .record_page(path, 2, (MAX_MIRAX_RECORDS_PER_PAGE + 1) as i32)
-            .is_err());
-    }
-}
+#[path = "index/tests/budget.rs"]
+mod budget_tests;

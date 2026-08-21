@@ -1,20 +1,8 @@
 use super::super::*;
-use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-fn encode_test_jpeg(image: &image::RgbImage) -> Vec<u8> {
-    let mut encoded = Vec::new();
-    JpegEncoder::new(&mut encoded, 50)
-        .encode(
-            image.as_raw().as_slice(),
-            image.width() as u16,
-            image.height() as u16,
-            JpegColorType::Rgb,
-        )
-        .unwrap();
-    encoded
-}
+use crate::formats::tiff_family::test_support::encode_test_jpeg;
 
 pub(super) fn synthetic_dri_420_jpeg_header() -> Vec<u8> {
     vec![
@@ -131,7 +119,10 @@ pub(super) fn float_tag(tag: u16, value: f32) -> (u16, u16, u32, [u8; 4]) {
 
 /// Build a synthetic NDPI TIFF with embedded strip payloads at valid offsets.
 /// Each entry is (width, height, source_lens, focal_plane, compression_tag).
-pub(super) fn build_ndpi_with_strips(entries: &[(u32, u32, f32, i32, u32)]) -> NamedTempFile {
+pub(super) fn build_ndpi_with_strips(
+    entries: &[(u32, u32, f32, i32, u32)],
+    macro_jpeg_tables: Option<[u8; 4]>,
+) -> NamedTempFile {
     let mut strip_blocks: Vec<Vec<u8>> = Vec::new();
     for &(w, h, _, _, compression_tag) in entries {
         let actual_w = w.min(64);
@@ -183,6 +174,11 @@ pub(super) fn build_ndpi_with_strips(entries: &[(u32, u32, f32, i32, u32)]) -> N
         if focal != 0 {
             tags.push(float_tag(NDPI_FOCAL_PLANE, focal as f32));
         }
+        if lens == -1.0 && compression_tag == 7 {
+            if let Some(tables) = macro_jpeg_tables {
+                tags.push((tags::JPEG_TABLES, 1, tables.len() as u32, tables));
+            }
+        }
 
         // Add NDPI marker tag to first IFD
         if i == 0 {
@@ -231,5 +227,5 @@ pub(super) fn build_ndpi_with_jpeg_strips(entries: &[(u32, u32, f32, i32)]) -> N
         .iter()
         .map(|&(w, h, lens, focal)| (w, h, lens, focal, 7u32))
         .collect();
-    build_ndpi_with_strips(&entries_with_compression)
+    build_ndpi_with_strips(&entries_with_compression, None)
 }

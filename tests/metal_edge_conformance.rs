@@ -12,8 +12,7 @@ fn configured_wsi_edges_have_identical_cpu_and_metal_dimensions() {
         .expect("WSI_RS_METAL_EDGE_PATHS is required for real Metal edge conformance");
     let paths = std::env::split_paths(&raw_paths).collect::<Vec<_>>();
     assert!(!paths.is_empty(), "at least one WSI fixture is required");
-    let device = metal::Device::system_default().expect("a Metal device is required");
-    let sessions = MetalBackendSessions::new(device);
+    let sessions = MetalBackendSessions::system_default().expect("a Metal device is required");
 
     for path in paths {
         let slide = Slide::open(&path).expect("open WSI fixture");

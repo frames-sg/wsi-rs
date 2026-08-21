@@ -1,11 +1,32 @@
-use super::*;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use j2k_core::BackendRequest;
+
+use crate::core::cache::{PrivateCache, PrivateCacheBudget};
+use crate::core::file_identity::FileIdentity;
+use crate::core::types::{CpuTile, RawCompressedTile};
+use crate::error::WsiError;
+
+use super::backend::is_encapsulated_transfer_syntax;
+use super::decode::{
+    black_sample_buffer, checked_dicom_tile_coordinates, crop_or_keep_sample_buffer_rgb,
+    dicom_actual_tile_dimensions, raw_compression_for_transfer_syntax,
+    raw_photometric_interpretation, trim_encapsulated_frame_padding,
+};
+use super::frame_index::DicomEncapsulatedFrames;
+use super::metadata::{invalid_slide, parse_sparse_tile_map, ParsedDicomMetadata};
+use super::preflight::DicomPixelDataLocation;
+
+mod frame_decode;
+mod frame_io;
 
 pub(super) const BATCH_FRAME_READ_MAX_SPAN_BYTES: u64 = 32 * 1024 * 1024;
 pub(super) const BATCH_FRAME_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug)]
 pub(super) struct DicomImage {
-    pub(super) path: PathBuf,
     pub(super) sop_instance_uid: String,
     pub(super) transfer_syntax_uid: String,
     pub(super) photometric_interpretation: String,
@@ -18,13 +39,19 @@ pub(super) struct DicomImage {
     pub(super) tiles_across: u32,
     pub(super) tiles_down: u32,
     pub(super) number_of_frames: u32,
-    pub(super) native_pixel_data: Option<NativePixelData>,
     pub(super) grid: DicomGrid,
     pub(super) pixel_spacing: Option<(f64, f64)>,
     pub(super) objective_lens_power: Option<f64>,
-    pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
-    pub(super) encapsulated_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
+    pub(super) frame_store: DicomFrameStore,
     pub(super) decoded_frame_cache: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
+}
+
+#[derive(Debug)]
+pub(super) struct DicomFrameStore {
+    pub(super) path: PathBuf,
+    pub(super) native_pixel_data: Option<NativePixelData>,
+    pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
+    pub(super) compressed_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
 }
 
 #[derive(Debug)]
@@ -38,19 +65,6 @@ pub(super) struct NativePixelData {
 pub(super) enum DicomGrid {
     Full,
     Sparse(HashMap<(u32, u32), u32>),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct DicomFragmentRef {
-    pub(super) payload_offset: u64,
-    pub(super) item_offset: u64,
-    pub(super) len: u32,
-}
-
-#[derive(Debug)]
-pub(super) struct DicomEncapsulatedFrames {
-    pub(super) fragments: Vec<DicomFragmentRef>,
-    pub(super) frame_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl DicomImage {
@@ -101,7 +115,6 @@ impl DicomImage {
             })
         };
         Ok(Self {
-            path: meta.path,
             sop_instance_uid: meta.sop_instance_uid,
             transfer_syntax_uid: meta.transfer_syntax_uid,
             photometric_interpretation: meta.photometric_interpretation,
@@ -114,12 +127,15 @@ impl DicomImage {
             tiles_across,
             tiles_down,
             number_of_frames: meta.number_of_frames,
-            native_pixel_data,
             grid,
             pixel_spacing: meta.pixel_spacing,
             objective_lens_power: meta.objective_lens_power,
-            encapsulated_frames: Mutex::new(None),
-            encapsulated_frame_cache: Mutex::new(encapsulated_frame_cache),
+            frame_store: DicomFrameStore {
+                path: meta.path,
+                native_pixel_data,
+                encapsulated_frames: Mutex::new(None),
+                compressed_frame_cache: Mutex::new(encapsulated_frame_cache),
+            },
             decoded_frame_cache: Mutex::new(decoded_frame_cache),
         })
     }
@@ -241,736 +257,6 @@ impl DicomImage {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .capacity_entries()
-    }
-
-    pub(super) fn decode_uncompressed_frame_sample_buffer(
-        &self,
-        frame_index: u32,
-        level: u32,
-        col: i64,
-        row: i64,
-    ) -> Result<CpuTile, WsiError> {
-        let frame_len = crate::core::limits::checked_product_to_usize(
-            &[
-                u64::from(self.tile_width),
-                u64::from(self.tile_height),
-                u64::from(self.samples_per_pixel),
-            ],
-            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
-            "native DICOM frame",
-        )
-        .map_err(|reason| WsiError::TileRead {
-            col,
-            row,
-            level,
-            reason,
-        })?;
-        let start = u64::from(frame_index)
-            .checked_mul(frame_len as u64)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame offset overflow".into(),
-            })?;
-        let end = start
-            .checked_add(frame_len as u64)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame byte range overflow".into(),
-            })?;
-        let native_pixel_data =
-            self.native_pixel_data
-                .as_ref()
-                .ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: "native DICOM Pixel Data location is unavailable".into(),
-                })?;
-        if end > u64::from(native_pixel_data.value_len) {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "DICOM frame {frame_index} byte range {}..{} exceeds pixel data length {}",
-                    start, end, native_pixel_data.value_len
-                ),
-            });
-        }
-        let absolute_start = native_pixel_data
-            .value_offset
-            .checked_add(start)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame file offset overflow".into(),
-            })?;
-        let mut frame = Vec::new();
-        frame
-            .try_reserve_exact(frame_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "native DICOM frame",
-                requested: frame_len as u64,
-                limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
-            })?;
-        frame.resize(frame_len, 0);
-        let mut file = File::open(&self.path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: self.path.clone(),
-        })?;
-        if FileIdentity::from_open_file(&self.path, &file)? != native_pixel_data.source_identity {
-            return Err(invalid_slide(
-                &self.path,
-                "DICOM source changed after metadata was parsed",
-            ));
-        }
-        read_exact_at(&mut file, &self.path, absolute_start, &mut frame)?;
-        frame_bytes_to_rgb_tile(
-            &frame,
-            self.tile_width,
-            self.tile_height,
-            self.samples_per_pixel,
-            self.planar_configuration.unwrap_or(0),
-            &self.photometric_interpretation,
-        )
-        .map_err(|err| WsiError::TileRead {
-            col,
-            row,
-            level,
-            reason: err.to_string(),
-        })
-    }
-
-    pub(super) fn decode_frame_sample_buffer(
-        &self,
-        frame_index: u32,
-        level: u32,
-        col: i64,
-        row: i64,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
-        let use_decoded_cache = is_encapsulated_transfer_syntax(&self.transfer_syntax_uid);
-        if use_decoded_cache {
-            if let Some(cached) = self.cached_decoded_frame(frame_index) {
-                return Ok(cached.as_ref().clone());
-            }
-        }
-
-        let buffer = if self.transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            crate::core::batch::exactly_one(
-                decode_batch_jpeg(&[JpegDecodeJob {
-                    data: Cow::Borrowed(bytes.as_slice()),
-                    tables: None,
-                    expected_width: self.tile_width,
-                    expected_height: self.tile_height,
-                    color_transform: j2k_jpeg::ColorTransform::Auto,
-                    force_dimensions: false,
-                    requested_size: None,
-                }]),
-                "DICOM JPEG frame decode",
-            )?
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else if JP2K_TRANSFER_SYNTAXES.contains(&self.transfer_syntax_uid.as_str()) {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            crate::core::batch::exactly_one(
-                decode_batch_jp2k(&[Jp2kDecodeJob {
-                    data: Cow::Borrowed(bytes.as_slice()),
-                    expected_width: self.tile_width,
-                    expected_height: self.tile_height,
-                    rgb_color_space: !jp2k_photometric_is_ycbcr(
-                        self.photometric_interpretation.as_str(),
-                    ),
-                    backend,
-                }]),
-                "DICOM JP2K frame decode",
-            )?
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else if self.transfer_syntax_uid == RLE_TRANSFER_SYNTAX {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            decode_rle_lossless_frame(
-                bytes.as_slice(),
-                self.tile_width,
-                self.tile_height,
-                self.samples_per_pixel,
-                &self.photometric_interpretation,
-            )
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else {
-            self.decode_uncompressed_frame_sample_buffer(frame_index, level, col, row)?
-        };
-
-        if use_decoded_cache {
-            self.cache_decoded_frame(frame_index, Arc::new(buffer.clone()));
-        }
-        Ok(buffer)
-    }
-
-    pub(super) fn extract_encapsulated_frame(
-        &self,
-        frame_index: u32,
-        level: u32,
-        col: i64,
-        row: i64,
-        cache_result: bool,
-    ) -> Result<Arc<Vec<u8>>, WsiError> {
-        if is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
-            if cache_result {
-                if let Some(bytes) = self
-                    .encapsulated_frame_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(&frame_index)
-                    .cloned()
-                {
-                    return Ok(bytes);
-                }
-            }
-            let encapsulated_frames = self.ensure_encapsulated_frames()?;
-            let frame_range = encapsulated_frames
-                .frame_ranges
-                .get(frame_index as usize)
-                .ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: format!(
-                        "encapsulated frame {frame_index} out of range for {} frames",
-                        encapsulated_frames.frame_ranges.len()
-                    ),
-                })?;
-            let bytes = Arc::new(self.read_encapsulated_fragments(
-                &encapsulated_frames.fragments[frame_range.start..frame_range.end],
-            )?);
-            if cache_result {
-                self.encapsulated_frame_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .put(frame_index, bytes.clone());
-            }
-            return Ok(bytes);
-        }
-
-        let obj = reopen_dicom_object(&self.path)?;
-        let pixel_data = obj
-            .element(tags::PIXEL_DATA)
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!("missing pixel data: {err}"),
-            })?;
-        let fragments = pixel_data.fragments().ok_or_else(|| WsiError::TileRead {
-            col,
-            row,
-            level,
-            reason: "pixel data is not encapsulated".into(),
-        })?;
-        let number_of_frames = optional_u32(&obj, tags::NUMBER_OF_FRAMES)
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-            .unwrap_or(1);
-
-        if number_of_frames == 1 && fragments.len() > 1 {
-            let total_len =
-                preflight_compressed_lengths(&self.path, fragments.iter().map(Vec::len))?;
-            let mut data = Vec::new();
-            data.try_reserve_exact(total_len)
-                .map_err(|_| WsiError::ResourceLimit {
-                    resource: "compressed DICOM frame",
-                    requested: total_len as u64,
-                    limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-                })?;
-            for fragment in fragments {
-                data.extend_from_slice(fragment);
-            }
-            return Ok(Arc::new(data));
-        }
-
-        let fragment = fragments
-            .get(frame_index as usize)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "encapsulated frame {frame_index} out of range for {} fragments",
-                    fragments.len()
-                ),
-            })?;
-        let total_len = preflight_compressed_lengths(&self.path, [fragment.len()])?;
-        let mut data = Vec::new();
-        data.try_reserve_exact(total_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "compressed DICOM frame",
-                requested: total_len as u64,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            })?;
-        data.extend_from_slice(fragment);
-        Ok(Arc::new(data))
-    }
-
-    #[cfg(test)]
-    pub(super) fn extract_encapsulated_frames(
-        &self,
-        frame_indices: &[u32],
-        level: u32,
-        col: i64,
-        row: i64,
-        cache_result: bool,
-    ) -> Result<HashMap<u32, Arc<Vec<u8>>>, WsiError> {
-        self.extract_encapsulated_frames_controlled(
-            frame_indices,
-            level,
-            col,
-            row,
-            cache_result,
-            None,
-        )
-    }
-
-    pub(super) fn extract_encapsulated_frames_controlled(
-        &self,
-        frame_indices: &[u32],
-        level: u32,
-        col: i64,
-        row: i64,
-        cache_result: bool,
-        control: Option<&crate::ReadControl>,
-    ) -> Result<HashMap<u32, Arc<Vec<u8>>>, WsiError> {
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
-        let mut results = HashMap::with_capacity(frame_indices.len());
-        if frame_indices.is_empty() {
-            return Ok(results);
-        }
-
-        let mut missing = Vec::new();
-        if cache_result {
-            let mut cache = self
-                .encapsulated_frame_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            for &frame_index in frame_indices {
-                if let Some(control) = control {
-                    control.check_cancelled()?;
-                }
-                if results.contains_key(&frame_index) {
-                    continue;
-                }
-                if let Some(bytes) = cache.get(&frame_index).cloned() {
-                    results.insert(frame_index, bytes);
-                } else {
-                    missing.push(frame_index);
-                }
-            }
-        } else {
-            for &frame_index in frame_indices {
-                if let Some(control) = control {
-                    control.check_cancelled()?;
-                }
-                if !results.contains_key(&frame_index) {
-                    missing.push(frame_index);
-                }
-            }
-        }
-
-        if missing.is_empty() {
-            return Ok(results);
-        }
-
-        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
-            for frame_index in missing {
-                let bytes =
-                    self.extract_encapsulated_frame(frame_index, level, col, row, cache_result)?;
-                results.insert(frame_index, bytes);
-            }
-            return Ok(results);
-        }
-
-        let encapsulated_frames = self.ensure_encapsulated_frames_controlled(control)?;
-        let mut spans = Vec::with_capacity(missing.len());
-        for frame_index in missing {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
-            let frame_range = encapsulated_frames
-                .frame_ranges
-                .get(frame_index as usize)
-                .ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: format!(
-                        "encapsulated frame {frame_index} out of range for {} frames",
-                        encapsulated_frames.frame_ranges.len()
-                    ),
-                })?
-                .clone();
-            spans.push(self.frame_read_span(
-                &encapsulated_frames,
-                frame_index,
-                frame_range,
-                level,
-                col,
-                row,
-            )?);
-        }
-
-        let mut file = File::open(&self.path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: self.path.clone(),
-        })?;
-        for group in group_frame_read_spans(spans) {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
-            for (frame_index, bytes) in
-                self.read_encapsulated_frame_group(&mut file, &encapsulated_frames, &group)?
-            {
-                let bytes = Arc::new(bytes);
-                if cache_result {
-                    self.encapsulated_frame_cache
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .put(frame_index, bytes.clone());
-                }
-                results.insert(frame_index, bytes);
-            }
-        }
-
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
-        Ok(results)
-    }
-
-    pub(super) fn ensure_encapsulated_frames(
-        &self,
-    ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
-        self.ensure_encapsulated_frames_controlled(None)
-    }
-
-    pub(super) fn ensure_encapsulated_frames_controlled(
-        &self,
-        control: Option<&crate::ReadControl>,
-    ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
-        let Some(control) = control else {
-            return self.ensure_encapsulated_frames_with_builder(None, || {
-                scan_encapsulated_frames_controlled(
-                    &self.path,
-                    &self.transfer_syntax_uid,
-                    self.number_of_frames,
-                    None,
-                )
-            });
-        };
-
-        let (deferred_control, deferred_diagnostics) = control.defer_diagnostics();
-        let result = self.ensure_encapsulated_frames_with_builder(Some(&deferred_control), || {
-            scan_encapsulated_frames_controlled(
-                &self.path,
-                &self.transfer_syntax_uid,
-                self.number_of_frames,
-                Some(&deferred_control),
-            )
-        });
-        if result.is_ok() {
-            deferred_diagnostics.flush();
-        }
-        result
-    }
-
-    pub(super) fn ensure_encapsulated_frames_with_builder(
-        &self,
-        control: Option<&crate::ReadControl>,
-        build: impl FnOnce() -> Result<DicomEncapsulatedFrames, WsiError>,
-    ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {
-        let reuse_started = control
-            .filter(|control| control.diagnostics_enabled())
-            .map(|_| std::time::Instant::now());
-        let mut guard = self
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
-        if let Some(frames) = &*guard {
-            let frames = frames.clone();
-            tracing::trace!(
-                path = %self.path.display(),
-                outcome = "reused",
-                "reused DICOM encapsulated frame index"
-            );
-            drop(guard);
-            if let (Some(control), Some(started)) = (control, reuse_started) {
-                control.record_diagnostic(crate::DicomIndexDiagnostic::new(
-                    crate::DicomIndexOutcome::Reused,
-                    started.elapsed(),
-                ));
-            }
-            return Ok(frames);
-        }
-        let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
-        let result = build();
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
-        let frames = Arc::new(result?);
-        *guard = Some(frames.clone());
-        if let Some(control) = control {
-            if let Err(error) = control.check_cancelled() {
-                *guard = None;
-                return Err(error);
-            }
-        }
-        if let Some(started) = started {
-            tracing::debug!(
-                path = %self.path.display(),
-                outcome = "built",
-                elapsed_us = started.elapsed().as_micros(),
-                "published DICOM encapsulated frame index"
-            );
-        }
-        Ok(frames)
-    }
-
-    pub(super) fn read_encapsulated_fragments(
-        &self,
-        fragments: &[DicomFragmentRef],
-    ) -> Result<Vec<u8>, WsiError> {
-        let mut file = File::open(&self.path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: self.path.clone(),
-        })?;
-        self.read_encapsulated_fragments_with_file(&mut file, fragments)
-    }
-
-    fn read_encapsulated_fragments_with_file(
-        &self,
-        file: &mut File,
-        fragments: &[DicomFragmentRef],
-    ) -> Result<Vec<u8>, WsiError> {
-        let total_len = preflight_compressed_frame(&self.path, fragments)?;
-        self.validate_encapsulated_fragment_headers_with_file(file, fragments)?;
-        let mut data = Vec::new();
-        data.try_reserve_exact(total_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "compressed DICOM frame",
-                requested: total_len as u64,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            })?;
-        for fragment in fragments {
-            let start = data.len();
-            let end = start.checked_add(fragment.len as usize).ok_or_else(|| {
-                invalid_slide(&self.path, "DICOM compressed frame length overflow")
-            })?;
-            data.resize(end, 0);
-            read_exact_at(
-                file,
-                &self.path,
-                fragment.payload_offset,
-                &mut data[start..],
-            )?;
-        }
-        Ok(data)
-    }
-
-    fn frame_read_span(
-        &self,
-        encapsulated_frames: &DicomEncapsulatedFrames,
-        frame_index: u32,
-        frame_range: std::ops::Range<usize>,
-        level: u32,
-        col: i64,
-        row: i64,
-    ) -> Result<DicomFrameReadSpan, WsiError> {
-        let fragments = encapsulated_frames
-            .fragments
-            .get(frame_range.clone())
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!("encapsulated frame {frame_index} has invalid fragment range"),
-            })?;
-        preflight_compressed_frame(&self.path, fragments)?;
-        let first = fragments.first().ok_or_else(|| WsiError::TileRead {
-            col,
-            row,
-            level,
-            reason: format!("encapsulated frame {frame_index} has no fragments"),
-        })?;
-        let mut start = first.item_offset;
-        let mut end = first
-            .payload_offset
-            .checked_add(first.len as u64)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!("encapsulated frame {frame_index} byte span overflow"),
-            })?;
-        for fragment in &fragments[1..] {
-            start = start.min(fragment.item_offset);
-            let fragment_end = fragment
-                .payload_offset
-                .checked_add(fragment.len as u64)
-                .ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: format!("encapsulated frame {frame_index} byte span overflow"),
-                })?;
-            end = end.max(fragment_end);
-        }
-        Ok(DicomFrameReadSpan {
-            frame_index,
-            frame_range,
-            start,
-            end,
-        })
-    }
-
-    pub(super) fn read_encapsulated_frame_group<R: Read + Seek>(
-        &self,
-        file: &mut R,
-        encapsulated_frames: &DicomEncapsulatedFrames,
-        group: &DicomFrameReadGroup,
-    ) -> Result<Vec<(u32, Vec<u8>)>, WsiError> {
-        let span_len = group
-            .end
-            .checked_sub(group.start)
-            .ok_or_else(|| invalid_slide(&self.path, "DICOM batch frame read span underflow"))?;
-        let span_len = usize::try_from(span_len)
-            .map_err(|_| invalid_slide(&self.path, "DICOM batch frame read span overflow"))?;
-        if span_len as u64 > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-            return Err(WsiError::ResourceLimit {
-                resource: "compressed DICOM batch read span",
-                requested: span_len as u64,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            });
-        }
-        let mut window = Vec::new();
-        window
-            .try_reserve_exact(span_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "compressed DICOM batch read span",
-                requested: span_len as u64,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            })?;
-        window.resize(span_len, 0);
-        read_exact_at(file, &self.path, group.start, &mut window)?;
-
-        group
-            .spans
-            .iter()
-            .map(|span| {
-                let fragments = encapsulated_frames
-                    .fragments
-                    .get(span.frame_range.clone())
-                    .ok_or_else(|| {
-                        invalid_slide(&self.path, "DICOM batch frame fragment range out of bounds")
-                    })?;
-                for fragment in fragments {
-                    let relative_start =
-                        fragment
-                            .item_offset
-                            .checked_sub(group.start)
-                            .ok_or_else(|| {
-                                invalid_slide(
-                                    &self.path,
-                                    "DICOM batch fragment Item offset underflow",
-                                )
-                            })?;
-                    let relative_start = usize::try_from(relative_start).map_err(|_| {
-                        invalid_slide(&self.path, "DICOM batch fragment Item offset overflow")
-                    })?;
-                    let relative_end = relative_start.checked_add(8).ok_or_else(|| {
-                        invalid_slide(&self.path, "DICOM batch fragment Item header overflow")
-                    })?;
-                    let header = window.get(relative_start..relative_end).ok_or_else(|| {
-                        invalid_slide(
-                            &self.path,
-                            "DICOM batch fragment Item header is outside the read window",
-                        )
-                    })?;
-                    self.validate_encapsulated_fragment_header(fragment, header)?;
-                }
-                let data = copy_fragments_from_window(&self.path, group.start, &window, fragments)?;
-                Ok((span.frame_index, data))
-            })
-            .collect()
-    }
-
-    fn validate_encapsulated_fragment_headers_with_file(
-        &self,
-        file: &mut (impl Read + Seek),
-        fragments: &[DicomFragmentRef],
-    ) -> Result<(), WsiError> {
-        for fragment in fragments {
-            let mut header = [0u8; 8];
-            read_exact_at(file, &self.path, fragment.item_offset, &mut header)?;
-            self.validate_encapsulated_fragment_header(fragment, &header)?;
-        }
-        Ok(())
-    }
-
-    fn validate_encapsulated_fragment_header(
-        &self,
-        fragment: &DicomFragmentRef,
-        header: &[u8],
-    ) -> Result<(), WsiError> {
-        let tag = header
-            .get(..4)
-            .ok_or_else(|| invalid_slide(&self.path, "truncated DICOM fragment Item tag"))?;
-        let length = header
-            .get(4..8)
-            .ok_or_else(|| invalid_slide(&self.path, "truncated DICOM fragment Item length"))?;
-        let length = u32::from_le_bytes(
-            length
-                .try_into()
-                .expect("validated DICOM fragment Item length is four bytes"),
-        );
-        if tag != DICOM_ITEM_TAG_LE || length != fragment.len {
-            return Err(invalid_slide(
-                &self.path,
-                format!(
-                    "DICOM fragment Item header at byte {} does not match its indexed length",
-                    fragment.item_offset
-                ),
-            ));
-        }
-        Ok(())
     }
 }
 

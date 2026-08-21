@@ -5,7 +5,6 @@ use crate::core::types::{
 };
 use crate::error::WsiError;
 use rayon::ThreadPool;
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,10 +14,6 @@ const DEFAULT_ROUTE_SAMPLE_SIZE: usize = 32;
 const DIRECT_DEVICE_BATCH_THRESHOLD: usize = 8;
 const DEVICE_WIN_RATIO: f64 = 0.85;
 const ROUTE_CACHE_MAX_ENTRIES: usize = 1024;
-
-thread_local! {
-    static CURRENT_DECODE_RUNTIME: RefCell<Option<Arc<DecodeRuntime>>> = const { RefCell::new(None) };
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -186,35 +181,29 @@ impl DecodeRuntime {
     }
 
     pub(crate) fn install_jp2k_cpu<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        if let Some(pool) = &self.jp2k_cpu_pool {
-            pool.install(op)
+        if self.requires_jp2k_pool_install() {
+            self.jp2k_cpu_pool
+                .as_ref()
+                .expect("a differing JP2K pool width requires a configured pool")
+                .install(op)
         } else {
             op()
         }
     }
 
+    fn requires_jp2k_pool_install(&self) -> bool {
+        self.jp2k_cpu_pool
+            .as_ref()
+            .is_some_and(|pool| pool.current_num_threads() != rayon::current_num_threads())
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_jp2k_cpu_pool(&self) -> bool {
         self.jp2k_cpu_pool.is_some()
     }
 
     pub(crate) fn options(&self) -> DecodeExecutionOptions {
         self.options
-    }
-
-    pub(crate) fn with_current<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
-        struct Restore(Option<Arc<DecodeRuntime>>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                let previous = self.0.take();
-                CURRENT_DECODE_RUNTIME.with(|slot| {
-                    *slot.borrow_mut() = previous;
-                });
-            }
-        }
-
-        let previous = CURRENT_DECODE_RUNTIME.with(|slot| slot.replace(Some(self.clone())));
-        let _restore = Restore(previous);
-        f()
     }
 
     fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
@@ -304,10 +293,6 @@ impl DecodeRouteCache {
     }
 }
 
-pub(crate) fn current_decode_runtime() -> Option<Arc<DecodeRuntime>> {
-    CURRENT_DECODE_RUNTIME.with(|slot| slot.borrow().clone())
-}
-
 fn default_jp2k_cpu_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
@@ -338,6 +323,50 @@ struct RouteTileGrid {
 pub(crate) struct AdaptiveDecodeReader {
     inner: Box<dyn SlideReader>,
     runtime: Arc<DecodeRuntime>,
+}
+
+struct ReadExecutionContext<'a> {
+    decode_runtime: &'a DecodeRuntime,
+    control: Option<&'a crate::ReadControl>,
+}
+
+impl<'a> ReadExecutionContext<'a> {
+    fn new(decode_runtime: &'a DecodeRuntime, control: Option<&'a crate::ReadControl>) -> Self {
+        Self {
+            decode_runtime,
+            control,
+        }
+    }
+
+    fn check_cancelled(&self) -> Result<(), WsiError> {
+        self.control
+            .map_or(Ok(()), crate::ReadControl::check_cancelled)
+    }
+
+    fn run_jp2k<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
+        self.decode_runtime.install_jp2k_cpu(operation)
+    }
+
+    fn run_tile_batch<R: Send>(
+        &self,
+        reader: &dyn SlideReader,
+        requests: &[TileRequest],
+        operation: impl FnOnce() -> R + Send,
+    ) -> R {
+        if !self.decode_runtime.requires_jp2k_pool_install() {
+            return operation();
+        }
+        if requests.iter().any(|request| {
+            matches!(
+                reader.tile_codec_kind(request),
+                TileCodecKind::Jp2k | TileCodecKind::Htj2k
+            )
+        }) {
+            self.run_jp2k(operation)
+        } else {
+            operation()
+        }
+    }
 }
 
 impl AdaptiveDecodeReader {
@@ -459,8 +488,9 @@ impl AdaptiveDecodeReader {
         output: TileOutputPreference,
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<TilePixels>, WsiError> {
-        Self::check_control(control)?;
-        let result = self.runtime.with_current(|| match control {
+        let context = ReadExecutionContext::new(&self.runtime, control);
+        context.check_cancelled()?;
+        let result = context.run_tile_batch(self.inner.as_ref(), reqs, || match control {
             Some(control) => self.inner.read_tiles_controlled(reqs, output, control),
             None => self.inner.read_tiles(reqs, output),
         });
@@ -475,7 +505,7 @@ impl AdaptiveDecodeReader {
         } else {
             result
         };
-        Self::check_control(control)?;
+        context.check_cancelled()?;
         result
     }
 
@@ -587,7 +617,11 @@ impl SlideReader for AdaptiveDecodeReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.runtime.with_current(|| self.inner.read_tile_cpu(req))
+        ReadExecutionContext::new(&self.runtime, None).run_tile_batch(
+            self.inner.as_ref(),
+            std::slice::from_ref(req),
+            || self.inner.read_tile_cpu(req),
+        )
     }
 
     fn read_raw_compressed_tile(
@@ -605,8 +639,11 @@ impl SlideReader for AdaptiveDecodeReader {
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.runtime
-            .with_current(|| self.inner.read_tiles_cpu(reqs))
+        ReadExecutionContext::new(&self.runtime, None).run_tile_batch(
+            self.inner.as_ref(),
+            reqs,
+            || self.inner.read_tiles_cpu(reqs),
+        )
     }
 
     fn use_display_tile_cache(&self, req: &crate::core::types::TileViewRequest) -> bool {
@@ -618,8 +655,8 @@ impl SlideReader for AdaptiveDecodeReader {
         ctx: &mut crate::core::registry::SlideReadContext<'_>,
         req: &crate::core::types::RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
-        self.runtime
-            .with_current(|| self.inner.read_region_fastpath(ctx, req))
+        ReadExecutionContext::new(&self.runtime, None)
+            .run_jp2k(|| self.inner.read_region_fastpath(ctx, req))
     }
 
     fn read_region(
@@ -627,16 +664,16 @@ impl SlideReader for AdaptiveDecodeReader {
         req: &crate::core::types::RegionRequest,
         output: TileOutputPreference,
     ) -> Result<TilePixels, WsiError> {
-        self.runtime
-            .with_current(|| self.inner.read_region(req, output))
+        ReadExecutionContext::new(&self.runtime, None)
+            .run_jp2k(|| self.inner.read_region(req, output))
     }
 
     fn read_display_tile(
         &self,
         req: &crate::core::types::TileViewRequest,
     ) -> Result<CpuTile, WsiError> {
-        self.runtime
-            .with_current(|| self.inner.read_display_tile(req))
+        ReadExecutionContext::new(&self.runtime, None)
+            .run_jp2k(|| self.inner.read_display_tile(req))
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

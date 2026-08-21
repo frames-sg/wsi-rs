@@ -26,7 +26,7 @@ use j2k_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
 use crate::core::cache::{CacheConfig, PrivateCache};
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
@@ -56,26 +56,14 @@ impl FormatProbe for ZeissBackend {
         let mut file = match fs::File::open(path) {
             Ok(file) => file,
             Err(_) => {
-                return Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                });
+                return Ok(ProbeResult::not_detected(""));
             }
         };
         if std::io::Read::read_exact(&mut file, &mut magic).is_err() || &magic != FILE_MAGIC {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected(""));
         }
 
-        Ok(ProbeResult {
-            detected: true,
-            vendor: "zeiss".into(),
-            confidence: ProbeConfidence::Definite,
-        })
+        Ok(ProbeResult::detected("zeiss", ProbeConfidence::Definite))
     }
 }
 

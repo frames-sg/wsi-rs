@@ -210,11 +210,41 @@ fn interpret_macro_associated_image() {
 }
 
 #[test]
+fn interpret_preserves_jpeg_tables_for_macro_image() {
+    let jpeg_tables = [0xFF, 0xD8, 0xFF, 0xD9];
+    let file = build_ndpi_with_strips(
+        &[
+            (2048, 1536, 40.0, 0, 7), // pyramid
+            (800, 600, -1.0, 0, 7),   // JPEG macro
+        ],
+        Some(jpeg_tables),
+    );
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = NdpiInterpreter.interpret(&container).unwrap();
+
+    match layout.associated_sources.get("macro").unwrap() {
+        TileSource::Stripped {
+            compression,
+            jpeg_tables: Some(actual),
+            ..
+        } => {
+            assert_eq!(*compression, Compression::Jpeg);
+            assert_eq!(actual, &jpeg_tables);
+        }
+        other => panic!("expected JPEG macro strip source with tables, got: {other:?}"),
+    }
+}
+
+#[test]
 fn negative_two_sourcelens_is_not_exposed_as_public_thumbnail() {
-    let file = build_ndpi_with_strips(&[
-        (2048, 1536, 40.0, 0, 7), // pyramid
-        (196, 572, -2.0, 0, 1),   // thumbnail
-    ]);
+    let file = build_ndpi_with_strips(
+        &[
+            (2048, 1536, 40.0, 0, 7), // pyramid
+            (196, 572, -2.0, 0, 1),   // thumbnail
+        ],
+        None,
+    );
 
     let container = TiffContainer::open(file.path()).unwrap();
     let interpreter = NdpiInterpreter;

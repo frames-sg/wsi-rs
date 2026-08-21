@@ -1,19 +1,7 @@
-use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-fn encode_test_jpeg(image: &image::RgbImage) -> Vec<u8> {
-    let mut encoded = Vec::new();
-    JpegEncoder::new(&mut encoded, 50)
-        .encode(
-            image.as_raw().as_slice(),
-            image.width() as u16,
-            image.height() as u16,
-            JpegColorType::Rgb,
-        )
-        .unwrap();
-    encoded
-}
+use crate::formats::tiff_family::test_support::encode_test_jpeg;
 
 /// Build a synthetic NDPI TIFF file with embedded JPEG data.
 /// Each entry is (width, height, source_lens).

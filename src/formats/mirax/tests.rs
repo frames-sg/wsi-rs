@@ -2,13 +2,34 @@ use super::*;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 
+mod backend;
+mod errors;
+pub(super) mod fixtures;
+mod parser;
+
+static MIRAX_ASSOCIATED_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn mirax_sentinel_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../downloads/openslide-testdata-extracted/mirax/mirax-cmu1/CMU-1.mrxs")
+    let cache = std::env::var_os("WSI_RS_PARITY_CORPUS_CACHE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| {
+                PathBuf::from(home)
+                    .join(".cache")
+                    .join("slideviewer")
+                    .join("parity-corpus")
+            })
+        });
+    cache
+        .map(|cache| cache.join("mirax-001.d").join("CMU-1.mrxs"))
+        .unwrap_or_else(|| PathBuf::from("mirax-001.d/CMU-1.mrxs"))
 }
 
 #[test]
 fn associated_thumbnail_is_cached_after_first_read() {
+    let _serial = MIRAX_ASSOCIATED_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let sentinel_path = mirax_sentinel_path();
     if !sentinel_path.is_file() {
         eprintln!(

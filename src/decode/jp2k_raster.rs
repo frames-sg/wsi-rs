@@ -1,11 +1,48 @@
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::decode::jp2k::Jp2kColorSpace;
-#[cfg(test)]
-use crate::decode::jp2k_backend::DecodedImage;
 use crate::decode::jp2k_backend::DecodedInterleavedImage;
 use crate::error::WsiError;
-#[cfg(test)]
-use image::RgbaImage;
+
+const CHROMA_VALUES: usize = 256;
+
+struct YcbcrTables {
+    red_from_cr: [i16; CHROMA_VALUES],
+    green_from_cb: [i32; CHROMA_VALUES],
+    green_from_cr: [i32; CHROMA_VALUES],
+    blue_from_cb: [i16; CHROMA_VALUES],
+}
+
+const fn round_ratio(numerator: i64, denominator: i64) -> i64 {
+    if numerator >= 0 {
+        (numerator + denominator / 2) / denominator
+    } else {
+        -((-numerator + denominator / 2) / denominator)
+    }
+}
+
+const fn build_ycbcr_tables() -> YcbcrTables {
+    let mut tables = YcbcrTables {
+        red_from_cr: [0; CHROMA_VALUES],
+        green_from_cb: [0; CHROMA_VALUES],
+        green_from_cr: [0; CHROMA_VALUES],
+        blue_from_cb: [0; CHROMA_VALUES],
+    };
+    let mut index = 0;
+    while index < CHROMA_VALUES {
+        let chroma = index as i64 - 128;
+        tables.red_from_cr[index] = round_ratio(1_402 * chroma, 1_000) as i16;
+        tables.green_from_cb[index] =
+            round_ratio(65_536 * (50_000 - 34_414 * chroma), 100_000) as i32;
+        tables.green_from_cr[index] = round_ratio(65_536 * (-71_414 * chroma), 100_000) as i32;
+        tables.blue_from_cb[index] = round_ratio(1_772 * chroma, 1_000) as i16;
+        index += 1;
+    }
+    tables
+}
+
+// OpenSlide 4.0.1 uses these lookup-table values, including the precomputed
+// half-unit in the green Cb term, before combining green in 16-bit fixed point.
+static YCBCR_TABLES: YcbcrTables = build_ycbcr_tables();
 
 #[inline]
 fn clamp_u8(v: i32) -> u8 {
@@ -13,103 +50,15 @@ fn clamp_u8(v: i32) -> u8 {
 }
 
 #[inline]
-fn ycbcr_to_rgb(yy: i32, cb: i32, cr: i32) -> [u8; 3] {
-    let cb_off = cb - 128;
-    let cr_off = cr - 128;
+fn ycbcr_to_rgb(yy: u8, cb: u8, cr: u8) -> [u8; 3] {
+    let yy = i32::from(yy);
+    let cb = usize::from(cb);
+    let cr = usize::from(cr);
     [
-        clamp_u8(yy + ((1402 * cr_off) / 1000)),
-        clamp_u8(yy - ((344 * cb_off + 714 * cr_off) / 1000)),
-        clamp_u8(yy + ((1772 * cb_off) / 1000)),
+        clamp_u8(yy + i32::from(YCBCR_TABLES.red_from_cr[cr])),
+        clamp_u8(yy + ((YCBCR_TABLES.green_from_cb[cb] + YCBCR_TABLES.green_from_cr[cr]) >> 16)),
+        clamp_u8(yy + i32::from(YCBCR_TABLES.blue_from_cb[cb])),
     ]
-}
-
-#[cfg(test)]
-fn decoded_image_to_rgb_bytes(
-    image: &DecodedImage,
-    colorspace: Jp2kColorSpace,
-) -> Result<Vec<u8>, WsiError> {
-    let w = image.width;
-    let h = image.height;
-    let [c0, c1, c2] = &image.components;
-
-    if c0.width == 0
-        || c0.height == 0
-        || c1.width == 0
-        || c1.height == 0
-        || c2.width == 0
-        || c2.height == 0
-    {
-        return Err(WsiError::Jp2k(
-            "decoded image has invalid component dimensions".into(),
-        ));
-    }
-
-    let c0_sub_x = (w / c0.width).max(1);
-    let c1_sub_x = (w / c1.width).max(1);
-    let c2_sub_x = (w / c2.width).max(1);
-    let c0_sub_y = (h / c0.height).max(1);
-    let c1_sub_y = (h / c1.height).max(1);
-    let c2_sub_y = (h / c2.height).max(1);
-
-    let mut rgb = vec![0u8; w * h * 3];
-    for y in 0..h {
-        let c0_row = (y / c0_sub_y) * c0.width;
-        let c1_row = (y / c1_sub_y) * c1.width;
-        let c2_row = (y / c2_sub_y) * c2.width;
-        for x in 0..w {
-            let pixel = match colorspace {
-                Jp2kColorSpace::Rgb => [
-                    clamp_u8(c0.samples[c0_row + x / c0_sub_x]),
-                    clamp_u8(c1.samples[c1_row + x / c1_sub_x]),
-                    clamp_u8(c2.samples[c2_row + x / c2_sub_x]),
-                ],
-                Jp2kColorSpace::YCbCr => ycbcr_to_rgb(
-                    c0.samples[c0_row + x / c0_sub_x],
-                    c1.samples[c1_row + x / c1_sub_x],
-                    c2.samples[c2_row + x / c2_sub_x],
-                ),
-            };
-            let off = (y * w + x) * 3;
-            rgb[off..off + 3].copy_from_slice(&pixel);
-        }
-    }
-    Ok(rgb)
-}
-
-#[cfg(test)]
-pub(crate) fn decoded_image_to_rgba(
-    image: DecodedImage,
-    colorspace: Jp2kColorSpace,
-) -> Result<RgbaImage, WsiError> {
-    let w = image.width;
-    let h = image.height;
-    let rgb = decoded_image_to_rgb_bytes(&image, colorspace)?;
-    let mut rgba_buf = vec![255u8; w * h * 4];
-    for (src, dst) in rgb.chunks_exact(3).zip(rgba_buf.chunks_exact_mut(4)) {
-        dst[..3].copy_from_slice(src);
-    }
-
-    RgbaImage::from_raw(w as u32, h as u32, rgba_buf)
-        .ok_or_else(|| WsiError::Jp2k("failed to create RgbaImage from decoded data".into()))
-}
-
-#[cfg(test)]
-pub(crate) fn decoded_image_to_sample_buffer(
-    image: DecodedImage,
-    colorspace: Jp2kColorSpace,
-) -> Result<CpuTile, WsiError> {
-    let w = image.width;
-    let h = image.height;
-    let rgb = decoded_image_to_rgb_bytes(&image, colorspace)?;
-
-    Ok(CpuTile {
-        width: w as u32,
-        height: h as u32,
-        channels: 3,
-        color_space: ColorSpace::Rgb,
-        layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(rgb),
-    })
 }
 
 pub(crate) fn interleaved_image_to_sample_buffer(
@@ -133,7 +82,7 @@ pub(crate) fn interleaved_image_to_sample_buffer(
         Jp2kColorSpace::YCbCr => {
             let mut rgb = vec![0u8; expected_len];
             for (src, dst) in image.pixels.chunks_exact(3).zip(rgb.chunks_exact_mut(3)) {
-                let rgb = ycbcr_to_rgb(i32::from(src[0]), i32::from(src[1]), i32::from(src[2]));
+                let rgb = ycbcr_to_rgb(src[0], src[1], src[2]);
                 dst.copy_from_slice(&rgb);
             }
             rgb
@@ -211,120 +160,4 @@ pub(crate) fn crop_sample_buffer(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::decode::jp2k_backend::{DecodedComponent, DecodedImage, DecodedInterleavedImage};
-
-    fn rgb_decoded_image_for_test() -> DecodedImage {
-        DecodedImage {
-            width: 2,
-            height: 1,
-            components: [
-                DecodedComponent {
-                    width: 2,
-                    height: 1,
-                    samples: vec![10, 20],
-                },
-                DecodedComponent {
-                    width: 2,
-                    height: 1,
-                    samples: vec![30, 40],
-                },
-                DecodedComponent {
-                    width: 2,
-                    height: 1,
-                    samples: vec![50, 60],
-                },
-            ],
-        }
-    }
-
-    #[test]
-    fn rgb_components_convert_to_rgba() {
-        let rgba =
-            decoded_image_to_rgba(rgb_decoded_image_for_test(), Jp2kColorSpace::Rgb).unwrap();
-        assert_eq!(rgba.as_raw(), &[10, 30, 50, 255, 20, 40, 60, 255]);
-    }
-
-    #[test]
-    fn ycbcr_components_convert_to_rgba() {
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            components: [
-                DecodedComponent {
-                    width: 1,
-                    height: 1,
-                    samples: vec![100],
-                },
-                DecodedComponent {
-                    width: 1,
-                    height: 1,
-                    samples: vec![128],
-                },
-                DecodedComponent {
-                    width: 1,
-                    height: 1,
-                    samples: vec![128],
-                },
-            ],
-        };
-
-        let rgba = decoded_image_to_rgba(image, Jp2kColorSpace::YCbCr).unwrap();
-        assert_eq!(rgba.as_raw(), &[100, 100, 100, 255]);
-    }
-
-    #[test]
-    fn rgb_components_convert_to_sample_buffer() {
-        let buffer =
-            decoded_image_to_sample_buffer(rgb_decoded_image_for_test(), Jp2kColorSpace::Rgb)
-                .unwrap();
-        assert_eq!(buffer.data.as_u8().unwrap(), &[10, 30, 50, 20, 40, 60]);
-    }
-
-    #[test]
-    fn crop_sample_buffer_trims_to_requested_bounds() {
-        let buffer = CpuTile {
-            width: 4,
-            height: 3,
-            channels: 3,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8((0..36).collect()),
-        };
-
-        let cropped = crop_sample_buffer(buffer, 2, 2).unwrap();
-        assert_eq!(cropped.width, 2);
-        assert_eq!(cropped.height, 2);
-        assert_eq!(
-            cropped.data.as_u8().unwrap(),
-            &[0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17]
-        );
-    }
-
-    #[test]
-    fn interleaved_rgb_image_wraps_without_repacking() {
-        let image = DecodedInterleavedImage {
-            width: 2,
-            height: 1,
-            colorspace: Jp2kColorSpace::Rgb,
-            pixels: vec![10, 20, 30, 40, 50, 60],
-        };
-
-        let buffer = interleaved_image_to_sample_buffer(image).unwrap();
-        assert_eq!(buffer.data.as_u8().unwrap(), &[10, 20, 30, 40, 50, 60]);
-    }
-
-    #[test]
-    fn interleaved_ycbcr_image_converts_to_rgb() {
-        let image = DecodedInterleavedImage {
-            width: 1,
-            height: 1,
-            colorspace: Jp2kColorSpace::YCbCr,
-            pixels: vec![100, 128, 128],
-        };
-
-        let buffer = interleaved_image_to_sample_buffer(image).unwrap();
-        assert_eq!(buffer.data.as_u8().unwrap(), &[100, 100, 100]);
-    }
-}
+mod tests;

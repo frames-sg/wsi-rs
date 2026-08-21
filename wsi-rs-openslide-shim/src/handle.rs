@@ -1,17 +1,28 @@
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr};
+use std::num::NonZeroUsize;
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wsi_rs::{
-    FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileCache, TileLayout, WsiError,
+    DecodeExecutionOptions, FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide,
+    SlideOpenOptions, TileCache, TileLayout, WsiError,
 };
 
+mod geometry;
+
+use geometry::OpenSlideGeometry;
+
 static DETECTED_VENDORS: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
+// Private benchmark knob. A configured runtime belongs to one slide handle, so
+// the comparison harness uses one JP2K thread per handle and scales with the
+// number of client handles instead of creating nested N-by-N decode pools.
+const BENCHMARK_JP2K_THREADS_ENV: &str = "WSI_RS_SHIM_JP2K_CPU_THREADS";
 
 pub(crate) struct OpenSlideHandle {
     slide: Option<Slide>,
+    geometry: OpenSlideGeometry,
     error: Mutex<Option<CString>>,
     properties: BTreeMap<String, CString>,
     property_names: CStringArray,
@@ -66,7 +77,23 @@ impl CStringArray {
 
 impl OpenSlideHandle {
     pub(crate) fn open(path: PathBuf) -> Option<Box<Self>> {
-        match Slide::open(&path) {
+        let threads = match parse_benchmark_jp2k_threads(
+            std::env::var_os(BENCHMARK_JP2K_THREADS_ENV).as_deref(),
+        ) {
+            Ok(threads) => threads,
+            Err(message) => return Some(Box::new(Self::from_error(message))),
+        };
+        Self::open_with_jp2k_threads(path, threads)
+    }
+
+    fn open_with_jp2k_threads(path: PathBuf, threads: Option<NonZeroUsize>) -> Option<Box<Self>> {
+        let mut options = SlideOpenOptions::default();
+        if let Some(threads) = threads {
+            options = options.with_decode_execution_options(
+                DecodeExecutionOptions::default().with_jp2k_cpu_threads(threads),
+            );
+        }
+        match Slide::open_with_options(&path, options) {
             Ok(slide) => Some(Box::new(Self::from_slide(slide))),
             Err(err) if should_open_return_null(&err) => None,
             Err(err) => Some(Box::new(Self::from_error(err.to_string()))),
@@ -84,7 +111,8 @@ impl OpenSlideHandle {
     }
 
     fn from_slide(slide: Slide) -> Self {
-        let properties = build_properties(&slide);
+        let geometry = OpenSlideGeometry::from_slide(&slide);
+        let properties = build_properties(&slide, &geometry);
         let property_names = CStringArray::from_names(properties.keys().cloned());
         let associated_images = slide
             .dataset()
@@ -110,6 +138,7 @@ impl OpenSlideHandle {
 
         Self {
             slide: Some(slide),
+            geometry,
             error: Mutex::new(None),
             properties,
             property_names,
@@ -122,6 +151,7 @@ impl OpenSlideHandle {
     fn from_error(message: String) -> Self {
         Self {
             slide: None,
+            geometry: OpenSlideGeometry::empty(),
             error: Mutex::new(Some(cstring_sanitized(message))),
             properties: BTreeMap::new(),
             property_names: CStringArray::empty(),
@@ -142,6 +172,43 @@ impl OpenSlideHandle {
         if let Some(slide) = self.slide() {
             slide.replace_shared_tile_cache(cache);
         }
+    }
+
+    pub(crate) fn level_count(&self) -> Option<usize> {
+        (!self.has_error()).then_some(self.geometry.level_count())
+    }
+
+    pub(crate) fn level_dimensions(&self, level: usize) -> Option<(u64, u64)> {
+        if self.has_error() {
+            return None;
+        }
+        self.geometry.level_dimensions(level)
+    }
+
+    pub(crate) fn level_downsample(&self, level: usize) -> Option<f64> {
+        if self.has_error() {
+            return None;
+        }
+        self.geometry.level_downsample(level)
+    }
+
+    pub(crate) fn level_downsamples(&self) -> Option<Vec<f64>> {
+        if self.has_error() {
+            return None;
+        }
+        Some(self.geometry.level_downsamples().collect())
+    }
+
+    pub(crate) fn read_origin(
+        &self,
+        x: i64,
+        y: i64,
+        level: usize,
+    ) -> Option<((i64, i64), (f64, f64))> {
+        if self.has_error() {
+            return None;
+        }
+        self.geometry.read_origin(x, y, level)
     }
 
     pub(crate) fn set_error(&self, message: impl Into<String>) {
@@ -210,6 +277,19 @@ impl OpenSlideHandle {
     }
 }
 
+fn parse_benchmark_jp2k_threads(value: Option<&OsStr>) -> Result<Option<NonZeroUsize>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .ok_or_else(|| format!("{BENCHMARK_JP2K_THREADS_ENV} must contain valid UTF-8"))?;
+    let threads = value
+        .parse::<NonZeroUsize>()
+        .map_err(|err| format!("invalid {BENCHMARK_JP2K_THREADS_ENV}={value:?}: {err}"))?;
+    Ok(Some(threads))
+}
+
 pub(crate) fn empty_names() -> *const *const c_char {
     static EMPTY_NAMES: [usize; 1] = [0];
     EMPTY_NAMES.as_ptr().cast::<*const c_char>()
@@ -247,7 +327,7 @@ fn should_open_return_null(err: &WsiError) -> bool {
     }
 }
 
-fn build_properties(slide: &Slide) -> BTreeMap<String, CString> {
+fn build_properties(slide: &Slide, geometry: &OpenSlideGeometry) -> BTreeMap<String, CString> {
     let dataset = slide.dataset();
     let mut properties = dataset
         .properties
@@ -261,30 +341,32 @@ fn build_properties(slide: &Slide) -> BTreeMap<String, CString> {
             .or_insert_with(|| vendor.to_string());
     }
 
-    if let Some(series) = dataset
-        .scenes
-        .first()
-        .and_then(|scene| scene.series.first())
-    {
+    if geometry.level_count() > 0 {
         properties.insert(
             "openslide.level-count".to_string(),
-            series.levels.len().to_string(),
+            geometry.level_count().to_string(),
         );
 
-        for (idx, level) in series.levels.iter().enumerate() {
+        for (idx, (dimensions, downsample)) in geometry.levels().enumerate() {
             properties.insert(
                 format!("openslide.level[{idx}].width"),
-                level.dimensions.0.to_string(),
+                dimensions.0.to_string(),
             );
             properties.insert(
                 format!("openslide.level[{idx}].height"),
-                level.dimensions.1.to_string(),
+                dimensions.1.to_string(),
             );
             properties.insert(
                 format!("openslide.level[{idx}].downsample"),
-                format_float(level.downsample),
+                format_float(downsample),
             );
-            if let Some((tile_width, tile_height)) = tile_size(&level.tile_layout) {
+            let tile_layout = dataset
+                .scenes
+                .first()
+                .and_then(|scene| scene.series.first())
+                .and_then(|series| series.levels.get(idx))
+                .map(|level| &level.tile_layout);
+            if let Some((tile_width, tile_height)) = tile_layout.and_then(tile_size) {
                 properties.insert(
                     format!("openslide.level[{idx}].tile-width"),
                     tile_width.to_string(),
@@ -296,7 +378,7 @@ fn build_properties(slide: &Slide) -> BTreeMap<String, CString> {
             }
         }
 
-        if let Some(level0) = series.levels.first() {
+        if let Some(level0) = geometry.level_dimensions(0) {
             properties
                 .entry("openslide.bounds-x".to_string())
                 .or_insert_with(|| "0".to_string());
@@ -305,10 +387,10 @@ fn build_properties(slide: &Slide) -> BTreeMap<String, CString> {
                 .or_insert_with(|| "0".to_string());
             properties
                 .entry("openslide.bounds-width".to_string())
-                .or_insert_with(|| level0.dimensions.0.to_string());
+                .or_insert_with(|| level0.0.to_string());
             properties
                 .entry("openslide.bounds-height".to_string())
-                .or_insert_with(|| level0.dimensions.1.to_string());
+                .or_insert_with(|| level0.1.to_string());
         }
     }
 
@@ -368,47 +450,4 @@ fn format_float(value: f64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-
-    #[test]
-    fn tile_size_uses_virtual_size_for_whole_level_layout() {
-        let layout = TileLayout::WholeLevel {
-            width: 1024,
-            height: 768,
-            virtual_tile_width: 512,
-            virtual_tile_height: 256,
-        };
-
-        assert_eq!(tile_size(&layout), Some((512, 256)));
-    }
-
-    #[test]
-    fn tile_size_rounds_irregular_tile_advance() {
-        let layout = TileLayout::Irregular {
-            tile_advance: (127.6, 0.2),
-            extra_tiles: (0, 0, 0, 0),
-            tiles: HashMap::new(),
-        };
-
-        assert_eq!(tile_size(&layout), Some((128, 1)));
-    }
-
-    #[test]
-    fn handle_error_state_recovers_from_poisoned_mutex() {
-        let handle = OpenSlideHandle::from_error("initial error".to_string());
-
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = handle.error.lock().expect("lock error mutex");
-            panic!("poison error mutex");
-        }));
-
-        handle.set_error("later error");
-
-        assert!(handle.has_error());
-        assert!(!handle.error_ptr().is_null());
-        assert_eq!(handle.property_names(), empty_names());
-    }
-}
+mod tests;

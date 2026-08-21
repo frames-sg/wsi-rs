@@ -73,7 +73,7 @@ impl DicomSlide {
             .clone();
 
         let quickhash = quickhash_for_series_uid(&series_instance_uid)?;
-        let dataset_id = dataset_id_from_quickhash(path, &quickhash)?;
+        let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
         let largest_dimensions = (level0.width, level0.height);
         let public_levels = levels
             .iter()
@@ -205,7 +205,7 @@ impl DicomLevel {
             tile_height: image.tile_height,
             tiles_across: image.tiles_across,
             tiles_down: image.tiles_down,
-            path: image.path.clone(),
+            path: image.frame_store.path.clone(),
             pixel_spacing: image.pixel_spacing,
             objective_lens_power: image.objective_lens_power,
             parts: vec![image],
@@ -674,12 +674,5 @@ where
 }
 
 #[cfg(test)]
-mod directory_limit_tests {
-    use super::MAX_DICOM_DIRECTORY_FILES;
-
-    #[test]
-    fn dicom_directory_file_limit_is_bounded() {
-        let limit = std::hint::black_box(MAX_DICOM_DIRECTORY_FILES);
-        assert!((1_000..=100_000).contains(&limit));
-    }
-}
+#[path = "manifest/tests/directory_limit.rs"]
+mod directory_limit_tests;

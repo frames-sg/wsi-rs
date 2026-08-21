@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::error::WsiError;
+use objc2_metal::MTLDevice;
 
-use super::{MetalDeviceTile, YcbcrToRgb8Converter};
+use super::{MetalDevice, MetalDeviceTile, YcbcrToRgb8Converter};
 
 /// Codec-specific Metal sessions allocated from one renderer-owned device.
 #[derive(Debug, Clone)]
@@ -14,11 +15,18 @@ pub struct MetalBackendSessions {
 }
 
 impl MetalBackendSessions {
-    pub fn new(device: metal::Device) -> Self {
+    pub fn new(device: MetalDevice) -> Self {
         Self::from_sessions(
             j2k_jpeg_metal::MetalBackendSession::new(device.clone()),
             j2k_metal::MetalBackendSession::new(device),
         )
+    }
+
+    /// Create codec sessions on the system default Metal device.
+    pub fn system_default() -> Result<Self, WsiError> {
+        j2k_metal_support::system_default_device()
+            .map(Self::new)
+            .map_err(|source| super::interop::support_error("metal-session", source))
     }
 
     pub(crate) fn from_sessions(

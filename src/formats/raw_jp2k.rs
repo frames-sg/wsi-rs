@@ -18,6 +18,9 @@ use crate::decode::jp2k_codestream::{parse_codestream_header, validate_narrow_su
 use crate::error::WsiError;
 use crate::properties::Properties;
 
+#[cfg(test)]
+mod tests;
+
 const MARKER_SOC_BYTES: [u8; 2] = [0xFF, 0x4F];
 
 pub(crate) struct RawJp2kBackend;
@@ -25,26 +28,22 @@ pub(crate) struct RawJp2kBackend;
 impl FormatProbe for RawJp2kBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
-            return Ok(not_detected());
+            return Ok(ProbeResult::not_detected("raw-jp2k"));
         };
         if !matches!(extension.to_ascii_lowercase().as_str(), "j2k" | "j2c") {
-            return Ok(not_detected());
+            return Ok(ProbeResult::not_detected("raw-jp2k"));
         }
 
         let mut file = match File::open(path) {
             Ok(file) => file,
-            Err(_) => return Ok(not_detected()),
+            Err(_) => return Ok(ProbeResult::not_detected("raw-jp2k")),
         };
         let mut magic = [0u8; 2];
         if file.read_exact(&mut magic).is_err() || magic != MARKER_SOC_BYTES {
-            return Ok(not_detected());
+            return Ok(ProbeResult::not_detected("raw-jp2k"));
         }
 
-        Ok(ProbeResult {
-            detected: true,
-            vendor: "raw-jp2k".into(),
-            confidence: ProbeConfidence::Definite,
-        })
+        Ok(ProbeResult::detected("raw-jp2k", ProbeConfidence::Definite))
     }
 }
 
@@ -67,14 +66,6 @@ impl DatasetReader for RawJp2kBackend {
             width: header.image_width,
             height: header.image_height,
         }))
-    }
-}
-
-fn not_detected() -> ProbeResult {
-    ProbeResult {
-        detected: false,
-        vendor: "raw-jp2k".into(),
-        confidence: ProbeConfidence::Likely,
     }
 }
 

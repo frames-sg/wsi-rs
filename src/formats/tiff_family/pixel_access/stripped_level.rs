@@ -87,33 +87,34 @@ impl TiffPixelReader {
 
     fn get_or_decode_stripped_level_image(
         &self,
+        req: &TileRequest,
         ifd_id: IfdId,
         compression: Compression,
         dimensions: (u32, u32),
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<Arc<CpuTile>, WsiError> {
-        if let Some(image) = self
-            .full_decode_cache
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .get(&ifd_id)
-        {
-            return Ok(image);
-        }
-
-        let image = Arc::new(self.decode_stripped_level_image(
+        let decode_error = |reason| WsiError::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason,
+        };
+        self.full_decode_cache.get_or_try_insert_with_error(
             ifd_id,
-            compression,
-            dimensions,
-            strip_offsets,
-            strip_byte_counts,
-        )?);
-        self.full_decode_cache
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .put(ifd_id, image.clone());
-        Ok(image)
+            || {
+                self.decode_stripped_level_image(
+                    ifd_id,
+                    compression,
+                    dimensions,
+                    strip_offsets,
+                    strip_byte_counts,
+                )
+                .map(Arc::new)
+                .map_err(|err| decode_error(err.to_string()))
+            },
+            decode_error,
+        )
     }
 
     pub(super) fn read_stripped_level_tile(
@@ -169,6 +170,7 @@ impl TiffPixelReader {
         let width = tile_width.min(dimensions.0 - src_x);
         let height = tile_height.min(dimensions.1 - src_y);
         let image = self.get_or_decode_stripped_level_image(
+            req,
             ifd_id,
             compression,
             dimensions,

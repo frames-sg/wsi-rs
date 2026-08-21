@@ -8,80 +8,12 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        if let Some(img) = {
-            let mut cache = self
-                .full_decode_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.get(&ifd_id)
-        } {
-            return Ok(img);
-        }
-
-        let mut flights = self
-            .full_decode_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut registered_waiter = false;
-        loop {
-            match flights.get_mut(&ifd_id) {
-                Some(flight) => {
-                    if !registered_waiter {
-                        flight.waiters += 1;
-                        registered_waiter = true;
-                    }
-                    if let Some(result) = flight.result.clone() {
-                        flight.waiters -= 1;
-                        let should_remove = flight.waiters == 0;
-                        if should_remove {
-                            flights.remove(&ifd_id);
-                        }
-                        return result.map_err(|reason| Self::ndpi_full_decode_error(req, reason));
-                    }
-                    flights = self
-                        .full_decode_ready
-                        .wait(flights)
-                        .unwrap_or_else(|e| e.into_inner());
-                }
-                None if registered_waiter => {
-                    return Err(Self::ndpi_full_decode_error(
-                        req,
-                        format!("NDPI full decode flight for {ifd_id} disappeared"),
-                    ));
-                }
-                None => {
-                    flights.insert(ifd_id, FullDecodeFlight::default());
-                    break;
-                }
-            }
-        }
-        drop(flights);
-
-        let decode_result = self
-            .decode_ndpi_full_image(req, ifd_id, strip_offset, strip_byte_count)
-            .map_err(|err| err.to_string());
-        if let Ok(image) = decode_result.as_ref() {
-            let mut cache = self
-                .full_decode_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.put(ifd_id, image.clone());
-        }
-
-        let mut flights = self
-            .full_decode_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(flight) = flights.get_mut(&ifd_id) {
-            flight.result = Some(decode_result.clone());
-            if flight.waiters == 0 {
-                flights.remove(&ifd_id);
-            }
-        }
-        drop(flights);
-        self.full_decode_ready.notify_all();
-
-        decode_result.map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+        self.full_decode_cache
+            .get_or_try_insert_with(ifd_id, || {
+                self.decode_ndpi_full_image(req, ifd_id, strip_offset, strip_byte_count)
+                    .map_err(|err| err.to_string())
+            })
+            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
 
     /// Read a tile from an NdpiJpeg source (MCU extraction fast path).

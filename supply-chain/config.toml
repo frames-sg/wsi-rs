@@ -16,16 +16,20 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [policy.wsi-rs]
 audit-as-crates-io = true
 
+[policy.wsi-rs-perf]
+criteria = "safe-to-run"
+notes = "Non-published local benchmark coordinator and worker."
+
+[policy.xtask]
+criteria = "safe-to-run"
+notes = "Non-published workspace engineering command runner."
+
 [[exemptions.autocfg]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
 version = "2.13.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.block]]
-version = "0.1.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.block-buffer]]
@@ -58,10 +62,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.chrono]]
 version = "0.4.45"
-criteria = "safe-to-deploy"
-
-[[exemptions.core-foundation]]
-version = "0.10.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.cpufeatures]]
@@ -120,6 +120,10 @@ criteria = "safe-to-deploy"
 version = "0.10.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.encoding]]
 version = "0.2.33"
 criteria = "safe-to-deploy"
@@ -157,7 +161,7 @@ version = "2.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.fearless_simd]]
-version = "0.4.1"
+version = "0.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -213,59 +217,71 @@ version = "1.0.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-codec-math]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-core]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-cuda]]
-version = "0.8.0"
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.j2k-cuda-build-support]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.j2k-cuda-j2k-engine]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.j2k-cuda-jpeg-engine]]
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-cuda-runtime]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg-cuda]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-jpeg-metal]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-metal]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-metal-support]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-native]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-profile]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-tilecodec]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.j2k-types]]
-version = "0.8.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.jobserver]]
@@ -309,7 +325,7 @@ version = "0.4.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.lru]]
-version = "0.18.1"
+version = "0.18.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.memchr]]
@@ -320,16 +336,28 @@ criteria = "safe-to-deploy"
 version = "0.8.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.objc]]
-version = "0.2.7"
+[[exemptions.objc2]]
+version = "0.6.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-core-foundation]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-encode]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-foundation]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-metal]]
+version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
 version = "1.21.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.paste]]
-version = "1.0.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.pin-project-lite]]
@@ -553,7 +581,7 @@ version = "0.7.15"
 criteria = "safe-to-run"
 
 [[exemptions.wsi-rs]]
-version = "0.5.2"
+version = "0.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zmij]]

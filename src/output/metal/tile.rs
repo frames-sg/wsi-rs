@@ -1,4 +1,6 @@
 use crate::{error::WsiError, PixelFormat};
+use objc2::runtime::ProtocolObject;
+use objc2_metal::MTLDevice;
 
 use super::{interop, YcbcrToRgb8Converter};
 
@@ -21,11 +23,6 @@ pub struct MetalDeviceTile {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum MetalDeviceStorage {
-    #[deprecated(note = "raw Buffer storage is untrusted; adopt it into Resident storage")]
-    Buffer {
-        buffer: metal::Buffer,
-        byte_offset: usize,
-    },
     Resident {
         image: j2k_metal_support::ResidentMetalImage,
     },
@@ -101,20 +98,11 @@ impl MetalDeviceTile {
 
     /// Validate the public compatibility metadata and borrow the resident image.
     ///
-    /// Legacy raw-buffer storage is not a synchronized resident image and is
-    /// rejected. Callers that own such a buffer must first use the explicit
-    /// unsafe adoption API.
-    #[allow(deprecated)]
     pub fn validated_resident_image(
         &self,
     ) -> Result<&j2k_metal_support::ResidentMetalImage, WsiError> {
         let image = match &self.storage {
             MetalDeviceStorage::Resident { image } => image,
-            MetalDeviceStorage::Buffer { .. } => {
-                return Err(WsiError::Unsupported {
-                    reason: "legacy raw Metal buffer tiles must be explicitly adopted before resident access".into(),
-                });
-            }
         };
         let format = j2k_core::PixelFormat::from(self.format);
         if image.dimensions() != (self.width, self.height)
@@ -132,7 +120,7 @@ impl MetalDeviceTile {
 
     pub(crate) fn resident_image_for_device(
         &self,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) -> Result<&j2k_metal_support::ResidentMetalImage, WsiError> {
         let image = self.validated_resident_image()?;
         image

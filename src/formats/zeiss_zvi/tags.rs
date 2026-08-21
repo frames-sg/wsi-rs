@@ -85,13 +85,5 @@ pub(super) fn tag_color(tags: &HashMap<i32, String>, tag_id: i32) -> Option<[u8;
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tag_parser_rejects_excessive_declared_entry_count() {
-        let mut data = vec![0; 12];
-        data[8..12].copy_from_slice(&16_385_i32.to_le_bytes());
-        assert!(parse_zvi_tags(&data).is_err());
-    }
-}
+#[path = "tests/tags.rs"]
+mod tests;

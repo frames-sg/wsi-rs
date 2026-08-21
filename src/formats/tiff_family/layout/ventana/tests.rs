@@ -1,4 +1,189 @@
 use super::*;
+use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
+
+fn validate_no_adjacent_overlap(
+    tiles: &HashMap<(i64, i64), TileEntry>,
+    tile_advance_x: f64,
+    tile_advance_y: f64,
+    _tile_width: u32,
+    _tile_height: u32,
+) -> Result<(), TiffParseError> {
+    let mut rects: Vec<(f64, f64, f64, f64, i64, i64)> = tiles
+        .iter()
+        .map(|(&(col, row), entry)| {
+            let x1 = col as f64 * tile_advance_x + entry.offset.0;
+            let y1 = row as f64 * tile_advance_y + entry.offset.1;
+            let x2 = x1 + entry.dimensions.0 as f64;
+            let y2 = y1 + entry.dimensions.1 as f64;
+            (x1, y1, x2, y2, col, row)
+        })
+        .collect();
+    rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    for (index, &(x1, y1, x2, y2, col, row)) in rects.iter().enumerate() {
+        for &(nx1, ny1, nx2, ny2, next_col, next_row) in rects.iter().skip(index + 1) {
+            if nx1 >= x2 {
+                break;
+            }
+            let intersection_x = (x2.min(nx2) - x1.max(nx1)).max(0.0);
+            let intersection_y = (y2.min(ny2) - y1.max(ny1)).max(0.0);
+            let overlap_area = intersection_x * intersection_y;
+            if overlap_area > 0.0 {
+                return Err(TiffParseError::Structure(format!(
+                    "Ventana BIF: tiles ({col},{row}) and ({next_col},{next_row}) overlap by {overlap_area:.1} pixels"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn encode_info() -> &'static str {
+    r#"<EncodeInfo>
+        <SlideStitchInfo>
+            <ImageInfo AOIScanned="1" NumCols="3" NumRows="2" Width="748" Height="504"
+                       Pos-X="100" Pos-Y="200">
+                <TileJointInfo Direction="RIGHT" OverlapX="10" OverlapY="0" Confidence="100"
+                               Tile1="1" Tile2="2"/>
+                <TileJointInfo Direction="UP" OverlapX="0" OverlapY="8" Confidence="100"
+                               Tile1="1" Tile2="4"/>
+            </ImageInfo>
+        </SlideStitchInfo>
+    </EncodeInfo>"#
+}
+
+#[test]
+fn interpret_builds_stitched_pyramid_associated_images_and_properties() {
+    let level0_description = format!("level=0;{}", encode_info());
+    let file = build_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 768),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 512),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, &level0_description),
+            SyntheticTag::ascii(
+                tags::XMP,
+                r#"<xmp><iScan Magnification="40" ScanRes="0.25" Scanner="DP200"/></xmp>"#,
+            ),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 384),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 256),
+            SyntheticTag::long(tags::TILE_WIDTH, 128),
+            SyntheticTag::long(tags::TILE_LENGTH, 128),
+            SyntheticTag::short(tags::COMPRESSION, 33004),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "level=1"),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 96),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 64),
+            SyntheticTag::long(tags::TILE_WIDTH, 32),
+            SyntheticTag::long(tags::TILE_LENGTH, 32),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "thumbnail"),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 120),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 80),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 0),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 0),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "label image"),
+        ],
+    ]);
+    let container = TiffContainer::open(file.path()).unwrap();
+    let interpreter = VentanaInterpreter;
+
+    assert!(interpreter.detect(&container));
+    assert_eq!(interpreter.vendor_name(), "ventana");
+    let layout = interpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels.len(), 2);
+    assert_eq!(levels[0].dimensions, (748, 504));
+    assert_eq!(levels[1].dimensions, (374, 252));
+    assert!(matches!(
+        levels[0].tile_layout,
+        TileLayout::Irregular { .. }
+    ));
+    let TileLayout::Irregular { tiles, .. } = &levels[0].tile_layout else {
+        unreachable!("level 0 was already characterized as irregular");
+    };
+    assert!(tiles.values().all(|entry| entry.dimensions == (256, 256)));
+    assert!(tiles.values().all(|entry| entry.tiff_tile_index.is_none()));
+    assert!(matches!(levels[1].tile_layout, TileLayout::Regular { .. }));
+    assert_eq!(layout.tile_sources.len(), 2);
+    assert_eq!(
+        layout.dataset.associated_images["thumbnail"].dimensions,
+        (96, 64)
+    );
+    assert_eq!(
+        layout.dataset.associated_images["macro"].dimensions,
+        (120, 80)
+    );
+    assert!(matches!(
+        layout.associated_sources["thumbnail"],
+        TileSource::TiledIfd { .. }
+    ));
+    assert!(matches!(
+        layout.associated_sources["macro"],
+        TileSource::Stripped { .. }
+    ));
+    let properties = &layout.dataset.properties;
+    assert_eq!(properties.get("openslide.objective-power"), Some("40"));
+    assert_eq!(properties.get("openslide.mpp-x"), Some("0.25"));
+    assert_eq!(properties.get("openslide.mpp-y"), Some("0.25"));
+    assert_eq!(properties.get("ventana.Scanner"), Some("DP200"));
+    assert!(properties
+        .get("openslide.comment")
+        .is_some_and(|value| value.starts_with("level=0")));
+}
+
+#[test]
+fn interpret_requires_pyramid_encode_info_and_scanned_areas() {
+    let no_pyramid = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 64),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 64),
+        SyntheticTag::ascii(tags::XMP, "<iScan/>"),
+    ]]);
+    let container = TiffContainer::open(no_pyramid.path()).unwrap();
+    assert!(VentanaInterpreter
+        .interpret(&container)
+        .unwrap_err()
+        .to_string()
+        .contains("no tiled pyramid IFDs"));
+
+    let missing_xml = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 64),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 64),
+        SyntheticTag::long(tags::TILE_WIDTH, 32),
+        SyntheticTag::long(tags::TILE_LENGTH, 32),
+        SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "level=0"),
+    ]]);
+    let container = TiffContainer::open(missing_xml.path()).unwrap();
+    assert!(VentanaInterpreter
+        .interpret(&container)
+        .unwrap_err()
+        .to_string()
+        .contains("no EncodeInfo XML"));
+
+    let description = "level=0;<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned=\"0\" NumCols=\"1\" NumRows=\"1\"/></SlideStitchInfo></EncodeInfo>";
+    let unscanned = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 64),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 64),
+        SyntheticTag::long(tags::TILE_WIDTH, 32),
+        SyntheticTag::long(tags::TILE_LENGTH, 32),
+        SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, description),
+    ]]);
+    let container = TiffContainer::open(unscanned.path()).unwrap();
+    assert!(VentanaInterpreter
+        .interpret(&container)
+        .unwrap_err()
+        .to_string()
+        .contains("no scanned areas"));
+}
 
 // ── parse_level0_xml ────────────────────────────────────────────
 
@@ -108,22 +293,16 @@ fn ventana_level0_dimensions_prefers_exact_tile_positions() {
         areas: vec![],
         tiles: vec![
             BifTile {
-                col: 0,
-                row: 0,
                 x: 5.0,
                 y: 7.0,
                 width: 251,
                 height: 249,
-                tiff_tile_index: 0,
             },
             BifTile {
-                col: 1,
-                row: 0,
                 x: 261.0,
                 y: 7.0,
                 width: 240,
                 height: 249,
-                tiff_tile_index: 1,
             },
         ],
         tile_advance_x: 256.0,
@@ -147,22 +326,16 @@ fn ventana_level0_dimensions_prefers_area_model_when_present() {
         }],
         tiles: vec![
             BifTile {
-                col: 0,
-                row: 0,
                 x: 0.0,
                 y: 0.0,
                 width: 256,
                 height: 256,
-                tiff_tile_index: 0,
             },
             BifTile {
-                col: 1,
-                row: 0,
                 x: 300.0,
                 y: 0.0,
                 width: 256,
                 height: 256,
-                tiff_tile_index: 1,
             },
         ],
         tile_advance_x: 240.0,
@@ -199,6 +372,33 @@ fn exact_tile_dimensions_use_neighbor_positions() {
     assert_eq!(
         ventana_exact_tile_dimensions(1, 0, 2, 2, &positions, 496.0, 256.0, 256.0, 256.0),
         (235, 249)
+    );
+}
+
+#[test]
+fn exact_tile_dimensions_use_previous_after_invalid_candidates() {
+    let positions = HashMap::from([
+        ((0, 1), (70.0, 200.0)),
+        ((1, 0), (100.0, 160.0)),
+        ((1, 1), (100.0, 200.0)),
+        ((2, 1), (100.5, 200.0)),
+        ((1, 2), (100.0, 200.5)),
+    ]);
+
+    // A delta or remaining edge of exactly 0.5 is invalid, so both axes
+    // fall back to the previous neighbor before using the nominal size.
+    assert_eq!(
+        ventana_exact_tile_dimensions(1, 1, 3, 3, &positions, 100.5, 200.5, 256.0, 256.0),
+        (30, 40)
+    );
+}
+
+#[test]
+fn exact_tile_dimensions_keep_single_tile_fallbacks() {
+    let positions = HashMap::from([((0, 0), (10.0, 20.0))]);
+    assert_eq!(
+        ventana_exact_tile_dimensions(0, 0, 1, 1, &positions, 500.0, 500.0, 11.6, 9.4),
+        (12, 9)
     );
 }
 

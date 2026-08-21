@@ -81,19 +81,6 @@ pub(super) fn parse_level0_properties(path: &Path) -> Result<Level0Properties, W
     Ok((pixel_spacing, objective_lens_power))
 }
 
-#[cfg(test)]
-pub(super) fn parse_level0_properties_from_metadata(
-    meta: &ParsedDicomMetadata,
-) -> (Option<(f64, f64)>, Option<f64>) {
-    let pixel_spacing = optional_pixel_spacing_mpp(&meta.obj).unwrap_or(None);
-    let objective_lens_power = optional_f64_at(
-        &meta.obj,
-        (tags::OPTICAL_PATH_SEQUENCE, 0, tags::OBJECTIVE_LENS_POWER),
-    )
-    .unwrap_or(None);
-    (pixel_spacing, objective_lens_power)
-}
-
 pub(super) fn optional_pixel_spacing_mpp(
     obj: &DefaultDicomObject,
 ) -> Result<Option<(f64, f64)>, WsiError> {
@@ -499,18 +486,6 @@ pub(super) fn quickhash_for_series_uid(series_uid: &str) -> Result<String, WsiEr
     quickhash
         .finish()
         .ok_or_else(|| WsiError::DisplayConversion("failed to compute DICOM quickhash".into()))
-}
-
-pub(super) fn dataset_id_from_quickhash(
-    path: &Path,
-    quickhash: &str,
-) -> Result<DatasetId, WsiError> {
-    if quickhash.len() < 32 {
-        return Err(invalid_slide(path, "quickhash too short"));
-    }
-    let value = u128::from_str_radix(&quickhash[..32], 16)
-        .map_err(|_| invalid_slide(path, "quickhash is not valid hex"))?;
-    Ok(DatasetId::new(value))
 }
 
 pub(super) fn canonicalize_or_fallback(path: &Path) -> PathBuf {

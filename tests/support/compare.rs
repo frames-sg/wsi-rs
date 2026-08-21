@@ -3,25 +3,25 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Tolerance {
+pub(crate) struct Tolerance {
     pub max_abs: u8,
     pub mean_abs: f64,
 }
 
 impl Tolerance {
-    pub const JPEG_TIGHT: Self = Self {
+    pub(crate) const JPEG_TIGHT: Self = Self {
         max_abs: 1,
         mean_abs: 0.05,
     };
 
-    pub const TOLERANT: Self = Self {
+    pub(crate) const TOLERANT: Self = Self {
         max_abs: 4,
         mean_abs: 1.0,
     };
 }
 
 #[derive(Debug, Clone)]
-pub struct CompareReport {
+pub(crate) struct CompareReport {
     pub bytewise_equal_rate: f64,
     pub max_abs: u8,
     pub mean_abs: f64,
@@ -30,7 +30,7 @@ pub struct CompareReport {
     pub diff_dump: Option<PathBuf>,
 }
 
-pub fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> CompareReport {
+pub(crate) fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> CompareReport {
     assert_eq!(
         actual.len(),
         expected.len(),
@@ -88,7 +88,7 @@ pub fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> CompareRe
     }
 }
 
-pub fn tolerance_failure(label: &str, report: &CompareReport) -> Option<String> {
+pub(crate) fn tolerance_failure(label: &str, report: &CompareReport) -> Option<String> {
     if report.passed {
         return None;
     }

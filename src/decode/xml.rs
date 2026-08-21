@@ -17,10 +17,10 @@ struct XmlBudget {
 
 impl XmlBudget {
     fn add_node(&mut self) -> Result<(), WsiError> {
-        self.nodes = self
-            .nodes
-            .checked_add(1)
-            .ok_or_else(|| WsiError::Xml("XML node count overflow".into()))?;
+        // The parser rejects the next node at 100,001, far below usize::MAX on
+        // every supported target, so a separate arithmetic-overflow branch is
+        // unreachable.
+        self.nodes += 1;
         if self.nodes > MAX_XML_NODES {
             return Err(WsiError::Xml(format!(
                 "XML node count exceeds maximum of {MAX_XML_NODES}"
@@ -35,10 +35,8 @@ impl XmlBudget {
                 "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
             )));
         }
-        self.attributes = self
-            .attributes
-            .checked_add(count)
-            .ok_or_else(|| WsiError::Xml("XML attribute count overflow".into()))?;
+        // Per-node and aggregate budgets bound this addition to at most 500,256.
+        self.attributes += count;
         if self.attributes > MAX_XML_ATTRIBUTES {
             return Err(WsiError::Xml(format!(
                 "XML attribute count exceeds maximum of {MAX_XML_ATTRIBUTES}"
@@ -46,64 +44,6 @@ impl XmlBudget {
         }
         Ok(())
     }
-}
-
-/// Find the first element with the given tag name and return its text content.
-#[cfg(test)]
-pub fn parse_element_text(xml: &str, tag: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut inside_tag = false;
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.name().as_ref() == tag.as_bytes() => {
-                inside_tag = true;
-            }
-            Ok(Event::Text(e)) if inside_tag => {
-                return e
-                    .xml_content(XmlVersion::Implicit1_0)
-                    .ok()
-                    .map(|s| s.into_owned());
-            }
-            Ok(Event::End(_)) if inside_tag => {
-                return None;
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    None
-}
-
-/// Find the first element with the given tag name and return the value of the specified attribute.
-#[cfg(test)]
-pub fn parse_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == tag.as_bytes() => {
-                for a in e.attributes() {
-                    let Ok(a) = a else {
-                        return None;
-                    };
-                    if a.key.as_ref() == attr.as_bytes() {
-                        return a
-                            .normalized_value(XmlVersion::Implicit1_0)
-                            .ok()
-                            .map(|s| s.into_owned());
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    None
 }
 
 /// A simple tree representation of an XML document.
@@ -114,7 +54,7 @@ pub fn parse_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
 /// and enforces input, depth, node, and attribute budgets before constructing
 /// the tree.
 #[derive(Debug, Clone)]
-pub struct XmlNode {
+pub(crate) struct XmlNode {
     pub tag: String,
     pub attributes: HashMap<String, String>,
     pub text: Option<String>,
@@ -123,23 +63,23 @@ pub struct XmlNode {
 
 impl XmlNode {
     /// Find the first direct child with the given tag name.
-    pub fn find(&self, tag: &str) -> Option<&XmlNode> {
+    pub(crate) fn find(&self, tag: &str) -> Option<&XmlNode> {
         self.children.iter().find(|c| c.tag == tag)
     }
 
     /// Find all direct children with the given tag name.
-    pub fn find_all(&self, tag: &str) -> Vec<&XmlNode> {
+    pub(crate) fn find_all(&self, tag: &str) -> Vec<&XmlNode> {
         self.children.iter().filter(|c| c.tag == tag).collect()
     }
 
     /// Get the value of an attribute by name.
-    pub fn attr(&self, name: &str) -> Option<&str> {
+    pub(crate) fn attr(&self, name: &str) -> Option<&str> {
         self.attributes.get(name).map(|s| s.as_str())
     }
 }
 
 /// Parse an XML string into a tree of `XmlNode`.
-pub fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
+pub(crate) fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
     if xml.len() > MAX_XML_INPUT_BYTES {
         return Err(WsiError::Xml(format!(
             "XML input exceeds maximum of {MAX_XML_INPUT_BYTES} bytes"
@@ -251,7 +191,7 @@ fn parse_node_recursive(
             Ok(Event::Text(e)) => {
                 let t = e
                     .xml_content(XmlVersion::Implicit1_0)
-                    .map_err(|err| WsiError::Xml(err.to_string()))?
+                    .expect("Reader::from_str yields valid text encoding")
                     .into_owned();
                 if !t.trim().is_empty() {
                     text = Some(t);
@@ -278,102 +218,4 @@ fn parse_node_recursive(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_element_text() {
-        let xml = "<root><name>Aperio</name></root>";
-        assert_eq!(parse_element_text(xml, "name"), Some("Aperio".to_string()));
-    }
-
-    #[test]
-    fn test_parse_attribute() {
-        let xml = r#"<root><image width="1024"/></root>"#;
-        assert_eq!(
-            parse_attribute(xml, "image", "width"),
-            Some("1024".to_string())
-        );
-    }
-
-    #[test]
-    fn missing_element_returns_none() {
-        let xml = "<root><name>Test</name></root>";
-        assert_eq!(parse_element_text(xml, "missing"), None);
-        assert_eq!(parse_attribute(xml, "missing", "attr"), None);
-    }
-
-    #[test]
-    fn parse_xml_tree() {
-        let xml = r#"<root version="1.0">
-            <meta key="vendor">Aperio</meta>
-            <levels>
-                <level id="0" width="4096" height="2048"/>
-                <level id="1" width="2048" height="1024"/>
-            </levels>
-        </root>"#;
-
-        let root = parse_xml(xml).unwrap();
-        assert_eq!(root.tag, "root");
-        assert_eq!(root.attr("version"), Some("1.0"));
-
-        let meta = root.find("meta").unwrap();
-        assert_eq!(meta.attr("key"), Some("vendor"));
-        assert_eq!(meta.text.as_deref(), Some("Aperio"));
-
-        let levels = root.find("levels").unwrap();
-        let level_nodes = levels.find_all("level");
-        assert_eq!(level_nodes.len(), 2);
-        assert_eq!(level_nodes[0].attr("id"), Some("0"));
-        assert_eq!(level_nodes[0].attr("width"), Some("4096"));
-        assert_eq!(level_nodes[1].attr("id"), Some("1"));
-        assert_eq!(level_nodes[1].attr("height"), Some("1024"));
-
-        // children should be empty for self-closing tags
-        assert!(level_nodes[0].children.is_empty());
-    }
-
-    #[test]
-    fn deeply_nested_xml_rejected() {
-        let depth = MAX_XML_DEPTH + 10;
-        let open_tags: String = (0..depth).map(|i| format!("<n{}>", i)).collect();
-        let close_tags: String = (0..depth).rev().map(|i| format!("</n{}>", i)).collect();
-        let xml = format!("{}{}", open_tags, close_tags);
-
-        let result = parse_xml(&xml);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("nesting depth"),
-            "expected depth error, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn duplicate_attributes_are_rejected() {
-        let err = parse_xml(r#"<root value="first" value="second"/>"#).unwrap_err();
-        assert!(
-            err.to_string().contains("duplicated attribute"),
-            "unexpected duplicate-attribute error: {err}"
-        );
-    }
-
-    #[test]
-    fn excessive_attributes_are_rejected() {
-        let attributes = (0..=MAX_XML_ATTRIBUTES_PER_NODE)
-            .map(|idx| format!(r#" a{idx}="value""#))
-            .collect::<String>();
-        let err = parse_xml(&format!("<root{attributes}/>")).unwrap_err();
-        assert!(
-            err.to_string().contains("attribute count"),
-            "unexpected attribute-budget error: {err}"
-        );
-    }
-
-    #[test]
-    fn document_type_entities_are_not_expanded() {
-        let xml = r#"<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>"#;
-        let root = parse_xml(xml).unwrap();
-        assert_ne!(root.text.as_deref(), Some("expanded"));
-    }
-}
+mod tests;

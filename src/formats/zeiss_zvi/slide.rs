@@ -157,7 +157,7 @@ impl ZviSlide {
         }
 
         let quickhash = quickhash_for_zvi(path, &planes, level_dimensions)?;
-        let dataset_id = dataset_id_from_quickhash(path, &quickhash)?;
+        let dataset_id = dataset_id_from_quickhash(path, &quickhash, "ZVI quickhash")?;
         let mut properties = Properties::new();
         properties.insert("openslide.vendor", "zeiss");
         properties.insert("openslide.quickhash-1", quickhash);
@@ -234,27 +234,44 @@ impl ZviSlide {
     }
 
     fn read_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        if req.scene.get() != 0 || req.series.get() != 0 || req.level.get() != 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "ZVI exposes one scene, series, and level".into(),
-            });
-        }
-        if req.plane.get().z >= self.dataset.scenes[0].series[0].axes.z
-            || req.plane.get().c >= self.dataset.scenes[0].series[0].axes.c
-            || req.plane.get().t >= self.dataset.scenes[0].series[0].axes.t
-        {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "ZVI plane out of range".into(),
-            });
+        let scene = self
+            .dataset
+            .scenes
+            .get(req.scene.get())
+            .ok_or(WsiError::SceneOutOfRange {
+                index: req.scene.get(),
+                count: self.dataset.scenes.len(),
+            })?;
+        let series = scene
+            .series
+            .get(req.series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: req.series.get(),
+                count: scene.series.len(),
+            })?;
+        let level =
+            series
+                .levels
+                .get(req.level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: req.level.get(),
+                    count: series.levels.len() as u32,
+                })?;
+        let plane = req.plane.get();
+        for (axis, value, extent) in [
+            ("z", plane.z, series.axes.z),
+            ("c", plane.c, series.axes.c),
+            ("t", plane.t, series.axes.t),
+        ] {
+            if value >= extent {
+                return Err(WsiError::PlaneOutOfRange {
+                    axis: axis.into(),
+                    value,
+                    max: extent.saturating_sub(1),
+                });
+            }
         }
 
-        let level = &self.dataset.scenes[0].series[0].levels[0];
         match &level.tile_layout {
             TileLayout::WholeLevel {
                 width,
@@ -366,15 +383,6 @@ fn quickhash_for_zvi(
         .ok_or_else(|| WsiError::DisplayConversion("failed to compute ZVI quickhash".into()))
 }
 
-fn dataset_id_from_quickhash(path: &Path, quickhash: &str) -> Result<DatasetId, WsiError> {
-    if quickhash.len() < 32 {
-        return Err(invalid_slide(path, "ZVI quickhash too short"));
-    }
-    let value = u128::from_str_radix(&quickhash[..32], 16)
-        .map_err(|_| invalid_slide(path, "ZVI quickhash is not valid hex"))?;
-    Ok(DatasetId::new(value))
-}
-
 fn validated_payload_length(
     path: &Path,
     stream_length: u64,
@@ -419,43 +427,5 @@ fn invalid_slide(path: &Path, message: impl ToString) -> WsiError {
 }
 
 #[cfg(test)]
-mod payload_tests {
-    use super::super::model::ZviImageHeader;
-    use super::*;
-
-    fn header(compression: ZviCompression) -> ZviImageHeader {
-        ZviImageHeader {
-            width: 2,
-            height: 3,
-            bytes_per_sample: 1,
-            payload_offset: 10,
-            compression,
-            z: 0,
-            c: 0,
-            t: 0,
-            tile_index: 0,
-        }
-    }
-
-    #[test]
-    fn payload_bounds_reject_offset_trailing_raw_data_and_oversize() {
-        let path = Path::new("plane.zvi");
-        assert_eq!(
-            validated_payload_length(path, 16, &header(ZviCompression::Raw)).unwrap(),
-            6
-        );
-        assert!(validated_payload_length(path, 9, &header(ZviCompression::Jpeg)).is_err());
-        assert!(validated_payload_length(path, 17, &header(ZviCompression::Raw)).is_err());
-        assert!(validated_payload_length(
-            path,
-            11 + crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
-            &header(ZviCompression::Zlib),
-        )
-        .is_err());
-
-        let mut oversized_decoded = header(ZviCompression::Zlib);
-        oversized_decoded.width = u32::MAX;
-        oversized_decoded.height = u32::MAX;
-        assert!(validated_payload_length(path, 11, &oversized_decoded).is_err());
-    }
-}
+#[path = "tests/slide.rs"]
+mod tests;

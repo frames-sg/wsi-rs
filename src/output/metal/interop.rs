@@ -1,7 +1,20 @@
 use super::{MetalDeviceStorage, MetalDeviceTile};
 use crate::{error::WsiError, PixelFormat};
 use j2k_metal_support::{MetalImageLayout, ResidentMetalImage, SubmittedMetalImages};
-use metal::{Buffer, CommandBuffer, ComputeCommandEncoderRef, DeviceRef};
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder, MTLDevice};
+
+use super::MetalBuffer;
+
+type CommandBuffer = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
+
+// SAFETY: the converter owns retained Metal queue, library, and immutable
+// pipeline objects, all documented by Metal as cross-thread resources. Lazy
+// pipeline initialization is serialized by `OnceLock`.
+unsafe impl Send for super::ycbcr::YcbcrToRgb8Converter {}
+// SAFETY: shared access exposes immutable handles and creates an independent
+// command buffer per conversion; no unsynchronized CPU mutation is reachable.
+unsafe impl Sync for super::ycbcr::YcbcrToRgb8Converter {}
 
 pub(super) fn support_error(
     context: &'static str,
@@ -14,24 +27,70 @@ pub(super) fn support_error(
 }
 
 pub(super) fn bind_resident_compute_input(
-    encoder: &ComputeCommandEncoderRef,
+    encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     index: u64,
     image: &ResidentMetalImage,
 ) {
-    // SAFETY: this audited operation binds the logically immutable resident
-    // allocation for a GPU read. The submission owner separately retains the
-    // image through completion.
-    encoder.set_buffer(
-        index,
-        Some(unsafe { image.raw_buffer() }),
-        image.byte_offset() as u64,
-    );
+    // SAFETY: the binding index is part of the fixed shader ABI, the offset
+    // was validated by `ResidentMetalImage`, and support-created command
+    // buffers retain the immutable input through completion.
+    unsafe {
+        encoder.setBuffer_offset_atIndex(
+            Some(image.raw_buffer()),
+            image.byte_offset(),
+            usize::try_from(index).expect("Metal buffer index fits usize"),
+        )
+    };
+}
+
+pub(super) fn bind_compute_buffer(
+    encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    index: usize,
+    buffer: &ProtocolObject<dyn MTLBuffer>,
+) {
+    assert!(index < 31, "Metal buffer index exceeds the binding table");
+    // SAFETY: every call site uses this allocation according to its fixed
+    // shader ABI, the offset is zero, the index was validated, and the
+    // support-created command buffer retains bound resources to completion.
+    unsafe { encoder.setBuffer_offset_atIndex(Some(buffer), 0, index) };
+}
+
+pub(super) fn bind_ycbcr_params(
+    encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    index: usize,
+    params: &super::ycbcr::YcbcrToRgb8Params,
+) {
+    assert!(index < 31, "Metal byte index exceeds the binding table");
+    let pointer = std::ptr::NonNull::from(params).cast();
+    // SAFETY: `YcbcrToRgb8Params` is `repr(C)` with four initialized `u32`
+    // fields and no padding. Metal copies these bytes during this call, and
+    // the fixed shader ABI uses the same layout and binding index.
+    unsafe {
+        encoder.setBytes_length_atIndex(
+            pointer,
+            core::mem::size_of::<super::ycbcr::YcbcrToRgb8Params>(),
+            index,
+        )
+    };
+}
+
+#[cfg(test)]
+pub(super) fn bind_probe_coordinate(
+    encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    index: usize,
+    coordinate: &[u32; 2],
+) {
+    assert!(index < 31, "Metal byte index exceeds the binding table");
+    let pointer = std::ptr::NonNull::from(coordinate).cast();
+    // SAFETY: the two initialized `u32` values exactly match the probe
+    // shader's `uint2` value binding and Metal copies them synchronously.
+    unsafe { encoder.setBytes_length_atIndex(pointer, core::mem::size_of_val(coordinate), index) };
 }
 
 pub(super) fn submit_ycbcr_images(
-    device: &DeviceRef,
+    device: &ProtocolObject<dyn MTLDevice>,
     command_buffer: CommandBuffer,
-    outputs: Vec<(Buffer, MetalImageLayout)>,
+    outputs: Vec<(MetalBuffer, MetalImageLayout)>,
     inputs: Vec<ResidentMetalImage>,
 ) -> Result<SubmittedMetalImages, WsiError> {
     // SAFETY: the YCbCr converter passes fresh destination allocations, its
@@ -43,7 +102,7 @@ pub(super) fn submit_ycbcr_images(
 
 #[cfg(test)]
 pub(super) fn resident_test_image(
-    device: &DeviceRef,
+    device: &ProtocolObject<dyn MTLDevice>,
     bytes: &[u8],
     dimensions: (u32, u32),
     pitch_bytes: usize,
@@ -73,7 +132,7 @@ pub(crate) fn resident_bytes(image: &ResidentMetalImage) -> Vec<u8> {
 }
 
 #[cfg(test)]
-pub(super) fn u64_buffer_values(buffer: &Buffer, len: usize) -> Vec<u64> {
+pub(super) fn u64_buffer_values(buffer: &ProtocolObject<dyn MTLBuffer>, len: usize) -> Vec<u64> {
     // SAFETY: the test command buffer has completed and the shared output is
     // read only while this snapshot is created.
     unsafe { j2k_metal_support::checked_buffer_read_vec::<u64>(buffer, 0, len) }
@@ -89,7 +148,7 @@ impl MetalDeviceTile {
     /// ensure no surviving raw handle mutates the allocation while the tile or
     /// any clone remains alive.
     pub unsafe fn from_completed_buffer(
-        buffer: Buffer,
+        buffer: MetalBuffer,
         byte_offset: usize,
         width: u32,
         height: u32,
@@ -112,7 +171,7 @@ impl MetalDeviceTile {
     /// The contract is identical to [`MetalDeviceTile::from_completed_buffer`].
     #[deprecated(note = "use from_completed_buffer or the safe from_resident constructor")]
     pub unsafe fn from_buffer(
-        buffer: Buffer,
+        buffer: MetalBuffer,
         byte_offset: usize,
         width: u32,
         height: u32,
@@ -129,20 +188,14 @@ impl MetalDeviceTile {
     ///
     /// # Safety
     ///
-    /// Resident storage may be bound only for reads whose submission retains
-    /// this tile until completion. Legacy buffer storage remains untrusted and
-    /// requires the caller to establish all synchronization and aliasing rules.
-    #[allow(deprecated)]
-    pub unsafe fn raw_buffer(&self) -> (&Buffer, usize) {
+    /// The resident storage may be bound only for reads whose submission
+    /// retains this tile until completion.
+    pub unsafe fn raw_buffer(&self) -> (&ProtocolObject<dyn MTLBuffer>, usize) {
         match &self.storage {
             MetalDeviceStorage::Resident { image } => {
                 // SAFETY: the caller accepts the resident raw-read contract.
                 (unsafe { image.raw_buffer() }, image.byte_offset())
             }
-            MetalDeviceStorage::Buffer {
-                buffer,
-                byte_offset,
-            } => (buffer, *byte_offset),
         }
     }
 }

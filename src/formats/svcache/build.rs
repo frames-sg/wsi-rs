@@ -565,14 +565,14 @@ pub(super) fn cache_grid_for_level(level: &Level) -> (u32, u32, u64, u64) {
 }
 
 pub(super) fn write_tile_payload(file: &mut File, tile: &CpuTile) -> Result<TileMeta, WsiError> {
-    if tile.layout != CpuTileLayout::Interleaved || tile.data.sample_type() != SampleType::Uint8 {
-        return Err(WsiError::UnsupportedFormat(
-            ".svcache builder only supports interleaved uint8 display tiles".into(),
-        ));
-    }
-    let raw = tile.data.as_u8().ok_or_else(|| {
-        WsiError::UnsupportedFormat(".svcache builder expected uint8 tile data".into())
-    })?;
+    let raw = match (tile.layout, &tile.data) {
+        (CpuTileLayout::Interleaved, CpuTileData::U8(samples)) => samples.as_slice(),
+        _ => {
+            return Err(WsiError::UnsupportedFormat(
+                ".svcache builder only supports interleaved uint8 display tiles".into(),
+            ));
+        }
+    };
     let color_space = ColorSpaceMeta::try_from(&tile.color_space)?;
     let encoded = zstd::bulk::compress(raw, 1).map_err(|err| WsiError::Codec {
         codec: "svcache-zstd",

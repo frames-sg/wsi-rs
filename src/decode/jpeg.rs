@@ -6,8 +6,6 @@ mod tests;
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
 pub(crate) use device::decode_batch_jpeg_pixels;
-#[cfg(test)]
-pub(crate) use input::jpeg_tile_geometry;
 use input::{
     checked_jpeg_rgb_len, decode_jpeg_rgb_with_color_transform_and_patch,
     inspect_j2k_jpeg_output_size, j2k_downscale_for_dimensions, prepare_jpeg_input,
@@ -19,8 +17,6 @@ use std::borrow::Cow;
 
 use crate::core::types::{ColorSpace, CpuTile};
 use crate::error::WsiError;
-#[cfg(test)]
-use image::RgbaImage;
 use j2k_jpeg::{
     decode_tiles_into_with_options, decode_tiles_scaled_into_with_options,
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
@@ -35,7 +31,15 @@ use rayon::prelude::*;
 /// OOM from crafted JPEG headers with extreme dimensions.
 const MAX_JPEG_DECODE_BYTES: u64 = 512 * 1024 * 1024;
 const JPEG_MAX_DIMENSION: u16 = 65500;
-pub struct DecodedJpegRgb {
+
+pub(crate) const fn is_sof_marker(marker: u8) -> bool {
+    matches!(
+        marker,
+        0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
+    )
+}
+
+pub(crate) struct DecodedJpegRgb {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
@@ -80,55 +84,6 @@ struct PreparedBatchJpeg<'a> {
     scale: J2kDownscale,
 }
 
-/// Decode JPEG data to premultiplied RGBA (alpha=255 for all decoded pixels).
-///
-/// If `tables` is provided, it is prepended to `data` before decoding.
-/// Tables end with FFD9 (EOI), data starts with FFD8 (SOI).
-/// Strip EOI from tables, strip SOI from data, concatenate.
-#[cfg(test)]
-pub fn decode_jpeg(
-    data: &[u8],
-    tables: Option<&[u8]>,
-    expected_width: u32,
-    expected_height: u32,
-) -> Result<RgbaImage, WsiError> {
-    let decoded = decode_jpeg_rgb(data, tables, expected_width, expected_height)?;
-    let pixel_count = (decoded.width as usize)
-        .checked_mul(decoded.height as usize)
-        .ok_or_else(|| WsiError::Jpeg("pixel dimensions overflow".into()))?;
-    let rgba_size = pixel_count
-        .checked_mul(4)
-        .ok_or_else(|| WsiError::Jpeg("RGBA buffer size overflow".into()))?;
-    let mut rgba_buf = vec![255u8; rgba_size];
-    for (rgb, rgba) in decoded
-        .pixels
-        .chunks_exact(3)
-        .zip(rgba_buf.chunks_exact_mut(4))
-    {
-        rgba[0] = rgb[0];
-        rgba[1] = rgb[1];
-        rgba[2] = rgb[2];
-    }
-    RgbaImage::from_raw(decoded.width, decoded.height, rgba_buf)
-        .ok_or_else(|| WsiError::Jpeg("failed to create RgbaImage".into()))
-}
-
-#[cfg(test)]
-pub fn decode_jpeg_rgb(
-    data: &[u8],
-    tables: Option<&[u8]>,
-    expected_width: u32,
-    expected_height: u32,
-) -> Result<DecodedJpegRgb, WsiError> {
-    decode_jpeg_rgb_with_color_transform(
-        data,
-        tables,
-        expected_width,
-        expected_height,
-        J2kColorTransform::Auto,
-    )
-}
-
 pub(crate) fn decode_jpeg_rgb_with_size_override(
     data: &[u8],
     tables: Option<&[u8]>,
@@ -150,7 +105,7 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
 
     match (requested_width, requested_height) {
         (Some(requested_width), Some(requested_height)) => {
-            try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
+            match try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
                 data,
                 tables,
                 expected_width: image_width,
@@ -159,23 +114,20 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
                 requested_height,
                 force_dimensions: true,
                 color_transform,
-            })?
-            .map_or_else(
-                || {
-                    decode_jpeg_rgb_with_color_transform_and_patch(
+            })? {
+                Some(decoded) => Ok(decoded),
+                None => {
+                    let decoded = decode_jpeg_rgb_with_color_transform_and_patch(
                         data,
                         tables,
                         image_width,
                         image_height,
                         true,
                         color_transform,
-                    )
-                    .and_then(|decoded| {
-                        resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
-                    })
-                },
-                Ok,
-            )
+                    )?;
+                    resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
+                }
+            }
         }
         _ => decode_jpeg_rgb_with_color_transform_and_patch(
             data,
@@ -344,7 +296,7 @@ pub(super) fn decode_one_jpeg_job(job: &JpegDecodeJob<'_>) -> Result<CpuTile, Ws
             job.color_transform,
         )
     } else if let Some((requested_width, requested_height)) = job.requested_size {
-        try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
+        match try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
             data: job.data.as_ref(),
             tables: job.tables.as_deref(),
             expected_width: job.expected_width,
@@ -353,22 +305,19 @@ pub(super) fn decode_one_jpeg_job(job: &JpegDecodeJob<'_>) -> Result<CpuTile, Ws
             requested_height,
             force_dimensions: false,
             color_transform: job.color_transform,
-        })?
-        .map_or_else(
-            || {
-                decode_jpeg_rgb_with_color_transform(
+        })? {
+            Some(decoded) => Ok(decoded),
+            None => {
+                let decoded = decode_jpeg_rgb_with_color_transform(
                     job.data.as_ref(),
                     job.tables.as_deref(),
                     job.expected_width,
                     job.expected_height,
                     job.color_transform,
-                )
-                .and_then(|decoded| {
-                    resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
-                })
-            },
-            Ok,
-        )
+                )?;
+                resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
+            }
+        }
     } else {
         decode_jpeg_rgb_with_color_transform(
             job.data.as_ref(),

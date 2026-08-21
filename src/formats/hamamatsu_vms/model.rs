@@ -63,15 +63,3 @@ pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError
         message: message.into(),
     }
 }
-
-pub(super) fn dataset_id_from_quickhash(
-    path: &Path,
-    quickhash: &str,
-) -> Result<DatasetId, WsiError> {
-    if quickhash.len() < 32 {
-        return Err(invalid_slide(path, "quickhash too short"));
-    }
-    let value = u128::from_str_radix(&quickhash[..32], 16)
-        .map_err(|_| invalid_slide(path, "quickhash is not valid hex"))?;
-    Ok(DatasetId::new(value))
-}

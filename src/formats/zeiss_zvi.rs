@@ -6,6 +6,9 @@ mod slide;
 mod tags;
 mod tiles;
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -16,7 +19,7 @@ use cfb::CompoundFile;
 use flate2::read::ZlibDecoder;
 use image::ImageFormat;
 
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
 };
@@ -44,44 +47,24 @@ impl FormatProbe for ZeissZviBackend {
         let mut file = match File::open(path) {
             Ok(file) => file,
             Err(_) => {
-                return Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                });
+                return Ok(ProbeResult::not_detected(""));
             }
         };
         if file.read_exact(&mut magic).is_err() || magic != *CFB_MAGIC {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected(""));
         }
 
         let mut compound = match cfb::open(path) {
             Ok(compound) => compound,
             Err(_) => {
-                return Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                });
+                return Ok(ProbeResult::not_detected(""));
             }
         };
         if !looks_like_zvi(&mut compound) {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected(""));
         }
 
-        Ok(ProbeResult {
-            detected: true,
-            vendor: "zeiss".into(),
-            confidence: ProbeConfidence::Definite,
-        })
+        Ok(ProbeResult::detected("zeiss", ProbeConfidence::Definite))
     }
 }
 

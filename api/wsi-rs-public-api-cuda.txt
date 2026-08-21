@@ -216,17 +216,18 @@ pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
 pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
 pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::height(&self) -> u32
-pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
 pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<alloc::vec::Vec<u8>>>
 pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::width(&self) -> u32
 #[non_exhaustive] pub struct wsi_rs::prelude::Dataset
 pub wsi_rs::prelude::Dataset::associated_images: std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>
 pub wsi_rs::prelude::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>
@@ -658,17 +659,18 @@ pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
 pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
 pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::height(&self) -> u32
-pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
 pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<alloc::vec::Vec<u8>>>
 pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::width(&self) -> u32
 #[non_exhaustive] pub struct wsi_rs::CudaDeviceTile
 pub wsi_rs::CudaDeviceTile::format: wsi_rs::PixelFormat
 pub wsi_rs::CudaDeviceTile::height: u32

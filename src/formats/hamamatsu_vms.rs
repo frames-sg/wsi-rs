@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{read_file_bounded, MAX_COMPRESSED_INPUT_BYTES};
 use crate::core::registry::{
     read_cpu_tiles_with_backend, ConfiguredDatasetReader, ConfiguredFormatProbe,
@@ -97,19 +97,11 @@ impl ConfiguredFormatProbe for HamamatsuVmsBackend {
         let ini = match parse_vms_ini(path) {
             Ok(ini) => ini,
             Err(_) => {
-                return Ok(ProbeResult {
-                    detected: false,
-                    vendor: String::new(),
-                    confidence: ProbeConfidence::Likely,
-                });
+                return Ok(ProbeResult::not_detected(""));
             }
         };
         let Some(group) = ini.groups.get(GROUP_VMS) else {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected(""));
         };
         let cols = group
             .get(KEY_NUM_JPEG_COLS)
@@ -120,29 +112,23 @@ impl ConfiguredFormatProbe for HamamatsuVmsBackend {
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(0);
         if cols == 0 || rows == 0 {
-            return Ok(ProbeResult {
-                detected: false,
-                vendor: String::new(),
-                confidence: ProbeConfidence::Likely,
-            });
+            return Ok(ProbeResult::not_detected(""));
         }
 
         let key = FileIdentity::from_path(path)?;
         if self.probe_cache.get(&key, cache_config).is_some() {
-            return Ok(ProbeResult {
-                detected: true,
-                vendor: "hamamatsu".into(),
-                confidence: ProbeConfidence::Definite,
-            });
+            return Ok(ProbeResult::detected(
+                "hamamatsu",
+                ProbeConfidence::Definite,
+            ));
         }
         let slide = self.parse_with_cache_config(path, cache_config)?;
         self.probe_cache.insert(key, cache_config, slide);
 
-        Ok(ProbeResult {
-            detected: true,
-            vendor: "hamamatsu".into(),
-            confidence: ProbeConfidence::Definite,
-        })
+        Ok(ProbeResult::detected(
+            "hamamatsu",
+            ProbeConfidence::Definite,
+        ))
     }
 }
 

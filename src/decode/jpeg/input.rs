@@ -8,9 +8,9 @@ use j2k_jpeg::{
     JpegError as J2kJpegError, JpegView, PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
 };
 
-#[cfg(test)]
-use super::JpegTileGeometry;
-use super::{DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES};
+use super::{
+    is_sof_marker, DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES,
+};
 
 pub(super) fn checked_jpeg_preparation_len(
     data_len: usize,
@@ -24,11 +24,9 @@ pub(super) fn checked_jpeg_preparation_len(
             requested: u64::MAX,
             limit: MAX_COMPRESSED_INPUT_BYTES,
         })?;
-    let requested_u64 = u64::try_from(requested).map_err(|_| WsiError::ResourceLimit {
-        resource: "prepared JPEG input",
-        requested: u64::MAX,
-        limit: MAX_COMPRESSED_INPUT_BYTES,
-    })?;
+    // Rust's supported address spaces are at most 64 bits, so every `usize`
+    // value has an exact `u64` representation.
+    let requested_u64 = requested as u64;
     if requested_u64 > MAX_COMPRESSED_INPUT_BYTES {
         return Err(WsiError::ResourceLimit {
             resource: "prepared JPEG input",
@@ -229,7 +227,12 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
     };
     let (pixels, outcome) = match decode_result {
         Ok(decoded) => decoded,
-        Err(err) if should_retry_scaled_jpeg_as_full_decode(&err) => return Ok(None),
+        Err(
+            J2kJpegError::DownscaleUnsupported { .. }
+            | J2kJpegError::NotImplemented {
+                sof: J2kSofKind::Progressive8,
+            },
+        ) => return Ok(None),
         Err(err) => return Err(WsiError::Jpeg(err.to_string())),
     };
     let decoded = if scale == J2kDownscale::None {
@@ -252,155 +255,9 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
     )?))
 }
 
-fn should_retry_scaled_jpeg_as_full_decode(err: &J2kJpegError) -> bool {
-    matches!(
-        err,
-        J2kJpegError::DownscaleUnsupported { .. }
-            | J2kJpegError::NotImplemented {
-                sof: J2kSofKind::Progressive8
-            }
-    )
-}
-
 pub(crate) fn jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), WsiError> {
     let info = J2kJpegDecoder::inspect(data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     Ok(info.dimensions)
-}
-
-#[cfg(test)]
-pub(crate) fn jpeg_tile_geometry(data: &[u8]) -> Result<JpegTileGeometry, WsiError> {
-    let header = parse_jpeg_tile_header(data)?;
-    let restart_interval = header.restart_interval;
-    let mcu_width = u32::from(header.max_h) * 8;
-    let mcu_height = u32::from(header.max_v) * 8;
-    let mcus_per_row = header.width.div_ceil(mcu_width as u16);
-    if restart_interval > mcus_per_row {
-        return Err(WsiError::Jpeg(format!(
-            "JPEG restart interval {} exceeds MCUs per row {}",
-            restart_interval, mcus_per_row
-        )));
-    }
-    if mcus_per_row % restart_interval != 0 {
-        return Err(WsiError::Jpeg(
-            "JPEG restart interval does not divide MCUs per row".into(),
-        ));
-    }
-
-    Ok(JpegTileGeometry {
-        width: header.width as u32,
-        height: header.height as u32,
-        tile_width: mcu_width * u32::from(restart_interval),
-        tile_height: mcu_height,
-    })
-}
-
-#[cfg(test)]
-struct ParsedJpegTileHeader {
-    width: u16,
-    height: u16,
-    restart_interval: u16,
-    max_h: u8,
-    max_v: u8,
-}
-
-#[cfg(test)]
-fn parse_jpeg_tile_header(data: &[u8]) -> Result<ParsedJpegTileHeader, WsiError> {
-    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
-        return Err(WsiError::Jpeg("JPEG missing SOI marker".into()));
-    }
-
-    let mut i = 2usize;
-    let mut width = None;
-    let mut height = None;
-    let mut restart_interval = None;
-    let mut max_h = 1u8;
-    let mut max_v = 1u8;
-
-    while i + 1 < data.len() {
-        if data[i] != 0xFF {
-            return Err(WsiError::Jpeg(format!(
-                "expected JPEG marker at byte {i}, found {:02X}",
-                data[i]
-            )));
-        }
-
-        while i < data.len() && data[i] == 0xFF {
-            i += 1;
-        }
-        if i >= data.len() {
-            break;
-        }
-        let marker = data[i];
-        i += 1;
-
-        match marker {
-            0xD9 | 0xDA => break,
-            0x00 | 0xD0..=0xD7 => continue,
-            _ => {}
-        }
-
-        if i + 1 >= data.len() {
-            return Err(WsiError::Jpeg(format!(
-                "truncated JPEG marker length for marker FF{:02X}",
-                marker
-            )));
-        }
-        let seg_len = u16::from_be_bytes([data[i], data[i + 1]]) as usize;
-        if seg_len < 2 || i + seg_len > data.len() {
-            return Err(WsiError::Jpeg(format!(
-                "invalid JPEG segment length {} for marker FF{:02X}",
-                seg_len, marker
-            )));
-        }
-        let payload = &data[i + 2..i + seg_len];
-
-        if is_sof_marker(marker) {
-            if payload.len() < 6 {
-                return Err(WsiError::Jpeg("JPEG SOF segment too short".into()));
-            }
-            height = Some(u16::from_be_bytes([payload[1], payload[2]]));
-            width = Some(u16::from_be_bytes([payload[3], payload[4]]));
-            let component_count = payload[5] as usize;
-            let components = &payload[6..];
-            if components.len() < component_count * 3 {
-                return Err(WsiError::Jpeg("JPEG SOF component table too short".into()));
-            }
-            for component in components.chunks_exact(3).take(component_count) {
-                let sampling = component[1];
-                max_h = max_h.max(sampling >> 4);
-                max_v = max_v.max(sampling & 0x0F);
-            }
-        } else if marker == 0xDD {
-            if payload.len() < 2 {
-                return Err(WsiError::Jpeg("JPEG DRI segment too short".into()));
-            }
-            restart_interval = Some(u16::from_be_bytes([payload[0], payload[1]]));
-        }
-
-        i += seg_len;
-    }
-
-    let width = width.ok_or_else(|| WsiError::Jpeg("JPEG missing SOF marker".into()))?;
-    let height = height.ok_or_else(|| WsiError::Jpeg("JPEG missing SOF marker".into()))?;
-    let restart_interval = restart_interval.unwrap_or(0);
-    if restart_interval == 0 {
-        return Err(WsiError::Jpeg("JPEG missing restart markers".into()));
-    }
-
-    Ok(ParsedJpegTileHeader {
-        width,
-        height,
-        restart_interval,
-        max_h,
-        max_v,
-    })
-}
-
-fn is_sof_marker(marker: u8) -> bool {
-    matches!(
-        marker,
-        0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
-    )
 }
 
 pub(super) fn ensure_jpeg_eoi<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
@@ -430,16 +287,17 @@ pub(super) fn inspect_j2k_jpeg_output_size(input: &[u8]) -> Result<(u32, u32), W
 }
 
 pub(super) fn checked_jpeg_rgb_len(width: u32, height: u32) -> Result<usize, WsiError> {
-    let bytes = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(3))
+    // A pair of `u32` dimensions always multiplies exactly in `u64`.
+    let pixels = u64::from(width) * u64::from(height);
+    let bytes = pixels
+        .checked_mul(3)
         .ok_or_else(|| WsiError::Jpeg("JPEG decode size overflow".into()))?;
     if bytes > MAX_JPEG_DECODE_BYTES {
         return Err(WsiError::Jpeg(format!(
             "JPEG decode size {bytes} bytes exceeds {MAX_JPEG_DECODE_BYTES} byte limit"
         )));
     }
-    usize::try_from(bytes).map_err(|_| WsiError::Jpeg("JPEG decode size overflow".into()))
+    Ok(usize::try_from(bytes).expect("the 512 MiB JPEG limit fits supported usize targets"))
 }
 
 pub(super) fn crop_jpeg_rgb_to_expected(
@@ -475,9 +333,8 @@ pub(super) fn resize_jpeg_rgb_nearest(
     requested_width: u32,
     requested_height: u32,
 ) -> Result<DecodedJpegRgb, WsiError> {
-    let pixel_count = u64::from(requested_width)
-        .checked_mul(u64::from(requested_height))
-        .ok_or_else(|| WsiError::Jpeg("scaled JPEG dimensions overflow".into()))?;
+    // A pair of `u32` dimensions always multiplies exactly in `u64`.
+    let pixel_count = u64::from(requested_width) * u64::from(requested_height);
     let len = pixel_count
         .checked_mul(3)
         .ok_or_else(|| WsiError::Jpeg("scaled JPEG buffer size overflow".into()))?;

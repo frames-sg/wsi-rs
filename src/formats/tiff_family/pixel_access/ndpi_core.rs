@@ -2,10 +2,7 @@ use super::*;
 
 impl TiffPixelReader {
     pub(super) fn get_cached_ndpi_strip(&self, strip_key: NdpiStripKey) -> Option<Arc<CpuTile>> {
-        self.ndpi_strip_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&strip_key)
+        self.ndpi_strip_cache.get(&strip_key)
     }
 
     pub(super) fn clamp_ndpi_strip_crop(
@@ -73,39 +70,39 @@ impl TiffPixelReader {
         any_outside_relative_strip && any_normalized_inside_strip
     }
 
-    fn normalize_ndpi_mcu_start(start: u64, file_absolute: bool, strip_offset: u64) -> u64 {
-        if file_absolute {
-            start.saturating_sub(strip_offset)
-        } else {
-            start
-        }
-    }
-
     pub(super) fn ndpi_mcu_starts(
         &self,
         ifd_id: IfdId,
         mcu_starts_tag: u16,
+        strip_offset: u64,
+        strip_byte_count: u64,
     ) -> Result<Arc<Vec<u64>>, WsiError> {
+        let cache_key = (ifd_id, mcu_starts_tag, strip_offset, strip_byte_count);
         if let Some(starts) = self
             .ndpi_mcu_starts_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&(ifd_id, mcu_starts_tag))
+            .get(&cache_key)
             .cloned()
         {
             return Ok(starts);
         }
 
-        let starts = Arc::new(
-            self.container
-                .get_u64_array(ifd_id, mcu_starts_tag)
-                .map_err(|e| e.into_wsi_error(self.container.path()))?
-                .to_vec(),
-        );
+        let mut starts = self
+            .container
+            .get_u64_array(ifd_id, mcu_starts_tag)
+            .map_err(|e| e.into_wsi_error(self.container.path()))?
+            .to_vec();
+        if Self::ndpi_mcu_starts_are_file_absolute(&starts, strip_offset, strip_byte_count) {
+            for start in &mut starts {
+                *start = start.saturating_sub(strip_offset);
+            }
+        }
+        let starts = Arc::new(starts);
         self.ndpi_mcu_starts_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert((ifd_id, mcu_starts_tag), starts.clone());
+            .insert(cache_key, starts.clone());
         Ok(starts)
     }
 
@@ -433,7 +430,8 @@ impl TiffPixelReader {
         let strip_width =
             virtual_tile_width.min(level_width.saturating_sub(strip_key.col * virtual_tile_width));
 
-        let mcu_starts = self.ndpi_mcu_starts(ifd_id, mcu_starts_tag)?;
+        let mcu_starts =
+            self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
 
         let idx =
             (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
@@ -450,28 +448,14 @@ impl TiffPixelReader {
             });
         }
 
-        let file_absolute_mcu_starts = Self::ndpi_mcu_starts_are_file_absolute(
-            mcu_starts.as_slice(),
-            strip_offset,
-            strip_byte_count,
-        );
-
-        let segment_start = Self::normalize_ndpi_mcu_start(
-            *mcu_starts.get(idx).ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("NDPI MCU-starts index {idx} out of range"),
-            })?,
-            file_absolute_mcu_starts,
-            strip_offset,
-        );
+        let segment_start = *mcu_starts.get(idx).ok_or_else(|| WsiError::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason: format!("NDPI MCU-starts index {idx} out of range"),
+        })?;
         let next_segment_start = if idx + 1 < mcu_starts.len() {
-            Some(Self::normalize_ndpi_mcu_start(
-                mcu_starts[idx + 1],
-                file_absolute_mcu_starts,
-                strip_offset,
-            ))
+            Some(mcu_starts[idx + 1])
         } else {
             None
         };
@@ -670,93 +654,25 @@ impl TiffPixelReader {
         level_width: u32,
         level_height: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        if let Some(strip) = {
-            let mut cache = self
-                .ndpi_strip_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.get(&strip_key)
-        } {
-            return Ok(strip);
-        }
-
-        let mut flights = self
-            .ndpi_strip_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut registered_waiter = false;
-        loop {
-            match flights.get_mut(&strip_key) {
-                Some(flight) => {
-                    if !registered_waiter {
-                        flight.waiters += 1;
-                        registered_waiter = true;
-                    }
-                    if let Some(result) = flight.result.clone() {
-                        flight.waiters -= 1;
-                        if flight.waiters == 0 {
-                            flights.remove(&strip_key);
-                        }
-                        return result.map_err(|reason| Self::ndpi_full_decode_error(req, reason));
-                    }
-                    flights = self
-                        .ndpi_strip_ready
-                        .wait(flights)
-                        .unwrap_or_else(|e| e.into_inner());
-                }
-                None if registered_waiter => {
-                    return Err(Self::ndpi_full_decode_error(
-                        req,
-                        format!("NDPI strip decode flight for {:?} disappeared", strip_key),
-                    ));
-                }
-                None => {
-                    flights.insert(strip_key, NdpiStripFlight::default());
-                    break;
-                }
-            }
-        }
-        drop(flights);
-
-        let decode_result = self
-            .decode_ndpi_strip(
-                req,
-                ifd_id,
-                jpeg_header,
-                mcu_starts_tag,
-                tiles_across,
-                tiles_down,
-                strip_offset,
-                strip_byte_count,
-                strip_key,
-                virtual_tile_width,
-                virtual_tile_height,
-                level_width,
-                level_height,
-            )
-            .map_err(|err| err.to_string());
-
-        if let Ok(strip) = decode_result.as_ref() {
-            let mut cache = self
-                .ndpi_strip_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            cache.put(strip_key, strip.clone());
-        }
-
-        let mut flights = self
-            .ndpi_strip_flights
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(flight) = flights.get_mut(&strip_key) {
-            flight.result = Some(decode_result.clone());
-            if flight.waiters == 0 {
-                flights.remove(&strip_key);
-            }
-        }
-        drop(flights);
-        self.ndpi_strip_ready.notify_all();
-
-        decode_result.map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+        self.ndpi_strip_cache
+            .get_or_try_insert_with(strip_key, || {
+                self.decode_ndpi_strip(
+                    req,
+                    ifd_id,
+                    jpeg_header,
+                    mcu_starts_tag,
+                    tiles_across,
+                    tiles_down,
+                    strip_offset,
+                    strip_byte_count,
+                    strip_key,
+                    virtual_tile_width,
+                    virtual_tile_height,
+                    level_width,
+                    level_height,
+                )
+                .map_err(|err| err.to_string())
+            })
+            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
 }

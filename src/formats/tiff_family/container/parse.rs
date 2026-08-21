@@ -82,7 +82,7 @@ impl ParseReader {
 
 impl TiffContainer {
     /// Open and parse a TIFF or BigTIFF file.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, TiffParseError> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self, TiffParseError> {
         let started = Instant::now();
         let path = path.as_ref();
         let file = std::fs::File::open(path)?;
@@ -403,7 +403,7 @@ impl TiffContainer {
     /// Parse SubIFDs referenced by tag 330 in an IFD.
     /// Adds newly discovered IFDs to the global arena. Deduplicates by offset.
     #[cfg(test)]
-    pub fn materialize_sub_ifds(
+    pub(crate) fn materialize_sub_ifds(
         &mut self,
         parent_ifd_id: IfdId,
         max_depth: u32,
@@ -414,7 +414,10 @@ impl TiffContainer {
     }
 
     #[cfg(test)]
-    pub fn materialize_all_sub_ifds(&mut self, max_depth: u32) -> Result<(), TiffParseError> {
+    pub(crate) fn materialize_all_sub_ifds(
+        &mut self,
+        max_depth: u32,
+    ) -> Result<(), TiffParseError> {
         let root_ids = self.top_ifds.clone();
         let mut reader = self.open_parse_reader()?;
         for root_id in root_ids {

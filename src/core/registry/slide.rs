@@ -11,6 +11,39 @@ pub struct Slide {
     decode_runtime: Arc<DecodeRuntime>,
 }
 
+#[derive(Clone, Copy)]
+struct TileReadTraceOutcome {
+    fallback_to_cpu: bool,
+    fallback_reason: &'static str,
+    device_decoded_host_resident: bool,
+}
+
+impl TileReadTraceOutcome {
+    fn classify(result: &Result<TilePixels, WsiError>, device_decode_attempted: bool) -> Self {
+        let (fallback_to_cpu, fallback_reason) = match result {
+            Ok(TilePixels::Cpu(_)) if device_decode_attempted => (true, "j2k_auto_chose_cpu"),
+            Err(WsiError::Unsupported { .. }) if device_decode_attempted => {
+                (true, "no_device_backend_for_codec")
+            }
+            _ => (false, "none"),
+        };
+        Self {
+            fallback_to_cpu,
+            fallback_reason,
+            device_decoded_host_resident: false,
+        }
+    }
+
+    fn record(self, span: &tracing::Span) {
+        span.record("fallback_to_cpu", self.fallback_to_cpu);
+        span.record("fallback_reason", self.fallback_reason);
+        span.record(
+            "device_decoded_host_resident",
+            self.device_decoded_host_resident,
+        );
+    }
+}
+
 impl std::fmt::Debug for Slide {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Slide")
@@ -161,17 +194,7 @@ impl Slide {
     }
 
     pub fn cached_tile_present(&self, req: &TileRequest) -> bool {
-        let key = CacheKey {
-            dataset_id: self.dataset().id,
-            scene: req.scene.get() as u32,
-            series: req.series.get() as u32,
-            level: req.level.get(),
-            z: req.plane.get().z,
-            c: req.plane.get().c,
-            t: req.plane.get().t,
-            tile_col: req.col,
-            tile_row: req.row,
-        };
+        let key = CacheKey::from_tile_request(self.dataset().id, req);
         self.shared_tile_cache().get(&key).is_some()
     }
 
@@ -197,45 +220,13 @@ impl Slide {
         );
         let _guard = span.enter();
         let result = self.source.read_tile(req, output);
-        let mut fallback_to_cpu = false;
-        let mut fallback_reason = "none";
-        let device_decoded_host_resident = false;
-        match &result {
-            Ok(TilePixels::Cpu(_)) if device_decode_attempted => {
-                fallback_to_cpu = true;
-                fallback_reason = "j2k_auto_chose_cpu";
-                span.record("fallback_to_cpu", true);
-                span.record("fallback_reason", fallback_reason);
-                span.record("device_decoded_host_resident", false);
-            }
-            Ok(TilePixels::Cpu(_)) => {
-                span.record("fallback_to_cpu", false);
-                span.record("fallback_reason", "none");
-                span.record("device_decoded_host_resident", false);
-            }
-            Ok(TilePixels::Device(_)) => {
-                span.record("fallback_to_cpu", false);
-                span.record("fallback_reason", "none");
-                span.record("device_decoded_host_resident", false);
-            }
-            Err(WsiError::Unsupported { .. }) if device_decode_attempted => {
-                fallback_to_cpu = true;
-                fallback_reason = "no_device_backend_for_codec";
-                span.record("fallback_to_cpu", true);
-                span.record("fallback_reason", fallback_reason);
-                span.record("device_decoded_host_resident", false);
-            }
-            Err(_) => {
-                span.record("fallback_to_cpu", false);
-                span.record("fallback_reason", "none");
-                span.record("device_decoded_host_resident", false);
-            }
-        }
+        let outcome = TileReadTraceOutcome::classify(&result, device_decode_attempted);
+        outcome.record(&span);
         tracing::debug!(
             device_decode_attempted,
-            fallback_to_cpu,
-            fallback_reason,
-            device_decoded_host_resident,
+            fallback_to_cpu = outcome.fallback_to_cpu,
+            fallback_reason = outcome.fallback_reason,
+            device_decoded_host_resident = outcome.device_decoded_host_resident,
             "wsi tile output preference resolved"
         );
         result
@@ -314,33 +305,44 @@ impl Slide {
         )
     }
 
-    pub fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
-        // For Regular tile layouts, route through the generic composition path
-        // with cache so intermediate tile reads are reused. For WholeLevel and
-        // Irregular layouts, delegate to the source's override which may have
-        // format-specific fast paths (e.g. NDPI MCU-level JPEG access).
-        let is_regular = self
-            .source
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|s| s.series.get(req.series.get()))
-            .and_then(|s| s.levels.get(req.level.get() as usize))
-            .is_some_and(|level| matches!(level.tile_layout, TileLayout::Regular { .. }));
-        if is_regular {
-            let display_cache = self
-                .source
-                .use_display_tile_cache(req)
-                .then_some(self.display_cache.as_ref());
-            read_display_tile_from_source(
-                self.source.as_ref(),
-                display_cache,
-                req,
-                TileOutputPreference::cpu(),
-            )
-        } else {
-            self.source.read_display_tile(req)
+    /// Read a region whose origin includes a fractional level-pixel offset.
+    ///
+    /// This is the compatibility boundary for APIs such as OpenSlide that
+    /// express reduced-level reads in level-0 coordinates. `offset_px` must be
+    /// finite and lie in `[0, 1)` on both axes; it is added to
+    /// [`RegionRequest::origin_px`] before tile composition. A nonzero offset
+    /// returns RGBA8 so the interpolation coverage remains available to
+    /// callers that require premultiplied output.
+    pub fn read_region_subpixel(
+        &self,
+        req: &RegionRequest,
+        offset_px: (f64, f64),
+    ) -> Result<CpuTile, WsiError> {
+        if !valid_subpixel_offset(offset_px.0) || !valid_subpixel_offset(offset_px.1) {
+            return Err(WsiError::DisplayConversion(format!(
+                "subpixel offset must be finite and in [0, 1), got ({}, {})",
+                offset_px.0, offset_px.1
+            )));
         }
+        if offset_px == (0.0, 0.0) {
+            return self.read_region(req);
+        }
+
+        let cache = self.shared_tile_cache();
+        composite_fractional_region_from_source(
+            self.source.as_ref(),
+            Some(cache.as_ref()),
+            req,
+            (
+                req.origin_px.0 as f64 + offset_px.0,
+                req.origin_px.1 as f64 + offset_px.1,
+            ),
+            self.max_region_pixels,
+        )
+    }
+
+    pub fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
+        self.read_display_tile_impl(req, TileOutputPreference::cpu())
     }
 
     pub fn read_display_tile_with_output(
@@ -348,6 +350,18 @@ impl Slide {
         req: &TileViewRequest,
         output: TileOutputPreference,
     ) -> Result<CpuTile, WsiError> {
+        self.read_display_tile_impl(req, output)
+    }
+
+    fn read_display_tile_impl(
+        &self,
+        req: &TileViewRequest,
+        output: TileOutputPreference,
+    ) -> Result<CpuTile, WsiError> {
+        // For Regular tile layouts, route through the generic composition path
+        // with cache so intermediate tile reads are reused. For WholeLevel and
+        // Irregular layouts, delegate to the source's override which may have
+        // format-specific fast paths (e.g. NDPI MCU-level JPEG access).
         let is_regular = self
             .source
             .dataset()
@@ -394,3 +408,10 @@ impl Slide {
         self.source.read_associated(name)
     }
 }
+
+fn valid_subpixel_offset(value: f64) -> bool {
+    value.is_finite() && (0.0..1.0).contains(&value)
+}
+
+#[cfg(test)]
+mod tests;

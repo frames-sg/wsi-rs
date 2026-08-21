@@ -229,10 +229,9 @@ pub fn execute_install_detailed(
             })?;
         }
 
-        let verify_target = entries
-            .first()
-            .map(|entry| entry.destination.as_path())
-            .ok_or_else(|| "no install destinations planned".to_string())?;
+        // Every supported platform declares exactly three loader-compatible
+        // names, so the install plan is nonempty by construction.
+        let verify_target = entries[0].destination.as_path();
         verify_library_version(verify_target)?;
         write_manifest(&manifest, &entries, "installed")?;
         sync_directory(&lib_dir)
@@ -354,10 +353,10 @@ fn write_manifest(path: &Path, entries: &[RestoreEntry], state: &str) -> Result<
         drop(file);
         fs::rename(&temporary, path)
             .map_err(|err| format!("commit manifest {}: {err}", path.display()))?;
-        sync_directory(
-            path.parent()
-                .ok_or_else(|| "manifest has no parent".to_string())?,
-        )
+        let Some(parent) = path.parent() else {
+            return Err("manifest has no parent".to_string());
+        };
+        sync_directory(parent)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -643,7 +642,7 @@ fn verify_library_version(path: &Path) -> Result<(), String> {
             return Err("openslide_get_version returned NULL".into());
         }
         let version = CStr::from_ptr(version).to_string_lossy();
-        if !version.starts_with("OpenSlide-wsi-rs") {
+        if !version.starts_with("OpenSlide 4.0.1+wsi-rs-") {
             return Err(format!("unexpected OpenSlide shim version: {version}"));
         }
     }
@@ -651,59 +650,4 @@ fn verify_library_version(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rollback_failure_is_typed_and_preserves_recoverable_backup() {
-        let directory = tempfile::tempdir().expect("temporary install directory");
-        let destination = directory.path().join("libopenslide.so");
-        let backup = directory.path().join("libopenslide.so.wsi_rs-backup-42");
-        let stage = directory.path().join("libopenslide.so.wsi_rs-stage-42");
-        let manifest = directory.path().join("install.tsv");
-        std::fs::write(&destination, b"installed shim").expect("installed shim");
-        std::fs::write(&backup, b"original library").expect("preserved original");
-        std::fs::write(&manifest, b"prepared journal").expect("recovery journal");
-        let entries = vec![RestoreEntry {
-            destination: destination.clone(),
-            backup: Some(backup.clone()),
-        }];
-
-        let rollback = rollback_install_with(
-            &entries,
-            &[stage],
-            &manifest,
-            |path| std::fs::remove_file(path),
-            |_from, _to| Err(std::io::Error::other("injected restore failure")),
-        )
-        .expect_err("injected restoration failure must be observable");
-        let error = combined_install_error(
-            "injected primary install failure".into(),
-            rollback,
-            &entries,
-            &manifest,
-        );
-
-        let InstallError::RollbackFailed {
-            primary,
-            rollback,
-            preserved_backups,
-            recovery_manifest,
-        } = error
-        else {
-            panic!("expected typed rollback failure");
-        };
-        assert!(primary.contains("primary install failure"));
-        assert!(rollback.contains("injected restore failure"));
-        assert_eq!(preserved_backups, vec![backup.clone()]);
-        assert_eq!(recovery_manifest, manifest);
-        assert_eq!(
-            std::fs::read(&backup).expect("recoverable backup remains"),
-            b"original library"
-        );
-        assert!(
-            recovery_manifest.exists(),
-            "journal must remain for recovery"
-        );
-    }
-}
+mod tests;

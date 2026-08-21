@@ -32,3 +32,7 @@ metadata, `read_region`, properties, associated images, ICC defaults, and cache
 compatibility hooks. Cache handles own byte-bounded shared caches; attaching a
 cache clones its owner into the slide, so releasing the C cache handle does not
 invalidate slides that still use it.
+
+`openslide_get_version()` reports `OpenSlide 4.0.1+wsi-rs-<shim-version>`.
+The OpenSlide prefix identifies the compatibility target; the suffix identifies
+the exact shim package release.

@@ -13,6 +13,10 @@ fn fixture_path() -> CString {
     CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
 }
 
+/// # Safety
+///
+/// `ptr` must be non-null and point to a live NUL-terminated C string for the
+/// duration of the copy.
 unsafe fn c_string(ptr: *const std::os::raw::c_char) -> String {
     // SAFETY: Test callers only pass non-null pointers returned by the shim;
     // each points to a static or handle-owned NUL-terminated C string.
@@ -72,6 +76,16 @@ fn unsupported_file_returns_null_without_error_handle() {
 }
 
 #[test]
+fn version_reports_openslide_4_0_1_and_shim_package_version() {
+    // SAFETY: `openslide_get_version` returns a static NUL-terminated string.
+    let version = unsafe { c_string(openslide_get_version()) };
+    assert_eq!(
+        version,
+        concat!("OpenSlide 4.0.1+wsi-rs-", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn opens_supported_slide_and_exposes_core_metadata() {
     let path = fixture_path();
 
@@ -85,7 +99,6 @@ fn opens_supported_slide_and_exposes_core_metadata() {
         let osr = openslide_open(path.as_ptr());
         assert!(!osr.is_null());
         assert!(openslide_get_error(osr).is_null());
-        assert!(c_string(openslide_get_version()).starts_with("OpenSlide-wsi-rs"));
 
         assert_eq!(openslide_get_level_count(osr), 1);
         let mut w = 0;
@@ -122,6 +135,28 @@ fn opens_supported_slide_and_exposes_core_metadata() {
         assert!(argb.iter().any(|pixel| *pixel != 0));
         assert!(argb.iter().all(|pixel| (pixel >> 24) == 0xff));
 
+        openslide_close(osr);
+    }
+}
+
+#[test]
+fn read_region_keeps_pixels_outside_the_slide_transparent() {
+    let path = fixture_path();
+
+    // SAFETY: `path` and `argb` remain live for every ABI call, and the handle
+    // returned by this shim is closed exactly once.
+    unsafe {
+        let osr = openslide_open(path.as_ptr());
+        assert!(!osr.is_null());
+
+        let mut argb = [0xdead_beefu32; 16];
+        openslide_read_region(osr, argb.as_mut_ptr(), 14, 10, 0, 4, 4);
+
+        assert!(openslide_get_error(osr).is_null());
+        assert!(argb[..2].iter().all(|pixel| pixel >> 24 == 0xff));
+        assert_eq!(&argb[2..4], &[0, 0]);
+        assert!(argb[4..6].iter().all(|pixel| pixel >> 24 == 0xff));
+        assert_eq!(&argb[6..], &[0; 10]);
         openslide_close(osr);
     }
 }

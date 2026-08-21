@@ -20,8 +20,8 @@ mod slide;
 mod traits;
 
 pub(crate) use composition::{
-    check_region_pixel_limit, composite_region_from_source, crop_rgb_interleaved_u8_buffer,
-    read_display_tile_from_source,
+    check_region_pixel_limit, composite_fractional_region_from_source,
+    composite_region_from_source, crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
 };
 pub use open_options::SlideOpenOptions;
 pub(crate) use probe_cache::ConfiguredProbeCache;

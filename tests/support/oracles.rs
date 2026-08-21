@@ -9,18 +9,18 @@ use jpeg_decoder::{Decoder as ReferenceJpegDecoder, PixelFormat as ReferenceJpeg
 use wsi_rs::{CpuTile, FormatRegistry, PlaneSelection, Slide, TileLayout, TileRequest};
 
 #[derive(Debug, Clone)]
-pub struct TileBuffer {
+pub(crate) struct TileBuffer {
     pub pixels_rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
 }
 
-pub trait Oracle {
+pub(crate) trait Oracle {
     fn name(&self) -> &'static str;
     fn open(&self, slide_path: &Path) -> Result<OpenedSlide, String>;
 }
 
-pub struct OpenedSlide {
+pub(crate) struct OpenedSlide {
     pub path: PathBuf,
     pub oracle_name: &'static str,
     pub level_count: u32,
@@ -31,17 +31,17 @@ pub struct OpenedSlide {
     pub region_reader: OracleReader,
 }
 
-pub type OracleReader =
+pub(crate) type OracleReader =
     Box<dyn Fn(u32, i64, i64, u32, u32) -> Result<TileBuffer, String> + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProbeKind {
+pub(crate) enum ProbeKind {
     Tile,
     Region,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProbeRequest {
+pub(crate) struct ProbeRequest {
     pub level: u32,
     pub x: i64,
     pub y: i64,
@@ -50,7 +50,7 @@ pub struct ProbeRequest {
     pub kind: ProbeKind,
 }
 
-pub fn top_left_probe(slide: &OpenedSlide, level: u32) -> Option<ProbeRequest> {
+pub(crate) fn top_left_probe(slide: &OpenedSlide, level: u32) -> Option<ProbeRequest> {
     if let Some(Some(probe)) = slide.probe_regions.get(level as usize) {
         return Some(*probe);
     }
@@ -83,7 +83,7 @@ pub fn top_left_probe(slide: &OpenedSlide, level: u32) -> Option<ProbeRequest> {
     })
 }
 
-pub fn read_probe(slide: &OpenedSlide, probe: ProbeRequest) -> Result<TileBuffer, String> {
+pub(crate) fn read_probe(slide: &OpenedSlide, probe: ProbeRequest) -> Result<TileBuffer, String> {
     match probe.kind {
         ProbeKind::Tile => (slide.reader)(probe.level, probe.x, probe.y, probe.width, probe.height),
         ProbeKind::Region => {
@@ -92,11 +92,11 @@ pub fn read_probe(slide: &OpenedSlide, probe: ProbeRequest) -> Result<TileBuffer
     }
 }
 
-pub fn is_reference_oracle_unsupported(err: &str) -> bool {
+pub(crate) fn is_reference_oracle_unsupported(err: &str) -> bool {
     err.starts_with("reference oracle unsupported")
 }
 
-pub struct J2kOracle;
+pub(crate) struct J2kOracle;
 
 impl Oracle for J2kOracle {
     fn name(&self) -> &'static str {
@@ -108,7 +108,7 @@ impl Oracle for J2kOracle {
     }
 }
 
-pub struct ReferenceOracle;
+pub(crate) struct ReferenceOracle;
 
 impl Oracle for ReferenceOracle {
     fn name(&self) -> &'static str {
@@ -867,7 +867,7 @@ fn read_u64(endian: TiffEndian, bytes: &[u8]) -> u64 {
 }
 
 #[cfg(feature = "parity-openslide")]
-pub struct OpenSlideOracle {
+pub(crate) struct OpenSlideOracle {
     pub lib: super::openslide_shim::LoadedOpenSlide,
 }
 

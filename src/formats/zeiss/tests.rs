@@ -5,6 +5,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+mod attachment_cases;
+mod error_cases;
+mod fixtures;
+mod generated;
+mod metadata_cases;
+mod tile_cases;
+
 static ZEISS_TEST_GUARD: Mutex<()> = Mutex::new(());
 
 fn zeiss_uncompressed_fixture() -> Option<PathBuf> {

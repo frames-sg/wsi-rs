@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Migrated the optional Metal backend from `metal-rs` to the J2K 0.10.0
+  `objc2-metal` ownership model. `MetalBackendSessions::system_default` is the
+  new common constructor; expert raw-buffer adoption now accepts
+  `MetalBuffer`, and the deprecated unsynchronized `MetalDeviceStorage::Buffer`
+  variant was removed.
+- Reworked region composition, JPEG 2000 decoding, and DICOM frame access around
+  explicit planning, validation, I/O, cache, and backend ownership boundaries.
+  Decode runtime selection is now passed explicitly at internal operation
+  boundaries instead of relying on thread-local state; the public `SlideReader`
+  interface remains unchanged.
+- Consolidated parity-corpus and OpenSlide test/performance support. Performance
+  capture schema 6 removes metadata duplicated by the run records and declared
+  capture plan; schema 5 captures remain readable by the checksum-enforcing
+  comparator.
+
+## [0.6.0] - 2026-08-15
+
+### Added
+
+- Added reproducible OpenSlide comparison tooling, changed-line and component
+  coverage gates, deterministic workload checksums, and CPU/host metadata for
+  performance captures.
+- Added focused concurrency, geometry, compositor, cache, parser, and device
+  regression coverage while moving test-only modules out of production LCOV.
+
+### Changed
+
+- `CpuTile::pixels_arc` now returns `Option<Arc<Vec<u8>>>` and clones the tile's
+  existing `Arc` without copying pixels. Callers migrating from `Arc<[u8]>`
+  should change the stored type and use `pixels.as_slice()` when they need a
+  byte slice; constructing a new `Arc<[u8]>` remains possible but copies.
+- The OpenSlide compatibility shim now reports
+  `OpenSlide 4.0.1+wsi-rs-0.6.0`, matching the pinned comparison ABI version
+  while retaining the shim package version in the compatibility string.
+- Consolidated decoded-cache single-flight behavior and split format,
+  composition, codec, and test modules along existing ownership boundaries.
+  Public APIs remain unchanged except for the planned `pixels_arc` migration.
+
+### Removed
+
+- Removed obsolete JP2K parsing/conversion code, self-only XML helpers, and
+  unreachable public visibility identified by the 0.6 source audit.
+
 ## [0.5.2] - 2026-07-31
 
 ### Added
@@ -147,7 +192,8 @@
 
 - Initial public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/frames-sg/wsi-rs/compare/v0.4.0...v0.5.0

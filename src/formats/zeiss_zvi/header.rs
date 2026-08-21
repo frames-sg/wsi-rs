@@ -235,12 +235,5 @@ pub(super) fn decode_utf16le_lossy(raw: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod limit_tests {
-    use super::*;
-
-    #[test]
-    fn zvi_axis_coordinates_are_bounded_before_channel_allocation() {
-        assert_eq!(checked_axis(65_535).unwrap(), 65_535);
-        assert!(checked_axis(65_536).is_err());
-    }
-}
+#[path = "tests/header.rs"]
+mod tests;

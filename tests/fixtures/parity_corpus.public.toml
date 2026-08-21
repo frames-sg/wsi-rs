@@ -112,11 +112,6 @@ path             = ""
 format           = "ventana"
 codecs           = ["jpeg"]
 must_decode      = ["base"]
-expected_failures = [
-  # Ventana irregular-region composition is close but not byte-equivalent to
-  # OpenSlide on the occupied base-level probe.
-  "j2k-vs-openslide:base",
-]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -124,9 +119,6 @@ sha256           = "8c0bcfe258574e1ec5640d280f9c5b664b76840f52b9cdcd321ec690c113
 citation         = "OpenSlide testdata, Ventana sample."
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Ventana/OS-2.bif"
-
-[slide.expected_failure_rationale]
-"j2k-vs-openslide:base" = "Ventana irregular-region composition reads occupied tissue and is close to OpenSlide but not byte-equivalent on the base-level probe. This is an accepted 0.5 RC limitation for Ventana edge composition, and any additional Ventana parity failures remain release blockers."
 
 [[slide]]
 name             = "mirax_brightfield_typical"

@@ -54,14 +54,12 @@ pub fn wsi_rs::error::WsiError::from(wsi_rs::RawCompressedTileBuildError) -> Sel
 pub mod wsi_rs::output
 pub mod wsi_rs::output::metal
 #[non_exhaustive] pub enum wsi_rs::output::metal::MetalDeviceStorage
-pub wsi_rs::output::metal::MetalDeviceStorage::Buffer
-pub wsi_rs::output::metal::MetalDeviceStorage::Buffer::buffer: metal::buffer::Buffer
-pub wsi_rs::output::metal::MetalDeviceStorage::Buffer::byte_offset: usize
 pub wsi_rs::output::metal::MetalDeviceStorage::Resident
 pub wsi_rs::output::metal::MetalDeviceStorage::Resident::image: j2k_metal_support::resident::ResidentMetalImage
 pub struct wsi_rs::output::metal::MetalBackendSessions
 impl wsi_rs::output::metal::MetalBackendSessions
-pub fn wsi_rs::output::metal::MetalBackendSessions::new(metal::device::Device) -> Self
+pub fn wsi_rs::output::metal::MetalBackendSessions::new(wsi_rs::output::metal::MetalDevice) -> Self
+pub fn wsi_rs::output::metal::MetalBackendSessions::system_default() -> core::result::Result<Self, wsi_rs::error::WsiError>
 #[non_exhaustive] pub struct wsi_rs::output::metal::MetalDeviceTile
 pub wsi_rs::output::metal::MetalDeviceTile::format: wsi_rs::PixelFormat
 pub wsi_rs::output::metal::MetalDeviceTile::height: u32
@@ -69,12 +67,14 @@ pub wsi_rs::output::metal::MetalDeviceTile::pitch_bytes: usize
 pub wsi_rs::output::metal::MetalDeviceTile::storage: wsi_rs::output::metal::MetalDeviceStorage
 pub wsi_rs::output::metal::MetalDeviceTile::width: u32
 impl wsi_rs::output::metal::MetalDeviceTile
-pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_buffer(metal::buffer::Buffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_completed_buffer(metal::buffer::Buffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::raw_buffer(&self) -> (&metal::buffer::Buffer, usize)
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_buffer(wsi_rs::output::metal::MetalBuffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::from_completed_buffer(wsi_rs::output::metal::MetalBuffer, usize, u32, u32, usize, wsi_rs::PixelFormat) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub unsafe fn wsi_rs::output::metal::MetalDeviceTile::raw_buffer(&self) -> (&objc2::runtime::protocol_object::ProtocolObject<dyn objc2_metal::generated::__MTLBuffer::MTLBuffer>, usize)
 impl wsi_rs::output::metal::MetalDeviceTile
 pub fn wsi_rs::output::metal::MetalDeviceTile::from_resident(j2k_metal_support::resident::ResidentMetalImage) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::output::metal::MetalDeviceTile::validated_resident_image(&self) -> core::result::Result<&j2k_metal_support::resident::ResidentMetalImage, wsi_rs::error::WsiError>
+pub type wsi_rs::output::metal::MetalBuffer = objc2::rc::retained::Retained<objc2::runtime::protocol_object::ProtocolObject<dyn objc2_metal::generated::__MTLBuffer::MTLBuffer>>
+pub type wsi_rs::output::metal::MetalDevice = objc2::rc::retained::Retained<objc2::runtime::protocol_object::ProtocolObject<dyn objc2_metal::generated::__MTLDevice::MTLDevice>>
 pub mod wsi_rs::prelude
 #[non_exhaustive] pub enum wsi_rs::prelude::ColorSpace
 pub wsi_rs::prelude::ColorSpace::Cmyk
@@ -215,17 +215,18 @@ pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
 pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
 pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::height(&self) -> u32
-pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
 pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<alloc::vec::Vec<u8>>>
 pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::width(&self) -> u32
 #[non_exhaustive] pub struct wsi_rs::prelude::Dataset
 pub wsi_rs::prelude::Dataset::associated_images: std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>
 pub wsi_rs::prelude::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>
@@ -657,17 +658,18 @@ pub fn wsi_rs::CpuTile::color_space(&self) -> &wsi_rs::ColorSpace
 pub fn wsi_rs::CpuTile::data(&self) -> &wsi_rs::CpuTileData
 pub fn wsi_rs::CpuTile::from_u8_interleaved(u32, u32, u16, wsi_rs::ColorSpace, alloc::vec::Vec<u8>) -> core::result::Result<Self, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::height(&self) -> u32
-pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::layout(&self) -> wsi_rs::CpuTileLayout
 pub fn wsi_rs::CpuTile::new(u32, u32, u16, wsi_rs::ColorSpace, wsi_rs::CpuTileLayout, wsi_rs::CpuTileData) -> core::result::Result<Self, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<[u8]>>
+pub fn wsi_rs::CpuTile::pixels_arc(&self) -> core::option::Option<alloc::sync::Arc<alloc::vec::Vec<u8>>>
 pub fn wsi_rs::CpuTile::stride_bytes(&self) -> usize
+pub fn wsi_rs::CpuTile::width(&self) -> u32
+impl wsi_rs::CpuTile
+pub fn wsi_rs::CpuTile::into_rgb(self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::CpuTile::into_rgba(self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb(&self) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgb_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba(&self) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::CpuTile::to_rgba_windowed(&self, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
-pub fn wsi_rs::CpuTile::width(&self) -> u32
 #[non_exhaustive] pub struct wsi_rs::Dataset
 pub wsi_rs::Dataset::associated_images: std::collections::hash::map::HashMap<alloc::string::String, wsi_rs::AssociatedImage>
 pub wsi_rs::Dataset::icc_profiles: std::collections::hash::map::HashMap<wsi_rs::IccProfileKey, alloc::vec::Vec<u8>>

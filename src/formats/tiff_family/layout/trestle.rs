@@ -323,57 +323,5 @@ fn sibling_path(path: &std::path::Path, extension: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_trestle_description_extracts_key_value_pairs() {
-        let parsed = parse_trestle_description(
-            "Background Color=E6E6E6;White Balance=C0AAA1;Objective Power=10;OverlapsXY= 64 64 32 32",
-        );
-
-        assert_eq!(
-            parsed.get("Background Color").map(String::as_str),
-            Some("E6E6E6")
-        );
-        assert_eq!(
-            parsed.get("White Balance").map(String::as_str),
-            Some("C0AAA1")
-        );
-        assert_eq!(
-            parsed.get("Objective Power").map(String::as_str),
-            Some("10")
-        );
-        assert_eq!(
-            parsed.get("OverlapsXY").map(String::as_str),
-            Some("64 64 32 32")
-        );
-    }
-
-    #[test]
-    fn parse_overlap_pairs_groups_values_by_level() {
-        assert_eq!(
-            parse_overlap_pairs(Some(&"64 64 32 32 16 16".to_string())),
-            vec![(64, 64), (32, 32), (16, 16)]
-        );
-    }
-
-    #[test]
-    fn trestle_tile_grid_rejects_zero_dimensions_without_panicking() {
-        assert!(checked_trestle_tile_grid(1024, 1024, 0, 256).is_err());
-        assert!(checked_trestle_tile_grid(0, 1024, 256, 256).is_err());
-    }
-
-    #[test]
-    fn trestle_tile_grid_enforces_the_dense_map_limit() {
-        assert_eq!(
-            checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL, 1, 1, 1).unwrap(),
-            (
-                MAX_TRESTLE_TILES_PER_LEVEL,
-                1,
-                MAX_TRESTLE_TILES_PER_LEVEL as usize
-            )
-        );
-        assert!(checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL + 1, 1, 1, 1).is_err());
-    }
-}
+#[path = "trestle/tests.rs"]
+mod tests;

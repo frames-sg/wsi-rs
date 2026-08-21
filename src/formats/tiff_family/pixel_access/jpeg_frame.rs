@@ -1,4 +1,5 @@
 use super::*;
+use crate::decode::jpeg::is_sof_marker;
 
 pub(super) fn j2k_decode_options(color_transform: J2kColorTransform) -> J2kDecodeOptions {
     J2kDecodeOptions::default().with_color_transform(color_transform)
@@ -89,7 +90,7 @@ pub(super) fn jpeg_segment_color_hint(data: &[u8]) -> JpegBitstreamColorHint {
                     _ => JpegBitstreamColorHint::Unknown,
                 };
             }
-            marker if is_jpeg_sof_marker(marker) => {
+            marker if is_sof_marker(marker) => {
                 return jpeg_sof_color_hint(payload);
             }
             0xDA => return JpegBitstreamColorHint::Unknown,
@@ -100,13 +101,6 @@ pub(super) fn jpeg_segment_color_hint(data: &[u8]) -> JpegBitstreamColorHint {
     }
 
     JpegBitstreamColorHint::Unknown
-}
-
-pub(super) fn is_jpeg_sof_marker(marker: u8) -> bool {
-    matches!(
-        marker,
-        0xC0 | 0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE | 0xCF
-    )
 }
 
 pub(super) fn jpeg_sof_color_hint(payload: &[u8]) -> JpegBitstreamColorHint {
@@ -191,7 +185,7 @@ fn scan_baseline_jpeg_frame(data: &[u8]) -> Result<(bool, bool, JpegFrameInfo), 
             0xDB => has_dqt = true,
             0xC4 => has_dht = true,
             0xC0 => info = Some(parse_sof0_frame_info(segment.payload)?),
-            marker if is_jpeg_sof_marker(marker) => {
+            marker if is_sof_marker(marker) => {
                 return Err(WsiError::Unsupported {
                     reason: "JPEG passthrough only supports Baseline JPEG SOF0 frames".into(),
                 });
@@ -260,7 +254,7 @@ pub(super) fn parse_baseline_jpeg_frame_info(data: &[u8]) -> Result<JpegFrameInf
         if segment.marker == 0xC0 {
             return parse_sof0_frame_info(segment.payload);
         }
-        if is_jpeg_sof_marker(segment.marker) {
+        if is_sof_marker(segment.marker) {
             return Err(WsiError::Unsupported {
                 reason: "JPEG passthrough only supports Baseline JPEG SOF0 frames".into(),
             });
@@ -504,7 +498,7 @@ pub(super) fn patch_jpeg_sof0_dimensions(
                 .copy_from_slice(&(width as u16).to_be_bytes());
             return Ok(());
         }
-        if is_jpeg_sof_marker(segment.marker) {
+        if is_sof_marker(segment.marker) {
             return Err(WsiError::Unsupported {
                 reason: "NDPI JPEG passthrough only supports Baseline JPEG SOF0 frames".into(),
             });

@@ -5,15 +5,21 @@ use std::cell::Cell;
 use rayon::prelude::*;
 
 #[cfg(feature = "metal")]
-use crate::core::types::{ColorSpace, CpuTile};
+use super::input::inspect_j2k_jpeg_output_size;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use super::input::{prepare_jpeg_input, validate_j2k_jpeg_output_size};
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use super::{decode_one_jpeg_job, JpegDecodeJob};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::core::types::{DeviceTile, TilePixels};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 use crate::error::WsiError;
 #[cfg(any(feature = "metal", feature = "cuda"))]
-use j2k_core::{
-    BackendKind as J2kBackendKind, BackendRequest as J2kBackendRequest, DeviceSurface as _,
-};
+use crate::output::{CudaBackendSessionsRef, MetalBackendSessionsRef};
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use j2k_core::BackendRequest as J2kBackendRequest;
+#[cfg(feature = "cuda")]
+use j2k_core::{BackendKind as J2kBackendKind, DeviceSurface as _};
 #[cfg(feature = "cuda")]
 use j2k_core::{
     DeviceSubmission as J2kDeviceSubmission, ImageDecode as J2kImageDecode, ImageDecodeSubmit,
@@ -25,28 +31,7 @@ use j2k_jpeg::{
     DecodeOptions as J2kDecodeOptions, JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
     SofKind as J2kSofKind,
 };
-#[cfg(feature = "metal")]
-use j2k_jpeg_metal::SurfaceResidency as J2kJpegSurfaceResidency;
 
-#[cfg(feature = "metal")]
-use super::input::crop_jpeg_rgb_to_expected;
-#[cfg(feature = "metal")]
-use super::input::inspect_j2k_jpeg_output_size;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use super::input::{prepare_jpeg_input, validate_j2k_jpeg_output_size};
-#[cfg(feature = "metal")]
-use super::DecodedJpegRgb;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use super::{decode_one_jpeg_job, JpegDecodeJob};
-
-#[cfg(feature = "metal")]
-type MetalBackendSessionsRef<'a> = Option<&'a crate::output::metal::MetalBackendSessions>;
-#[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "metal")))]
-type MetalBackendSessionsRef<'a> = Option<&'a ()>;
-#[cfg(feature = "cuda")]
-type CudaBackendSessionsRef<'a> = Option<&'a crate::output::cuda::CudaBackendSessions>;
-#[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "cuda")))]
-type CudaBackendSessionsRef<'a> = Option<&'a ()>;
 #[cfg(all(feature = "metal", test, target_os = "macos"))]
 thread_local! {
     static JPEG_DEVICE_BATCH_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
@@ -305,36 +290,16 @@ fn tile_pixels_from_metal_jpeg_surface(
     job: &JpegDecodeJob<'_>,
     require_device: bool,
 ) -> Result<TilePixels, WsiError> {
-    if surface.backend_kind() == J2kBackendKind::Metal {
-        if surface.residency() == J2kJpegSurfaceResidency::CpuStagedMetalUpload {
-            if require_device {
-                return Err(WsiError::Unsupported {
-                    reason:
-                        "JPEG device decode produced CPU-staged Metal upload instead of resident Metal decode"
-                            .into(),
-                });
-            }
-            return decode_one_jpeg_job(job).map(TilePixels::Cpu);
-        }
-        if let Some(tile) = crate::output::metal::MetalDeviceTile::from_jpeg(surface)? {
-            let tile = tile.crop_top_left(job.expected_width, job.expected_height)?;
-            return Ok(TilePixels::Device(DeviceTile::Metal(tile)));
-        }
-        if require_device {
-            return Err(WsiError::Unsupported {
-                reason: "device backend not available for jpeg".into(),
-            });
-        }
-        return decode_one_jpeg_job(job).map(TilePixels::Cpu);
+    if let Some(tile) = crate::output::metal::MetalDeviceTile::from_jpeg(surface)? {
+        let tile = tile.crop_top_left(job.expected_width, job.expected_height)?;
+        return Ok(TilePixels::Device(DeviceTile::Metal(tile)));
     }
-
     if require_device {
         return Err(WsiError::Unsupported {
-            reason: "device backend not available for jpeg".into(),
+            reason: "explicit Metal JPEG decode returned a non-resident surface".into(),
         });
     }
-    cpu_tile_from_jpeg_surface(surface, job.expected_width, job.expected_height)
-        .map(TilePixels::Cpu)
+    decode_one_jpeg_job(job).map(TilePixels::Cpu)
 }
 
 #[cfg(feature = "cuda")]
@@ -459,38 +424,4 @@ pub(super) fn progressive_jpeg_requires_cpu_device_route(
         });
     }
     Ok(true)
-}
-
-#[cfg(feature = "metal")]
-fn cpu_tile_from_jpeg_surface(
-    surface: j2k_jpeg_metal::Surface,
-    expected_width: u32,
-    expected_height: u32,
-) -> Result<CpuTile, WsiError> {
-    if surface.pixel_format() != J2kPixelFormat::Rgb8 {
-        return Err(WsiError::Jpeg(format!(
-            "j2k JPEG returned unsupported pixel format {:?}",
-            surface.pixel_format()
-        )));
-    }
-    let (width, height) = surface.dimensions();
-    let decoded = crop_jpeg_rgb_to_expected(
-        DecodedJpegRgb {
-            width,
-            height,
-            pixels: surface
-                .as_bytes()
-                .map_err(|err| WsiError::Jpeg(format!("j2k JPEG surface readback failed: {err}")))?
-                .to_vec(),
-        },
-        expected_width,
-        expected_height,
-    )?;
-    CpuTile::from_u8_interleaved(
-        decoded.width,
-        decoded.height,
-        3,
-        ColorSpace::Rgb,
-        decoded.pixels,
-    )
 }

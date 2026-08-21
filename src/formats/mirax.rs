@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::file_identity::FileIdentity;
-use crate::core::hash::Quickhash1;
+use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
     ConfiguredFormatProbe, ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence,
@@ -143,26 +143,18 @@ impl ConfiguredFormatProbe for MiraxBackend {
         cache_config: CacheConfig,
     ) -> Result<ProbeResult, WsiError> {
         if !looks_like_mirax(path) {
-            return Ok(not_detected());
+            return Ok(ProbeResult::not_detected(""));
         }
         let key = FileIdentity::from_path(path)?;
         if self.probe_cache.get(&key, cache_config).is_some() {
-            return Ok(ProbeResult {
-                detected: true,
-                vendor: "mirax".into(),
-                confidence: ProbeConfidence::Definite,
-            });
+            return Ok(ProbeResult::detected("mirax", ProbeConfidence::Definite));
         }
         let slide = match self.parse_with_cache_config(path, cache_config) {
             Ok(slide) => slide,
-            Err(_) => return Ok(not_detected()),
+            Err(_) => return Ok(ProbeResult::not_detected("")),
         };
         self.probe_cache.insert(key, cache_config, slide);
-        Ok(ProbeResult {
-            detected: true,
-            vendor: "mirax".into(),
-            confidence: ProbeConfidence::Definite,
-        })
+        Ok(ProbeResult::detected("mirax", ProbeConfidence::Definite))
     }
 }
 
@@ -219,7 +211,22 @@ impl MiraxReader {
         req: &TileRequest,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        let series = &self.slide.dataset.scenes[req.scene.get()].series[req.series.get()];
+        let scene =
+            self.slide
+                .dataset
+                .scenes
+                .get(req.scene.get())
+                .ok_or(WsiError::SceneOutOfRange {
+                    index: req.scene.get(),
+                    count: self.slide.dataset.scenes.len(),
+                })?;
+        let series = scene
+            .series
+            .get(req.series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: req.series.get(),
+                count: scene.series.len(),
+            })?;
         let level =
             series
                 .levels
@@ -228,6 +235,7 @@ impl MiraxReader {
                     level: req.level.get(),
                     count: series.levels.len() as u32,
                 })?;
+        validate_mirax_plane(req.plane.get(), series.axes)?;
         let TileLayout::Irregular { tiles, .. } = &level.tile_layout else {
             return Err(WsiError::UnsupportedFormat(
                 "MIRAX levels must use irregular tiles".into(),
@@ -280,6 +288,23 @@ impl MiraxReader {
             entry.dimensions.1,
         )
     }
+}
+
+fn validate_mirax_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), WsiError> {
+    for (axis, value, extent) in [
+        ("z", plane.z, axes.z),
+        ("c", plane.c, axes.c),
+        ("t", plane.t, axes.t),
+    ] {
+        if value >= extent {
+            return Err(WsiError::PlaneOutOfRange {
+                axis: axis.into(),
+                value,
+                max: extent.saturating_sub(1),
+            });
+        }
+    }
+    Ok(())
 }
 
 struct MiraxSlide {
@@ -361,14 +386,6 @@ enum MiraxImageFormat {
     Jpeg,
     Png,
     Bmp24,
-}
-
-fn not_detected() -> ProbeResult {
-    ProbeResult {
-        detected: false,
-        vendor: String::new(),
-        confidence: ProbeConfidence::Likely,
-    }
 }
 
 fn looks_like_mirax(path: &Path) -> bool {

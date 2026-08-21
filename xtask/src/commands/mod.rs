@@ -13,7 +13,6 @@ pub(crate) fn run() -> Result<(), String> {
         "test" => checks::test(),
         "nextest" => checks::nextest(),
         "bench-check" => checks::bench_check(),
-        "bench" => checks::bench(),
         "feature-check" => checks::feature_check(),
         "parity-corpus-test" => checks::parity_corpus_test(),
         "doc" | "docs" => checks::doc(),
@@ -29,6 +28,7 @@ pub(crate) fn run() -> Result<(), String> {
         "coverage-changed" => coverage::changed(env::args().skip(2).collect()),
         "perf-capture" => perf::capture(env::args().skip(2).collect()),
         "perf-capture-openslide" => perf::capture_openslide(env::args().skip(2).collect()),
+        "perf-capture-pair" => perf::capture_pair(env::args().skip(2).collect()),
         "perf-compare" => perf::compare(env::args().skip(2).collect()),
         "perf-profile" => perf::profile(env::args().skip(2).collect()),
         "package" => checks::package(),
@@ -57,8 +57,7 @@ fn help_text() -> &'static str {
        clippy       run clippy with warnings denied\n\
        test         run library and integration tests\n\
        nextest      run library and integration tests with cargo-nextest\n\
-       bench-check  compile Rust benchmark targets without running timings\n\
-       bench        run synthetic Rust Criterion benchmarks locally\n\
+       bench-check  compile the performance worker and wsi-rs OpenSlide shim\n\
        feature-check check supported feature combinations with cargo-hack\n\
        parity-corpus-test run strict corpus-backed ignored integration tests\n\
        doc          build docs with warnings denied\n\
@@ -70,67 +69,15 @@ fn help_text() -> &'static str {
        api-check    run public API and semver stability checks\n\
        fuzz-check   type-check cargo-fuzz targets\n\
        release-test run release-mode library and integration tests\n\
-       coverage     generate lcov.info with cargo-llvm-cov\n\
+       coverage     generate lcov.info and enforce workspace/component floors\n\
        coverage-changed [--base REV] [--lcov lcov.info] enforce changed-path coverage\n\
        perf-capture <label> [slides...] capture local wsi_rs benchmark JSON\n\
        perf-capture-openslide <label> [slides...] capture local OpenSlide benchmark JSON\n\
+       perf-capture-pair <label> [aliases-or-slides...] capture alternating paired JSON\n\
        perf-compare <before.json> <after.json> compare captures with 5% noise guard\n\
        perf-profile <slide> [workload] print samply/xctrace profiling recipes\n\
        package      package the crate from a clean worktree with verification"
 }
 
 #[cfg(test)]
-mod tests {
-    use super::help_text;
-
-    #[test]
-    fn help_lists_benchmark_tasks() {
-        let help = help_text();
-
-        assert!(help.contains("bench-check"));
-        assert!(help.contains("bench        "));
-        assert!(help.contains("perf-capture"));
-        assert!(help.contains("perf-capture-openslide"));
-        assert!(help.contains("perf-compare"));
-        assert!(help.contains("perf-profile"));
-        assert!(help.contains("coverage-changed"));
-    }
-
-    #[test]
-    fn help_lists_api_stability_task() {
-        let help = help_text();
-
-        assert!(help.contains("api-check    run public API and semver stability checks"));
-    }
-
-    #[test]
-    fn help_lists_doc_test_task() {
-        let help = help_text();
-
-        assert!(help.contains("doc-test     compile rustdoc examples with doctest"));
-    }
-
-    #[test]
-    fn help_lists_fuzzing_task() {
-        let help = help_text();
-
-        assert!(help.contains("fuzz-check   type-check cargo-fuzz targets"));
-    }
-
-    #[test]
-    fn package_help_advertises_package_verification() {
-        let help = help_text();
-
-        assert!(
-            help.contains("package      package the crate from a clean worktree with verification")
-        );
-        assert!(!help.contains("without verification"));
-    }
-
-    #[test]
-    fn help_lists_rc_preflight_task() {
-        let help = help_text();
-
-        assert!(help.contains("rc-preflight run local release-candidate preflight gates"));
-    }
-}
+mod tests;

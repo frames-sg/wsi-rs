@@ -4,22 +4,20 @@ pub mod install;
 
 mod handle;
 mod pixels;
+mod region;
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::ptr;
+use std::slice;
 use std::sync::Arc;
 
 use handle::{empty_names, OpenSlideHandle};
-use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, TileCache};
+use wsi_rs::{ColorSpace, LevelIdx, RegionRequest, SceneId, SeriesId, TileCache};
 
-const VERSION: &str = concat!(
-    "OpenSlide-wsi-rs 4.0.0+wsi-rs-",
-    env!("CARGO_PKG_VERSION"),
-    "\0"
-);
+const VERSION: &str = concat!("OpenSlide 4.0.1+wsi-rs-", env!("CARGO_PKG_VERSION"), "\0");
 
 #[repr(C)]
 pub struct openslide_t {
@@ -43,6 +41,9 @@ fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
+/// # Safety
+/// A non-null `osr` must be a live handle returned by this shim and must not
+/// be closed or mutably aliased for the lifetime of the returned reference.
 unsafe fn handle_ref<'a>(osr: *mut openslide_t) -> Option<&'a OpenSlideHandle> {
     if osr.is_null() {
         return None;
@@ -52,6 +53,9 @@ unsafe fn handle_ref<'a>(osr: *mut openslide_t) -> Option<&'a OpenSlideHandle> {
     Some(unsafe { &*(osr.cast::<OpenSlideHandle>()) })
 }
 
+/// # Safety
+/// A non-null `osr` must be a live handle returned by this shim whose Box
+/// ownership has not already been recovered.
 unsafe fn take_handle(osr: *mut openslide_t) -> Option<Box<OpenSlideHandle>> {
     if osr.is_null() {
         return None;
@@ -61,6 +65,9 @@ unsafe fn take_handle(osr: *mut openslide_t) -> Option<Box<OpenSlideHandle>> {
     Some(unsafe { Box::from_raw(osr.cast::<OpenSlideHandle>()) })
 }
 
+/// # Safety
+/// A non-null `cache` must be a live cache returned by this shim whose Box
+/// ownership has not already been recovered.
 unsafe fn cache_from_raw(cache: *mut openslide_cache_t) -> Option<Box<ShimCache>> {
     if cache.is_null() {
         return None;
@@ -70,6 +77,9 @@ unsafe fn cache_from_raw(cache: *mut openslide_cache_t) -> Option<Box<ShimCache>
     Some(unsafe { Box::from_raw(cache.cast::<ShimCache>()) })
 }
 
+/// # Safety
+/// A non-null `cache` must be a live cache returned by this shim and must not
+/// be released or mutably aliased for the returned reference's lifetime.
 unsafe fn cache_ref<'a>(cache: *mut openslide_cache_t) -> Option<&'a ShimCache> {
     if cache.is_null() {
         return None;
@@ -79,6 +89,9 @@ unsafe fn cache_ref<'a>(cache: *mut openslide_cache_t) -> Option<&'a ShimCache> 
     Some(unsafe { &*cache.cast::<ShimCache>() })
 }
 
+/// # Safety
+/// A non-null `filename` must point to a readable NUL-terminated C string for
+/// the duration of this call.
 unsafe fn path_from_c(filename: *const c_char) -> Option<PathBuf> {
     if filename.is_null() {
         return None;
@@ -103,12 +116,8 @@ fn checked_pixel_len(w: i64, h: i64) -> Option<usize> {
         .checked_mul(usize::try_from(h).ok()?)
 }
 
-fn checked_u32_pixel_len(w: u32, h: u32) -> Option<usize> {
-    usize::try_from(w)
-        .ok()?
-        .checked_mul(usize::try_from(h).ok()?)
-}
-
+/// # Safety
+/// A non-null `dest` must be writable for `len` consecutive `u32` elements.
 unsafe fn clear_u32(dest: *mut u32, len: usize) {
     if !dest.is_null() && len > 0 {
         // SAFETY: Caller supplies a writable `dest` buffer with at least `len`
@@ -226,10 +235,10 @@ pub unsafe extern "C" fn openslide_get_level_count(osr: *mut openslide_t) -> c_i
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return -1;
         };
-        let Some(series) = first_series(handle) else {
+        let Some(level_count) = handle.level_count() else {
             return -1;
         };
-        i32::try_from(series.levels.len()).unwrap_or(-1)
+        i32::try_from(level_count).unwrap_or(-1)
     })
 }
 
@@ -277,23 +286,20 @@ pub unsafe extern "C" fn openslide_get_level_dimensions(
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return;
         };
-        let Some(series) = first_series(handle) else {
-            return;
-        };
         if level < 0 {
             return;
         }
-        let Some(level) = series.levels.get(level as usize) else {
+        let Some((width, height)) = handle.level_dimensions(level as usize) else {
             return;
         };
         // SAFETY: Output pointers are optional and are checked for null before
         // writing dimensions.
         unsafe {
             if !w.is_null() {
-                *w = i64::try_from(level.dimensions.0).unwrap_or(-1);
+                *w = i64::try_from(width).unwrap_or(-1);
             }
             if !h.is_null() {
-                *h = i64::try_from(level.dimensions.1).unwrap_or(-1);
+                *h = i64::try_from(height).unwrap_or(-1);
             }
         }
     }));
@@ -314,17 +320,10 @@ pub unsafe extern "C" fn openslide_get_level_downsample(
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return -1.0;
         };
-        let Some(series) = first_series(handle) else {
-            return -1.0;
-        };
         if level < 0 {
             return -1.0;
         }
-        series
-            .levels
-            .get(level as usize)
-            .map(|level| level.downsample)
-            .unwrap_or(-1.0)
+        handle.level_downsample(level as usize).unwrap_or(-1.0)
     })
 }
 
@@ -343,14 +342,9 @@ pub unsafe extern "C" fn openslide_get_best_level_for_downsample(
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return -1;
         };
-        let Some(series) = first_series(handle) else {
+        let Some(downsample_levels) = handle.level_downsamples() else {
             return -1;
         };
-        let downsample_levels = series
-            .levels
-            .iter()
-            .map(|level| level.downsample)
-            .collect::<Vec<_>>();
         best_level_for_downsample(&downsample_levels, downsample)
             .and_then(|level| i32::try_from(level).ok())
             .unwrap_or(-1)
@@ -422,16 +416,10 @@ pub unsafe extern "C" fn openslide_read_region(
                 return Err(FfiPanic);
             }
         };
-        let downsample = level_meta.downsample;
-        let level_x = if downsample > 0.0 {
-            (x as f64 / downsample).floor() as i64
-        } else {
-            x
-        };
-        let level_y = if downsample > 0.0 {
-            (y as f64 / downsample).floor() as i64
-        } else {
-            y
+        let Some(((level_x, level_y), subpixel_offset)) = handle.read_origin(x, y, level as usize)
+        else {
+            handle.set_error(format!("level {level} has invalid geometry"));
+            return Err(FfiPanic);
         };
         let req = RegionRequest::new(
             SceneId::new(0),
@@ -440,24 +428,25 @@ pub unsafe extern "C" fn openslide_read_region(
             (level_x, level_y),
             (width, height),
         );
+        // SAFETY: `dest` is non-null and `pixel_len` was checked from the
+        // caller-provided positive dimensions above. The OpenSlide ABI gives
+        // this function exclusive write access to the destination region for
+        // the duration of the call.
+        let destination = unsafe { slice::from_raw_parts_mut(dest, pixel_len) };
         match slide
-            .read_region(&req)
-            .and_then(pixels::tile_to_premultiplied_argb)
-        {
-            Ok(argb) if argb.len() == pixel_len => {
-                // SAFETY: `dest` was checked non-null above and the source
-                // buffer length exactly matches the requested pixel count.
-                unsafe { ptr::copy_nonoverlapping(argb.as_ptr(), dest, argb.len()) };
-                Ok(())
-            }
-            Ok(argb) => {
-                handle.set_error(format!(
-                    "read_region returned {} pixels for requested {} pixels",
-                    argb.len(),
-                    pixel_len
-                ));
-                Err(FfiPanic)
-            }
+            .read_region_subpixel(&req, subpixel_offset)
+            .and_then(|tile| {
+                let opaque_output = !matches!(tile.color_space(), ColorSpace::Rgba);
+                pixels::tile_to_premultiplied_argb_into(tile, destination)?;
+                region::clear_uncovered_pixels(
+                    level_meta,
+                    (level_x, level_y),
+                    (width, height),
+                    destination,
+                    opaque_output,
+                )
+            }) {
+            Ok(()) => Ok(()),
             Err(err) => {
                 handle.set_error(err.to_string());
                 Err(FfiPanic)
@@ -673,7 +662,7 @@ pub unsafe extern "C" fn openslide_read_associated_image(
             handle.set_error(format!("associated image not found: {name}"));
             return Err(FfiPanic);
         };
-        let Some(len) = checked_u32_pixel_len(info.width, info.height) else {
+        let Some(len) = checked_pixel_len(i64::from(info.width), i64::from(info.height)) else {
             handle.set_error("associated image dimensions exceed addressable memory");
             return Err(FfiPanic);
         };
@@ -838,101 +827,9 @@ pub unsafe extern "C" fn openslide_cache_release(cache: *mut openslide_cache_t) 
 }
 
 #[cfg(test)]
-mod arithmetic_tests {
-    use super::*;
-
-    #[test]
-    fn pixel_lengths_reject_negative_and_overflowing_dimensions() {
-        assert_eq!(checked_pixel_len(2, 3), Some(6));
-        assert_eq!(checked_pixel_len(-1, 3), None);
-        assert_eq!(checked_pixel_len(i64::MAX, i64::MAX), None);
-        assert_eq!(checked_u32_pixel_len(2, 3), Some(6));
-
-        if usize::BITS == 32 {
-            assert_eq!(checked_u32_pixel_len(u32::MAX, 2), None);
-        }
-    }
-
-    #[test]
-    fn best_level_uses_openslide_floor_boundaries_and_special_values() {
-        let levels = [1.0, 4.0];
-        for (request, expected) in [
-            (f64::NEG_INFINITY, 0),
-            (0.0, 0),
-            (1.0, 0),
-            (3.0, 0),
-            (4.0, 1),
-            (f64::INFINITY, 1),
-            (f64::NAN, 1),
-        ] {
-            assert_eq!(
-                best_level_for_downsample(&levels, request),
-                Some(expected),
-                "request {request:?}"
-            );
-        }
-        assert_eq!(best_level_for_downsample(&[], 1.0), None);
-    }
-}
+#[path = "lib/tests/arithmetic.rs"]
+mod arithmetic_tests;
 
 #[cfg(test)]
-mod cache_tests {
-    use super::*;
-    use std::ffi::CString;
-    use std::sync::Arc;
-
-    fn fixture_path() -> CString {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("tests")
-            .join("fixtures")
-            .join("jp2k")
-            .join("rgb_nomct.j2k");
-        CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
-    }
-
-    #[test]
-    fn ffi_cache_is_shared_released_safely_and_replaced() {
-        let path = fixture_path();
-        // SAFETY: Every pointer is created by this shim, remains live for each
-        // call, and is released or closed exactly once.
-        unsafe {
-            let first = openslide_open(path.as_ptr());
-            let second = openslide_open(path.as_ptr());
-            assert!(!first.is_null() && !second.is_null());
-            let cache = openslide_cache_create(1024);
-            let owner = Arc::clone(&cache_ref(cache).expect("live cache handle").owner);
-            openslide_set_cache(first, cache);
-            openslide_set_cache(second, cache);
-            openslide_cache_release(cache);
-
-            let mut pixels = [0u32; 16];
-            openslide_read_region(first, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
-            let cold = owner.stats();
-            assert_eq!(cold.misses, 1);
-            assert_eq!(cold.puts, 1);
-            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
-            assert_eq!(owner.stats().hits, 1, "second slide must share the entry");
-
-            let replacement = openslide_cache_create(1);
-            let replacement_owner =
-                Arc::clone(&cache_ref(replacement).expect("replacement cache").owner);
-            openslide_set_cache(second, replacement);
-            openslide_cache_release(replacement);
-            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
-            assert_eq!(replacement_owner.stats().misses, 1);
-            assert_eq!(replacement_owner.stats().rejected_oversize, 1);
-            let before_null = replacement_owner.stats();
-            openslide_set_cache(second, ptr::null_mut());
-            openslide_read_region(second, pixels.as_mut_ptr(), 0, 0, 0, 4, 4);
-            assert_eq!(
-                replacement_owner.stats().misses,
-                before_null.misses + 1,
-                "NULL cache is outside the OpenSlide contract and must not detach the live cache"
-            );
-
-            openslide_close(first);
-            openslide_close(second);
-        }
-    }
-}
+#[path = "lib/tests/cache.rs"]
+mod cache_tests;

@@ -32,151 +32,177 @@ fn encode_test_jpeg(img: &image::RgbImage) -> Vec<u8> {
     encoded
 }
 
-#[cfg(feature = "cuda")]
-fn cuda_unavailable_reason(reason: &str) -> bool {
-    reason.contains("CUDA is unavailable") || reason.contains("CUDA runtime error")
-}
-
-#[cfg(feature = "cuda")]
-fn baseline_cuda_jpeg_job() -> JpegDecodeJob<'static> {
-    JpegDecodeJob {
-        data: Cow::Borrowed(include_bytes!(
-            "../../../tests/fixtures/jpeg/baseline_420_16x16.jpg"
-        )),
-        tables: None,
-        expected_width: 16,
-        expected_height: 16,
-        color_transform: J2kColorTransform::Auto,
-        force_dimensions: false,
-        requested_size: None,
+fn decode_jpeg(
+    data: &[u8],
+    tables: Option<&[u8]>,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<image::RgbaImage, WsiError> {
+    let decoded = decode_jpeg_rgb(data, tables, expected_width, expected_height)?;
+    let mut rgba = Vec::with_capacity(decoded.pixels.len() / 3 * 4);
+    for rgb in decoded.pixels.chunks_exact(3) {
+        rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
     }
-}
-
-#[cfg(feature = "cuda")]
-#[test]
-fn baseline_420_jpeg_strict_cuda_decodes_to_owned_cuda_surface() {
-    let sessions = crate::output::cuda::CudaBackendSessions::new();
-    let decoded = decode_one_jpeg_pixels(
-        &baseline_cuda_jpeg_job(),
-        J2kBackendRequest::Cuda,
-        true,
-        None,
-        Some(&sessions),
-    );
-
-    let decoded = match decoded {
-        Ok(decoded) => decoded,
-        Err(WsiError::Unsupported { reason })
-            if cuda_unavailable_reason(&reason)
-                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
-        {
-            eprintln!("skipping CUDA JPEG decode test: {reason}");
-            return;
-        }
-        Err(err) => panic!("strict CUDA JPEG decode failed unexpectedly: {err}"),
-    };
-
-    let TilePixels::Device(DeviceTile::Cuda(tile)) = decoded else {
-        panic!("strict CUDA JPEG decode must return DeviceTile::Cuda");
-    };
-    assert_eq!((tile.width, tile.height), (16, 16));
-    assert_eq!(tile.format, crate::PixelFormat::Rgb8);
-    let surface = tile
-        .storage
-        .jpeg_surface()
-        .expect("CUDA JPEG storage must expose J2k JPEG surface");
-    let cuda = surface.cuda_surface().expect("resident CUDA JPEG surface");
-    let stats = cuda.stats();
-    assert!(
-        stats.used_owned_cuda_decode(),
-        "strict CUDA JPEG must use owned CUDA decode, got {:?}",
-        stats.decode_path()
-    );
-    assert!(
-        !stats.used_hardware_decode(),
-        "strict CUDA JPEG success must not be counted through hardware JPEG decode"
-    );
-}
-
-#[cfg(feature = "cuda")]
-#[test]
-fn baseline_jpeg_cuda_download_cpu_matches_cpu_decode() {
-    let job = baseline_cuda_jpeg_job();
-    let expected = decode_one_jpeg_job(&job).expect("CPU JPEG decode");
-    let sessions = crate::output::cuda::CudaBackendSessions::new();
-    let decoded =
-        decode_one_jpeg_pixels(&job, J2kBackendRequest::Cuda, true, None, Some(&sessions));
-    let decoded = match decoded {
-        Ok(decoded) => decoded,
-        Err(WsiError::Unsupported { reason })
-            if cuda_unavailable_reason(&reason)
-                && std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
-        {
-            eprintln!("skipping CUDA JPEG host-download parity test: {reason}");
-            return;
-        }
-        Err(err) => panic!("strict CUDA JPEG decode failed unexpectedly: {err}"),
-    };
-    let TilePixels::Device(DeviceTile::Cuda(tile)) = decoded else {
-        panic!("strict CUDA JPEG decode must return DeviceTile::Cuda");
-    };
-    let actual = tile.download_cpu().expect("download CUDA JPEG tile");
-
-    assert_eq!(
-        (actual.width, actual.height),
-        (expected.width, expected.height)
-    );
-    assert_eq!(actual.channels, expected.channels);
-    assert_eq!(actual.color_space, expected.color_space);
-    assert_eq!(actual.layout, expected.layout);
-    assert_eq!(actual.data.as_u8(), expected.data.as_u8());
-}
-
-#[cfg(feature = "cuda")]
-#[test]
-fn require_cuda_jpeg_without_session_returns_unsupported() {
-    let err = decode_one_jpeg_pixels(
-        &baseline_cuda_jpeg_job(),
-        J2kBackendRequest::Cuda,
-        true,
-        None,
-        None,
+    Ok(
+        image::RgbaImage::from_raw(decoded.width, decoded.height, rgba)
+            .expect("decoded RGB samples expand to exact RGBA dimensions"),
     )
-    .unwrap_err();
-
-    let WsiError::Unsupported { reason } = err else {
-        panic!("strict CUDA JPEG without session must be Unsupported, got {err:?}");
-    };
-    assert!(
-        reason.contains("CUDA session"),
-        "unexpected strict CUDA JPEG error: {reason}"
-    );
 }
 
-#[cfg(feature = "cuda")]
+fn decode_jpeg_rgb(
+    data: &[u8],
+    tables: Option<&[u8]>,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<DecodedJpegRgb, WsiError> {
+    decode_jpeg_rgb_with_color_transform(
+        data,
+        tables,
+        expected_width,
+        expected_height,
+        J2kColorTransform::Auto,
+    )
+}
+
+fn jpeg_tile_geometry(data: &[u8]) -> Result<JpegTileGeometry, WsiError> {
+    let header = parse_jpeg_tile_header(data)?;
+    let restart_interval = header.restart_interval;
+    let mcu_width = u32::from(header.max_h) * 8;
+    let mcu_height = u32::from(header.max_v) * 8;
+    let mcus_per_row = header.width.div_ceil(mcu_width as u16);
+    if restart_interval > mcus_per_row {
+        return Err(WsiError::Jpeg(format!(
+            "JPEG restart interval {} exceeds MCUs per row {}",
+            restart_interval, mcus_per_row
+        )));
+    }
+    if mcus_per_row % restart_interval != 0 {
+        return Err(WsiError::Jpeg(
+            "JPEG restart interval does not divide MCUs per row".into(),
+        ));
+    }
+
+    Ok(JpegTileGeometry {
+        width: header.width as u32,
+        height: header.height as u32,
+        tile_width: mcu_width * u32::from(restart_interval),
+        tile_height: mcu_height,
+    })
+}
+
+struct ParsedJpegTileHeader {
+    width: u16,
+    height: u16,
+    restart_interval: u16,
+    max_h: u8,
+    max_v: u8,
+}
+
+fn parse_jpeg_tile_header(data: &[u8]) -> Result<ParsedJpegTileHeader, WsiError> {
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return Err(WsiError::Jpeg("JPEG missing SOI marker".into()));
+    }
+
+    let mut i = 2usize;
+    let mut width = None;
+    let mut height = None;
+    let mut restart_interval = None;
+    let mut max_h = 1u8;
+    let mut max_v = 1u8;
+
+    while i + 1 < data.len() {
+        if data[i] != 0xFF {
+            return Err(WsiError::Jpeg(format!(
+                "expected JPEG marker at byte {i}, found {:02X}",
+                data[i]
+            )));
+        }
+
+        while i < data.len() && data[i] == 0xFF {
+            i += 1;
+        }
+        if i >= data.len() {
+            break;
+        }
+        let marker = data[i];
+        i += 1;
+
+        match marker {
+            0xD9 | 0xDA => break,
+            0x00 | 0xD0..=0xD7 => continue,
+            _ => {}
+        }
+
+        if i + 1 >= data.len() {
+            return Err(WsiError::Jpeg(format!(
+                "truncated JPEG marker length for marker FF{:02X}",
+                marker
+            )));
+        }
+        let seg_len = u16::from_be_bytes([data[i], data[i + 1]]) as usize;
+        if seg_len < 2 || i + seg_len > data.len() {
+            return Err(WsiError::Jpeg(format!(
+                "invalid JPEG segment length {} for marker FF{:02X}",
+                seg_len, marker
+            )));
+        }
+        let payload = &data[i + 2..i + seg_len];
+
+        if is_sof_marker(marker) {
+            if payload.len() < 6 {
+                return Err(WsiError::Jpeg("JPEG SOF segment too short".into()));
+            }
+            height = Some(u16::from_be_bytes([payload[1], payload[2]]));
+            width = Some(u16::from_be_bytes([payload[3], payload[4]]));
+            let component_count = payload[5] as usize;
+            let components = &payload[6..];
+            if components.len() < component_count * 3 {
+                return Err(WsiError::Jpeg("JPEG SOF component table too short".into()));
+            }
+            for component in components.chunks_exact(3).take(component_count) {
+                let sampling = component[1];
+                max_h = max_h.max(sampling >> 4);
+                max_v = max_v.max(sampling & 0x0F);
+            }
+        } else if marker == 0xDD {
+            if payload.len() < 2 {
+                return Err(WsiError::Jpeg("JPEG DRI segment too short".into()));
+            }
+            restart_interval = Some(u16::from_be_bytes([payload[0], payload[1]]));
+        }
+
+        i += seg_len;
+    }
+
+    let width = width.ok_or_else(|| WsiError::Jpeg("JPEG missing SOF marker".into()))?;
+    let height = height.ok_or_else(|| WsiError::Jpeg("JPEG missing SOF marker".into()))?;
+    let restart_interval = restart_interval.unwrap_or(0);
+    if restart_interval == 0 {
+        return Err(WsiError::Jpeg("JPEG missing restart markers".into()));
+    }
+
+    Ok(ParsedJpegTileHeader {
+        width,
+        height,
+        restart_interval,
+        max_h,
+        max_v,
+    })
+}
+
 #[test]
-fn require_cuda_progressive_jpeg_returns_unsupported_without_cpu_fallback() {
-    let sessions = crate::output::cuda::CudaBackendSessions::new();
-    let job = JpegDecodeJob {
-        data: Cow::Owned(progressive_8x8_jpeg()),
-        tables: None,
-        expected_width: 8,
-        expected_height: 8,
-        color_transform: J2kColorTransform::Auto,
-        force_dimensions: false,
-        requested_size: None,
-    };
+fn sof_marker_classification_covers_every_marker_byte() {
+    const EXPECTED: [u8; 13] = [
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+    ];
 
-    let err = decode_one_jpeg_pixels(&job, J2kBackendRequest::Cuda, true, None, Some(&sessions))
-        .unwrap_err();
-
-    let WsiError::Unsupported { reason } = err else {
-        panic!("strict CUDA progressive JPEG must be Unsupported, got {err:?}");
-    };
-    assert!(
-        reason.contains("Progressive8 JPEG") && reason.contains("CUDA"),
-        "unexpected strict CUDA progressive JPEG error: {reason}"
-    );
+    for marker in u8::MIN..=u8::MAX {
+        assert_eq!(
+            is_sof_marker(marker),
+            EXPECTED.contains(&marker),
+            "unexpected SOF classification for marker FF{marker:02X}",
+        );
+    }
 }
 
 fn progressive_8x8_jpeg() -> Vec<u8> {
@@ -204,470 +230,9 @@ fn progressive_8x8_jpeg() -> Vec<u8> {
         .collect()
 }
 
-#[test]
-fn decode_valid_jpeg() {
-    let mut rgb = image::RgbImage::new(8, 8);
-    for pixel in rgb.pixels_mut() {
-        *pixel = image::Rgb([200, 100, 50]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let decoded = decode_jpeg(&jpeg_data, None, 8, 8).unwrap();
-    assert_eq!(decoded.width(), 8);
-    assert_eq!(decoded.height(), 8);
-    // All alpha channels should be 255
-    for pixel in decoded.pixels() {
-        assert_eq!(pixel[3], 255);
-    }
-}
-
-#[test]
-fn decode_empty_data_fails() {
-    let result = decode_jpeg(&[], None, 0, 0);
-    assert!(result.is_err());
-}
-
-#[test]
-fn decode_with_jpeg_tables() {
-    // Create a valid JPEG
-    let mut rgb = image::RgbImage::new(8, 8);
-    for pixel in rgb.pixels_mut() {
-        *pixel = image::Rgb([100, 150, 200]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-
-    // Find SOS marker (0xFF, 0xDA) to split into tables and scan data.
-    // Tables = everything up to (but not including) SOS marker, plus EOI.
-    // Data = SOI + SOS marker onward.
-    let sos_pos = jpeg_data
-        .windows(2)
-        .position(|w| w == [0xFF, 0xDA])
-        .expect("SOS marker not found");
-
-    // tables: from start to just before SOS, with EOI appended
-    let mut tables = jpeg_data[..sos_pos].to_vec();
-    tables.extend_from_slice(&[0xFF, 0xD9]); // EOI
-
-    // data: SOI + from SOS onward
-    let mut data = vec![0xFF, 0xD8]; // SOI
-    data.extend_from_slice(&jpeg_data[sos_pos..]);
-
-    let decoded = decode_jpeg(&data, Some(&tables), 8, 8).unwrap();
-    assert_eq!(decoded.width(), 8);
-    assert_eq!(decoded.height(), 8);
-    for pixel in decoded.pixels() {
-        assert_eq!(pixel[3], 255);
-    }
-}
-
-#[test]
-fn decode_jpeg_rgb_returns_interleaved_rgb() {
-    let mut rgb = image::RgbImage::new(4, 4);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 200, 50]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-
-    let decoded = decode_jpeg_rgb(&jpeg_data, None, 4, 4).unwrap();
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
-}
-
-#[test]
-fn decode_progressive_jpeg_rgb_returns_interleaved_rgb() {
-    let jpeg_data = progressive_8x8_jpeg();
-
-    let decoded = decode_jpeg_rgb(&jpeg_data, None, 8, 8).unwrap();
-
-    assert_eq!(decoded.width, 8);
-    assert_eq!(decoded.height, 8);
-    assert_eq!(decoded.pixels.len(), 8 * 8 * 3);
-}
-
-#[test]
-fn progressive_scaled_decode_falls_back_to_full_decode_resize() {
-    let jpeg_data = progressive_8x8_jpeg();
-
-    let decoded = decode_jpeg_rgb_with_size_override(
-        &jpeg_data,
-        None,
-        8,
-        8,
-        Some(4),
-        Some(4),
-        J2kColorTransform::Auto,
-    )
-    .unwrap();
-
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
-}
-
-#[cfg(feature = "metal")]
-#[test]
-fn progressive_jpeg_device_route_uses_cpu_unless_device_is_required() {
-    let jpeg_data = progressive_8x8_jpeg();
-    let view = J2kJpegView::parse_with_options(
-        &jpeg_data,
-        J2kDecodeOptions::default().with_color_transform(J2kColorTransform::Auto),
-    )
-    .unwrap();
-
-    assert!(progressive_jpeg_requires_cpu_device_route(&view, false, "Metal").unwrap());
-    let err = progressive_jpeg_requires_cpu_device_route(&view, true, "Metal").unwrap_err();
-    assert!(matches!(
-        err,
-        WsiError::Unsupported { reason }
-            if reason.contains("Progressive8") && reason.contains("Metal")
-    ));
-}
-
-#[cfg(all(feature = "metal", target_os = "macos"))]
-#[test]
-fn private_metal_jpeg_decode_returns_private_device_tile() {
-    let Some(device) = metal::Device::system_default() else {
-        return;
-    };
-    let sessions =
-        crate::output::metal::MetalBackendSessions::new(device).with_private_jpeg_decode();
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([
-            ((idx * 17) & 0xff) as u8,
-            ((idx * 31 + 9) & 0xff) as u8,
-            ((idx * 7 + 3) & 0xff) as u8,
-        ]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let job = JpegDecodeJob {
-        data: Cow::Borrowed(jpeg_data.as_slice()),
-        tables: None,
-        expected_width: 16,
-        expected_height: 16,
-        color_transform: J2kColorTransform::Auto,
-        force_dimensions: false,
-        requested_size: None,
-    };
-
-    let pixels =
-        decode_one_jpeg_pixels(&job, J2kBackendRequest::Metal, true, Some(&sessions), None)
-            .expect("private JPEG Metal tile");
-    let TilePixels::Device(DeviceTile::Metal(tile)) = pixels else {
-        panic!("expected private Metal tile");
-    };
-    let crate::output::metal::MetalDeviceStorage::Resident { image } = tile.storage else {
-        panic!("private JPEG decode must return resident storage");
-    };
-    assert_eq!(image.dimensions(), (16, 16));
-    assert_eq!(tile.width, 16);
-    assert_eq!(tile.height, 16);
-}
-
-#[cfg(all(feature = "metal", target_os = "macos"))]
-#[test]
-fn metal_jpeg_edge_tile_is_cropped_to_expected_dimensions() {
-    let Some(device) = metal::Device::system_default() else {
-        return;
-    };
-    let sessions = crate::output::metal::MetalBackendSessions::new(device);
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([
-            ((idx * 17) & 0xff) as u8,
-            ((idx * 31 + 9) & 0xff) as u8,
-            ((idx * 7 + 3) & 0xff) as u8,
-        ]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let job = JpegDecodeJob {
-        data: Cow::Borrowed(jpeg_data.as_slice()),
-        tables: None,
-        expected_width: 7,
-        expected_height: 11,
-        color_transform: J2kColorTransform::Auto,
-        force_dimensions: false,
-        requested_size: None,
-    };
-
-    let pixels =
-        decode_one_jpeg_pixels(&job, J2kBackendRequest::Metal, true, Some(&sessions), None)
-            .expect("cropped Metal JPEG edge tile");
-    let TilePixels::Device(DeviceTile::Metal(tile)) = pixels else {
-        panic!("expected resident Metal tile");
-    };
-
-    assert_eq!((tile.width, tile.height), (7, 11));
-    assert_eq!(
-        tile.validated_resident_image().unwrap().dimensions(),
-        (7, 11)
-    );
-}
-
-#[cfg(all(feature = "metal", target_os = "macos"))]
-#[test]
-fn decode_batch_jpeg_pixels_uses_session_backed_device_batch() {
-    let Some(device) = metal::Device::system_default() else {
-        return;
-    };
-    let sessions = crate::output::metal::MetalBackendSessions::new(device);
-    let mut first = image::RgbImage::new(16, 16);
-    for (idx, pixel) in first.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 80, 180]);
-    }
-    let mut second = image::RgbImage::new(16, 16);
-    for (idx, pixel) in second.pixels_mut().enumerate() {
-        *pixel = image::Rgb([200, idx as u8, 40]);
-    }
-    let first_jpeg = encode_test_jpeg(&first);
-    let second_jpeg = encode_test_jpeg(&second);
-    let jobs = [
-        JpegDecodeJob {
-            data: Cow::Borrowed(first_jpeg.as_slice()),
-            tables: None,
-            expected_width: 16,
-            expected_height: 16,
-            color_transform: J2kColorTransform::Auto,
-            force_dimensions: false,
-            requested_size: None,
-        },
-        JpegDecodeJob {
-            data: Cow::Borrowed(second_jpeg.as_slice()),
-            tables: None,
-            expected_width: 16,
-            expected_height: 16,
-            color_transform: J2kColorTransform::Auto,
-            force_dimensions: false,
-            requested_size: None,
-        },
-    ];
-
-    reset_jpeg_device_batch_attempts_for_test();
-    let pixels =
-        decode_batch_jpeg_pixels(&jobs, J2kBackendRequest::Metal, true, Some(&sessions), None);
-
-    assert_eq!(jpeg_device_batch_attempts_for_test(), 1);
-    assert_eq!(pixels.len(), 2);
-    for pixels in pixels {
-        assert!(matches!(pixels.unwrap(), TilePixels::Device(_)));
-    }
-}
-
-#[test]
-fn decode_jpeg_rgb_scaled_returns_scaled_dimensions() {
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 100, 200]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-
-    let decoded = try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
-        data: &jpeg_data,
-        tables: None,
-        expected_width: 16,
-        expected_height: 16,
-        requested_width: 4,
-        requested_height: 4,
-        force_dimensions: false,
-        color_transform: J2kColorTransform::Auto,
-    })
-    .unwrap()
-    .expect("power-of-two downscale should use j2k IDCT scale");
-
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
-}
-
-#[test]
-fn j2k_batch_fast_path_matches_single_tile_for_forced_color_transform() {
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 100, 200]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let jobs = (0..4)
-        .map(|_| JpegDecodeJob {
-            data: Cow::Borrowed(jpeg_data.as_slice()),
-            tables: None,
-            expected_width: 16,
-            expected_height: 16,
-            color_transform: J2kColorTransform::ForceRgb,
-            force_dimensions: false,
-            requested_size: None,
-        })
-        .collect::<Vec<_>>();
-
-    let fast = try_decode_batch_jpeg_with_j2k(&jobs)
-        .expect("forced color transform should use j2k batch fast path");
-    let sequential = jobs.iter().map(decode_one_jpeg_job).collect::<Vec<_>>();
-
-    assert_eq!(fast.len(), sequential.len());
-    for (fast, sequential) in fast.into_iter().zip(sequential) {
-        let fast = fast.unwrap();
-        let sequential = sequential.unwrap();
-        assert_eq!(fast.width, sequential.width);
-        assert_eq!(fast.height, sequential.height);
-        assert_eq!(fast.data.as_u8(), sequential.data.as_u8());
-    }
-}
-
-#[test]
-fn j2k_batch_fast_path_matches_single_tile_for_scaled_decode() {
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 100, 200]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let jobs = (0..4)
-        .map(|_| JpegDecodeJob {
-            data: Cow::Borrowed(jpeg_data.as_slice()),
-            tables: None,
-            expected_width: 16,
-            expected_height: 16,
-            color_transform: J2kColorTransform::ForceRgb,
-            force_dimensions: false,
-            requested_size: Some((4, 4)),
-        })
-        .collect::<Vec<_>>();
-
-    let fast = try_decode_batch_jpeg_with_j2k(&jobs)
-        .expect("scaled decode should use j2k batch fast path");
-    let sequential = jobs.iter().map(decode_one_jpeg_job).collect::<Vec<_>>();
-
-    assert_eq!(fast.len(), sequential.len());
-    for (fast, sequential) in fast.into_iter().zip(sequential) {
-        let fast = fast.unwrap();
-        let sequential = sequential.unwrap();
-        assert_eq!(fast.width, 4);
-        assert_eq!(fast.height, 4);
-        assert_eq!(fast.data.as_u8(), sequential.data.as_u8());
-    }
-}
-
-#[test]
-fn patch_jpeg_dimensions_overwrites_zero_sized_sof() {
-    let jpeg = vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC0, // SOF0
-        0x00, 0x11, // length
-        0x08, // precision
-        0x00, 0x00, // height
-        0x00, 0x00, // width
-        0x03, // components
-        0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
-    ];
-
-    let patched = patch_jpeg_dimensions(&jpeg, 512, 256, false);
-    let patched = patched.as_ref();
-    assert_eq!(&patched[7..9], &256u16.to_be_bytes());
-    assert_eq!(&patched[9..11], &512u16.to_be_bytes());
-
-    // Original input is unchanged.
-    assert_eq!(&jpeg[7..9], &[0, 0]);
-    assert_eq!(&jpeg[9..11], &[0, 0]);
-}
-
-#[test]
-fn patch_jpeg_dimensions_leaves_nonzero_sof_alone() {
-    let jpeg = vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC0, // SOF0
-        0x00, 0x11, // length
-        0x08, // precision
-        0x01, 0x00, // height
-        0x02, 0x00, // width
-        0x03, // components
-        0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
-    ];
-
-    let patched = patch_jpeg_dimensions(&jpeg, 512, 256, false);
-    assert!(matches!(patched, Cow::Borrowed(_)));
-}
-
-#[test]
-fn patch_jpeg_dimensions_forces_nonzero_sof_when_requested() {
-    let jpeg = vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC0, // SOF0
-        0x00, 0x11, // length
-        0x08, // precision
-        0x00, 0x10, // height = 16
-        0x04, 0x00, // width = 1024
-        0x03, // components
-        0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
-    ];
-
-    let patched = patch_jpeg_dimensions(&jpeg, 1024, 4, true);
-    let patched = patched.as_ref();
-    assert_eq!(&patched[7..9], &4u16.to_be_bytes());
-    assert_eq!(&patched[9..11], &1024u16.to_be_bytes());
-}
-
-#[test]
-fn ensure_jpeg_eoi_appends_missing_marker() {
-    let jpeg = vec![0xFF, 0xD8, 0x00, 0x01];
-    let repaired = ensure_jpeg_eoi(&jpeg);
-    assert_eq!(
-        repaired.as_ref()[repaired.as_ref().len() - 2..],
-        [0xFF, 0xD9]
-    );
-}
-
-#[test]
-fn ensure_jpeg_eoi_keeps_valid_trailer() {
-    let jpeg = vec![0xFF, 0xD8, 0xFF, 0xD9];
-    let repaired = ensure_jpeg_eoi(&jpeg);
-    assert!(matches!(repaired, Cow::Borrowed(_)));
-}
-
-#[test]
-fn jpeg_preparation_length_reserves_space_for_repaired_eoi() {
-    let limit = crate::core::limits::MAX_COMPRESSED_INPUT_BYTES as usize;
-    assert_eq!(checked_jpeg_preparation_len(limit - 2, 0).unwrap(), limit);
-    assert!(checked_jpeg_preparation_len(limit - 1, 0).is_err());
-    assert!(checked_jpeg_preparation_len(usize::MAX, 1).is_err());
-}
-
-#[test]
-fn jpeg_tile_geometry_parses_dri_after_sof() {
-    let jpeg = vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC0, // SOF0
-        0x00, 0x11, // len
-        0x08, // precision
-        0x00, 0x08, // height
-        0x00, 0x20, // width
-        0x03, // components
-        0x01, 0x22, 0x00, // h=2, v=2
-        0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xDD, // DRI
-        0x00, 0x04, // len
-        0x00, 0x02, // restart interval
-        0xFF, 0xDA, // SOS
-        0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F, 0x00,
-    ];
-
-    let geometry = jpeg_tile_geometry(&jpeg).unwrap();
-    assert_eq!(geometry.width, 32);
-    assert_eq!(geometry.height, 8);
-    assert_eq!(geometry.tile_width, 32);
-    assert_eq!(geometry.tile_height, 16);
-}
-
-#[test]
-fn jpeg_tile_geometry_rejects_missing_restart_markers() {
-    let jpeg = vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC0, // SOF0
-        0x00, 0x11, // len
-        0x08, // precision
-        0x00, 0x08, // height
-        0x00, 0x10, // width
-        0x03, // components
-        0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xDA, // SOS
-        0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F, 0x00,
-    ];
-
-    let err = jpeg_tile_geometry(&jpeg).unwrap_err();
-    assert!(err.to_string().contains("restart markers"));
-}
+mod batch;
+mod cpu;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+mod device;
+mod errors;
+mod input_repair;

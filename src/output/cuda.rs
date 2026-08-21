@@ -1,6 +1,4 @@
-use crate::{
-    error::WsiError, ColorSpace, CpuTile, CpuTileData, CpuTileLayout, PixelFormat, SampleType,
-};
+use crate::{error::WsiError, CpuTile, CpuTileData, CpuTileLayout, PixelFormat};
 use j2k_core::{BackendKind, DeviceSurface};
 use std::sync::{Arc, Mutex};
 
@@ -287,85 +285,25 @@ fn downloaded_bytes_to_cpu_tile(
             bytes.len()
         )));
     }
-    let data = match format.sample_type() {
-        SampleType::Uint8 => CpuTileData::u8(bytes),
-        SampleType::Uint16 => {
+    let data = match format {
+        PixelFormat::Rgb8 | PixelFormat::Rgba8 | PixelFormat::Gray8 => CpuTileData::u8(bytes),
+        PixelFormat::Rgb16 | PixelFormat::Rgba16 | PixelFormat::Gray16 => {
             let samples = bytes
                 .chunks_exact(2)
                 .map(|sample| u16::from_ne_bytes([sample[0], sample[1]]))
                 .collect();
             CpuTileData::u16(samples)
         }
-        SampleType::Float32 => {
-            return Err(WsiError::Unsupported {
-                reason: "CUDA decoded Float32 tiles are not supported".into(),
-            });
-        }
     };
     CpuTile::new(
         width,
         height,
         format.channels() as u16,
-        match format.color_space() {
-            ColorSpace::Rgb => ColorSpace::Rgb,
-            ColorSpace::Rgba => ColorSpace::Rgba,
-            ColorSpace::Grayscale => ColorSpace::Grayscale,
-            _ => {
-                return Err(WsiError::Unsupported {
-                    reason: format!("CUDA pixel format {format:?} has an unsupported color space"),
-                });
-            }
-        },
+        format.color_space(),
         CpuTileLayout::Interleaved,
         data,
     )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ColorSpace, CpuTileData, CpuTileLayout};
-
-    #[test]
-    fn tight_download_layout_rejects_dimension_overflow() {
-        let error = tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16)
-            .expect_err("overflowing CUDA host download must fail before allocation");
-        assert!(error.to_string().contains("overflow"), "{error}");
-    }
-
-    #[test]
-    fn downloaded_bytes_convert_all_public_pixel_families() {
-        for (format, channels, color_space) in [
-            (PixelFormat::Gray8, 1, ColorSpace::Grayscale),
-            (PixelFormat::Rgb8, 3, ColorSpace::Rgb),
-            (PixelFormat::Rgba8, 4, ColorSpace::Rgba),
-            (PixelFormat::Gray16, 1, ColorSpace::Grayscale),
-            (PixelFormat::Rgb16, 3, ColorSpace::Rgb),
-            (PixelFormat::Rgba16, 4, ColorSpace::Rgba),
-        ] {
-            let (_, byte_len) = tight_download_layout(2, 1, format).expect("valid layout");
-            let bytes = (0..byte_len).map(|value| value as u8).collect();
-            let tile = downloaded_bytes_to_cpu_tile(2, 1, format, bytes)
-                .expect("downloaded bytes form a valid CpuTile");
-            assert_eq!(tile.channels, channels);
-            assert_eq!(tile.color_space, color_space);
-            assert_eq!(tile.layout, CpuTileLayout::Interleaved);
-            match (format.sample_type(), &tile.data) {
-                (crate::SampleType::Uint8, CpuTileData::U8(samples)) => {
-                    assert_eq!(samples.len(), 2 * channels as usize);
-                }
-                (crate::SampleType::Uint16, CpuTileData::U16(samples)) => {
-                    assert_eq!(samples.len(), 2 * channels as usize);
-                }
-                other => panic!("unexpected CUDA CPU tile storage: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn downloaded_bytes_reject_undersized_output() {
-        let error = downloaded_bytes_to_cpu_tile(2, 2, PixelFormat::Rgb8, vec![0; 11])
-            .expect_err("undersized CUDA download must fail validation");
-        assert!(error.to_string().contains("expected 12 bytes"), "{error}");
-    }
-}
+mod tests;

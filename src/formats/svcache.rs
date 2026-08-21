@@ -28,9 +28,9 @@ use crate::core::registry::{
     DatasetReader, FormatProbe, FormatRegistry, ProbeConfidence, ProbeResult, Slide, SlideReader,
 };
 use crate::core::types::{
-    AssociatedImage, AxesShape, ChannelInfo, ColorSpace, CpuTile, CpuTileLayout, Dataset,
-    DatasetId, Level, LevelIdx, PlaneIdx, PlaneSelection, SampleType, Scene, SceneId, Series,
-    SeriesId, TileLayout, TileOutputPreference, TilePixels, TileRequest, TileViewRequest,
+    AssociatedImage, AxesShape, ChannelInfo, ColorSpace, CpuTile, CpuTileData, CpuTileLayout,
+    Dataset, DatasetId, Level, LevelIdx, PlaneIdx, PlaneSelection, SampleType, Scene, SceneId,
+    Series, SeriesId, TileLayout, TileOutputPreference, TilePixels, TileRequest, TileViewRequest,
 };
 use crate::error::WsiError;
 use crate::properties::Properties;
@@ -203,9 +203,9 @@ enum ColorSpaceMeta {
     Grayscale,
 }
 
-pub struct SvcacheBackend;
+pub(crate) struct SvcacheBackend;
 
-pub struct SvcacheReader {
+pub(crate) struct SvcacheReader {
     file: Mutex<File>,
     payload_start: u64,
     metadata: SvcacheMetadata,

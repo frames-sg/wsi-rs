@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly BASELINE_VERSION="0.4.0"
-readonly BASELINE_SHA256="947b5b1b7703f1f99eb2a0bf124373dae81024954fc29743231a8bbcdcad457c"
-readonly USER_AGENT="wsi-rs-semver-check/0.5.0 (+https://github.com/frames-sg/wsi-rs)"
+readonly BASELINE_VERSION="0.5.2"
+readonly BASELINE_SHA256="0118b54cd6fe19b48d9170c1a54a089599e61442f076eff6a6da05d0f3891a98"
+readonly USER_AGENT="wsi-rs-semver-check/0.6.0 (+https://github.com/frames-sg/wsi-rs)"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wsi-rs-semver.XXXXXX")"

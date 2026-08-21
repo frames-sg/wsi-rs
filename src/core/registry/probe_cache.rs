@@ -58,3 +58,6 @@ impl<T> ConfiguredProbeCache<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

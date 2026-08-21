@@ -16,7 +16,7 @@ impl TiffContainer {
 
     /// Perform a positional read using the persistent file handle.
     /// Uses pread(2) on Unix for lock-free concurrent reads (no seek state).
-    pub fn pread(&self, offset: u64, len: u64) -> Result<Vec<u8>, TiffParseError> {
+    pub(crate) fn pread(&self, offset: u64, len: u64) -> Result<Vec<u8>, TiffParseError> {
         // Bounds check with checked arithmetic
         let end = offset
             .checked_add(len)
@@ -67,7 +67,7 @@ impl TiffContainer {
     /// Resolve a tag's raw bytes. For Inline, returns the bytes directly.
     /// For Lazy, performs a pread on first access and caches the result
     /// (including errors) permanently via OnceLock.
-    pub fn resolve_tag(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
+    pub(crate) fn resolve_tag(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -90,14 +90,14 @@ impl TiffContainer {
     }
 
     /// Alias for resolve_tag — returns raw bytes without type interpretation.
-    pub fn get_bytes(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
+    pub(crate) fn get_bytes(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
         self.resolve_tag(ifd_id, tag)
     }
 
     // ── Typed scalar accessors ─────────────────────────────────
 
     /// Read a single u32 value. Accepts BYTE, SHORT, LONG types.
-    pub fn get_u32(&self, ifd_id: IfdId, tag: u16) -> Result<u32, TiffParseError> {
+    pub(crate) fn get_u32(&self, ifd_id: IfdId, tag: u16) -> Result<u32, TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -136,7 +136,7 @@ impl TiffContainer {
     }
 
     /// Read a single u64 value. Accepts BYTE, SHORT, LONG, LONG8 types.
-    pub fn get_u64(&self, ifd_id: IfdId, tag: u16) -> Result<u64, TiffParseError> {
+    pub(crate) fn get_u64(&self, ifd_id: IfdId, tag: u16) -> Result<u64, TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -196,7 +196,7 @@ impl TiffContainer {
     }
 
     /// Read a single f64 value. Accepts FLOAT, DOUBLE, RATIONAL, SRATIONAL types.
-    pub fn get_f64(&self, ifd_id: IfdId, tag: u16) -> Result<f64, TiffParseError> {
+    pub(crate) fn get_f64(&self, ifd_id: IfdId, tag: u16) -> Result<f64, TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -259,7 +259,7 @@ impl TiffContainer {
     }
 
     /// Read an ASCII string value.
-    pub fn get_string(&self, ifd_id: IfdId, tag: u16) -> Result<&str, TiffParseError> {
+    pub(crate) fn get_string(&self, ifd_id: IfdId, tag: u16) -> Result<&str, TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -324,7 +324,7 @@ impl TiffContainer {
     // ── Typed array accessors (cached decode) ──────────────────
 
     /// Read a u64 array. Accepts SHORT, LONG, LONG8 types. Cached via OnceLock.
-    pub fn get_u64_array(&self, ifd_id: IfdId, tag: u16) -> Result<&[u64], TiffParseError> {
+    pub(crate) fn get_u64_array(&self, ifd_id: IfdId, tag: u16) -> Result<&[u64], TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
             ifd_offset: ifd.offset,
@@ -391,31 +391,31 @@ impl TiffContainer {
 
     // ── Metadata accessors ─────────────────────────────────────
 
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.path.as_ref()
     }
 
-    pub fn endian(&self) -> Endian {
+    pub(crate) fn endian(&self) -> Endian {
         self.endian
     }
 
-    pub fn is_bigtiff(&self) -> bool {
+    pub(crate) fn is_bigtiff(&self) -> bool {
         self.bigtiff
     }
 
-    pub fn is_ndpi(&self) -> bool {
+    pub(crate) fn is_ndpi(&self) -> bool {
         self.ndpi
     }
 
-    pub fn ifd_count(&self) -> usize {
+    pub(crate) fn ifd_count(&self) -> usize {
         self.ifds.len()
     }
 
-    pub fn top_ifds(&self) -> &[IfdId] {
+    pub(crate) fn top_ifds(&self) -> &[IfdId] {
         &self.top_ifds
     }
 
-    pub fn ifd_by_id(&self, id: IfdId) -> Result<&Ifd, TiffParseError> {
+    pub(crate) fn ifd_by_id(&self, id: IfdId) -> Result<&Ifd, TiffParseError> {
         self.ifds.get(&id).ok_or(TiffParseError::IfdNotFound(id))
     }
 
