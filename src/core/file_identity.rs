@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
 use crate::error::WsiError;
 
 /// Filesystem identity used for short-lived probe-to-open caches.
@@ -16,6 +19,10 @@ pub(crate) struct FileIdentity {
     length: u64,
     modified_ns: Option<u128>,
     is_dir: bool,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
 }
 
 impl FileIdentity {
@@ -58,6 +65,10 @@ impl FileIdentity {
             length: metadata.len(),
             modified_ns,
             is_dir: metadata.is_dir(),
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
         }
     }
 }

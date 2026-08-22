@@ -709,12 +709,19 @@ fn find_ets_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
         path: dir.to_path_buf(),
     })? {
         let entry = entry?;
+        let file_type = entry.file_type().map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: entry.path(),
+        })?;
         let path = entry.path();
-        if !path.is_dir() {
+        if !file_type.is_dir() {
             continue;
         }
         let frame = path.join("frame_t.ets");
-        if frame.is_file() {
+        let frame_is_regular_file = fs::symlink_metadata(&frame)
+            .map(|metadata| metadata.file_type().is_file())
+            .unwrap_or(false);
+        if frame_is_regular_file {
             if paths.len() == MAX_ETS_SCENES {
                 return Err(invalid_slide(
                     dir,

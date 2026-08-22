@@ -95,15 +95,34 @@ pub(super) fn decode_rle_lossless_frame(
             "DICOM RLE segment count {segment_count} is invalid"
         )));
     }
-    let expected_segments = samples_per_pixel as usize;
+    let expected_segments = match (samples_per_pixel, photometric_interpretation) {
+        (3, "RGB") => 3usize,
+        (1, "MONOCHROME1" | "MONOCHROME2") => 1usize,
+        _ => {
+            return Err(WsiError::DisplayConversion(format!(
+                "unsupported DICOM RLE pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}"
+            )));
+        }
+    };
     if segment_count < expected_segments {
         return Err(WsiError::DisplayConversion(format!(
             "DICOM RLE has {segment_count} segments, expected at least {expected_segments}"
         )));
     }
-    let pixel_count = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| WsiError::DisplayConversion("DICOM RLE dimensions overflow".into()))?;
+    let pixel_count_u64 = u64::from(width) * u64::from(height);
+    let working_set_bytes = pixel_count_u64.saturating_mul(u64::from(samples_per_pixel) + 3);
+    if working_set_bytes > crate::core::limits::MAX_DECODED_IMAGE_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "DICOM RLE decoded working set",
+            requested: working_set_bytes,
+            limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        });
+    }
+    let pixel_count = usize::try_from(pixel_count_u64).map_err(|_| WsiError::ResourceLimit {
+        resource: "DICOM RLE pixel count",
+        requested: pixel_count_u64,
+        limit: usize::MAX as u64,
+    })?;
     let mut planes = Vec::with_capacity(expected_segments);
     for segment in 0..expected_segments {
         let offset_start = 4 + segment * 4;
@@ -135,7 +154,10 @@ pub(super) fn decode_rle_lossless_frame(
 
     let rgb = match (samples_per_pixel, photometric_interpretation) {
         (3, "RGB") => {
-            let mut rgb = vec![0; pixel_count * 3];
+            let rgb_len = pixel_count
+                .checked_mul(3)
+                .ok_or_else(|| WsiError::DisplayConversion("DICOM RLE RGB size overflow".into()))?;
+            let mut rgb = try_zeroed_rle_buffer(rgb_len)?;
             for (idx, ((&red, &green), &blue)) in
                 planes[0].iter().zip(&planes[1]).zip(&planes[2]).enumerate()
             {
@@ -147,17 +169,16 @@ pub(super) fn decode_rle_lossless_frame(
             rgb
         }
         (1, "MONOCHROME1" | "MONOCHROME2") => {
-            let mut rgb = Vec::with_capacity(pixel_count * 3);
+            let rgb_len = pixel_count
+                .checked_mul(3)
+                .ok_or_else(|| WsiError::DisplayConversion("DICOM RLE RGB size overflow".into()))?;
+            let mut rgb = try_rle_buffer_with_capacity(rgb_len)?;
             for &gray in &planes[0] {
                 rgb.extend_from_slice(&[gray, gray, gray]);
             }
             rgb
         }
-        _ => {
-            return Err(WsiError::DisplayConversion(format!(
-                "unsupported DICOM RLE pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}"
-            )));
-        }
+        _ => unreachable!("DICOM RLE pixel format was validated before allocation"),
     };
 
     CpuTile::new(
@@ -171,7 +192,7 @@ pub(super) fn decode_rle_lossless_frame(
 }
 
 pub(super) fn decode_rle_segment(segment: &[u8], expected_len: usize) -> Result<Vec<u8>, WsiError> {
-    let mut output = Vec::with_capacity(expected_len);
+    let mut output = try_rle_buffer_with_capacity(expected_len)?;
     let mut i = 0;
     while i < segment.len() && output.len() < expected_len {
         let n = segment[i] as i8;
@@ -209,6 +230,22 @@ pub(super) fn decode_rle_segment(segment: &[u8], expected_len: usize) -> Result<
             output.len()
         )));
     }
+    Ok(output)
+}
+
+fn try_rle_buffer_with_capacity(capacity: usize) -> Result<Vec<u8>, WsiError> {
+    let mut output = Vec::new();
+    output.try_reserve_exact(capacity).map_err(|_| {
+        WsiError::DisplayConversion(format!(
+            "unable to allocate {capacity} bytes for DICOM RLE decode"
+        ))
+    })?;
+    Ok(output)
+}
+
+fn try_zeroed_rle_buffer(len: usize) -> Result<Vec<u8>, WsiError> {
+    let mut output = try_rle_buffer_with_capacity(len)?;
+    output.resize(len, 0);
     Ok(output)
 }
 

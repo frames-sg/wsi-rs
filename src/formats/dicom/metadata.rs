@@ -128,16 +128,32 @@ pub(super) fn parse_metadata_object_until(
     let specimen_identifier = optional_string(&obj, tags::SPECIMEN_IDENTIFIER)?;
     let sop_instance_uid = required_string(&obj, tags::SOP_INSTANCE_UID, "SOPInstanceUID")?;
     let image_type = required_multi_string(&obj, tags::IMAGE_TYPE, "ImageType")?;
-    let rows = required_u32(&obj, tags::ROWS, "Rows")?;
-    let columns = required_u32(&obj, tags::COLUMNS, "Columns")?;
+    let rows = required_nonzero_u32(&obj, tags::ROWS, "Rows", path)?;
+    let columns = required_nonzero_u32(&obj, tags::COLUMNS, "Columns", path)?;
     let number_of_frames = optional_u32(&obj, tags::NUMBER_OF_FRAMES)?.unwrap_or(1);
+    if number_of_frames == 0 {
+        return Err(invalid_slide(
+            path,
+            "NumberOfFrames must be greater than zero",
+        ));
+    }
     let photometric_interpretation = required_string(
         &obj,
         tags::PHOTOMETRIC_INTERPRETATION,
         "PhotometricInterpretation",
     )?;
-    let total_pixel_matrix_columns = optional_u32(&obj, tags::TOTAL_PIXEL_MATRIX_COLUMNS)?;
-    let total_pixel_matrix_rows = optional_u32(&obj, tags::TOTAL_PIXEL_MATRIX_ROWS)?;
+    let total_pixel_matrix_columns = optional_nonzero_u32(
+        &obj,
+        tags::TOTAL_PIXEL_MATRIX_COLUMNS,
+        "TotalPixelMatrixColumns",
+        path,
+    )?;
+    let total_pixel_matrix_rows = optional_nonzero_u32(
+        &obj,
+        tags::TOTAL_PIXEL_MATRIX_ROWS,
+        "TotalPixelMatrixRows",
+        path,
+    )?;
     let dimension_organization_type = optional_string(&obj, tags::DIMENSION_ORGANIZATION_TYPE)?;
     let pixel_spacing = if stop_tag == tags::PIXEL_DATA {
         optional_pixel_spacing_mpp(&obj)?
@@ -186,6 +202,38 @@ pub(super) fn parse_metadata_object_until(
         objective_lens_power,
         source_icc_profiles,
     })
+}
+
+fn required_nonzero_u32(
+    obj: &DefaultDicomObject,
+    tag: dicom_core::Tag,
+    name: &str,
+    path: &Path,
+) -> Result<u32, WsiError> {
+    let value = required_u32(obj, tag, name)?;
+    if value == 0 {
+        return Err(invalid_slide(
+            path,
+            format!("{name} must be greater than zero"),
+        ));
+    }
+    Ok(value)
+}
+
+fn optional_nonzero_u32(
+    obj: &DefaultDicomObject,
+    tag: dicom_core::Tag,
+    name: &str,
+    path: &Path,
+) -> Result<Option<u32>, WsiError> {
+    let value = optional_u32(obj, tag)?;
+    if value == Some(0) {
+        return Err(invalid_slide(
+            path,
+            format!("{name} must be greater than zero"),
+        ));
+    }
+    Ok(value)
 }
 
 pub(super) fn optical_path_icc_profiles(

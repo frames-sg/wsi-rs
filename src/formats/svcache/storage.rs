@@ -71,6 +71,15 @@ fn validate_svcache_metadata(
         return Err(invalid_svcache(path, "svcache metadata extends past EOF"));
     }
     validate_string(path, "source path", &metadata.source.path)?;
+    if metadata.source.sha256.len() != 64
+        || !metadata
+            .source
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid_svcache(path, "svcache source checksum is invalid"));
+    }
     if metadata.scenes.len() > MAX_SCENES {
         return Err(invalid_svcache(path, "svcache has too many scenes"));
     }
@@ -357,8 +366,6 @@ pub fn svcache_matches_source(cache_path: &Path, source_path: &Path) -> Result<b
 }
 
 pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiError> {
-    const SAMPLE_BYTES: u64 = 64 * 1024;
-
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
@@ -380,32 +387,19 @@ pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiEr
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos());
     let len = before.len();
-    let mut offsets = vec![
-        0,
-        len / 4,
-        len / 2,
-        (len / 4).saturating_mul(3),
-        len.saturating_sub(SAMPLE_BYTES),
-    ];
-    offsets.sort_unstable();
-    offsets.dedup();
     let mut digest = Sha256::new();
-    digest.update(len.to_le_bytes());
-    let mut buffer = vec![0u8; usize::try_from(SAMPLE_BYTES).unwrap_or(0)];
-    for offset in offsets {
-        file.seek(SeekFrom::Start(offset))
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
             .map_err(|source| WsiError::IoWithPath {
                 source: Arc::new(source),
                 path: path.to_path_buf(),
             })?;
-        let to_read = usize::try_from((len - offset).min(SAMPLE_BYTES)).unwrap_or(0);
-        file.read_exact(&mut buffer[..to_read])
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-        digest.update(offset.to_le_bytes());
-        digest.update(&buffer[..to_read]);
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
     }
     let after = file.metadata().map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
@@ -426,7 +420,7 @@ pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiEr
         path: canonical_path.to_string_lossy().into_owned(),
         len,
         modified_unix_nanos,
-        sample_sha256: hex_encode(&digest.finalize()),
+        sha256: hex_encode(&digest.finalize()),
     })
 }
 
@@ -551,6 +545,6 @@ impl PartialEq for SourceFingerprint {
         self.path == other.path
             && self.len == other.len
             && self.modified_unix_nanos == other.modified_unix_nanos
-            && self.sample_sha256 == other.sample_sha256
+            && self.sha256 == other.sha256
     }
 }

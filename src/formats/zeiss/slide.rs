@@ -64,6 +64,7 @@ impl ZeissReader {
 
 pub(super) struct ZeissSlide {
     pub(super) source_path: PathBuf,
+    pub(super) source_identity: FileIdentity,
     pub(super) dataset: Dataset,
     pub(super) czi: Mutex<CziFile>,
     pub(super) level_cache: LevelImageCache,

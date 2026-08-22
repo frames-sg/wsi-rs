@@ -68,6 +68,54 @@ fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
 }
 
 #[test]
+fn metadata_parse_rejects_zero_geometry_and_frame_count() {
+    type ZeroDimensionCase = (&'static str, fn(&mut TestDicomOptions), &'static str);
+    let cases: [ZeroDimensionCase; 5] = [
+        (
+            "zero-rows.dcm",
+            |options: &mut TestDicomOptions| options.rows = 0,
+            "Rows",
+        ),
+        (
+            "zero-columns.dcm",
+            |options: &mut TestDicomOptions| options.columns = 0,
+            "Columns",
+        ),
+        (
+            "zero-total-rows.dcm",
+            |options: &mut TestDicomOptions| options.total_pixel_matrix_rows = 0,
+            "TotalPixelMatrixRows",
+        ),
+        (
+            "zero-total-columns.dcm",
+            |options: &mut TestDicomOptions| options.total_pixel_matrix_columns = 0,
+            "TotalPixelMatrixColumns",
+        ),
+        (
+            "zero-frames.dcm",
+            |options: &mut TestDicomOptions| options.number_of_frames = 0,
+            "NumberOfFrames",
+        ),
+    ];
+    for (file_name, mutate, expected_field) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(file_name);
+        let mut options = TestDicomOptions::native(test_rgb_pixel_data());
+        mutate(&mut options);
+        write_test_dicom(&path, options);
+
+        let error = match parse_metadata_object_full(&path) {
+            Ok(_) => panic!("zero DICOM image dimensions must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(expected_field),
+            "unexpected error for {expected_field}: {error}"
+        );
+    }
+}
+
+#[test]
 fn top_level_pixel_spacing_is_mpp_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("spacing.dcm");

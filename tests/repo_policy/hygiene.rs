@@ -4,6 +4,16 @@ use std::io::Write;
 use wsi_rs::FormatRegistry;
 
 #[test]
+fn publish_workflow_runs_the_supply_chain_gate() {
+    let workflow = fs::read_to_string(crate_root().join(".github/workflows/publish.yml"))
+        .expect("read publish workflow");
+    assert!(
+        workflow.contains("cargo xtask deps"),
+        "publishing must depend on the repository supply-chain checks"
+    );
+}
+
+#[test]
 fn public_manifest_does_not_depend_on_local_path_patches() {
     let manifest = fs::read_to_string(crate_root().join("Cargo.toml")).expect("read manifest");
     let manifest = manifest

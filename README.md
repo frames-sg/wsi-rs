@@ -88,7 +88,9 @@ one aggregate allocation derived from the configured source-tile budget; excess
 per-image or per-shard caches remain disabled instead of preallocating outside
 that policy. Cache effects completed by a legacy reader are not rolled back when
 a controlled read is cancelled, but a cancelled result is not returned to the
-caller.
+caller. `.svcache` freshness policies stream the complete source through SHA-256,
+so opting into cache resolution performs a full source-file read; implicit
+`.svcache` resolution remains disabled by default.
 
 Metal and CUDA features expose renderer-uploadable device payloads. Output
 residency and codec backend selection are related but separate choices. Metal

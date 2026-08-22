@@ -162,6 +162,20 @@ fn decodes_rle_lossless_rgb_frame() {
 }
 
 #[test]
+fn rejects_rle_working_set_above_decoded_image_budget() {
+    let mut frame = vec![0; 64];
+    frame[0..4].copy_from_slice(&1u32.to_le_bytes());
+    frame[4..8].copy_from_slice(&64u32.to_le_bytes());
+
+    let error = decode_rle_lossless_frame(&frame, 16_384, 8_193, 1, "MONOCHROME2")
+        .expect_err("oversized RLE working set must be rejected before allocation");
+    assert!(
+        matches!(error, WsiError::ResourceLimit { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn reads_htj2k_rpcl_raw_compressed_frame_without_dicom_padding() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("htj2k-rpcl.dcm");

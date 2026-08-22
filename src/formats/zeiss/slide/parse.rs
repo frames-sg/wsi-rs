@@ -5,6 +5,7 @@ use super::super::*;
 
 struct ValidatedCzi {
     czi: CziFile,
+    source_identity: FileIdentity,
     header: czi_rs::FileHeaderInfo,
     xml: String,
     summary: czi_rs::MetadataSummary,
@@ -15,6 +16,7 @@ struct ValidatedCzi {
 
 struct CziDatasetParts {
     czi: CziFile,
+    source_identity: FileIdentity,
     attachments: Vec<czi_rs::AttachmentInfo>,
     dataset_id: DatasetId,
     scenes: Vec<Scene>,
@@ -42,9 +44,15 @@ impl ZeissSlide {
 }
 
 fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
-    preflight_czi_file(path)?;
+    let source_identity = preflight_czi_file(path)?;
     let mut czi =
         CziFile::open(path).map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+    if FileIdentity::from_path(path)? != source_identity {
+        return Err(invalid_slide(
+            path,
+            "CZI source identity changed between preflight and parser open",
+        ));
+    }
 
     if czi.subblocks().len() > MAX_CZI_SUBBLOCKS {
         return Err(invalid_slide(
@@ -136,6 +144,7 @@ fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
         statistics: czi.statistics().clone(),
         attachments: czi.attachments().to_vec(),
         subblocks: czi.subblocks().to_vec(),
+        source_identity,
         czi,
     })
 }
@@ -217,6 +226,7 @@ fn build_dataset_parts(path: &Path, mut input: ValidatedCzi) -> Result<CziDatase
 
     Ok(CziDatasetParts {
         czi: input.czi,
+        source_identity: input.source_identity,
         attachments: input.attachments,
         dataset_id,
         scenes,
@@ -392,6 +402,7 @@ fn assemble_slide(
 
     ZeissSlide {
         source_path: path.to_path_buf(),
+        source_identity: parts.source_identity,
         dataset,
         czi: Mutex::new(parts.czi),
         level_cache: Mutex::new(level_cache),

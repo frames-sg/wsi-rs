@@ -19,8 +19,28 @@ fn source_fingerprint_detects_same_size_same_mtime_replacement() {
 
     assert_eq!(first.len, second.len);
     assert_eq!(first.modified_unix_nanos, second.modified_unix_nanos);
-    assert_ne!(first.sample_sha256, second.sample_sha256);
+    assert_ne!(first.sha256, second.sha256);
     assert_ne!(first, second);
+}
+
+#[test]
+fn source_fingerprint_hashes_bytes_between_former_sample_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("large-source.bin");
+    std::fs::write(&source, vec![0u8; 1024 * 1024]).unwrap();
+    let original_modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+    let first = fingerprint_source(&source).unwrap();
+
+    let mut file = std::fs::File::options().write(true).open(&source).unwrap();
+    file.seek(SeekFrom::Start(400 * 1024)).unwrap();
+    file.write_all(&[1]).unwrap();
+    file.set_times(FileTimes::new().set_modified(original_modified))
+        .unwrap();
+    let second = fingerprint_source(&source).unwrap();
+
+    assert_eq!(first.len, second.len);
+    assert_eq!(first.modified_unix_nanos, second.modified_unix_nanos);
+    assert_ne!(first.sha256, second.sha256);
 }
 
 #[test]

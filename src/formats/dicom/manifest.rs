@@ -2,7 +2,7 @@ use super::*;
 
 const DICOM_SHARED_CACHE_TARGET_REGION_SIDE: u32 = 2048;
 const DICOM_SHARED_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_DICOM_DIRECTORY_FILES: usize = 10_000;
+const MAX_DICOM_DIRECTORY_FILES: usize = 1_024;
 
 pub(super) struct DicomSlide {
     pub(super) dataset: Dataset,

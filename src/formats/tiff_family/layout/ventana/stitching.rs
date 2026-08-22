@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_VENTANA_TILES_PER_LEVEL: u64 = 1_000_000;
+
 // ── Level 0 XML parsing ────────────────────────────────────────────
 
 /// Parsed BIF area of interest.
@@ -33,6 +35,11 @@ pub(super) fn parse_level0_xml(
     tile_width: i64,
     tile_height: i64,
 ) -> Result<BifInfo, TiffParseError> {
+    if tile_width <= 0 || tile_height <= 0 {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: tile dimensions must be greater than zero (got {tile_width}x{tile_height})"
+        )));
+    }
     let root = xml::parse_xml(xml_str)
         .map_err(|e| TiffParseError::Structure(format!("Ventana BIF: XML parse error: {}", e)))?;
 
@@ -58,6 +65,7 @@ pub(super) fn parse_level0_xml(
     let mut total_offset_y: f64 = 0.0;
     let mut total_x_weight: i64 = 0;
     let mut total_y_weight: i64 = 0;
+    let mut total_tile_count = 0u64;
     for (idx, info) in image_infos.into_iter().enumerate() {
         let aoi_scanned: i64 = info
             .attr("AOIScanned")
@@ -76,6 +84,17 @@ pub(super) fn parse_level0_xml(
             .attr("NumRows")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
+        let area_tile_count = checked_ventana_tile_grid(num_cols, num_rows)?;
+        total_tile_count = total_tile_count
+            .checked_add(area_tile_count)
+            .ok_or_else(|| {
+                TiffParseError::Structure("Ventana BIF: aggregate tile grid overflow".into())
+            })?;
+        if total_tile_count > MAX_VENTANA_TILES_PER_LEVEL {
+            return Err(TiffParseError::Structure(format!(
+                "Ventana BIF: tile grid declares {total_tile_count} tiles, exceeding the {MAX_VENTANA_TILES_PER_LEVEL}-tile safety limit"
+            )));
+        }
         let pos_x: f64 = info
             .attr("Pos-X")
             .and_then(|s| s.parse().ok())
@@ -105,6 +124,12 @@ pub(super) fn parse_level0_xml(
         }
         let start_col = start_col_x / tile_width;
         let start_row = start_row_y / tile_height;
+        start_col.checked_add(num_cols).ok_or_else(|| {
+            TiffParseError::Structure("Ventana BIF: tile grid column range overflow".into())
+        })?;
+        start_row.checked_add(num_rows).ok_or_else(|| {
+            TiffParseError::Structure("Ventana BIF: tile grid row range overflow".into())
+        })?;
 
         // Accumulate joint offsets for tile advance computation.
         for joint_info in info.find_all("TileJointInfo") {
@@ -208,6 +233,28 @@ pub(super) fn parse_level0_xml(
         tile_advance_x,
         tile_advance_y,
     })
+}
+
+fn checked_ventana_tile_grid(num_cols: i64, num_rows: i64) -> Result<u64, TiffParseError> {
+    let (Ok(num_cols), Ok(num_rows)) = (u64::try_from(num_cols), u64::try_from(num_rows)) else {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: tile grid dimensions must be positive (got {num_cols}x{num_rows})"
+        )));
+    };
+    if num_cols == 0 || num_rows == 0 {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: tile grid dimensions must be positive (got {num_cols}x{num_rows})"
+        )));
+    }
+    let tile_count = num_cols
+        .checked_mul(num_rows)
+        .ok_or_else(|| TiffParseError::Structure("Ventana BIF: tile grid size overflow".into()))?;
+    if tile_count > MAX_VENTANA_TILES_PER_LEVEL {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: tile grid declares {tile_count} tiles, exceeding the {MAX_VENTANA_TILES_PER_LEVEL}-tile safety limit"
+        )));
+    }
+    Ok(tile_count)
 }
 
 fn parse_area_tile_positions(

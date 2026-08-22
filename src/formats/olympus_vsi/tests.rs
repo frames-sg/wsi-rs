@@ -62,6 +62,27 @@ fn probe_requires_case_insensitive_vsi_extension_and_companion_directory() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ets_discovery_does_not_follow_symlinked_scene_directories() {
+    use std::os::unix::fs::symlink;
+
+    let companion = tempfile::tempdir().expect("companion directory");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let outside_scene = outside.path().join("scene");
+    fs::create_dir(&outside_scene).expect("outside ETS scene");
+    fs::write(outside_scene.join("frame_t.ets"), b"ETS\0").expect("outside ETS file");
+    symlink(&outside_scene, companion.path().join("linked-scene"))
+        .expect("symlink outside scene into companion");
+
+    assert!(
+        find_ets_files(companion.path())
+            .expect("scan companion directory")
+            .is_empty(),
+        "ETS discovery must not escape through a directory symlink"
+    );
+}
+
 #[test]
 fn synthetic_vsi_opens_with_metadata_and_reads_encoded_and_background_tiles() {
     let fixture = write_vsi_fixture(&[("large-scene", EtsSpec::default())]);

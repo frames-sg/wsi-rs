@@ -16,30 +16,34 @@ const METADATA_MAGIC: &[u8; 16] = b"ZISRAWMETADATA\0\0";
 const ATTACHMENT_DIRECTORY_MAGIC: &[u8; 16] = b"ZISRAWATTDIR\0\0\0\0";
 const SUBBLOCK_MAGIC: &[u8; 16] = b"ZISRAWSUBBLOCK\0\0";
 
-pub(super) fn preflight_czi_file(path: &Path) -> Result<(), WsiError> {
+pub(super) fn preflight_czi_file(path: &Path) -> Result<FileIdentity, WsiError> {
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
+    let identity = FileIdentity::from_open_file(path, &file)?;
     let file_len = file.metadata()?.len();
     preflight_czi_reader(&mut file, file_len).map_err(|error| WsiError::InvalidSlide {
         path: path.to_path_buf(),
         message: error.to_string(),
-    })
+    })?;
+    Ok(identity)
 }
 
-pub(super) fn preflight_czi_subblock(path: &Path, offset: u64) -> Result<(), WsiError> {
+pub(super) fn preflight_czi_subblock(path: &Path, offset: u64) -> Result<FileIdentity, WsiError> {
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
+    let identity = FileIdentity::from_open_file(path, &file)?;
     let file_len = file.metadata()?.len();
     preflight_czi_subblock_reader(&mut file, file_len, offset).map_err(|error| {
         WsiError::InvalidSlide {
             path: path.to_path_buf(),
             message: error.to_string(),
         }
-    })
+    })?;
+    Ok(identity)
 }
 
 fn preflight_czi_reader(reader: &mut (impl Read + Seek), file_len: u64) -> Result<(), WsiError> {

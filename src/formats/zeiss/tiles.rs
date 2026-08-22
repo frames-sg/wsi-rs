@@ -8,6 +8,18 @@ use super::*;
 use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 
 impl ZeissSlide {
+    fn preflight_source_subblock(&self, offset: u64) -> Result<(), WsiError> {
+        let actual_identity = preflight_czi_subblock(&self.source_path, offset)?;
+        if actual_identity != self.source_identity {
+            return Err(WsiError::InvalidSlide {
+                path: self.source_path.clone(),
+                message: "CZI source identity check failed because the source path was replaced"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn read_tile(
         &self,
         scene: usize,
@@ -209,7 +221,7 @@ impl ZeissSlide {
         if direct_uncompressed_rgb {
             let mut destination = vec![0u8; tile_rgb_len];
             for info in subblocks {
-                preflight_czi_subblock(&self.source_path, info.file_position)?;
+                self.preflight_source_subblock(info.file_position)?;
                 let raw = czi
                     .read_subblock(info.index)
                     .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -229,7 +241,7 @@ impl ZeissSlide {
 
         let mut destination = vec![0u8; tile_rgb_len];
         for info in subblocks {
-            preflight_czi_subblock(&self.source_path, info.file_position)?;
+            self.preflight_source_subblock(info.file_position)?;
             let raw = czi
                 .read_subblock(info.index)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -359,7 +371,7 @@ impl ZeissSlide {
             .map_err(WsiError::DisplayConversion)?;
             let mut destination = vec![0u8; destination_len];
             for info in subblocks {
-                preflight_czi_subblock(&self.source_path, info.file_position)?;
+                self.preflight_source_subblock(info.file_position)?;
                 let raw = czi
                     .read_subblock(info.index)
                     .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -384,7 +396,7 @@ impl ZeissSlide {
 
         let mut destination: Option<czi_rs::Bitmap> = None;
         for info in subblocks {
-            preflight_czi_subblock(&self.source_path, info.file_position)?;
+            self.preflight_source_subblock(info.file_position)?;
             let raw = {
                 let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
                 czi.read_subblock(info.index)

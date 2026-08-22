@@ -26,6 +26,7 @@ use j2k_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
 use crate::core::cache::{CacheConfig, PrivateCache};
+use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{

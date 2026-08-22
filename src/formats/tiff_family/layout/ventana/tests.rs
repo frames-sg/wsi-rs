@@ -258,6 +258,29 @@ fn parse_level0_xml_missing_slide_stitch_info_errors() {
 }
 
 #[test]
+fn parse_level0_xml_rejects_invalid_or_overflowing_tile_grids() {
+    for (num_cols, num_rows) in [
+        ("0", "1"),
+        ("1", "0"),
+        ("1000001", "1"),
+        ("9223372036854775807", "2"),
+    ] {
+        let xml = format!(
+            r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="{num_cols}" NumRows="{num_rows}" Pos-X="0" Pos-Y="0"/></SlideStitchInfo></EncodeInfo>"#
+        );
+
+        let error = match parse_level0_xml(&xml, 256, 256) {
+            Ok(_) => panic!("invalid Ventana tile grids must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("tile grid"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
 fn ventana_level0_dimensions_normalize_to_minimum_scanned_origin() {
     let bif = BifInfo {
         areas: vec![
