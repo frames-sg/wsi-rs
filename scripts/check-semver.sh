@@ -80,6 +80,5 @@ for profile in "${profiles[@]}"; do
 
   cargo semver-checks check-release \
     --current-rustdoc "$current_rustdoc" \
-    --baseline-rustdoc "$baseline_rustdoc" \
-    --release-type minor
+    --baseline-rustdoc "$baseline_rustdoc"
 done

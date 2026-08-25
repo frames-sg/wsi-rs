@@ -329,6 +329,7 @@ pub fn wsi_rs::Slide::read_raw_compressed_tile(&self, &wsi_rs::TileRequest) -> c
 pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_subpixel(&self, &wsi_rs::RegionRequest, (f64, f64)) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>
@@ -880,6 +881,7 @@ pub fn wsi_rs::Slide::read_raw_compressed_tile(&self, &wsi_rs::TileRequest) -> c
 pub fn wsi_rs::Slide::read_region(&self, &wsi_rs::RegionRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba(&self, &wsi_rs::RegionRequest) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_region_rgba_windowed(&self, &wsi_rs::RegionRequest, &wsi_rs::DisplayWindow) -> core::result::Result<image::images::buffer::RgbaImage, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::read_region_subpixel(&self, &wsi_rs::RegionRequest, (f64, f64)) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tile_controlled(&self, &wsi_rs::TileRequest, wsi_rs::TileOutputPreference, &wsi_rs::ReadControl) -> core::result::Result<wsi_rs::TilePixels, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::read_tiles(&self, &[wsi_rs::TileRequest], wsi_rs::TileOutputPreference) -> core::result::Result<alloc::vec::Vec<wsi_rs::TilePixels>, wsi_rs::error::WsiError>

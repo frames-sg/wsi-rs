@@ -64,7 +64,7 @@ fn semver_check_uses_checksum_pinned_published_baseline() {
 }
 
 #[test]
-fn semver_check_covers_default_and_device_profiles_as_minor_compatibility() {
+fn semver_check_covers_default_and_device_profiles_using_versioned_compatibility() {
     let script = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
     )
@@ -74,7 +74,7 @@ fn semver_check_covers_default_and_device_profiles_as_minor_compatibility() {
     assert!(script.contains("if [[ \"$(uname -s)\" == \"Darwin\" ]]"));
     assert!(script.contains("for profile in \"${profiles[@]}\""));
     assert!(!script.contains("for profile in default cuda metal"));
-    assert!(script.contains("--release-type minor"));
+    assert!(!script.contains("--release-type"));
 }
 
 #[test]
