@@ -78,6 +78,14 @@ fn semver_check_covers_default_and_device_profiles_using_versioned_compatibility
 }
 
 #[test]
+fn dependency_policy_allows_path_only_dev_crates_without_allowing_registry_wildcards() {
+    let config = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../deny.toml"))
+        .expect("read cargo-deny config");
+    assert!(config.contains("wildcards = \"deny\""));
+    assert!(config.contains("allow-wildcard-paths = true"));
+}
+
+#[test]
 fn public_api_snapshot_comparison_normalizes_newlines_and_reports_drift() {
     let directory = tempfile::tempdir().unwrap();
     let snapshot = directory.path().join("api.txt");
