@@ -545,7 +545,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "j2k"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2b8f47cb9098f35d9a2bde2c6b1a907f33df6ee750e1f7dfe4749f067ee654"
 dependencies = [
  "j2k-core",
  "j2k-native",
@@ -557,7 +558,8 @@ dependencies = [
 [[package]]
 name = "j2k-codec-math"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99c1842cb5bd9ee9b99fb545d21065be3d35d7f35a2a649f6812ff41f798c18b"
 dependencies = [
  "j2k-types",
 ]
@@ -565,7 +567,8 @@ dependencies = [
 [[package]]
 name = "j2k-core"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "085fb673160afc821347344a5739dc300ac7f0148bd2ba1c347ac8843a35d8c5"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -573,7 +576,8 @@ dependencies = [
 [[package]]
 name = "j2k-jpeg"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63cff0404f67844a09baf0d1d11941c1c652cfe5885f67f20c355b19631575f5"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -587,7 +591,8 @@ dependencies = [
 [[package]]
 name = "j2k-native"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ace22559a16f427f33b521de26f03eef5cc295be98ebf154c653bb549ffb454"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -600,12 +605,14 @@ dependencies = [
 [[package]]
 name = "j2k-profile"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "398024e7c8470f50cf95d6b27c38c348f3a3cf54283d55bd89555575f6eb415c"
 
 [[package]]
 name = "j2k-tilecodec"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46a19ed33c3cf2c3a6d22a4d412e18b3f968bc404fbadaacc3034de8b0a3514c"
 dependencies = [
  "flate2",
  "j2k-core",
@@ -617,7 +624,8 @@ dependencies = [
 [[package]]
 name = "j2k-types"
 version = "0.10.0"
-source = "git+https://github.com/frames-sg/j2k.git?rev=57b6af89c61f25e1a476415ef3a752f6d1b3f057#57b6af89c61f25e1a476415ef3a752f6d1b3f057"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45c0bfd46538ea72f663b6f93af8d9cb309cf85033322de29a8db5c201e885da"
 
 [[package]]
 name = "jobserver"

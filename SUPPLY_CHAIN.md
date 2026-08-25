@@ -10,11 +10,10 @@ Alliance, Google, and Mozilla. Uncovered crates are explicit
 `safe-to-deploy` exemptions, not implicit trust. Dependency updates must rerun
 `cargo vet --locked`; new exemptions require review in the same change.
 
-The J2K 0.10.0 workspace is pinned to a reviewed Git revision for integration
-testing, but it is not release-ready: the coordinated crates must be published
-and the registry dependency must replace the Git pin. Exact-version Cargo Vet
-exemptions record local acceptance of its `objc2`, SIMD, and split CUDA engine
-dependency surface; any later J2K version requires another explicit review.
+The J2K 0.10.0 family resolves from its coordinated crates.io release.
+Exact-version Cargo Vet exemptions record local acceptance of its `objc2`,
+SIMD, and split CUDA engine dependency surface; any later J2K version requires
+another explicit review.
 
 ## Time-bound upstream exceptions
 
