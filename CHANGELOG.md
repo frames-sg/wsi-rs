@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-25
+
+### Added
+
+- Added reproducible OpenSlide comparison tooling, changed-line and component
+  coverage gates, deterministic workload checksums, and CPU/host metadata for
+  performance captures.
+- Added focused concurrency, geometry, compositor, cache, parser, and device
+  regression coverage while moving test-only modules out of production LCOV.
+
 ### Changed
 
 - Migrated the optional Metal backend from `metal-rs` to the J2K 0.10.0
@@ -20,19 +30,6 @@
   capture schema 6 removes metadata duplicated by the run records and declared
   capture plan; schema 5 captures remain readable by the checksum-enforcing
   comparator.
-
-## [0.6.0] - 2026-08-15
-
-### Added
-
-- Added reproducible OpenSlide comparison tooling, changed-line and component
-  coverage gates, deterministic workload checksums, and CPU/host metadata for
-  performance captures.
-- Added focused concurrency, geometry, compositor, cache, parser, and device
-  regression coverage while moving test-only modules out of production LCOV.
-
-### Changed
-
 - `CpuTile::pixels_arc` now returns `Option<Arc<Vec<u8>>>` and clones the tile's
   existing `Arc` without copying pixels. Callers migrating from `Arc<[u8]>`
   should change the stored type and use `pixels.as_slice()` when they need a

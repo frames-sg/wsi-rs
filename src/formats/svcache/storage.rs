@@ -367,11 +367,7 @@ pub fn svcache_matches_source(cache_path: &Path, source_path: &Path) -> Result<b
 
 pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiError> {
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let before = file.metadata().map_err(|source| WsiError::IoWithPath {
+    let before = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
@@ -381,6 +377,10 @@ pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiEr
             "svcache source fingerprint requires a regular file",
         ));
     }
+    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(source),
+        path: path.to_path_buf(),
+    })?;
     let modified_unix_nanos = before
         .modified()
         .ok()
