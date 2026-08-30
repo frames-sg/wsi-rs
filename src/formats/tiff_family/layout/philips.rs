@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use crate::core::types::*;
 use crate::decode::xml;
+use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
@@ -284,7 +285,7 @@ fn extract_pixel_spacings(
         .get_string(first_ifd, tags::IMAGE_DESCRIPTION)
         .ok()?;
 
-    let root = xml::parse_xml(desc).ok()?;
+    let root = parse_philips_xml(desc).ok()?;
 
     let mut spacings_raw = extract_representation_spacings(&root).unwrap_or_default();
     if spacings_raw.is_empty() {
@@ -424,6 +425,17 @@ fn find_first_pixel_spacing(node: &xml::XmlNode) -> Option<&str> {
     None
 }
 
+fn parse_philips_xml(description: &str) -> Result<xml::XmlNode, WsiError> {
+    // Philips metadata may encode the quotes surrounding decimal strings as
+    // predefined XML entities. The shared XML tree intentionally leaves text
+    // references opaque, so normalize only this known vendor representation.
+    if description.contains("&quot;") {
+        xml::parse_xml(&description.replace("&quot;", "\""))
+    } else {
+        xml::parse_xml(description)
+    }
+}
+
 /// Parse properties from the XML metadata.
 fn parse_properties(
     container: &TiffContainer,
@@ -442,12 +454,12 @@ fn parse_properties(
         properties.insert("openslide.comment", desc.to_string());
 
         // Walk XML for Name/Value property pairs.
-        if let Ok(root) = xml::parse_xml(desc) {
+        if let Ok(root) = parse_philips_xml(desc) {
             let raw_mpp_spacing = find_first_pixel_spacing(&root);
             collect_xml_properties(&root, &mut properties);
             if let Some((mpp_x, mpp_y)) = resolve_mpp_pair(raw_mpp_spacing, base_spacing) {
-                properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-                properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
+                properties.insert("openslide.mpp-x", mpp_x.to_string());
+                properties.insert("openslide.mpp-y", mpp_y.to_string());
             }
         }
     }
@@ -460,8 +472,8 @@ fn parse_properties(
     // MPP from DICOM_PIXEL_SPACING (multiply mm by 1000 -> micrometers).
     if properties.get("openslide.mpp-x").is_none() {
         if let Some((mpp_x, mpp_y)) = resolve_mpp_pair(None, base_spacing) {
-            properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-            properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
+            properties.insert("openslide.mpp-x", mpp_x.to_string());
+            properties.insert("openslide.mpp-y", mpp_y.to_string());
         }
     }
 

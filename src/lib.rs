@@ -59,6 +59,7 @@ pub mod error;
 pub(crate) mod formats;
 pub mod output;
 pub mod properties;
+mod slide_candidates;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -77,6 +78,7 @@ pub use formats::svcache::{
 #[cfg(feature = "cuda")]
 pub use output::cuda::CudaDeviceTile;
 pub use properties::Properties;
+pub use slide_candidates::{is_builtin_slide_candidate_path, BUILTIN_SLIDE_CANDIDATE_EXTENSIONS};
 
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]

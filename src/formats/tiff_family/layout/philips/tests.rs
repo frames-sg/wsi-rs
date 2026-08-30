@@ -175,6 +175,30 @@ fn parse_spacing_pair_preserves_distinct_axes() {
 }
 
 #[test]
+fn interpret_preserves_high_precision_entity_quoted_spacing_in_xy_order() {
+    let description = r#"<DataObject ObjectType="DPUfsImport">
+        <Attribute Name="DICOM_PIXEL_SPACING">&quot;0.000226891234&quot; &quot;0.000226907654&quot;</Attribute>
+    </DataObject>"#;
+    let file = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 1024),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 512),
+        SyntheticTag::long(tags::TILE_WIDTH, 256),
+        SyntheticTag::long(tags::TILE_LENGTH, 256),
+        SyntheticTag::short(tags::COMPRESSION, 7),
+        SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"),
+        SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, description),
+    ]]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = PhilipsInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.properties.mpp(),
+        Some((0.000226907654 * 1000.0, 0.000226891234 * 1000.0))
+    );
+}
+
+#[test]
 fn collect_pixel_spacings_recurses_and_handles_empty_xml() {
     let root = xml::parse_xml(philips_description()).unwrap();
     let mut spacings = Vec::new();

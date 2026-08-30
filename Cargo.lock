@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "wsi-rs"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "byteorder",

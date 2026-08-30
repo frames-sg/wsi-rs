@@ -1021,6 +1021,7 @@ pub fn wsi_rs::TileViewRequestBuilder::tile(self, i64, i64) -> Self
 pub fn wsi_rs::TileViewRequestBuilder::tile_height(self, u32) -> Self
 pub fn wsi_rs::TileViewRequestBuilder::tile_size(self, u32, u32) -> Self
 pub fn wsi_rs::TileViewRequestBuilder::tile_width(self, u32) -> Self
+pub const wsi_rs::BUILTIN_SLIDE_CANDIDATE_EXTENSIONS: &[&str]
 pub trait wsi_rs::DatasetReader: core::marker::Send + core::marker::Sync
 pub fn wsi_rs::DatasetReader::open(&self, &std::path::Path) -> core::result::Result<alloc::boxed::Box<dyn wsi_rs::SlideReader>, wsi_rs::error::WsiError>
 impl<T: wsi_rs::DatasetReader> wsi_rs::DatasetReader for alloc::sync::Arc<T>
@@ -1055,6 +1056,7 @@ pub fn wsi_rs::build_svcache_tiles(&std::path::Path, &std::path::Path, &[wsi_rs:
 pub fn wsi_rs::build_svcache_tiles_replace(&std::path::Path, &std::path::Path, &[wsi_rs::SvcacheTileSelection]) -> core::result::Result<usize, wsi_rs::error::WsiError>
 pub fn wsi_rs::cache_dir_svcache_path(&std::path::Path) -> std::path::PathBuf
 pub fn wsi_rs::default_svcache_path(&std::path::Path) -> std::path::PathBuf
+pub fn wsi_rs::is_builtin_slide_candidate_path(&std::path::Path) -> bool
 pub fn wsi_rs::svcache_candidate_paths(&std::path::Path) -> [std::path::PathBuf; 2]
 pub fn wsi_rs::svcache_matches_source(&std::path::Path, &std::path::Path) -> core::result::Result<bool, wsi_rs::error::WsiError>
 pub type wsi_rs::ReadDiagnosticSink = (dyn core::ops::function::Fn(wsi_rs::DicomIndexDiagnostic) + core::marker::Send + core::marker::Sync)
