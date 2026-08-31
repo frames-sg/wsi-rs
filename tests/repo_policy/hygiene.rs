@@ -151,7 +151,8 @@ fn referenced_parity_corpus_fetch_script_exists() {
 #[test]
 fn corpus_ci_reuses_verified_parent_cache_and_serializes_coverage() {
     let workflow = fs::read_to_string(crate_root().join(".github/workflows/ci.yml"))
-        .expect("read CI workflow");
+        .expect("read CI workflow")
+        .replace("\r\n", "\n");
 
     assert!(
         workflow.contains("  coverage:\n    needs: parity-corpus\n"),
