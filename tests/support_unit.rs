@@ -180,6 +180,34 @@ fn corpus_public_manifest_parses() {
         .expect("public DICOM JP2K corpus entry");
     assert!(dicom_jp2k.must_decode_level(0));
     assert!(!dicom_jp2k.openslide_must_decode_level(0));
+
+    let svs_jp2k = manifest
+        .slides
+        .iter()
+        .find(|slide| slide.alias == "svs-jp2k-001")
+        .expect("public SVS JP2K corpus entry");
+    assert!(svs_jp2k.openslide_required);
+
+    for alias in [
+        "argos-001",
+        "argos-stacked-001",
+        "huron-jpeg-001",
+        "huron-uncompressed-001",
+    ] {
+        let entry = manifest
+            .slides
+            .iter()
+            .find(|slide| slide.alias == alias)
+            .unwrap_or_else(|| panic!("public {alias} corpus entry"));
+        assert!(
+            !entry.openslide_required,
+            "{alias} must not use OpenSlide's flattened pyramid as its compatibility contract"
+        );
+        assert!(
+            !entry.oracle_divergences.is_empty(),
+            "{alias} must document its OpenSlide compatibility boundary"
+        );
+    }
 }
 
 #[test]

@@ -448,6 +448,8 @@ fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
         .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
     {
         Tolerance::TOLERANT
+    } else if entry.format == "huron" && entry.codecs.iter().any(|codec| codec == "jpeg") {
+        Tolerance::JPEG_DECODER_COMPAT
     } else {
         Tolerance::JPEG_TIGHT
     }

@@ -19,6 +19,11 @@ impl Tolerance {
         mean_abs: 0.05,
     };
 
+    pub(crate) const JPEG_DECODER_COMPAT: Self = Self {
+        max_abs: 3,
+        mean_abs: 0.1,
+    };
+
     pub(crate) const TOLERANT: Self = Self {
         max_abs: 4,
         mean_abs: 1.0,
