@@ -151,6 +151,175 @@ fn artifact_text_parsers_and_architecture_checks_fail_closed() {
     assert!(smoke_source(ArtifactPlatform::Linux).contains("openslide_cache_create"));
 }
 
+#[test]
+fn artifact_platform_output_validation_covers_portable_and_rejected_paths() {
+    let nm_exports = OFFICIAL_EXPORTS
+        .into_iter()
+        .map(|name| format!("00000000 T _{name}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let dumpbin_exports = OFFICIAL_EXPORTS
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| format!("{} 00000000 00000000 {name}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let linux_dynamic = "Library soname: [libopenslide.so.1]\nShared library: [libc.so.6]\n(RUNPATH) Library runpath: [$ORIGIN:$ORIGIN/lib]\n";
+    validate_linux_output("Machine: X86-64", linux_dynamic, &nm_exports, "x86_64").unwrap();
+    assert!(validate_linux_output(
+        "Machine: X86-64",
+        "Shared library: [libc.so.6]",
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("SONAME"));
+    assert!(validate_linux_output(
+        "Machine: X86-64",
+        "Library soname: [libopenslide.so.1]\nShared library: [/tmp/libcodec.so]",
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("invalid ELF dependency"));
+    assert!(validate_linux_output(
+        "Machine: X86-64",
+        "Library soname: [libopenslide.so.1]\n(RPATH) Library rpath: [/tmp/lib]",
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("RPATH escapes"));
+
+    let identity = "artifact:\n@rpath/libopenslide.1.dylib\n";
+    let dependencies = "artifact:\n@rpath/libopenslide.1.dylib (compatibility)\n/usr/lib/libSystem.B.dylib (compatibility)\n@loader_path/libcodec.dylib (compatibility)\n";
+    let load_commands = "cmd LC_RPATH\ncmdsize 32\npath @loader_path/lib (offset 12)\n";
+    validate_macos_output(
+        "x86_64",
+        identity,
+        dependencies,
+        load_commands,
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap();
+    assert!(validate_macos_output(
+        "x86_64",
+        "artifact:\n/tmp/libopenslide.1.dylib\n",
+        dependencies,
+        load_commands,
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("install ID"));
+    assert!(validate_macos_output(
+        "x86_64",
+        identity,
+        "artifact:\n/tmp/libcodec.dylib (compatibility)\n",
+        load_commands,
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("nonportable path"));
+    assert!(validate_macos_output(
+        "x86_64",
+        identity,
+        dependencies,
+        "cmd LC_RPATH\ncmdsize 32\n",
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("has no path"));
+    assert!(validate_macos_output(
+        "x86_64",
+        identity,
+        dependencies,
+        "cmd LC_RPATH\npath /tmp/lib (offset 12)\n",
+        &nm_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("RPATH has a nonportable path"));
+
+    validate_windows_output(
+        "machine (x64)",
+        "KERNEL32.dll\nVCRUNTIME140.dll\n",
+        &dumpbin_exports,
+        "x86_64",
+    )
+    .unwrap();
+    assert!(validate_windows_output(
+        "machine (x64)",
+        "C:\\runtime\\codec.dll\n",
+        &dumpbin_exports,
+        "x86_64",
+    )
+    .unwrap_err()
+    .contains("path instead of an import name"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_artifact_smoke_accepts_a_canonical_self_contained_library() {
+    let directory = tempfile::tempdir().unwrap();
+    let library = directory.path().join("libopenslide.so.1");
+    let include_dir = directory.path().join("include");
+    let metadata = directory.path().join("artifact-metadata.json");
+    let source = directory.path().join("openslide-shim.c");
+    fs::create_dir(&include_dir).unwrap();
+    fs::write(
+        include_dir.join("openslide.h"),
+        r#"#include <stddef.h>
+typedef void openslide_cache_t;
+const char *openslide_get_version(void);
+openslide_cache_t *openslide_cache_create(size_t capacity);
+void openslide_cache_release(openslide_cache_t *cache);
+"#,
+    )
+    .unwrap();
+    fs::write(include_dir.join("openslide-features.h"), "").unwrap();
+
+    let mut definitions = String::from(
+        r#"#include <stddef.h>
+#define EXPORT __attribute__((visibility("default")))
+static int CACHE;
+EXPORT const char *openslide_get_version(void) { return "OpenSlide 4.0.1+wsi-rs-test"; }
+EXPORT void *openslide_cache_create(size_t capacity) { (void)capacity; return &CACHE; }
+EXPORT void openslide_cache_release(void *cache) { (void)cache; }
+"#,
+    );
+    for export in OFFICIAL_EXPORTS {
+        if !matches!(
+            export,
+            "openslide_get_version" | "openslide_cache_create" | "openslide_cache_release"
+        ) {
+            definitions.push_str(&format!("EXPORT void {export}(void) {{}}\n"));
+        }
+    }
+    fs::write(&source, definitions).unwrap();
+    run(
+        "cc",
+        &[
+            OsString::from("-shared"),
+            OsString::from("-fPIC"),
+            OsString::from("-fvisibility=hidden"),
+            OsString::from("-Wl,-soname,libopenslide.so.1"),
+            source.as_os_str().to_owned(),
+            OsString::from("-o"),
+            library.as_os_str().to_owned(),
+        ],
+    )
+    .unwrap();
+    let digest = wsi_rs_perf::sha256_file(&library).unwrap();
+    write_metadata(&metadata, "libopenslide.so.1", &digest);
+
+    smoke_paths(&library, &include_dir, std::env::consts::ARCH, &metadata).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn artifact_process_helpers_report_success_exit_and_spawn_failures() {

@@ -181,8 +181,26 @@ fn validate_metadata(library: &Path, metadata_path: &Path) -> Result<(), String>
 
 fn validate_linux(library: &Path, expected_architecture: &str) -> Result<(), String> {
     let header = capture("readelf", [OsStr::new("-h"), library.as_os_str()])?;
-    require_architecture(&header, expected_architecture, "X86-64", "AArch64")?;
     let dynamic = capture("readelf", [OsStr::new("-d"), library.as_os_str()])?;
+    let exports = capture(
+        "nm",
+        [
+            OsStr::new("-D"),
+            OsStr::new("--defined-only"),
+            OsStr::new("--extern-only"),
+            library.as_os_str(),
+        ],
+    )?;
+    validate_linux_output(&header, &dynamic, &exports, expected_architecture)
+}
+
+fn validate_linux_output(
+    header: &str,
+    dynamic: &str,
+    exports: &str,
+    expected_architecture: &str,
+) -> Result<(), String> {
+    require_architecture(header, expected_architecture, "X86-64", "AArch64")?;
     if !dynamic.contains("Library soname: [libopenslide.so.1]") {
         return Err("ELF artifact SONAME must be libopenslide.so.1".into());
     }
@@ -202,22 +220,34 @@ fn validate_linux(library: &Path, expected_architecture: &str) -> Result<(), Str
             }
         }
     }
-    let exports = capture(
-        "nm",
-        [
-            OsStr::new("-D"),
-            OsStr::new("--defined-only"),
-            OsStr::new("--extern-only"),
-            library.as_os_str(),
-        ],
-    )?;
-    validate_exports(parse_nm_exports(&exports))
+    validate_exports(parse_nm_exports(exports))
 }
 
 fn validate_macos(library: &Path, expected_architecture: &str) -> Result<(), String> {
     let architectures = capture("lipo", [OsStr::new("-archs"), library.as_os_str()])?;
-    require_architecture(&architectures, expected_architecture, "x86_64", "arm64")?;
     let identity = capture("otool", [OsStr::new("-D"), library.as_os_str()])?;
+    let dependencies = capture("otool", [OsStr::new("-L"), library.as_os_str()])?;
+    let load_commands = capture("otool", [OsStr::new("-l"), library.as_os_str()])?;
+    let exports = capture("nm", [OsStr::new("-gU"), library.as_os_str()])?;
+    validate_macos_output(
+        &architectures,
+        &identity,
+        &dependencies,
+        &load_commands,
+        &exports,
+        expected_architecture,
+    )
+}
+
+fn validate_macos_output(
+    architectures: &str,
+    identity: &str,
+    dependencies: &str,
+    load_commands: &str,
+    exports: &str,
+    expected_architecture: &str,
+) -> Result<(), String> {
+    require_architecture(architectures, expected_architecture, "x86_64", "arm64")?;
     if !identity
         .lines()
         .skip(1)
@@ -225,7 +255,6 @@ fn validate_macos(library: &Path, expected_architecture: &str) -> Result<(), Str
     {
         return Err("Mach-O install ID must be @rpath/libopenslide.1.dylib".into());
     }
-    let dependencies = capture("otool", [OsStr::new("-L"), library.as_os_str()])?;
     for dependency in dependencies
         .lines()
         .skip(1)
@@ -244,7 +273,6 @@ fn validate_macos(library: &Path, expected_architecture: &str) -> Result<(), Str
             ));
         }
     }
-    let load_commands = capture("otool", [OsStr::new("-l"), library.as_os_str()])?;
     let mut lines = load_commands.lines();
     while let Some(line) = lines.next() {
         if line.trim() == "cmd LC_RPATH" {
@@ -258,19 +286,28 @@ fn validate_macos(library: &Path, expected_architecture: &str) -> Result<(), Str
             }
         }
     }
-    let exports = capture("nm", [OsStr::new("-gU"), library.as_os_str()])?;
-    validate_exports(parse_nm_exports(&exports))
+    validate_exports(parse_nm_exports(exports))
 }
 
 fn validate_windows(library: &Path, expected_architecture: &str) -> Result<(), String> {
     let headers = capture("dumpbin", [OsStr::new("/headers"), library.as_os_str()])?;
+    let dependencies = capture("dumpbin", [OsStr::new("/dependents"), library.as_os_str()])?;
+    let exports = capture("dumpbin", [OsStr::new("/exports"), library.as_os_str()])?;
+    validate_windows_output(&headers, &dependencies, &exports, expected_architecture)
+}
+
+fn validate_windows_output(
+    headers: &str,
+    dependencies: &str,
+    exports: &str,
+    expected_architecture: &str,
+) -> Result<(), String> {
     require_architecture(
-        &headers,
+        headers,
         expected_architecture,
         "machine (x64)",
         "machine (ARM64)",
     )?;
-    let dependencies = capture("dumpbin", [OsStr::new("/dependents"), library.as_os_str()])?;
     for dependency in dependencies
         .lines()
         .map(str::trim)
@@ -282,8 +319,7 @@ fn validate_windows(library: &Path, expected_architecture: &str) -> Result<(), S
             ));
         }
     }
-    let exports = capture("dumpbin", [OsStr::new("/exports"), library.as_os_str()])?;
-    validate_exports(parse_dumpbin_exports(&exports))
+    validate_exports(parse_dumpbin_exports(exports))
 }
 
 fn require_architecture(
