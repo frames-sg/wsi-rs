@@ -54,9 +54,15 @@ mod unix {
             fs::create_dir_all(root.join("api")).unwrap();
             fs::create_dir_all(root.join("fuzz")).unwrap();
             fs::create_dir_all(root.join("scripts")).unwrap();
+            fs::create_dir_all(root.join("src")).unwrap();
             fs::create_dir_all(root.join("target")).unwrap();
             fs::write(root.join("Cargo.lock"), "root-lock\n").unwrap();
             fs::write(root.join("fuzz/Cargo.lock"), "fuzz-lock\n").unwrap();
+            fs::write(
+                root.join("src/lib.rs"),
+                "#[cfg(feature = \"fuzzing\")]\nfn fuzz_only() {}\n",
+            )
+            .unwrap();
             for snapshot in [
                 "api/wsi-rs-public-api.txt",
                 "api/wsi-rs-public-api-cuda.txt",
@@ -134,10 +140,6 @@ mod unix {
             ("release-test", vec![]),
             ("typos", vec![]),
             ("coverage", vec![]),
-            (
-                "coverage-changed",
-                vec!["--base", "HEAD", "--lcov", "lcov.info"],
-            ),
         ] {
             let output = fixture.run(task, &arguments);
             assert!(
@@ -147,6 +149,21 @@ mod unix {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        fs::write(
+            fixture.root.join("src/lib.rs"),
+            "#[cfg(feature = \"fuzzing\")]\nfn fuzz_only() {}\nmod candidate;\npub use candidate::is_candidate;\n",
+        )
+        .unwrap();
+        let output = fixture.run(
+            "coverage-changed",
+            &["--base", "HEAD", "--lcov", "lcov.info"],
+        );
+        assert!(
+            output.status.success(),
+            "coverage-changed failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         let output = fixture.run("rc-preflight", &[]);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("WSI_RS_RC_OPENSLIDE_CAPTURE"));
