@@ -16,7 +16,16 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
     let mut runs = Vec::new();
     for (alias, format, benchmark_group) in SLIDES {
         for worker_count in WORKERS {
-            for repeat_index in 0..3 {
+            for repeat_index in 0..5 {
+                let engine_order = if repeat_index % 2 == 0 {
+                    ["wsi_rs", "openslide"]
+                } else {
+                    ["openslide", "wsi_rs"]
+                };
+                let engine_position = engine_order
+                    .iter()
+                    .position(|engine| *engine == library)
+                    .expect("known paired engine");
                 let workloads = viewer_workloads()
                     .iter()
                     .copied()
@@ -29,6 +38,13 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
                             "p99_us": p99,
                             "mean_us": p50,
                             "checksum_sha256": format!("pixels-{alias}-{name}"),
+                            "diagnostics": {
+                                "decode_route": {
+                                    "feature": "metal",
+                                    "device_tiles": 1,
+                                    "fallback_tiles": 0,
+                                }
+                            },
                         })
                     })
                     .collect::<Vec<_>>();
@@ -40,6 +56,8 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
                     "benchmark_group": benchmark_group,
                     "repeat_index": repeat_index,
                     "worker_count": worker_count,
+                    "engine_order": engine_order,
+                    "engine_position": engine_position,
                     "peak_rss_bytes": rss,
                     "level0_bounds": {"x": 0, "y": 0, "width": 1000, "height": 800},
                     "levels": [{"width": 1000, "height": 800, "downsample": 1.0}],
@@ -50,7 +68,7 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
     }
     json!({
         "schema_version": PERF_CAPTURE_SCHEMA_VERSION,
-        "repeat_count": 3,
+        "repeat_count": 5,
         "slide_manifest": SLIDES.into_iter().map(|(alias, format, benchmark_group)| json!({
             "path": format!("{alias}.svs"),
             "alias": alias,
@@ -58,10 +76,16 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
             "benchmark_group": benchmark_group,
         })).collect::<Vec<_>>(),
         "metadata": {
-            "host": {"os": "test", "arch": "test", "cpu": "test-cpu"},
+            "host": {
+                "os": "macos",
+                "arch": "aarch64",
+                "cpu": "test-cpu",
+                "gpu": "test-metal-gpu",
+                "pinned_host_id": "test-metal-host",
+            },
             "build": {
                 "profile": "release",
-                "features": [],
+                "features": ["metal"],
                 "rustflags": null,
                 "native_cpu_tuned": false,
             },
@@ -178,7 +202,7 @@ fn mandatory_matrix_requires_all_viewer_workloads_and_host_worker_counts() {
 }
 
 #[test]
-fn openslide_acceptance_requires_two_x_and_tail_memory_guards() {
+fn openslide_acceptance_requires_parity_and_treats_two_x_as_evidence() {
     let openslide = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
     let twice_as_fast = engine_capture("wsi_rs", 5_000, 10_000, 15_000, 1_200);
 
@@ -188,12 +212,17 @@ fn openslide_acceptance_requires_two_x_and_tail_memory_guards() {
     assert_eq!(report.headline_ratio, 0.5);
     assert!(report.failures.is_empty());
 
-    let too_slow = engine_capture("wsi_rs", 6_000, 10_000, 15_000, 1_200);
+    let evidence_only = engine_capture("wsi_rs", 6_000, 10_000, 15_000, 1_200);
+    let report =
+        evaluate_openslide_acceptance(&openslide, &evidence_only).expect("comparable captures");
+    assert!(report.failures.is_empty());
+
+    let too_slow = engine_capture("wsi_rs", 10_600, 21_200, 31_800, 1_200);
     let report = evaluate_openslide_acceptance(&openslide, &too_slow).expect("comparable captures");
     assert!(report
         .failures
         .iter()
-        .any(|failure| failure.contains("2x headline")));
+        .any(|failure| failure.contains("geometric-mean")));
 
     let too_much_memory = engine_capture("wsi_rs", 5_000, 10_000, 15_000, 1_201);
     let report =
@@ -221,6 +250,41 @@ fn openslide_acceptance_fails_closed_without_peak_rss_measurements() {
         .failures
         .iter()
         .any(|failure| failure.contains("peak RSS measurements are missing")));
+}
+
+#[test]
+fn openslide_acceptance_fails_closed_without_actual_gpu_route_evidence() {
+    let openslide = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
+    let mut wsi_rs = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    let run = wsi_rs["runs"]
+        .as_array_mut()
+        .expect("runs")
+        .iter_mut()
+        .find(|run| run["benchmark_group"] == "aperio/j2k")
+        .expect("JP2K run");
+    run["workloads"][0]["diagnostics"] = json!({});
+
+    let error = evaluate_openslide_acceptance(&openslide, &wsi_rs)
+        .expect_err("missing GPU route evidence must fail closed");
+
+    assert!(error.contains("actual metal route evidence"), "{error}");
+}
+
+#[test]
+fn gpu_route_evidence_ignores_non_decode_workloads() {
+    let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    let run = capture["runs"]
+        .as_array_mut()
+        .expect("runs")
+        .iter_mut()
+        .find(|run| run["benchmark_group"] == "aperio/j2k")
+        .expect("JP2K run");
+    run["workloads"]
+        .as_array_mut()
+        .expect("workloads")
+        .push(json!({"name": "open_latency", "n": 10}));
+
+    validate_gpu_route_evidence(&capture).expect("metadata-only work does not decode tiles");
 }
 
 #[test]
@@ -325,14 +389,14 @@ fn openslide_acceptance_rejects_a_repeat_missing_from_both_captures() {
     let mut openslide = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
     let mut wsi_rs = engine_capture("wsi_rs", 5_000, 10_000, 15_000, 1_000);
     for capture in [&mut openslide, &mut wsi_rs] {
-        capture["repeat_count"] = json!(4);
+        capture["repeat_count"] = json!(6);
     }
 
     let error = evaluate_openslide_acceptance(&openslide, &wsi_rs)
         .expect_err("symmetric repeat omission must fail closed");
 
     assert!(error.contains("missing declared cell"), "{error}");
-    assert!(error.contains("repeat=3"), "{error}");
+    assert!(error.contains("repeat=5"), "{error}");
 }
 
 #[test]

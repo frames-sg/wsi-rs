@@ -121,6 +121,23 @@ fn public_api_snapshot_update_creates_parent_and_trailing_newline() {
 }
 
 #[test]
+fn public_api_snapshot_update_reports_directory_and_write_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent_file = directory.path().join("parent-file");
+    fs::write(&parent_file, b"not a directory").unwrap();
+    let nested = parent_file.join("api.txt");
+    assert!(check_public_api_snapshot_with_update("api", &nested, true)
+        .unwrap_err()
+        .contains("failed to create"));
+
+    assert!(
+        check_public_api_snapshot_with_update("api", directory.path(), true)
+            .unwrap_err()
+            .contains("failed to write")
+    );
+}
+
+#[test]
 fn fuzz_gate_covers_every_declared_fuzz_binary() {
     let manifest =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fuzz/Cargo.toml"))

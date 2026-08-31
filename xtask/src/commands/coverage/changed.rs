@@ -243,7 +243,7 @@ fn module_wiring_declaration(line: &str) -> bool {
     declaration.starts_with("mod ") || declaration.starts_with("use ")
 }
 
-fn collect_git_diff_lines(
+pub(super) fn collect_git_diff_lines(
     lines: &mut HashMap<PathBuf, BTreeSet<u32>>,
     repo_root: &Path,
     name_args: &[&str],
@@ -311,7 +311,7 @@ fn parse_new_hunk_start(hunk: &str) -> Option<u32> {
         .ok()
 }
 
-fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+pub(super) fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let args = ["ls-files", "--others", "--exclude-standard"];
     let output = Command::new("git")
         .current_dir(repo_root)

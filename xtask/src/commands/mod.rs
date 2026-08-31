@@ -1,3 +1,4 @@
+mod artifact;
 mod checks;
 mod coverage;
 mod perf;
@@ -23,7 +24,9 @@ pub(crate) fn run() -> Result<(), String> {
         "deps" => checks::deps(),
         "api-check" => checks::api_check(),
         "fuzz-check" => checks::fuzz_check(),
+        "release-fuzz" => checks::release_fuzz(),
         "release-test" => checks::release_test(),
+        "artifact-smoke" => artifact::smoke(env::args().skip(2).collect()),
         "coverage" => checks::coverage(),
         "coverage-changed" => coverage::changed(env::args().skip(2).collect()),
         "perf-capture" => perf::capture(env::args().skip(2).collect()),
@@ -68,7 +71,9 @@ fn help_text() -> &'static str {
        deps         run deny and unused-deps\n\
        api-check    run public API and semver stability checks\n\
        fuzz-check   type-check cargo-fuzz targets\n\
+       release-fuzz run every fuzz target for five minutes under AddressSanitizer\n\
        release-test run release-mode library and integration tests\n\
+       artifact-smoke <library> <include-dir> <arch> <metadata> validate a release C artifact\n\
        coverage     generate lcov.info and enforce workspace/component floors\n\
        coverage-changed [--base REV] [--lcov lcov.info] enforce changed-path coverage\n\
        perf-capture <label> [slides...] capture local wsi_rs benchmark JSON\n\

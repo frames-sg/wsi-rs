@@ -99,6 +99,19 @@ fn compare_off_by_two_fails_jpeg_tight_passes_tolerant() {
 }
 
 #[test]
+fn jpeg_decoder_compat_accepts_cross_platform_huron_mean_variance() {
+    let expected = [0, 0, 0, 255].repeat(8);
+    let mut actual = expected.clone();
+    actual[..3].fill(1);
+
+    let report = compare_rgba(&actual, &expected, Tolerance::JPEG_DECODER_COMPAT);
+
+    assert_eq!(report.max_abs, 1);
+    assert_eq!(report.mean_abs, 0.125);
+    assert!(report.passed);
+}
+
+#[test]
 fn compare_requires_exact_alpha_and_excludes_it_from_rgb_mean() {
     let actual = vec![10u8, 20, 30, 0];
     let expected = vec![10u8, 20, 30, 255];
@@ -180,6 +193,34 @@ fn corpus_public_manifest_parses() {
         .expect("public DICOM JP2K corpus entry");
     assert!(dicom_jp2k.must_decode_level(0));
     assert!(!dicom_jp2k.openslide_must_decode_level(0));
+
+    let svs_jp2k = manifest
+        .slides
+        .iter()
+        .find(|slide| slide.alias == "svs-jp2k-001")
+        .expect("public SVS JP2K corpus entry");
+    assert!(svs_jp2k.openslide_required);
+
+    for alias in [
+        "argos-001",
+        "argos-stacked-001",
+        "huron-jpeg-001",
+        "huron-uncompressed-001",
+    ] {
+        let entry = manifest
+            .slides
+            .iter()
+            .find(|slide| slide.alias == alias)
+            .unwrap_or_else(|| panic!("public {alias} corpus entry"));
+        assert!(
+            !entry.openslide_required,
+            "{alias} must not use OpenSlide's flattened pyramid as its compatibility contract"
+        );
+        assert!(
+            !entry.oracle_divergences.is_empty(),
+            "{alias} must document its OpenSlide compatibility boundary"
+        );
+    }
 }
 
 #[test]

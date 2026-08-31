@@ -10,12 +10,12 @@ use super::capture::WorkerMatrix;
 use super::comparison::{P95_MIN_SAMPLE_COUNT, P99_MIN_SAMPLE_COUNT, REGRESSION_RATIO};
 use super::manifest::SlideSpec;
 use super::worker::{
-    cache_bytes, default_public_fixture, result_dir, workspace_root, BenchLibrary,
-    DEFAULT_CACHE_BYTES,
+    cache_bytes, default_public_fixture, performance_gpu_feature, result_dir, workspace_root,
+    BenchLibrary, DEFAULT_CACHE_BYTES,
 };
 use super::PERF_CAPTURE_SCHEMA_VERSION;
 
-const TRACKED_ENV_VARS: [&str; 21] = [
+const TRACKED_ENV_VARS: [&str; 19] = [
     "RUSTFLAGS",
     "RAYON_NUM_THREADS",
     "WSI_RS_PERF_RESULTS_DIR",
@@ -33,10 +33,8 @@ const TRACKED_ENV_VARS: [&str; 21] = [
     "WSI_RS_FULL_DECODE_CACHE_BYTES",
     "WSI_RS_NDPI_STRIP_CACHE_BYTES",
     "WSI_RS_SYNTHETIC_LEVEL_CACHE_BYTES",
-    "WSI_RS_JPEG_DEVICE_DECODE",
-    "WSI_RS_JP2K_DEVICE_DECODE",
-    "WSI_RS_JP2K_DEVICE_BATCH",
-    "WSI_RS_SHIM_JP2K_CPU_THREADS",
+    "WSI_RS_PERF_GPU_FEATURE",
+    "WSI_RS_PERF_PINNED_HOST_ID",
 ];
 
 pub(super) fn capture_summary(
@@ -74,6 +72,7 @@ fn capture_metadata(
     runs: &[Value],
 ) -> Result<Value, String> {
     let rust_codec_dependencies = rust_codec_dependencies(&workspace_root().join("Cargo.lock"))?;
+    let build_features = performance_gpu_feature()?.into_iter().collect::<Vec<_>>();
     let codec_thread_budget_enforced = runs
         .iter()
         .all(|run| run_decode_concurrency_matches(library, run))
@@ -90,10 +89,11 @@ fn capture_metadata(
             "uname": command_stdout("uname", &["-a"]),
             "cpu": cpu_identity(),
             "gpu": gpu_identity(),
+            "pinned_host_id": std::env::var("WSI_RS_PERF_PINNED_HOST_ID").ok(),
         },
         "build": {
             "profile": "release",
-            "features": Vec::<String>::new(),
+            "features": build_features,
             "rustflags": std::env::var("RUSTFLAGS").ok(),
             "native_cpu_tuned": std::env::var("RUSTFLAGS")
                 .is_ok_and(|value| value.contains("target-cpu=native")),
@@ -119,8 +119,8 @@ fn capture_metadata(
                 "per_run_field": "decode_cpu_concurrency",
                 "wsi_rs": {
                     "process_wide_rayon_threads": "worker_count via RAYON_NUM_THREADS",
-                    "jp2k_threads_per_handle": 1,
-                    "control": "WSI_RS_SHIM_JP2K_CPU_THREADS",
+                    "shared_across_handles": true,
+                    "control": "RAYON_NUM_THREADS",
                 },
                 "openslide": {
                     "decoder_threads_per_handle": 1,
@@ -219,10 +219,6 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
                 .and_then(Value::as_u64)
                 == Some(workers)
                 && control
-                    .get("jp2k_threads_per_handle")
-                    .and_then(Value::as_u64)
-                    == Some(1)
-                && control
                     .get("active_jp2k_thread_budget")
                     .and_then(Value::as_u64)
                     == Some(workers)
@@ -308,6 +304,15 @@ fn gpu_identity() -> String {
             return names.join("; ");
         }
         return text;
+    }
+    if cfg!(target_os = "linux") {
+        return command_stdout(
+            "nvidia-smi",
+            &[
+                "--query-gpu=name,uuid,driver_version",
+                "--format=csv,noheader",
+            ],
+        );
     }
     "unavailable: GPU metadata is only collected by default on macOS".into()
 }

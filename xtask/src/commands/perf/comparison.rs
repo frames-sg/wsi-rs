@@ -12,12 +12,21 @@ use super::checksum::{
 use super::process_metrics::PEAK_RSS_METRIC;
 use super::schema::{CaptureDocument, CaptureWorkload};
 
-const DEFAULT_REPEAT_COUNT: u32 = 3;
+const REQUIRED_REPEAT_COUNT: usize = 5;
+const REQUIRED_REGRESSED_REPEATS: usize = 3;
 pub(super) const REGRESSION_RATIO: f64 = 1.05;
+const THROUGHPUT_FLOOR_RATIO: f64 = 0.95;
+const RSS_REGRESSION_RATIO: f64 = 1.10;
 pub(super) const P95_MIN_SAMPLE_COUNT: u64 = 20;
 pub(super) const P99_MIN_SAMPLE_COUNT: u64 = 100;
 const PROCESS_METRICS_WORKLOAD: &str = "__process__";
-const WORKLOAD_METRICS: [&str; 4] = ["p50_us", "p95_us", "p99_us", "mean_us"];
+const WORKLOAD_METRICS: [&str; 5] = [
+    "p50_us",
+    "p95_us",
+    "p99_us",
+    "mean_us",
+    "throughput_bytes_per_second",
+];
 const DIAGNOSTIC_METRICS: [DiagnosticMetric; 8] = [
     DiagnosticMetric::cache("shared_cache_misses", "shared_cache", "misses"),
     DiagnosticMetric::cache("shared_cache_puts", "shared_cache", "puts"),
@@ -119,7 +128,10 @@ pub(in crate::commands) fn compare(args: Vec<String>) -> Result<(), String> {
             report.headline_ratio, report.headline_cells
         );
         if report.failures.is_empty() {
-            println!("OpenSlide 2x, tail-latency, cell, and RSS gates passed");
+            if report.headline_ratio <= 0.50 {
+                println!("OpenSlide 2x viewer p50 win observed (evidence only)");
+            }
+            println!("OpenSlide viewer p50, tail-latency, cell, and RSS gates passed");
             return Ok(());
         }
         for failure in &report.failures {
@@ -187,6 +199,14 @@ pub(in crate::commands) fn compare(args: Vec<String>) -> Result<(), String> {
 fn validate_same_engine_inputs(before: &Value, after: &Value) -> Result<(), String> {
     validate_declared_capture_plan(before)?;
     validate_declared_capture_plan(after)?;
+    for (label, capture) in [("baseline", before), ("candidate", after)] {
+        let repeats = CaptureDocument::parse(capture)?.repeat_count;
+        if repeats != REQUIRED_REPEAT_COUNT as u64 {
+            return Err(format!(
+                "previous-release comparison {label} requires exactly {REQUIRED_REPEAT_COUNT} repeats, found {repeats}"
+            ));
+        }
+    }
     validate_comparison_context(before, after)?;
     validate_cross_capture_checksums(before, after)
 }
@@ -247,7 +267,7 @@ pub(super) fn comparison_summaries(
     Ok(groups
         .into_iter()
         .filter_map(|(key, pairs)| {
-            if pairs.len() < DEFAULT_REPEAT_COUNT as usize {
+            if pairs.len() < REQUIRED_REPEAT_COUNT {
                 return None;
             }
             let regressed = pairs
@@ -277,8 +297,13 @@ pub(super) fn comparison_summaries(
         .collect())
 }
 
-fn metric_pair_regressed(_metric: &str, pair: &MetricPair) -> bool {
-    metric_ratio(pair.before, pair.after) > REGRESSION_RATIO
+fn metric_pair_regressed(metric: &str, pair: &MetricPair) -> bool {
+    let ratio = metric_ratio(pair.before, pair.after);
+    match metric {
+        "throughput_bytes_per_second" => ratio < THROUGHPUT_FLOOR_RATIO,
+        PEAK_RSS_METRIC => ratio > RSS_REGRESSION_RATIO,
+        _ => ratio > REGRESSION_RATIO,
+    }
 }
 
 fn regressions_from_summaries(summaries: &[MetricSummary]) -> Vec<Regression> {
@@ -300,7 +325,16 @@ fn regressions_from_summaries(summaries: &[MetricSummary]) -> Vec<Regression> {
 }
 
 fn metric_summary_regressed(summary: &MetricSummary) -> bool {
-    metric_ratio(summary.median_before, summary.median_after) > REGRESSION_RATIO
+    is_previous_release_gate_metric(summary.metric)
+        && summary.comparable_runs >= REQUIRED_REPEAT_COUNT
+        && summary.regressed_runs >= REQUIRED_REGRESSED_REPEATS
+}
+
+fn is_previous_release_gate_metric(metric: &str) -> bool {
+    matches!(
+        metric,
+        "p50_us" | "p95_us" | "p99_us" | "throughput_bytes_per_second" | PEAK_RSS_METRIC
+    )
 }
 
 fn metric_ratio(before: u64, after: u64) -> f64 {

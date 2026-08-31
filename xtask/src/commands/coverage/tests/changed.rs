@@ -238,4 +238,10 @@ fn repository_collection_helpers_report_real_and_invalid_git_inputs() {
     let mut lines = HashMap::new();
     add_file_lines(&mut lines, source.path()).unwrap();
     assert_eq!(lines[source.path()], BTreeSet::from([1, 2, 3]));
+
+    let missing_root = root.join("definitely-missing-directory");
+    let mut changed = HashMap::new();
+    assert!(collect_git_diff_lines(&mut changed, &missing_root, &["diff", "--name-only"]).is_err());
+    assert!(untracked_rust_paths(&missing_root).is_err());
+    assert!(add_repo_file_lines(&mut changed, root.as_path(), Path::new("missing.rs")).is_err());
 }

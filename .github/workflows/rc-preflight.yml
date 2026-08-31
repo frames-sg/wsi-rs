@@ -12,7 +12,7 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  rc-preflight:
+  source-preflight:
     strategy:
       fail-fast: false
       matrix:
@@ -39,3 +39,121 @@ jobs:
         run: cargo install cargo-vet --locked --version 0.10.2
       - run: cargo xtask rc-preflight
         working-directory: wsi-rs
+
+  c-artifacts:
+    name: C artifact (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            architecture: x86_64
+            gpu-feature: cuda
+            cargo-library: libwsi_rs_openslide_shim.so
+            artifact: libopenslide.so.1
+          - os: macos-15
+            target: macos-arm64
+            architecture: arm64
+            gpu-feature: metal
+            cargo-library: libwsi_rs_openslide_shim.dylib
+            artifact: libopenslide.1.dylib
+          - os: macos-15-intel
+            target: macos-x64
+            architecture: x86_64
+            gpu-feature: metal
+            cargo-library: libwsi_rs_openslide_shim.dylib
+            artifact: libopenslide.1.dylib
+          - os: windows-latest
+            target: windows-x64
+            architecture: x86_64
+            gpu-feature: cuda
+            cargo-library: wsi_rs_openslide_shim.dll
+            artifact: libopenslide-1.dll
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: wsi-rs
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
+        with:
+          toolchain: "1.96.0"
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: runner.os == 'Windows'
+      - name: Install ELF identity tooling
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+      - name: Build GPU-enabled shim
+        working-directory: wsi-rs
+        run: cargo build --locked --release -p wsi-rs-openslide-shim --features wsi-rs/${{ matrix.gpu-feature }}
+      - name: Prepare official OpenSlide 4.0.1 headers
+        shell: bash
+        run: |
+          include_dir="${RUNNER_TEMP}/openslide-4.0.1"
+          mkdir -p "${include_dir}"
+          curl --fail --location --retry 3 --output "${include_dir}/openslide.h" \
+            https://raw.githubusercontent.com/openslide/openslide/v4.0.1/src/openslide.h
+          curl --fail --location --retry 3 --output "${include_dir}/openslide-features.h" \
+            https://raw.githubusercontent.com/openslide/openslide/v4.0.1/src/openslide-features.h
+      - name: Prepare ELF artifact
+        if: runner.os == 'Linux'
+        working-directory: wsi-rs
+        shell: bash
+        run: |
+          artifact_dir="${RUNNER_TEMP}/wsi-rs-artifact"
+          mkdir -p "${artifact_dir}"
+          cp "target/release/${{ matrix.cargo-library }}" "${artifact_dir}/${{ matrix.artifact }}"
+          patchelf --set-soname '${{ matrix.artifact }}' "${artifact_dir}/${{ matrix.artifact }}"
+      - name: Prepare Mach-O artifact
+        if: runner.os == 'macOS'
+        working-directory: wsi-rs
+        shell: bash
+        run: |
+          artifact_dir="${RUNNER_TEMP}/wsi-rs-artifact"
+          mkdir -p "${artifact_dir}"
+          cp "target/release/${{ matrix.cargo-library }}" "${artifact_dir}/${{ matrix.artifact }}"
+          install_name_tool -id '@rpath/${{ matrix.artifact }}' "${artifact_dir}/${{ matrix.artifact }}"
+      - name: Prepare PE artifact
+        if: runner.os == 'Windows'
+        working-directory: wsi-rs
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP "wsi-rs-artifact"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          Copy-Item "target/release/${{ matrix.cargo-library }}" (Join-Path $artifactDir "${{ matrix.artifact }}")
+      - name: Generate checksum, unsigned metadata, and SBOMs
+        working-directory: wsi-rs
+        shell: bash
+        run: |
+          cargo metadata --locked --format-version 1 > "${RUNNER_TEMP}/cargo-metadata.json"
+          python3 scripts/generate-release-artifact-metadata.py \
+            --artifact "${RUNNER_TEMP}/wsi-rs-artifact/${{ matrix.artifact }}" \
+            --target '${{ matrix.target }}' \
+            --gpu-feature '${{ matrix.gpu-feature }}' \
+            --cargo-metadata "${RUNNER_TEMP}/cargo-metadata.json" \
+            --output-dir "${RUNNER_TEMP}/wsi-rs-artifact"
+      - name: Verify architecture, identity, dependencies, exports, and C ABI
+        working-directory: wsi-rs
+        shell: bash
+        run: >-
+          cargo xtask artifact-smoke
+          "${RUNNER_TEMP}/wsi-rs-artifact/${{ matrix.artifact }}"
+          "${RUNNER_TEMP}/openslide-4.0.1"
+          '${{ matrix.architecture }}'
+          "${RUNNER_TEMP}/wsi-rs-artifact/artifact-metadata.json"
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ runner.temp }}/wsi-rs-artifact/*
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: wsi-rs-openslide-${{ matrix.target }}-unsigned
+          path: ${{ runner.temp }}/wsi-rs-artifact
+          if-no-files-found: error

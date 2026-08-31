@@ -43,6 +43,10 @@ format           = "argos"
 codecs           = ["jpeg"]
 must_decode      = ["base", "level1", "level2", "thumbnail", "macro"]
 required_properties = ["openslide.vendor"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 exposes this AVS as one flattened level; wsi-rs retains the declared sparse pyramid and associated images.",
+]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -59,6 +63,10 @@ format           = "argos"
 codecs           = ["jpeg"]
 must_decode      = ["base", "level1", "level2", "thumbnail", "macro"]
 required_properties = ["openslide.vendor"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 exposes this AVS Z-stack as one flattened level; wsi-rs retains its sparse pyramid, Z planes, and associated images.",
+]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -75,6 +83,10 @@ format           = "huron"
 codecs           = ["jpeg"]
 must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
 required_properties = ["openslide.vendor"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 exposes this Huron TIFF as one flattened level; wsi-rs retains all declared pyramid levels and associated images. Independent JPEG decoders differ by at most 3 channel values and 0.125 mean absolute error on decoded probes across supported platforms.",
+]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -91,6 +103,10 @@ format           = "huron"
 codecs           = ["none"]
 must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
 required_properties = ["openslide.vendor"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 exposes this uncompressed Huron TIFF as one flattened level; wsi-rs retains all declared pyramid levels and associated images.",
+]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true

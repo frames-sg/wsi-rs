@@ -148,6 +148,25 @@ fn referenced_parity_corpus_fetch_script_exists() {
     }
 }
 
+#[test]
+fn corpus_ci_reuses_verified_parent_cache_and_serializes_coverage() {
+    let workflow = fs::read_to_string(crate_root().join(".github/workflows/ci.yml"))
+        .expect("read CI workflow")
+        .replace("\r\n", "\n");
+
+    assert!(
+        workflow.contains("  coverage:\n    needs: parity-corpus\n"),
+        "coverage must wait for parity-corpus to populate the shared corpus cache"
+    );
+    assert_eq!(
+        workflow
+            .matches("restore-keys: |\n            wsi-rs-parity-corpus-\n")
+            .count(),
+        2,
+        "both corpus cache consumers must restore a verified parent-layer cache"
+    );
+}
+
 fn zeiss_magic_fixture(suffix: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new()
         .suffix(suffix)

@@ -91,12 +91,7 @@ fn worker_environment_equalizes_decode_cpu_concurrency() {
         wsi_rs_env.get(OsStr::new("RAYON_NUM_THREADS")),
         Some(&Some(OsString::from("8")))
     );
-    assert_eq!(
-        wsi_rs_env.get(OsStr::new("WSI_RS_SHIM_JP2K_CPU_THREADS")),
-        Some(&Some(OsString::from("1")))
-    );
     assert_eq!(wsi_rs_control["rayon_threads_process_wide"], 8);
-    assert_eq!(wsi_rs_control["jp2k_threads_per_handle"], 1);
     assert_eq!(wsi_rs_control["active_jp2k_thread_budget"], 8);
     assert_eq!(wsi_rs_control["enforced"], true);
 
@@ -106,10 +101,6 @@ fn worker_environment_equalizes_decode_cpu_concurrency() {
     let openslide_env = command_environment(&openslide);
     assert_eq!(
         openslide_env.get(OsStr::new("RAYON_NUM_THREADS")),
-        Some(&None)
-    );
-    assert_eq!(
-        openslide_env.get(OsStr::new("WSI_RS_SHIM_JP2K_CPU_THREADS")),
         Some(&None)
     );
     assert_eq!(openslide_control["decoder_threads_per_handle"], 1);

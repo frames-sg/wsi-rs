@@ -115,7 +115,9 @@ jobs:
         run: |
           for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes open_vms_bundle_bytes open_vsi_bundle_bytes; do
             mkdir -p "fuzz/corpus/$target"
-            cargo +nightly-2026-04-17 fuzz run "$target" "fuzz/corpus/$target" -- "fuzz/seeds/$target" -max_total_time=15 -timeout=5 -rss_limit_mb=2048
+            inputs=("fuzz/corpus/$target")
+            if [[ -d "fuzz/seeds/$target" ]]; then inputs+=("fuzz/seeds/$target"); fi
+            cargo +nightly-2026-04-17 fuzz run "$target" "${inputs[@]}" -- -max_total_time=15 -timeout=5 -rss_limit_mb=2048
           done
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
@@ -128,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
-        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001,argos-001,argos-stacked-001,huron-jpeg-001,huron-uncompressed-001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -141,6 +143,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update
@@ -155,6 +159,10 @@ jobs:
           ventana-001
           mirax-001
           dicom-jp2k-001
+          argos-001
+          argos-stacked-001
+          huron-jpeg-001
+          huron-uncompressed-001
         working-directory: wsi-rs
       - run: cargo xtask parity-corpus-test
         working-directory: wsi-rs
@@ -218,6 +226,7 @@ jobs:
         working-directory: wsi-rs
 
   coverage:
+    needs: parity-corpus
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
@@ -238,6 +247,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update

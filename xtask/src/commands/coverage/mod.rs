@@ -66,7 +66,8 @@ use std::path::PathBuf;
 #[cfg(test)]
 use changed::{
     add_file_lines, add_repo_file_lines, changed_lines_are_declaration_only,
-    parse_diff_added_lines, source_has_function_definition, ChangedCoverageSummary,
+    collect_git_diff_lines, parse_diff_added_lines, source_has_function_definition,
+    untracked_rust_paths, ChangedCoverageSummary,
 };
 #[cfg(test)]
 use lcov::{normalize_lcov_path, parse_lcov, percent, FileCoverage};
