@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+use crate::core::registry::OpenBudget;
+
 use super::super::error::{IfdId, TiffParseError};
 
 // ── Endianness ─────────────────────────────────────────────────────
@@ -243,6 +245,7 @@ pub(crate) struct TiffContainer {
     pub(super) ifds: HashMap<IfdId, Ifd>,
     pub(super) parsed_ifd_entries: u64,
     pub(super) declared_tag_payload_bytes: u64,
+    pub(super) open_budget: Arc<OpenBudget>,
 }
 
 impl std::fmt::Debug for TiffContainer {

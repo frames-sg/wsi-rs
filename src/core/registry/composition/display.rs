@@ -5,8 +5,7 @@ use std::sync::Arc;
 use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::{SlideReader, DEFAULT_MAX_REGION_PIXELS};
 use crate::core::types::{
-    CpuTile, LevelIdx, RegionRequest, TileLayout, TileOutputPreference, TilePixels, TileRequest,
-    TileViewRequest,
+    CpuTile, LevelIdx, RegionRequest, TileLayout, TileRequest, TileViewRequest,
 };
 use crate::error::WsiError;
 
@@ -14,18 +13,11 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
     req: &TileViewRequest,
-    output: TileOutputPreference,
 ) -> Result<CpuTile, WsiError> {
-    if matches!(output, TileOutputPreference::RequireDevice { .. }) {
-        return Err(WsiError::Unsupported {
-            reason: "display tile composition requires CPU output".into(),
-        });
-    }
-
     let region_request = display_region_request(req);
     let (_, _, level) = validate_region_request(source.dataset(), &region_request)?;
     if is_exact_native_display_request(&level.tile_layout, req) {
-        return read_exact_native_display_tile(source, cache, req, &output);
+        return read_exact_native_display_tile(source, cache, req);
     }
 
     compose_display_tile_fallback(source, cache, req, region_request, level.dimensions)
@@ -78,22 +70,14 @@ fn display_tile_request(req: &TileViewRequest) -> TileRequest {
 fn read_display_source_tile<T: SlideReader + ?Sized>(
     source: &T,
     req: &TileViewRequest,
-    output: &TileOutputPreference,
 ) -> Result<CpuTile, WsiError> {
-    let tile = source.read_tile(&display_tile_request(req), output.clone())?;
-    match tile {
-        TilePixels::Cpu(cpu) => Ok(cpu),
-        TilePixels::Device(_) => Err(WsiError::Unsupported {
-            reason: "display tile read requires CPU pixels".into(),
-        }),
-    }
+    source.read_tile_cpu(&display_tile_request(req))
 }
 
 fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
     req: &TileViewRequest,
-    output: &TileOutputPreference,
 ) -> Result<CpuTile, WsiError> {
     let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
     let (tile, cache_hit) = if let Some(cache) = cache {
@@ -101,12 +85,12 @@ fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
         if let Some(cached) = cache.get(&key) {
             (cached.as_ref().clone(), Some(true))
         } else {
-            let tile = Arc::new(read_display_source_tile(source, req, output)?);
+            let tile = Arc::new(read_display_source_tile(source, req)?);
             cache.put(key, tile.clone());
             (tile.as_ref().clone(), Some(false))
         }
     } else {
-        (read_display_source_tile(source, req, output)?, None)
+        (read_display_source_tile(source, req)?, None)
     };
     trace_exact_native_display_tile(req, cache, cache_hit, started.as_ref());
     Ok(tile)

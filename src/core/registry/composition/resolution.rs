@@ -3,8 +3,7 @@ use std::sync::Arc;
 use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::SlideReader;
 use crate::core::types::{
-    CpuTile, Dataset, Level, RegionRequest, Scene, Series, TileHit, TileOutputPreference,
-    TilePixels, TileRequest,
+    CpuTile, Dataset, Level, RegionRequest, Scene, Series, TileHit, TileRequest,
 };
 use crate::error::WsiError;
 
@@ -137,16 +136,7 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
             let decoded = if missed_reqs.len() == 1 {
                 vec![self.source.read_tile_cpu(&missed_reqs[0])?]
             } else {
-                self.source
-                    .read_tiles(&missed_reqs, TileOutputPreference::cpu())?
-                    .into_iter()
-                    .map(|tile| match tile {
-                        TilePixels::Cpu(cpu) => Ok(cpu),
-                        TilePixels::Device(_) => Err(WsiError::Unsupported {
-                            reason: "region composition requires CPU tiles".into(),
-                        }),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
+                self.source.read_tiles_cpu(&missed_reqs)?
             };
             if decoded.len() != missed_reqs.len() {
                 return Err(WsiError::TileRead {

@@ -1,4 +1,7 @@
 use super::*;
+use crate::core::registry::OpenBudget;
+#[cfg(test)]
+use crate::SlideLimits;
 
 pub(super) struct ParsedDicomMetadata {
     pub(super) path: PathBuf,
@@ -10,6 +13,7 @@ pub(super) struct ParsedDicomMetadata {
     pub(super) frame_of_reference_uid: Option<String>,
     pub(super) container_identifier: Option<String>,
     pub(super) specimen_identifier: Option<String>,
+    pub(super) barcode_value: Option<String>,
     pub(super) sop_instance_uid: String,
     pub(super) transfer_syntax_uid: String,
     pub(super) photometric_interpretation: String,
@@ -54,19 +58,35 @@ impl ParsedDicomMetadata {
     }
 }
 
-pub(super) fn parse_metadata_object(path: &Path) -> Result<ParsedDicomMetadata, WsiError> {
+pub(super) fn parse_metadata_object_with_budget(
+    path: &Path,
+    budget: &OpenBudget,
+) -> Result<ParsedDicomMetadata, WsiError> {
     // Stop after the top-level matrix geometry is available, but before pixel
     // data. This keeps cold-open cheap while still building the correct
     // pyramid geometry for tiled DICOM pyramids.
-    let meta = parse_metadata_object_until(path, tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)?;
+    let meta = parse_metadata_object_until_with_budget(
+        path,
+        tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE,
+        budget,
+    )?;
     if meta.dimension_organization_type.as_deref() == Some("TILED_SPARSE") {
-        return parse_metadata_object_full(path);
+        return parse_metadata_object_full_with_budget(path, budget);
     }
     Ok(meta)
 }
 
+#[cfg(test)]
 pub(super) fn parse_metadata_object_full(path: &Path) -> Result<ParsedDicomMetadata, WsiError> {
-    parse_metadata_object_until(path, tags::PIXEL_DATA)
+    let budget = OpenBudget::new(SlideLimits::default());
+    parse_metadata_object_full_with_budget(path, budget.as_ref())
+}
+
+fn parse_metadata_object_full_with_budget(
+    path: &Path,
+    budget: &OpenBudget,
+) -> Result<ParsedDicomMetadata, WsiError> {
+    parse_metadata_object_until_with_budget(path, tags::PIXEL_DATA, budget)
 }
 
 pub(super) type Level0Properties = (Option<(f64, f64)>, Option<f64>);
@@ -99,9 +119,10 @@ pub(super) fn optional_pixel_spacing_mpp(
     optional_pair_f64_at(obj, tags::PIXEL_SPACING)
 }
 
-pub(super) fn parse_metadata_object_until(
+fn parse_metadata_object_until_with_budget(
     path: &Path,
     stop_tag: dicom_core::Tag,
+    budget: &OpenBudget,
 ) -> Result<ParsedDicomMetadata, WsiError> {
     if matches!(
         path.extension().and_then(|ext| ext.to_str()),
@@ -113,7 +134,7 @@ pub(super) fn parse_metadata_object_until(
         )));
     }
 
-    let opened = open_metadata_object_until(path, stop_tag)?;
+    let opened = open_metadata_object_until_with_budget(path, stop_tag, budget)?;
     let obj = opened.object;
 
     if !is_vl_wsi(obj.meta().media_storage_sop_class_uid()) {
@@ -126,6 +147,7 @@ pub(super) fn parse_metadata_object_until(
     let frame_of_reference_uid = optional_string(&obj, tags::FRAME_OF_REFERENCE_UID)?;
     let container_identifier = optional_string(&obj, tags::CONTAINER_IDENTIFIER)?;
     let specimen_identifier = optional_string(&obj, tags::SPECIMEN_IDENTIFIER)?;
+    let barcode_value = optional_string(&obj, tags::BARCODE_VALUE)?;
     let sop_instance_uid = required_string(&obj, tags::SOP_INSTANCE_UID, "SOPInstanceUID")?;
     let image_type = required_multi_string(&obj, tags::IMAGE_TYPE, "ImageType")?;
     let rows = required_nonzero_u32(&obj, tags::ROWS, "Rows", path)?;
@@ -186,6 +208,7 @@ pub(super) fn parse_metadata_object_until(
         frame_of_reference_uid,
         container_identifier,
         specimen_identifier,
+        barcode_value,
         sop_instance_uid,
         transfer_syntax_uid,
         photometric_interpretation,
@@ -448,7 +471,9 @@ pub(super) fn validate_supported_pixel_format(meta: &ParsedDicomMetadata) -> Res
             meta.photometric_interpretation.as_str(),
             "MONOCHROME1" | "MONOCHROME2"
         )
-    } else if meta.transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
+    } else if is_lossless_jpeg_transfer_syntax(&meta.transfer_syntax_uid) {
+        meta.photometric_interpretation == "RGB"
+    } else if is_jpeg_transfer_syntax(&meta.transfer_syntax_uid) {
         meta.photometric_interpretation == "YBR_FULL_422"
             || meta.photometric_interpretation == "RGB"
     } else if JP2K_TRANSFER_SYNTAXES.contains(&meta.transfer_syntax_uid.as_str()) {
@@ -473,12 +498,22 @@ pub(super) fn validate_supported_pixel_format(meta: &ParsedDicomMetadata) -> Res
     }
 }
 
+#[cfg(test)]
 pub(super) fn parse_sparse_tile_map(
     obj: &DefaultDicomObject,
     tile_width: u32,
     tile_height: u32,
 ) -> Result<HashMap<(u32, u32), u32>, WsiError> {
-    let mut map = HashMap::new();
+    let budget = OpenBudget::new(SlideLimits::default());
+    parse_sparse_tile_map_with_budget(obj, tile_width, tile_height, budget.as_ref())
+}
+
+pub(super) fn parse_sparse_tile_map_with_budget(
+    obj: &DefaultDicomObject,
+    tile_width: u32,
+    tile_height: u32,
+    budget: &OpenBudget,
+) -> Result<HashMap<(u32, u32), u32>, WsiError> {
     let items = obj
         .element(tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
         .map_err(|_| {
@@ -487,6 +522,18 @@ pub(super) fn parse_sparse_tile_map(
         .items()
         .ok_or_else(|| {
             WsiError::DisplayConversion("PerFrameFunctionalGroupsSequence is not a sequence".into())
+        })?;
+
+    let index_bytes = u64::try_from(items.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(32);
+    budget.retain_index(index_bytes)?;
+    let mut map = HashMap::new();
+    map.try_reserve(items.len())
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            requested: index_bytes,
+            limit: budget.limits().tile_index_bytes(),
         })?;
 
     for (frame_index, item) in items.iter().enumerate() {
@@ -670,10 +717,22 @@ pub(super) fn optional_f64_at(
     selector: impl Into<dicom_core::ops::AttributeSelector>,
 ) -> Result<Option<f64>, WsiError> {
     match obj.entry_at(selector) {
-        Ok(entry) => entry
-            .to_float64()
-            .map(Some)
-            .map_err(|err| WsiError::DisplayConversion(format!("invalid DICOM float: {err}"))),
+        Ok(entry) => {
+            let value = entry.to_float64().map_err(|err| {
+                WsiError::DisplayConversion(format!("invalid DICOM float: {err}"))
+            })?;
+            if !value.is_finite() {
+                Err(WsiError::DisplayConversion(
+                    "DICOM float must be finite".into(),
+                ))
+            } else if value <= 0.0 {
+                Err(WsiError::DisplayConversion(
+                    "DICOM float must be positive".into(),
+                ))
+            } else {
+                Ok(Some(value))
+            }
+        }
         Err(_) => Ok(None),
     }
 }
@@ -698,5 +757,19 @@ pub(super) fn optional_pair_f64_at(
         .next()
         .and_then(|part| part.parse::<f64>().ok())
         .ok_or_else(|| WsiError::DisplayConversion("invalid DICOM float pair".into()))?;
-    Ok(Some((second * 1000.0, first * 1000.0)))
+    let scaled = (second * 1000.0, first * 1000.0);
+    if ![first, second, scaled.0, scaled.1]
+        .into_iter()
+        .all(f64::is_finite)
+    {
+        Err(WsiError::DisplayConversion(
+            "DICOM float pair must be finite".into(),
+        ))
+    } else if first <= 0.0 || second <= 0.0 {
+        Err(WsiError::DisplayConversion(
+            "DICOM float pair must be positive".into(),
+        ))
+    } else {
+        Ok(Some(scaled))
+    }
 }

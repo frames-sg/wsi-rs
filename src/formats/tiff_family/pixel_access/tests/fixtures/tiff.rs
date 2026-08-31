@@ -248,6 +248,18 @@ pub(in super::super) fn build_multi_stripped_jpeg_tiff(
     rows_per_strip: u32,
     strips: &[Vec<u8>],
 ) -> NamedTempFile {
+    build_multi_stripped_tiff(width, height, rows_per_strip, strips, 7, 3, 6)
+}
+
+pub(in super::super) fn build_multi_stripped_tiff(
+    width: u32,
+    height: u32,
+    rows_per_strip: u32,
+    strips: &[Vec<u8>],
+    compression: u16,
+    samples_per_pixel: u16,
+    photometric: u16,
+) -> NamedTempFile {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"II");
     buf.extend_from_slice(&le_u16(42));
@@ -273,15 +285,16 @@ pub(in super::super) fn build_multi_stripped_jpeg_tiff(
         vec![
             (256u16, 4u16, 1u32, le_u32(width)),
             (257u16, 4u16, 1u32, le_u32(height)),
-            (259u16, 3u16, 1u32, short_in_u32(7)),
-            (262u16, 3u16, 1u32, short_in_u32(6)),
+            (258u16, 3u16, 1u32, short_in_u32(8)),
+            (259u16, 3u16, 1u32, short_in_u32(compression)),
+            (262u16, 3u16, 1u32, short_in_u32(photometric)),
             (
                 273u16,
                 4u16,
                 strip_offsets.len() as u32,
                 le_u32(strip_offsets_array_offset),
             ),
-            (277u16, 3u16, 1u32, short_in_u32(3)),
+            (277u16, 3u16, 1u32, short_in_u32(samples_per_pixel)),
             (278u16, 4u16, 1u32, le_u32(rows_per_strip)),
             (
                 279u16,

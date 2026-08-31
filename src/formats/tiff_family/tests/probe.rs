@@ -101,6 +101,62 @@ fn probe_detects_aperio() {
 }
 
 #[test]
+fn configured_metadata_limit_rejects_aperio_description() {
+    let file = build_aperio_tiff(1024, 768);
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(1)
+        .expect("nonzero metadata limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = TiffFamilyBackend::new()
+        .probe_with_config(file.path(), config)
+        .expect_err("tiny configured metadata limit must reject TIFF tag payloads");
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn permissive_probe_cache_cannot_satisfy_a_stricter_open() {
+    let file = build_aperio_tiff(1024, 768);
+    let backend = TiffFamilyBackend::new();
+    backend
+        .probe_with_config(file.path(), BackendOpenConfig::deterministic())
+        .expect("permissive probe");
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(1)
+        .expect("nonzero metadata limit");
+    let strict = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = match backend.open_with_config(file.path(), strict) {
+        Ok(_) => panic!("strict open must not consume a permissive probe cache entry"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, WsiError::ResourceLimit { .. }));
+}
+
+#[test]
+fn configured_tile_index_limit_rejects_before_ifd_allocation() {
+    let file = build_aperio_tiff(1024, 768);
+    let limits = crate::SlideLimits::default()
+        .with_tile_index_bytes(1)
+        .expect("nonzero index limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = TiffFamilyBackend::new()
+        .probe_with_config(file.path(), config)
+        .expect_err("tiny configured index limit must reject TIFF IFDs");
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn specific_vendor_beats_generic() {
     // An Aperio-like file should be detected as "aperio", not "generic-tiff"
     let file = build_aperio_tiff(512, 384);

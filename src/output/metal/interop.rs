@@ -1,8 +1,12 @@
 use super::{MetalDeviceStorage, MetalDeviceTile};
 use crate::{error::WsiError, PixelFormat};
+use j2k_core::DeviceSubmission;
 use j2k_metal_support::{MetalImageLayout, ResidentMetalImage, SubmittedMetalImages};
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder, MTLDevice};
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder,
+    MTLComputeCommandEncoder, MTLDevice, MTLResource,
+};
 
 use super::MetalBuffer;
 
@@ -98,6 +102,83 @@ pub(super) fn submit_ycbcr_images(
     // retained in `inputs` until completion.
     unsafe { SubmittedMetalImages::from_uncommitted(device, command_buffer, outputs, inputs) }
         .map_err(|source| support_error("metal-ycbcr", source))
+}
+
+pub(super) fn download_resident_rows(
+    image: &ResidentMetalImage,
+    row_bytes: usize,
+    byte_len: usize,
+) -> Result<Vec<u8>, WsiError> {
+    let raw_input = unsafe {
+        // SAFETY: the immutable resident image is borrowed for the complete
+        // synchronous blit and retained by the submission until completion.
+        image.raw_buffer()
+    };
+    let device = raw_input.device();
+    let queue = j2k_metal_support::checked_command_queue(&device)
+        .map_err(|source| support_error("metal-download-queue", source))?;
+    let command_buffer = j2k_metal_support::checked_command_buffer(&queue)
+        .map_err(|source| support_error("metal-download-command", source))?;
+    let output = j2k_metal_support::checked_shared_buffer(&device, byte_len)
+        .map_err(|source| support_error("metal-download-allocation", source))?;
+    let blit = j2k_metal_support::checked_blit_command_encoder(&command_buffer)
+        .map_err(|source| support_error("metal-download-blit", source))?;
+
+    for row in 0..usize::try_from(image.dimensions().1).unwrap_or(usize::MAX) {
+        let source_offset = row
+            .checked_mul(image.pitch_bytes())
+            .and_then(|offset| image.byte_offset().checked_add(offset))
+            .ok_or_else(|| {
+                WsiError::DisplayConversion("Metal download source offset overflow".into())
+            })?;
+        let destination_offset = row.checked_mul(row_bytes).ok_or_else(|| {
+            WsiError::DisplayConversion("Metal download destination offset overflow".into())
+        })?;
+        // SAFETY: ResidentMetalImage validated the source range, the tight
+        // layout validated the destination range, and the fresh output buffer
+        // has no other reader or writer before command completion.
+        unsafe {
+            blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                raw_input,
+                source_offset,
+                &output,
+                destination_offset,
+                row_bytes,
+            );
+        }
+    }
+    blit.endEncoding();
+
+    let output_layout =
+        MetalImageLayout::new(0, image.dimensions(), row_bytes, image.pixel_format())
+            .map_err(|source| support_error("metal-download-layout", source))?;
+    // SAFETY: the fresh output has exactly one pending writer in this command
+    // buffer. The immutable input is retained until the blit completes.
+    let submitted = unsafe {
+        SubmittedMetalImages::from_uncommitted(
+            &device,
+            command_buffer,
+            vec![(output, output_layout)],
+            vec![image.clone()],
+        )
+    }
+    .map_err(|source| support_error("metal-download-submit", source))?;
+    let mut outputs = submitted
+        .wait()
+        .map_err(|source| support_error("metal-download-wait", source))?;
+    let output = outputs.pop().ok_or_else(|| {
+        WsiError::DisplayConversion("Metal download completed without an output image".into())
+    })?;
+    // SAFETY: the blit has completed, the shared output is immutable, and the
+    // checked helper validates the exact tight byte range before copying.
+    unsafe {
+        j2k_metal_support::checked_buffer_read_vec::<u8>(
+            output.raw_buffer(),
+            output.byte_offset(),
+            byte_len,
+        )
+    }
+    .map_err(|source| support_error("metal-download-read", source))
 }
 
 #[cfg(test)]

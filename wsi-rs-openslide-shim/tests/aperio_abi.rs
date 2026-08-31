@@ -1,3 +1,5 @@
+use std::ffi::{CStr, CString};
+
 use wsi_rs_openslide_shim::*;
 
 mod support;
@@ -38,6 +40,52 @@ fn aperio_reduced_level_reads_preserve_fractional_origins() {
             assert!(openslide_get_error(osr).is_null(), "coordinate {x},{y}");
             assert_eq!(fnv1a_argb(&pixels), expected, "coordinate {x},{y}");
             assert!(pixels.iter().any(|pixel| pixel >> 24 != 0));
+        }
+
+        openslide_close(osr);
+    }
+}
+
+#[test]
+fn aperio_associated_images_read_through_the_c_abi() {
+    let Some(path) = fixture_path("svs-001", "svs") else {
+        return;
+    };
+
+    // SAFETY: `path`, names, dimensions, and per-image destinations remain
+    // live for their calls, and the opened handle is closed exactly once.
+    unsafe {
+        let osr = openslide_open(path.as_ptr());
+        assert!(!osr.is_null());
+
+        for name in ["thumbnail", "label", "macro"] {
+            let name = CString::new(name).unwrap();
+            let mut width = -1;
+            let mut height = -1;
+            openslide_get_associated_image_dimensions(osr, name.as_ptr(), &mut width, &mut height);
+            assert!(width > 0 && height > 0);
+            let len = usize::try_from(width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(height)
+                        .ok()
+                        .and_then(|height| width.checked_mul(height))
+                })
+                .expect("associated image dimensions fit memory");
+            let mut pixels = vec![0u32; len];
+            openslide_read_associated_image(osr, name.as_ptr(), pixels.as_mut_ptr());
+            let error = openslide_get_error(osr);
+            assert!(
+                error.is_null(),
+                "{}: {}",
+                name.to_string_lossy(),
+                if error.is_null() {
+                    "no error".into()
+                } else {
+                    CStr::from_ptr(error).to_string_lossy()
+                }
+            );
+            assert!(pixels.iter().any(|pixel| *pixel != 0));
         }
 
         openslide_close(osr);

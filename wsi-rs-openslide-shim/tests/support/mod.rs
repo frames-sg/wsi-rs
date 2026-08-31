@@ -13,8 +13,23 @@ pub(crate) fn fixture_path(alias: &str, extension: &str) -> Option<CString> {
             })
         })?;
     let path = cache.join(format!("{alias}.{extension}"));
-    path.is_file()
-        .then(|| CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL"))
+    if path.is_file() {
+        return Some(
+            CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL"),
+        );
+    }
+    let required = std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| {
+        aliases
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| candidate == alias)
+    });
+    assert!(
+        !required,
+        "required parity fixture is missing: {}",
+        path.display()
+    );
+    None
 }
 
 pub(crate) fn fnv1a_argb(pixels: &[u32]) -> u64 {

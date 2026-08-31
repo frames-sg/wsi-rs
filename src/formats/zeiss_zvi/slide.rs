@@ -1,4 +1,6 @@
-use super::compound::{compound_stream_paths, item_contents_index, read_stream_bounded};
+use super::compound::{
+    compound_stream_paths_with_budget, item_contents_index, read_stream_declared_bounded,
+};
 use super::header::read_zvi_header;
 use super::model::{ZviCompression, ZviPlane, ZviSlide};
 use super::mosaic::{apply_mosaic_positions, build_mosaic_grid, build_zvi_channels};
@@ -30,21 +32,36 @@ impl SlideReader for ZviReader {
 }
 
 impl ZviSlide {
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+    pub(super) fn parse_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(config.limits);
         let mut compound = cfb::open(path).map_err(|source| invalid_slide(path, source))?;
-        let stream_paths = compound_stream_paths(&compound)?;
-        let global_tags = read_tags_if_present(&mut compound, "/Image/Tags/Contents")?;
+        let stream_paths = compound_stream_paths_with_budget(&compound, &budget)?;
+        let global_tags = read_tags_if_present(&mut compound, "/Image/Tags/Contents", &budget)?;
         let global_width = tag_u32(&global_tags, 515);
         let global_height = tag_u32(&global_tags, 516);
         let mpp_x = tag_f64(&global_tags, 769);
         let mpp_y = tag_f64(&global_tags, 772);
 
-        let mut item_streams = stream_paths
-            .iter()
-            .filter_map(|stream_path| {
-                item_contents_index(stream_path).map(|idx| (idx, stream_path.clone()))
-            })
-            .collect::<Vec<_>>();
+        let mut item_streams = Vec::new();
+        item_streams
+            .try_reserve(stream_paths.len().min(MAX_ZVI_PLANES))
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "ZVI plane stream index",
+                requested: u64::try_from(stream_paths.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(
+                        u64::try_from(std::mem::size_of::<(i32, String)>()).unwrap_or(u64::MAX),
+                    ),
+                limit: budget.limits().tile_index_bytes(),
+            })?;
+        for stream_path in &stream_paths {
+            if let Some(idx) = item_contents_index(stream_path) {
+                item_streams.push((idx, stream_path.clone()));
+            }
+        }
         if item_streams.len() > MAX_ZVI_PLANES {
             return Err(invalid_slide(
                 path,
@@ -59,13 +76,25 @@ impl ZviSlide {
             return Err(invalid_slide(path, "ZVI has no image item streams"));
         }
 
-        let mut planes = Vec::with_capacity(item_streams.len());
+        let plane_index_bytes = u64::try_from(item_streams.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<ZviPlane>()).unwrap_or(u64::MAX));
+        budget.retain_index(plane_index_bytes)?;
+        let mut planes = Vec::new();
+        planes
+            .try_reserve_exact(item_streams.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "ZVI plane index",
+                requested: plane_index_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
         for (item_index, stream_path) in item_streams {
-            let header = read_zvi_header(&mut compound, &stream_path)?;
+            let header = read_zvi_header(&mut compound, &stream_path, &budget)?;
             let stream_length = compound.open_stream(&stream_path)?.seek(SeekFrom::End(0))?;
-            let payload_length = validated_payload_length(path, stream_length, &header)?;
+            let payload_length =
+                validated_payload_length_with_limits(path, stream_length, &header, config.limits)?;
             let tag_path = format!("/Image/Item({item_index})/Tags/Contents");
-            let tags = read_tags_if_present(&mut compound, &tag_path)?;
+            let tags = read_tags_if_present(&mut compound, &tag_path, &budget)?;
             let stage_position = tag_f64(&tags, 2073).zip(tag_f64(&tags, 2074));
             planes.push(ZviPlane {
                 stream_path,
@@ -118,6 +147,27 @@ impl ZviSlide {
 
         let mut plane_by_whole = HashMap::new();
         let mut plane_by_tile = HashMap::new();
+        let lookup_index_bytes = u64::try_from(planes.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                u64::try_from(std::mem::size_of::<((u32, u32, u32, i64, i64), usize)>())
+                    .unwrap_or(u64::MAX),
+            );
+        budget.retain_index(lookup_index_bytes)?;
+        plane_by_whole
+            .try_reserve(planes.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "ZVI plane lookup index",
+                requested: lookup_index_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
+        plane_by_tile
+            .try_reserve(planes.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "ZVI plane lookup index",
+                requested: lookup_index_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
         let level_dimensions;
         let tile_layout;
         if mosaic {
@@ -181,7 +231,7 @@ impl ZviSlide {
         }
 
         let channels = build_zvi_channels(&planes, size_c);
-        let associated = associated_images(&mut compound)?;
+        let associated = associated_images(&mut compound, &budget)?;
         let associated_metadata = associated
             .iter()
             .map(|(name, tile)| {
@@ -191,6 +241,7 @@ impl ZviSlide {
                         dimensions: (tile.width, tile.height),
                         sample_type: tile.data.sample_type(),
                         channels: tile.channels,
+                        icc_profile: Vec::new(),
                     },
                 )
             })
@@ -335,19 +386,36 @@ impl ZviSlide {
 
 fn associated_images(
     compound: &mut CompoundFile<File>,
+    budget: &OpenBudget,
 ) -> Result<HashMap<String, CpuTile>, WsiError> {
     if !compound.is_stream("/Thumbnail") {
         return Ok(HashMap::new());
     }
-    let data = read_stream_bounded(
+    let data = read_stream_declared_bounded(
         compound,
         "/Thumbnail",
-        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES.min(budget.limits().encoded_unit_bytes()),
         "ZVI thumbnail stream",
+        "encoded tile/frame unit",
     )?;
     let Some(bmp_start) = data.windows(2).position(|bytes| bytes == b"BM") else {
         return Ok(HashMap::new());
     };
+    let dimensions =
+        image::ImageReader::with_format(std::io::Cursor::new(&data[bmp_start..]), ImageFormat::Bmp)
+            .into_dimensions()
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+    let decoded_bytes = u64::from(dimensions.0)
+        .checked_mul(u64::from(dimensions.1))
+        .and_then(|pixels| pixels.checked_mul(3))
+        .unwrap_or(u64::MAX);
+    if decoded_bytes > budget.limits().decoded_output_bytes() {
+        return Err(WsiError::ResourceLimit {
+            resource: "decoded output",
+            requested: decoded_bytes,
+            limit: budget.limits().decoded_output_bytes(),
+        });
+    }
     let image = image::load_from_memory_with_format(&data[bmp_start..], ImageFormat::Bmp)
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?
         .to_rgb8();
@@ -383,32 +451,45 @@ fn quickhash_for_zvi(
         .ok_or_else(|| WsiError::DisplayConversion("failed to compute ZVI quickhash".into()))
 }
 
+#[cfg(test)]
 fn validated_payload_length(
     path: &Path,
     stream_length: u64,
     header: &super::model::ZviImageHeader,
 ) -> Result<u64, WsiError> {
+    validated_payload_length_with_limits(path, stream_length, header, crate::SlideLimits::default())
+}
+
+fn validated_payload_length_with_limits(
+    path: &Path,
+    stream_length: u64,
+    header: &super::model::ZviImageHeader,
+    limits: crate::SlideLimits,
+) -> Result<u64, WsiError> {
     let payload_length = stream_length
         .checked_sub(header.payload_offset)
         .ok_or_else(|| invalid_slide(path, "ZVI payload offset exceeds stream length"))?;
-    if payload_length > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-        return Err(invalid_slide(
-            path,
-            "ZVI plane payload exceeds safety limit",
-        ));
+    let encoded_limit =
+        crate::core::limits::MAX_COMPRESSED_INPUT_BYTES.min(limits.encoded_unit_bytes());
+    if payload_length > encoded_limit {
+        return Err(WsiError::ResourceLimit {
+            resource: "encoded tile/frame unit",
+            requested: payload_length,
+            limit: encoded_limit,
+        });
     }
     let decoded_length = u64::from(header.width)
         .checked_mul(u64::from(header.height))
         .and_then(|value| value.checked_mul(u64::from(header.bytes_per_sample)))
         .ok_or_else(|| invalid_slide(path, "ZVI decoded payload length overflow"))?;
-    if decoded_length > crate::core::limits::MAX_DECODED_IMAGE_BYTES {
-        return Err(invalid_slide(
-            path,
-            format!(
-                "ZVI decoded plane requires {decoded_length} bytes, exceeding the {}-byte safety limit",
-                crate::core::limits::MAX_DECODED_IMAGE_BYTES
-            ),
-        ));
+    let decoded_limit =
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES.min(limits.decoded_output_bytes());
+    if decoded_length > decoded_limit {
+        return Err(WsiError::ResourceLimit {
+            resource: "decoded output",
+            requested: decoded_length,
+            limit: decoded_limit,
+        });
     }
     if header.compression == ZviCompression::Raw && payload_length != decoded_length {
         return Err(invalid_slide(

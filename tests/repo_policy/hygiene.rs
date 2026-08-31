@@ -148,7 +148,7 @@ fn referenced_parity_corpus_fetch_script_exists() {
     }
 }
 
-fn assert_builtin_registry_detects_zeiss(suffix: &str) {
+fn zeiss_magic_fixture(suffix: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new()
         .suffix(suffix)
         .tempfile()
@@ -157,20 +157,17 @@ fn assert_builtin_registry_detects_zeiss(suffix: &str) {
         .expect("write Zeiss file magic");
     file.flush().expect("flush Zeiss probe fixture");
 
+    file
+}
+
+#[test]
+fn builtin_registry_does_not_claim_czi_support() {
+    let file = zeiss_magic_fixture(".czi");
     let detected = FormatRegistry::builtin()
         .detect_vendor(file.path())
-        .expect("probe Zeiss fixture")
-        .expect("built-in registry must detect Zeiss magic");
-    assert!(detected.detected);
-    assert_eq!(detected.vendor, "zeiss");
-}
-
-#[test]
-fn builtin_registry_detects_zeiss_magic_by_behavior() {
-    assert_builtin_registry_detects_zeiss(".czi");
-}
-
-#[test]
-fn zeiss_magic_detection_does_not_depend_on_the_filename_extension() {
-    assert_builtin_registry_detects_zeiss(".svs");
+        .expect("probe CZI fixture");
+    assert!(
+        detected.is_none(),
+        "CZI must remain outside the 0.7 production registry"
+    );
 }

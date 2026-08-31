@@ -43,6 +43,7 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
             SyntheticTag::short(tags::COMPRESSION, 7),
             SyntheticTag::long(tags::STRIP_OFFSETS, 0),
             SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 0),
+            SyntheticTag::bytes(tags::JPEG_TABLES, vec![0xFF, 0xD8, 0xFF, 0xD9]),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Philips label image"),
         ],
     ]);
@@ -60,6 +61,16 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
     assert_eq!(levels[1].downsample, 2.0);
     assert!(layout.dataset.associated_images.contains_key("label"));
     assert!(layout.associated_sources.contains_key("label"));
+    let TileSource::Stripped { jpeg_tables, .. } = &layout.associated_sources["label"] else {
+        panic!(
+            "Philips label must use stripped storage, got {:?}",
+            layout.associated_sources["label"]
+        );
+    };
+    assert_eq!(
+        jpeg_tables.as_deref(),
+        Some([0xFF, 0xD8, 0xFF, 0xD9].as_slice())
+    );
     assert_eq!(
         layout.dataset.properties.get("openslide.mpp-x"),
         Some("0.226907")

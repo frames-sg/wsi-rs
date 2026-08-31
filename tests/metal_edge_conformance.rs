@@ -1,9 +1,6 @@
 #![cfg(all(feature = "metal", target_os = "macos"))]
 
-use wsi_rs::{
-    output::metal::MetalBackendSessions, DeviceTile, Slide, TileLayout, TileOutputPreference,
-    TilePixels, TileRequest,
-};
+use wsi_rs::{output::metal::MetalBackendSessions, Slide, TileLayout, TileRequest};
 
 #[test]
 #[ignore = "requires WSI_RS_METAL_EDGE_PATHS with local WSI fixtures"]
@@ -37,23 +34,10 @@ fn configured_wsi_edges_have_identical_cpu_and_metal_dimensions() {
                 .source()
                 .read_raw_compressed_tile(&request)
                 .expect("read raw compressed edge tile");
-            let TilePixels::Cpu(cpu) = slide
-                .read_tile(&request, TileOutputPreference::cpu())
-                .expect("read CPU edge tile")
-            else {
-                panic!("CPU edge request returned a device tile");
-            };
-            let device_tile = slide
-                .read_tile(
-                    &request,
-                    TileOutputPreference::require_device_auto_with_metal_and_compressed_decode(
-                        sessions.clone(),
-                    ),
-                )
-                .expect("read Metal edge tile");
-            let TilePixels::Device(DeviceTile::Metal(metal)) = device_tile else {
-                panic!("Metal edge request did not return a Metal tile");
-            };
+            let cpu = slide.read_tile(&request).expect("read CPU edge tile");
+            let metal = slide
+                .read_tile_metal(&request, &sessions)
+                .expect("read strict Metal edge tile");
             assert_eq!(
                 (metal.width, metal.height),
                 (cpu.width(), cpu.height()),

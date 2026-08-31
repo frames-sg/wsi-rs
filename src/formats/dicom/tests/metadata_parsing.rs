@@ -39,7 +39,7 @@ fn level0_properties_from_metadata_match_full_parse() {
 
 #[test]
 fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
-    const METADATA_ELEMENT_LIMIT: u32 = 16 * 1024 * 1024;
+    const METADATA_ELEMENT_LIMIT: u64 = 16 * 1024 * 1024;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("oversized-metadata.dcm");
@@ -52,7 +52,11 @@ fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
         .position(|candidate| candidate == pixel_header)
         .expect("test DICOM should contain explicit-VR Pixel Data");
     let mut hostile_header = vec![0x77, 0x77, 0x10, 0x00, b'O', b'B', 0, 0];
-    hostile_header.extend_from_slice(&(METADATA_ELEMENT_LIMIT + 1).to_le_bytes());
+    hostile_header.extend_from_slice(
+        &u32::try_from(METADATA_ELEMENT_LIMIT + 2)
+            .unwrap()
+            .to_le_bytes(),
+    );
     bytes.splice(pixel_offset..pixel_offset, hostile_header);
     std::fs::write(&path, bytes).unwrap();
 
@@ -61,8 +65,38 @@ fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
         Err(error) => error,
     };
 
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            requested,
+            limit,
+        } if requested == METADATA_ELEMENT_LIMIT + 2
+            && limit == METADATA_ELEMENT_LIMIT
+    ));
+}
+
+#[test]
+fn metadata_preflight_rejects_odd_value_length_before_parser_desynchronization() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("odd-metadata-length.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    let bits_stored_header = [0x28, 0x00, 0x01, 0x01, b'U', b'S', 0x02, 0x00];
+    let header_offset = bytes
+        .windows(bits_stored_header.len())
+        .position(|candidate| candidate == bits_stored_header)
+        .expect("test DICOM should contain explicit-VR Bits Stored");
+    bytes[header_offset + 6] = 3;
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut file = File::open(&path).unwrap();
+    let error = preflight_dicom_metadata(&mut file, &path)
+        .expect_err("odd DICOM value lengths must be rejected before object parsing");
+
     assert!(
-        error.to_string().contains("metadata element value limit"),
+        error.to_string().contains("must be even"),
         "unexpected error: {error}"
     );
 }
@@ -236,6 +270,35 @@ fn optional_metadata_helpers_reject_invalid_numeric_values() {
         .unwrap_err()
         .to_string()
         .contains("invalid DICOM float pair"));
+
+    obj.put(DataElement::new(float_tag, VR::DS, "NaN"));
+    assert!(optional_f64_at(&obj, float_tag)
+        .unwrap_err()
+        .to_string()
+        .contains("finite"));
+
+    for value in ["0", "-1"] {
+        obj.put(DataElement::new(float_tag, VR::DS, value));
+        assert!(optional_f64_at(&obj, float_tag)
+            .unwrap_err()
+            .to_string()
+            .contains("positive"));
+    }
+
+    for pair in ["NaN\\2", "1e308\\2"] {
+        obj.put(DataElement::new(pair_tag, VR::DS, pair));
+        assert!(optional_pair_f64_at(&obj, pair_tag)
+            .unwrap_err()
+            .to_string()
+            .contains("finite"));
+    }
+    for pair in ["0\\2", "-1\\2", "1\\0", "1\\-2"] {
+        obj.put(DataElement::new(pair_tag, VR::DS, pair));
+        assert!(optional_pair_f64_at(&obj, pair_tag)
+            .unwrap_err()
+            .to_string()
+            .contains("positive"));
+    }
 
     obj.put(DataElement::<InMemDicomObject>::new(
         pair_tag,

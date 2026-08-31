@@ -30,6 +30,35 @@ impl TiffPixelReader {
             })
     }
 
+    fn display_request_matches_native_regular_grid(&self, req: &TileViewRequest) -> bool {
+        let Some(level) = self
+            .layout
+            .dataset
+            .scenes
+            .get(req.scene.get())
+            .and_then(|scene| scene.series.get(req.series.get()))
+            .and_then(|series| series.levels.get(req.level.get() as usize))
+        else {
+            return false;
+        };
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = &level.tile_layout
+        else {
+            return false;
+        };
+        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
+            return false;
+        };
+        req.tile_width == *tile_width
+            && req.tile_height == *tile_height
+            && col < *tiles_across
+            && row < *tiles_down
+    }
+
     pub(super) fn read_tiles_cpu_with_backend(
         &self,
         reqs: &[TileRequest],
@@ -263,6 +292,23 @@ impl SlideReader for TiffPixelReader {
             row: req.row,
         };
         match self.tile_source_for(&tile_req)? {
+            TileSource::TiledIfd {
+                ifd_id,
+                jpeg_tables,
+                compression: Compression::Jpeg,
+            } => {
+                if !self.display_request_matches_native_regular_grid(req) {
+                    return Err(WsiError::Unsupported {
+                        reason: "raw TIFF JPEG display passthrough requires the display grid to exactly match the native regular tile layout"
+                            .into(),
+                    });
+                }
+                self.read_tiled_ifd_raw_jpeg_tile(
+                    &tile_req,
+                    *ifd_id,
+                    jpeg_tables.as_deref(),
+                )
+            }
             TileSource::NdpiJpeg {
                 ifd_id,
                 jpeg_header,
@@ -291,8 +337,11 @@ impl SlideReader for TiffPixelReader {
                 reason: "raw compressed display tile access is not available for synthetic downsample levels"
                     .into(),
             }),
+            TileSource::TiledIfd { .. } => Err(WsiError::Unsupported {
+                reason: "raw compressed TIFF display tile access requires JPEG compression".into(),
+            }),
             _ => Err(WsiError::Unsupported {
-                reason: "raw compressed display tile access is only implemented for NDPI JPEG restart levels"
+                reason: "raw compressed display tile access is not available for this TIFF level"
                     .into(),
             }),
         }
@@ -451,133 +500,32 @@ impl SlideReader for TiffPixelReader {
         }
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        let backend = output.backend().to_j2k();
-        let require_device = output.requires_device();
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        let prefer_device = output.prefers_device();
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        let compressed_device_decode_enabled = output.compressed_device_decode_enabled();
-        #[cfg(feature = "metal")]
-        let metal_sessions = output.metal_sessions();
-        #[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "metal")))]
-        let metal_sessions = None;
-        #[cfg(feature = "cuda")]
-        let cuda_sessions = output.cuda_sessions();
-        #[cfg(all(any(feature = "metal", feature = "cuda"), not(feature = "cuda")))]
-        let cuda_sessions = None;
-
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        if prefer_device && !reqs.is_empty() {
-            if self.ndpi_jpeg_batchable(reqs)? {
-                if compressed_device_decode_enabled || jpeg_device_decode_enabled() {
-                    match self.decode_ndpi_jpeg_pixels(
-                        reqs,
-                        backend,
-                        require_device,
-                        metal_sessions,
-                        cuda_sessions,
-                    ) {
-                        Ok(tiles) => return Ok(tiles),
-                        Err(err) if require_device => return Err(err),
-                        Err(err) => {
-                            tracing::debug!(
-                                error = %err,
-                                fallback_to_cpu = true,
-                                fallback_reason = "ndpi_jpeg_device_decode_failed",
-                                "NDPI JPEG device tile path failed; retrying through CPU output"
-                            );
-                        }
-                    }
-                } else if require_device {
-                    return Err(WsiError::Unsupported {
-                        reason: format!(
-                            "NDPI JPEG device decode is disabled; set {JPEG_DEVICE_DECODE_ENV}=1 or request compressed device decode to opt in"
-                        ),
-                    });
-                }
-            }
-
-            let device_result = match self.tiled_ifd_batch_compression(reqs)? {
-                Some(Compression::Jpeg)
-                    if compressed_device_decode_enabled || jpeg_device_decode_enabled() =>
-                {
-                    Some(self.decode_tiled_ifd_jpeg_pixels(
-                        reqs,
-                        backend,
-                        require_device,
-                        metal_sessions,
-                        cuda_sessions,
-                    ))
-                }
-                Some(Compression::Jpeg) if require_device => {
-                    return Err(WsiError::Unsupported {
-                        reason: format!(
-                            "JPEG device decode is disabled; set {JPEG_DEVICE_DECODE_ENV}=1 or request compressed device decode to opt in"
-                        ),
-                    });
-                }
-                Some(Compression::Jpeg) => None,
-                Some(compression @ (Compression::Jp2kRgb | Compression::Jp2kYcbcr))
-                    if compressed_device_decode_enabled || jp2k_device_decode_enabled() =>
-                {
-                    Some(self.decode_tiled_ifd_jp2k_pixels(
-                        reqs,
-                        compression,
-                        backend,
-                        require_device,
-                        metal_sessions,
-                        cuda_sessions,
-                    ))
-                }
-                Some(Compression::Jp2kRgb | Compression::Jp2kYcbcr) if require_device => {
-                    return Err(WsiError::Unsupported {
-                        reason: format!(
-                            "JP2K device decode is disabled; set {JP2K_DEVICE_DECODE_ENV}=1 or request compressed device decode to opt in"
-                        ),
-                    });
-                }
-                Some(Compression::Jp2kRgb | Compression::Jp2kYcbcr) => None,
-                _ if require_device => {
-                    return Err(WsiError::Unsupported {
-                        reason: "device backend not available for tiff_family".into(),
-                    });
-                }
-                _ => None,
-            };
-            if let Some(result) = device_result {
-                match result {
-                    Ok(tiles) => return Ok(tiles),
-                    Err(err) if require_device => return Err(err),
-                    Err(err) => {
-                        tracing::debug!(
-                            error = %err,
-                            fallback_to_cpu = true,
-                            fallback_reason = "j2k_auto_chose_cpu",
-                            "device tile path failed; retrying through CPU output"
-                        );
-                    }
-                }
-            }
-        }
-
-        #[cfg(not(any(feature = "metal", feature = "cuda")))]
-        if require_device {
-            return Err(WsiError::Unsupported {
-                reason: "device backend not available for tiff_family".into(),
-            });
-        }
-
-        self.read_tiles_cpu_with_backend(reqs, backend)
-            .map(|tiles| tiles.into_iter().map(TilePixels::Cpu).collect())
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.read_tiles_cpu_with_backend(reqs, BackendRequest::Cpu)
     }
 
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_cpu_with_backend(reqs, BackendRequest::Auto)
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        self.decode_tiled_ifd_jp2k_metal(reqs, sessions)
+            .and_then(|tiles| {
+                crate::core::batch::expect_exact_count(tiles, reqs.len(), "TIFF Metal tile batch")
+            })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        self.decode_tiled_ifd_jp2k_cuda(reqs, sessions)
+            .and_then(|tiles| {
+                crate::core::batch::expect_exact_count(tiles, reqs.len(), "TIFF CUDA tile batch")
+            })
     }
 
     fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
@@ -618,7 +566,7 @@ impl SlideReader for TiffPixelReader {
             TileSource::SyntheticDownsample { base_level, factor } => {
                 self.read_synthetic_display_tile(req, *base_level, *factor)
             }
-            _ => read_display_tile_from_source(self, None, req, TileOutputPreference::cpu()),
+            _ => read_display_tile_from_source(self, None, req),
         }
     }
 
@@ -664,20 +612,13 @@ impl SlideReader for TiffPixelReader {
                         )
                     }
                     Compression::Lzw | Compression::Deflate | Compression::Zstd => {
-                        let data =
-                            self.read_stripped_data(name, strip_offsets, strip_byte_counts)?;
-                        let expected_bytes = self.expected_uncompressed_tile_bytes(
-                            *ifd_id,
-                            info.dimensions.0,
-                            info.dimensions.1,
-                        )?;
-                        let decoded = self.decompress_tiff_payload(
+                        let decoded = self.read_stripped_compressed_data(
+                            name,
                             *ifd_id,
                             *compression,
-                            &data,
-                            expected_bytes,
-                            info.dimensions.0,
-                            info.dimensions.1,
+                            info.dimensions,
+                            strip_offsets,
+                            strip_byte_counts,
                         )?;
                         self.decode_uncompressed_tile(
                             *ifd_id,
@@ -804,21 +745,5 @@ impl SlideReader for TiffPixelReader {
                 name,
             ))),
         }
-    }
-
-    fn recommended_shared_cache_bytes(&self) -> Option<u64> {
-        self.layout
-            .tile_sources
-            .values()
-            .any(|source| {
-                matches!(
-                    source,
-                    TileSource::TiledIfd {
-                        compression: Compression::Jp2kRgb | Compression::Jp2kYcbcr,
-                        ..
-                    }
-                )
-            })
-            .then_some(DEFAULT_JP2K_SHARED_TILE_CACHE_BYTES)
     }
 }

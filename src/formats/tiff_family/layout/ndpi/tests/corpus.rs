@@ -18,17 +18,15 @@ fn opens_legacy_wrapped_offset_ndpi_when_corpus_is_available() {
         (188160, 101376)
     );
     let tile = slide
-        .read_tile(
-            &TileRequest {
-                scene: 0usize.into(),
-                series: 0usize.into(),
-                level: 0u32.into(),
-                plane: PlaneSelection::default().into(),
-                col: 0,
-                row: 0,
-            },
-            TileOutputPreference::cpu(),
-        )
+        .read_tile(&TileRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: PlaneSelection::default().into(),
+            col: 0,
+            row: 0,
+        })
         .expect("read legacy NDPI tile");
-    assert!(matches!(tile, TilePixels::Cpu(_)));
+    assert!(tile.width() > 0);
+    assert!(tile.height() > 0);
 }

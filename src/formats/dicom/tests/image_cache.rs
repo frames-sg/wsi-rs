@@ -156,7 +156,7 @@ fn decoded_frame_cache_recovers_from_poisoning() {
         &image.cached_decoded_frame(7).expect("cached tile"),
         &tile
     ));
-    assert!(image.should_cache_decoded_frames_for_batch(1));
+    assert!(!image.should_cache_decoded_frames_for_batch(1));
 }
 
 #[test]

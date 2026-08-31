@@ -11,7 +11,8 @@ use crate::error::WsiError;
 use super::DicomImage;
 use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::frame_index::{
-    self, group_frame_read_spans, preflight_compressed_lengths, reopen_dicom_object,
+    self, group_frame_read_spans, preflight_compressed_frame_with_limit,
+    preflight_compressed_lengths_with_limit, reopen_dicom_object,
     scan_encapsulated_frames_controlled, DicomEncapsulatedFrames,
 };
 #[cfg(test)]
@@ -53,6 +54,11 @@ impl DicomImage {
                         encapsulated_frames.frame_ranges.len()
                     ),
                 })?;
+            preflight_compressed_frame_with_limit(
+                &self.frame_store.path,
+                &encapsulated_frames.fragments[frame_range.start..frame_range.end],
+                self.frame_store.encoded_unit_bytes,
+            )?;
             let bytes = Arc::new(frame_index::read_encapsulated_fragments(
                 &self.frame_store.path,
                 &encapsulated_frames.fragments[frame_range.start..frame_range.end],
@@ -62,7 +68,11 @@ impl DicomImage {
                     .compressed_frame_cache
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .put(frame_index, bytes.clone());
+                    .put(
+                        frame_index,
+                        bytes.clone(),
+                        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                    );
             }
             return Ok(bytes);
         }
@@ -92,16 +102,17 @@ impl DicomImage {
             .unwrap_or(1);
 
         if number_of_frames == 1 && fragments.len() > 1 {
-            let total_len = preflight_compressed_lengths(
+            let total_len = preflight_compressed_lengths_with_limit(
                 &self.frame_store.path,
                 fragments.iter().map(Vec::len),
+                self.frame_store.encoded_unit_bytes,
             )?;
             let mut data = Vec::new();
             data.try_reserve_exact(total_len)
                 .map_err(|_| WsiError::ResourceLimit {
                     resource: "compressed DICOM frame",
                     requested: total_len as u64,
-                    limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+                    limit: self.frame_store.encoded_unit_bytes,
                 })?;
             for fragment in fragments {
                 data.extend_from_slice(fragment);
@@ -120,13 +131,17 @@ impl DicomImage {
                     fragments.len()
                 ),
             })?;
-        let total_len = preflight_compressed_lengths(&self.frame_store.path, [fragment.len()])?;
+        let total_len = preflight_compressed_lengths_with_limit(
+            &self.frame_store.path,
+            [fragment.len()],
+            self.frame_store.encoded_unit_bytes,
+        )?;
         let mut data = Vec::new();
         data.try_reserve_exact(total_len)
             .map_err(|_| WsiError::ResourceLimit {
                 resource: "compressed DICOM frame",
                 requested: total_len as u64,
-                limit: crate::core::limits::MAX_COMPRESSED_INPUT_BYTES,
+                limit: self.frame_store.encoded_unit_bytes,
             })?;
         data.extend_from_slice(fragment);
         Ok(Arc::new(data))
@@ -212,6 +227,11 @@ impl DicomImage {
                     ),
                 })?
                 .clone();
+            preflight_compressed_frame_with_limit(
+                &self.frame_store.path,
+                &encapsulated_frames.fragments[frame_range.clone()],
+                self.frame_store.encoded_unit_bytes,
+            )?;
             spans.push(frame_index::frame_read_span(
                 &self.frame_store.path,
                 &encapsulated_frames,
@@ -244,7 +264,11 @@ impl DicomImage {
                         .compressed_frame_cache
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .put(frame_index, bytes.clone());
+                        .put(
+                            frame_index,
+                            bytes.clone(),
+                            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                        );
                 }
                 results.insert(frame_index, bytes);
             }

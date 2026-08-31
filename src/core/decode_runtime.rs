@@ -1,479 +1,656 @@
-use crate::core::registry::SlideReader;
-use crate::core::types::{
-    CpuTile, Dataset, Level, OutputBackendRequest, TileCodecKind, TileLayout, TileOutputPreference,
-    TilePixels, TileRequest,
-};
+#[cfg(test)]
+use crate::core::registry::ConservativeManagedReader;
+use crate::core::registry::{ManagedSlideReader, SlideReader};
+use crate::core::types::{CpuTile, Dataset, TileCodecKind, TileRequest};
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+use crate::core::types::{Level, TileLayout};
 use crate::error::WsiError;
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+use lru::LruCache;
 use rayon::ThreadPool;
-use std::collections::{HashMap, VecDeque};
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+#[cfg(feature = "route-telemetry")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+use std::time::Duration;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use std::time::Instant;
 
-const DEFAULT_ROUTE_SAMPLE_SIZE: usize = 32;
-const DIRECT_DEVICE_BATCH_THRESHOLD: usize = 8;
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+const ROUTE_SAMPLE_SIZE: usize = 8;
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 const DEVICE_WIN_RATIO: f64 = 0.85;
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 const ROUTE_CACHE_MAX_ENTRIES: usize = 1024;
+
+#[cfg(feature = "route-telemetry")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RouteBackendTelemetry {
+    device_attempt_tiles: u64,
+    device_tiles: u64,
+    adaptive_cpu_tiles: u64,
+    fallback_tiles: u64,
+    device_failure_fallback_tiles: u64,
+    unavailable_fallback_tiles: u64,
+}
+
+#[cfg(feature = "route-telemetry")]
+struct DecodeRouteTelemetryCounters {
+    device_attempt_tiles: AtomicU64,
+    device_tiles: AtomicU64,
+    adaptive_cpu_tiles: AtomicU64,
+    fallback_tiles: AtomicU64,
+    device_failure_fallback_tiles: AtomicU64,
+    unavailable_fallback_tiles: AtomicU64,
+}
+
+#[cfg(feature = "route-telemetry")]
+impl DecodeRouteTelemetryCounters {
+    const fn new() -> Self {
+        Self {
+            device_attempt_tiles: AtomicU64::new(0),
+            device_tiles: AtomicU64::new(0),
+            adaptive_cpu_tiles: AtomicU64::new(0),
+            fallback_tiles: AtomicU64::new(0),
+            device_failure_fallback_tiles: AtomicU64::new(0),
+            unavailable_fallback_tiles: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> RouteBackendTelemetry {
+        RouteBackendTelemetry {
+            device_attempt_tiles: self.device_attempt_tiles.load(Ordering::Relaxed),
+            device_tiles: self.device_tiles.load(Ordering::Relaxed),
+            adaptive_cpu_tiles: self.adaptive_cpu_tiles.load(Ordering::Relaxed),
+            fallback_tiles: self.fallback_tiles.load(Ordering::Relaxed),
+            device_failure_fallback_tiles: self
+                .device_failure_fallback_tiles
+                .load(Ordering::Relaxed),
+            unavailable_fallback_tiles: self.unavailable_fallback_tiles.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[cfg(feature = "route-telemetry")]
+static METAL_ROUTE_TELEMETRY: DecodeRouteTelemetryCounters = DecodeRouteTelemetryCounters::new();
+#[cfg(feature = "route-telemetry")]
+static CUDA_ROUTE_TELEMETRY: DecodeRouteTelemetryCounters = DecodeRouteTelemetryCounters::new();
+
+/// Serialize cumulative process-wide adaptive JP2K route counters.
+///
+/// This benchmark-only surface is intentionally JSON rather than public route
+/// types so normal consumers do not acquire another compatibility API.
+#[cfg(feature = "route-telemetry")]
+#[doc(hidden)]
+pub fn decode_route_telemetry_json() -> String {
+    let metal = METAL_ROUTE_TELEMETRY.snapshot();
+    let cuda = CUDA_ROUTE_TELEMETRY.snapshot();
+    serde_json::json!({
+        "metal": {
+            "device_attempt_tiles": metal.device_attempt_tiles,
+            "device_tiles": metal.device_tiles,
+            "adaptive_cpu_tiles": metal.adaptive_cpu_tiles,
+            "fallback_tiles": metal.fallback_tiles,
+            "device_failure_fallback_tiles": metal.device_failure_fallback_tiles,
+            "unavailable_fallback_tiles": metal.unavailable_fallback_tiles,
+        },
+        "cuda": {
+            "device_attempt_tiles": cuda.device_attempt_tiles,
+            "device_tiles": cuda.device_tiles,
+            "adaptive_cpu_tiles": cuda.adaptive_cpu_tiles,
+            "fallback_tiles": cuda.fallback_tiles,
+            "device_failure_fallback_tiles": cuda.device_failure_fallback_tiles,
+            "unavailable_fallback_tiles": cuda.unavailable_fallback_tiles,
+        }
+    })
+    .to_string()
+}
+
+/// Controls whether CPU-returning reads may use an available JP2K device path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DecodeAcceleration {
+    /// Measure CPU against an available Metal or CUDA path, including readback.
+    Auto,
+    /// Decode entirely on the CPU.
+    CpuOnly,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecodeExecutionOptions {
-    jp2k_cpu_threads: Option<NonZeroUsize>,
-    route_sample_size: usize,
+    acceleration: DecodeAcceleration,
 }
 
 impl DecodeExecutionOptions {
-    pub fn with_jp2k_cpu_threads(mut self, threads: NonZeroUsize) -> Self {
-        self.jp2k_cpu_threads = Some(threads);
+    pub fn with_acceleration(mut self, acceleration: DecodeAcceleration) -> Self {
+        self.acceleration = acceleration;
         self
     }
 
-    pub fn with_route_sample_size(mut self, sample_size: usize) -> Self {
-        self.route_sample_size = sample_size.max(1);
-        self
-    }
-
-    pub fn jp2k_cpu_threads(&self) -> Option<NonZeroUsize> {
-        self.jp2k_cpu_threads
-    }
-
-    pub fn route_sample_size(&self) -> usize {
-        self.route_sample_size
+    pub fn acceleration(&self) -> DecodeAcceleration {
+        self.acceleration
     }
 }
 
 impl Default for DecodeExecutionOptions {
     fn default() -> Self {
         Self {
-            jp2k_cpu_threads: None,
-            route_sample_size: DEFAULT_ROUTE_SAMPLE_SIZE,
+            acceleration: DecodeAcceleration::Auto,
         }
     }
 }
 
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum DecodeRoute {
+enum DecodeRoute {
     Cpu,
     Device,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct DecodeRouteDecision {
-    pub winner: DecodeRoute,
-    pub sample_tile_count: usize,
-    pub cpu_elapsed: Duration,
-    pub device_elapsed: Duration,
-    pub device_tile_count: usize,
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecodeRouteDecision {
+    winner: DecodeRoute,
+    cpu_elapsed: Duration,
+    device_elapsed: Duration,
+    device_failure: bool,
 }
 
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 impl DecodeRouteDecision {
-    pub fn measured(
-        sample_tile_count: usize,
-        cpu_elapsed: Duration,
-        device_elapsed: Duration,
-        device_tile_count: usize,
-    ) -> Self {
-        Self {
-            winner: Self::winner_for_measurement(cpu_elapsed, device_elapsed, device_tile_count),
-            sample_tile_count,
-            cpu_elapsed,
-            device_elapsed,
-            device_tile_count,
-        }
-    }
-
-    pub fn winner_for_measurement(
-        cpu_elapsed: Duration,
-        device_elapsed: Duration,
-        device_tile_count: usize,
-    ) -> DecodeRoute {
-        let cpu_ms = cpu_elapsed.as_secs_f64() * 1000.0;
-        let device_ms = device_elapsed.as_secs_f64() * 1000.0;
-        if device_tile_count > 0 && cpu_ms > 0.0 && device_ms <= cpu_ms * DEVICE_WIN_RATIO {
+    fn measured(cpu_elapsed: Duration, device_elapsed: Duration) -> Self {
+        let cpu_seconds = cpu_elapsed.as_secs_f64();
+        let device_seconds = device_elapsed.as_secs_f64();
+        let winner = if cpu_seconds > 0.0 && device_seconds <= cpu_seconds * DEVICE_WIN_RATIO {
             DecodeRoute::Device
         } else {
             DecodeRoute::Cpu
+        };
+        Self {
+            winner,
+            cpu_elapsed,
+            device_elapsed,
+            device_failure: false,
         }
     }
-}
 
-struct MeasuredDecodeRoute {
-    decision: DecodeRouteDecision,
-    sample_tiles: Vec<TilePixels>,
+    fn device_failure() -> Self {
+        Self {
+            winner: DecodeRoute::Cpu,
+            cpu_elapsed: Duration::ZERO,
+            device_elapsed: Duration::MAX,
+            device_failure: true,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct DecodeRuntime {
     options: DecodeExecutionOptions,
-    jp2k_cpu_pool: Option<ThreadPool>,
+    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     route_cache: Mutex<DecodeRouteCache>,
+    #[cfg(feature = "metal")]
+    metal_sessions: OnceLock<Result<crate::output::metal::MetalBackendSessions, String>>,
+    #[cfg(feature = "cuda")]
+    cuda_sessions: OnceLock<Result<crate::output::cuda::CudaBackendSessions, String>>,
 }
 
 impl DecodeRuntime {
+    #[cfg(test)]
     pub(crate) fn new(options: DecodeExecutionOptions) -> Result<Self, WsiError> {
-        Self::build(options, true)
+        Ok(Self::build(options))
     }
 
     pub(crate) fn arc_for_options(options: DecodeExecutionOptions) -> Result<Arc<Self>, WsiError> {
-        if options == DecodeExecutionOptions::default() {
-            Ok(Self::default_arc())
-        } else {
-            Ok(Arc::new(Self::new(options)?))
-        }
-    }
-
-    fn build(options: DecodeExecutionOptions, fail_on_pool_error: bool) -> Result<Self, WsiError> {
-        let threads = options
-            .jp2k_cpu_threads
-            .map_or_else(default_jp2k_cpu_threads, NonZeroUsize::get);
-        let jp2k_cpu_pool = match rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .thread_name(|index| format!("wsi_rs-jp2k-cpu-{index}"))
-            .build()
-        {
-            Ok(pool) => Some(pool),
-            Err(err) if fail_on_pool_error => {
-                return Err(WsiError::Unsupported {
-                    reason: format!("failed to initialize JP2K CPU decode pool: {err}"),
-                });
-            }
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "failed to initialize default JP2K CPU decode pool; falling back to inline decode"
-                );
-                None
+        static AUTO_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
+        static CPU_ONLY_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
+        let runtime = match options.acceleration {
+            DecodeAcceleration::Auto => AUTO_RUNTIME.get_or_init(|| Arc::new(Self::build(options))),
+            DecodeAcceleration::CpuOnly => {
+                CPU_ONLY_RUNTIME.get_or_init(|| Arc::new(Self::build(options)))
             }
         };
-        Ok(Self {
+        Ok(Arc::clone(runtime))
+    }
+
+    fn build(options: DecodeExecutionOptions) -> Self {
+        Self {
             options,
-            jp2k_cpu_pool,
-            route_cache: Mutex::new(DecodeRouteCache::new()),
-        })
+            #[cfg(any(test, feature = "metal", feature = "cuda"))]
+            route_cache: Mutex::new(new_decode_route_cache()),
+            #[cfg(feature = "metal")]
+            metal_sessions: OnceLock::new(),
+            #[cfg(feature = "cuda")]
+            cuda_sessions: OnceLock::new(),
+        }
     }
 
     pub(crate) fn default_arc() -> Arc<Self> {
-        static DEFAULT_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
-        DEFAULT_RUNTIME
-            .get_or_init(|| {
-                Arc::new(match Self::build(DecodeExecutionOptions::default(), false) {
-                    Ok(runtime) => runtime,
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to initialize default decode runtime; falling back to inline decode"
-                        );
-                        Self::inline(DecodeExecutionOptions::default())
-                    }
-                })
-            })
-            .clone()
-    }
-
-    fn inline(options: DecodeExecutionOptions) -> Self {
-        Self {
-            options,
-            jp2k_cpu_pool: None,
-            route_cache: Mutex::new(DecodeRouteCache::new()),
-        }
-    }
-
-    pub(crate) fn install_jp2k_cpu<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        if self.requires_jp2k_pool_install() {
-            self.jp2k_cpu_pool
-                .as_ref()
-                .expect("a differing JP2K pool width requires a configured pool")
-                .install(op)
-        } else {
-            op()
-        }
-    }
-
-    fn requires_jp2k_pool_install(&self) -> bool {
-        self.jp2k_cpu_pool
-            .as_ref()
-            .is_some_and(|pool| pool.current_num_threads() != rayon::current_num_threads())
+        Self::arc_for_options(DecodeExecutionOptions::default())
+            .expect("constructing the default decode runtime is infallible")
     }
 
     #[cfg(test)]
-    pub(crate) fn has_jp2k_cpu_pool(&self) -> bool {
-        self.jp2k_cpu_pool.is_some()
+    fn inline(options: DecodeExecutionOptions) -> Self {
+        Self::build(options)
+    }
+
+    pub(crate) fn install_jp2k_cpu<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
+        // Reuse an invoking Rayon worker instead of entering another registry.
+        // Calls from ordinary threads share the one process-wide WSI pool.
+        if rayon::current_thread_index().is_some() {
+            operation()
+        } else if let Some(pool) = process_jp2k_cpu_pool() {
+            pool.install(operation)
+        } else {
+            operation()
+        }
     }
 
     pub(crate) fn options(&self) -> DecodeExecutionOptions {
         self.options
     }
 
+    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
         self.route_cache
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .get(key)
+            .unwrap_or_else(|error| error.into_inner())
+            .peek(key)
+            .cloned()
     }
 
-    fn store_route(&self, key: DecodeRouteKey, decision: DecodeRouteDecision) {
-        self.route_cache
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(key, decision);
-    }
-
-    fn store_route_controlled(
+    #[cfg(any(test, feature = "metal", feature = "cuda"))]
+    fn store_route(
         &self,
         key: DecodeRouteKey,
         decision: DecodeRouteDecision,
-        control: &crate::ReadControl,
+        control: Option<&crate::ReadControl>,
     ) -> Result<(), WsiError> {
-        self.store_route_controlled_inner(key, decision, control, || {})
-    }
-
-    #[cfg(test)]
-    fn store_route_controlled_with_hook(
-        &self,
-        key: DecodeRouteKey,
-        decision: DecodeRouteDecision,
-        control: &crate::ReadControl,
-        before_publication: impl FnOnce(),
-    ) -> Result<(), WsiError> {
-        self.store_route_controlled_inner(key, decision, control, before_publication)
-    }
-
-    fn store_route_controlled_inner(
-        &self,
-        key: DecodeRouteKey,
-        decision: DecodeRouteDecision,
-        control: &crate::ReadControl,
-        before_publication: impl FnOnce(),
-    ) -> Result<(), WsiError> {
-        let mut route_cache = self
+        let mut cache = self
             .route_cache
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        before_publication();
-        control.publish_if_active(|| route_cache.insert(key, decision))
-    }
-}
-
-#[derive(Debug)]
-struct DecodeRouteCache {
-    entries: HashMap<DecodeRouteKey, DecodeRouteDecision>,
-    insertion_order: VecDeque<DecodeRouteKey>,
-}
-
-impl DecodeRouteCache {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            insertion_order: VecDeque::new(),
+        if let Some(control) = control {
+            control.publish_if_active(|| insert_decode_route(&mut cache, key, decision))
+        } else {
+            insert_decode_route(&mut cache, key, decision);
+            Ok(())
         }
     }
 
-    fn get(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
-        self.entries.get(key).cloned()
+    #[cfg(feature = "metal")]
+    fn metal_sessions(&self) -> Result<&crate::output::metal::MetalBackendSessions, WsiError> {
+        self.metal_sessions
+            .get_or_init(|| {
+                crate::output::metal::MetalBackendSessions::system_default()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|reason| WsiError::Unsupported {
+                reason: format!("Metal JP2K acceleration unavailable: {reason}"),
+            })
     }
 
-    fn insert(&mut self, key: DecodeRouteKey, decision: DecodeRouteDecision) {
-        if !self.entries.contains_key(&key) {
-            while self.entries.len() >= ROUTE_CACHE_MAX_ENTRIES {
-                let Some(evicted) = self.insertion_order.pop_front() else {
-                    break;
-                };
-                self.entries.remove(&evicted);
-            }
-            self.insertion_order.push_back(key.clone());
-        }
-        self.entries.insert(key, decision);
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
+    #[cfg(feature = "cuda")]
+    fn cuda_sessions(&self) -> Result<&crate::output::cuda::CudaBackendSessions, WsiError> {
+        self.cuda_sessions
+            .get_or_init(|| {
+                crate::output::cuda::CudaBackendSessions::system_default()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|reason| WsiError::Unsupported {
+                reason: reason.clone(),
+            })
     }
 }
 
-fn default_jp2k_cpu_threads() -> usize {
-    std::thread::available_parallelism()
-        .map_or(1, NonZeroUsize::get)
-        .max(1)
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+type DecodeRouteCache = LruCache<DecodeRouteKey, DecodeRouteDecision>;
+
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+fn new_decode_route_cache() -> DecodeRouteCache {
+    LruCache::new(
+        NonZeroUsize::new(ROUTE_CACHE_MAX_ENTRIES).expect("route cache capacity is nonzero"),
+    )
 }
 
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+fn insert_decode_route(
+    cache: &mut DecodeRouteCache,
+    key: DecodeRouteKey,
+    decision: DecodeRouteDecision,
+) {
+    // Peeks keep reads and replacements on the existing FIFO eviction order.
+    if let Some(existing) = cache.peek_mut(&key) {
+        *existing = decision;
+    } else {
+        cache.put(key, decision);
+    }
+}
+
+fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
+    static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        // Rayon's default sizing honors RAYON_NUM_THREADS; leaving it unset
+        // also avoids a second wsi-rs-specific concurrency control.
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|index| format!("wsi-rs-jp2k-cpu-{index}"))
+            .build()
+            .map(Some)
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    %error,
+                    "failed to initialize process-wide JP2K CPU pool; decoding inline"
+                );
+                None
+            })
+    })
+    .as_ref()
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DeviceKind {
+    #[cfg(feature = "metal")]
+    Metal,
+    #[cfg(feature = "cuda")]
+    Cuda,
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn telemetry_counters(device: DeviceKind) -> &'static DecodeRouteTelemetryCounters {
+    match device {
+        #[cfg(feature = "metal")]
+        DeviceKind::Metal => &METAL_ROUTE_TELEMETRY,
+        #[cfg(feature = "cuda")]
+        DeviceKind::Cuda => &CUDA_ROUTE_TELEMETRY,
+    }
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn telemetry_add(counter: &AtomicU64, tiles: usize) {
+    let tiles = u64::try_from(tiles).unwrap_or(u64::MAX);
+    counter.fetch_add(tiles, Ordering::Relaxed);
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn record_device_attempt(device: DeviceKind, tiles: usize) {
+    telemetry_add(&telemetry_counters(device).device_attempt_tiles, tiles);
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn record_device_route(device: DeviceKind, tiles: usize) {
+    telemetry_add(&telemetry_counters(device).device_tiles, tiles);
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn record_adaptive_cpu_route(device: DeviceKind, tiles: usize) {
+    telemetry_add(&telemetry_counters(device).adaptive_cpu_tiles, tiles);
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn record_device_failure_fallback(device: DeviceKind, tiles: usize) {
+    let counters = telemetry_counters(device);
+    telemetry_add(&counters.fallback_tiles, tiles);
+    telemetry_add(&counters.device_failure_fallback_tiles, tiles);
+}
+
+#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+fn record_unavailable_fallback(device: DeviceKind, tiles: usize) {
+    let counters = telemetry_counters(device);
+    telemetry_add(&counters.fallback_tiles, tiles);
+    telemetry_add(&counters.unavailable_fallback_tiles, tiles);
+}
+
+#[cfg(all(
+    not(feature = "route-telemetry"),
+    any(feature = "metal", feature = "cuda")
+))]
+fn record_device_attempt(_device: DeviceKind, _tiles: usize) {}
+#[cfg(all(
+    not(feature = "route-telemetry"),
+    any(feature = "metal", feature = "cuda")
+))]
+fn record_device_route(_device: DeviceKind, _tiles: usize) {}
+#[cfg(all(
+    not(feature = "route-telemetry"),
+    any(feature = "metal", feature = "cuda")
+))]
+fn record_adaptive_cpu_route(_device: DeviceKind, _tiles: usize) {}
+#[cfg(all(
+    not(feature = "route-telemetry"),
+    any(feature = "metal", feature = "cuda")
+))]
+fn record_device_failure_fallback(_device: DeviceKind, _tiles: usize) {}
+#[cfg(all(
+    not(feature = "route-telemetry"),
+    any(feature = "metal", feature = "cuda")
+))]
+fn record_unavailable_fallback(_device: DeviceKind, _tiles: usize) {}
+
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DecodeRouteKey {
     dataset_id: u128,
     scene: usize,
     series: usize,
     level: u32,
-    tile_grid: RouteTileGrid,
+    sample_geometry: RouteSampleGeometry,
     codec_kind: TileCodecKind,
-    output_backend: OutputBackendRequest,
-    device_backend_identity: String,
+    device_identity: String,
     sample_tile_count: usize,
 }
 
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct RouteTileGrid {
-    tile_width: u32,
-    tile_height: u32,
-    tiles_across: u64,
-    tiles_down: u64,
+struct RouteTileGeometry {
+    width: u32,
+    height: u32,
+}
+
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RouteSampleGeometry {
+    tiles: [RouteTileGeometry; ROUTE_SAMPLE_SIZE],
+    len: u8,
+}
+
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+impl RouteSampleGeometry {
+    #[cfg(test)]
+    fn from_dimensions<const N: usize>(dimensions: [(u32, u32); N]) -> Self {
+        assert!(
+            N <= ROUTE_SAMPLE_SIZE,
+            "route sample geometry exceeds its fixed capacity"
+        );
+        let mut tiles = [RouteTileGeometry {
+            width: 0,
+            height: 0,
+        }; ROUTE_SAMPLE_SIZE];
+        for (slot, (width, height)) in tiles.iter_mut().zip(dimensions) {
+            *slot = RouteTileGeometry { width, height };
+        }
+        tiles[..N].sort_unstable_by_key(|tile| (tile.width, tile.height));
+        Self {
+            tiles,
+            len: N as u8,
+        }
+    }
 }
 
 pub(crate) struct AdaptiveDecodeReader {
-    inner: Box<dyn SlideReader>,
+    inner: Box<dyn ManagedSlideReader>,
     runtime: Arc<DecodeRuntime>,
 }
 
-struct ReadExecutionContext<'a> {
-    decode_runtime: &'a DecodeRuntime,
-    control: Option<&'a crate::ReadControl>,
-}
-
-impl<'a> ReadExecutionContext<'a> {
-    fn new(decode_runtime: &'a DecodeRuntime, control: Option<&'a crate::ReadControl>) -> Self {
-        Self {
-            decode_runtime,
-            control,
-        }
-    }
-
-    fn check_cancelled(&self) -> Result<(), WsiError> {
-        self.control
-            .map_or(Ok(()), crate::ReadControl::check_cancelled)
-    }
-
-    fn run_jp2k<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
-        self.decode_runtime.install_jp2k_cpu(operation)
-    }
-
-    fn run_tile_batch<R: Send>(
-        &self,
-        reader: &dyn SlideReader,
-        requests: &[TileRequest],
-        operation: impl FnOnce() -> R + Send,
-    ) -> R {
-        if !self.decode_runtime.requires_jp2k_pool_install() {
-            return operation();
-        }
-        if requests.iter().any(|request| {
-            matches!(
-                reader.tile_codec_kind(request),
-                TileCodecKind::Jp2k | TileCodecKind::Htj2k
-            )
-        }) {
-            self.run_jp2k(operation)
-        } else {
-            operation()
-        }
-    }
-}
-
 impl AdaptiveDecodeReader {
+    #[cfg(test)]
     pub(crate) fn new(inner: Box<dyn SlideReader>, runtime: Arc<DecodeRuntime>) -> Self {
+        Self::new_managed(
+            Box::new(ConservativeManagedReader::new(
+                inner,
+                crate::SlideLimits::default().encoded_unit_bytes(),
+            )),
+            runtime,
+        )
+    }
+
+    pub(crate) fn new_managed(
+        inner: Box<dyn ManagedSlideReader>,
+        runtime: Arc<DecodeRuntime>,
+    ) -> Self {
         Self { inner, runtime }
     }
 
     fn read_tiles_adaptive(
         &self,
         reqs: &[TileRequest],
-        output: TileOutputPreference,
         control: Option<&crate::ReadControl>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    ) -> Result<Vec<CpuTile>, WsiError> {
         Self::check_control(control)?;
-        if !should_adapt_output(&output) {
-            tracing::debug!(
-                requested_tiles = reqs.len(),
-                adaptive_decode = false,
-                "wsi tile batch routed without adaptive decode"
-            );
-            return self.read_inner(reqs, output, control);
+        if reqs.is_empty() || self.runtime.options.acceleration == DecodeAcceleration::CpuOnly {
+            return self.read_inner_cpu(reqs, control);
         }
-        let route_sample_size = self.runtime.options.route_sample_size();
-        let Some(key) = route_key_for_batch(self.inner.as_ref(), reqs, &output, route_sample_size)
-        else {
-            tracing::debug!(
-                requested_tiles = reqs.len(),
-                route_sample_size,
-                adaptive_decode = true,
-                route_key_available = false,
-                "wsi adaptive decode fell back to requested output"
-            );
-            return self.read_inner(reqs, output, control);
-        };
-        if reqs.len() >= DIRECT_DEVICE_BATCH_THRESHOLD {
-            tracing::debug!(
-                requested_tiles = reqs.len(),
-                route_sample_size,
-                direct_device_batch_threshold = DIRECT_DEVICE_BATCH_THRESHOLD,
-                adaptive_decode = true,
-                route_key_available = true,
-                "wsi adaptive decode sent large batch through requested output"
-            );
-            return self.read_inner(reqs, output, control);
+        #[cfg(any(feature = "metal", feature = "cuda"))]
+        {
+            self.read_tiles_adaptive_device(reqs, control)
         }
-        let (route, measured, measured_decision) = match self.runtime.cached_route(&key) {
-            Some(decision) => {
-                tracing::debug!(
-                    requested_tiles = reqs.len(),
-                    route_sample_size,
-                    route_cache_hit = true,
-                    route = ?decision.winner,
-                    sample_tile_count = decision.sample_tile_count,
-                    cpu_elapsed_ms = decision.cpu_elapsed.as_secs_f64() * 1000.0,
-                    device_elapsed_ms = decision.device_elapsed.as_secs_f64() * 1000.0,
-                    device_tile_count = decision.device_tile_count,
-                    "wsi adaptive decode reused cached route"
-                );
-                (decision.winner, None, None)
+        #[cfg(not(any(feature = "metal", feature = "cuda")))]
+        {
+            self.read_inner_cpu(reqs, control)
+        }
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn read_tiles_adaptive_device(
+        &self,
+        reqs: &[TileRequest],
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        let Some(device) = self.preferred_device() else {
+            let tiles = self.read_inner_cpu(reqs, control)?;
+            if let Some(device) = self.configured_device() {
+                record_unavailable_fallback(device, jp2k_tile_count(self.inner.as_ref(), reqs));
             }
-            None => {
-                let measured = self.measure_route(reqs, output.clone(), control)?;
-                let decision = measured.decision.clone();
-                let winner = decision.winner;
-                tracing::debug!(
-                    requested_tiles = reqs.len(),
-                    route_sample_size,
-                    route_cache_hit = false,
-                    route = ?winner,
-                    sample_tile_count = measured.decision.sample_tile_count,
-                    cpu_elapsed_ms = measured.decision.cpu_elapsed.as_secs_f64() * 1000.0,
-                    device_elapsed_ms = measured.decision.device_elapsed.as_secs_f64() * 1000.0,
-                    device_tile_count = measured.decision.device_tile_count,
-                    "wsi adaptive decode measured route"
-                );
-                (winner, Some(measured.sample_tiles), Some(decision))
-            }
+            return Ok(tiles);
         };
-        let routed_output = match route {
-            DecodeRoute::Cpu => TileOutputPreference::cpu(),
-            DecodeRoute::Device => output,
+        let device_identity = self.device_identity(device)?;
+        let Some(key) = route_key_for_batch(self.inner.as_ref(), reqs, &device_identity) else {
+            return self.read_inner_cpu(reqs, control);
         };
-        let tiles = match measured {
-            Some(mut measured) => {
-                let sample_len = reqs.len().min(self.runtime.options.route_sample_size());
-                if measured.len() == sample_len {
-                    if sample_len == reqs.len() {
-                        measured
+
+        if let Some(decision) = self.runtime.cached_route(&key) {
+            tracing::debug!(
+                route = ?decision.winner,
+                cpu_elapsed_ms = decision.cpu_elapsed.as_secs_f64() * 1000.0,
+                device_elapsed_ms = decision.device_elapsed.as_secs_f64() * 1000.0,
+                route_cache_hit = true,
+                "wsi adaptive JP2K route"
+            );
+            return match decision.winner {
+                DecodeRoute::Cpu => {
+                    let tiles = self.read_inner_cpu(reqs, control)?;
+                    if decision.device_failure {
+                        record_device_failure_fallback(device, tiles.len());
                     } else {
-                        let mut rest =
-                            self.read_inner(&reqs[sample_len..], routed_output, control)?;
-                        measured.append(&mut rest);
-                        measured
+                        record_adaptive_cpu_route(device, tiles.len());
                     }
-                } else {
-                    self.read_inner(reqs, routed_output, control)?
+                    Ok(tiles)
                 }
-            }
-            None => self.read_inner(reqs, routed_output, control)?,
-        };
-        if let Some(decision) = measured_decision {
-            if let Some(control) = control {
+                DecodeRoute::Device => match self.read_device_host(reqs, device, control) {
+                    Ok(tiles) => {
+                        record_device_route(device, reqs.len());
+                        Ok(tiles)
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, "cached JP2K device route fell back to CPU");
+                        self.runtime.store_route(
+                            key,
+                            DecodeRouteDecision::device_failure(),
+                            control,
+                        )?;
+                        let tiles = self.read_inner_cpu(reqs, control)?;
+                        record_device_failure_fallback(device, tiles.len());
+                        Ok(tiles)
+                    }
+                },
+            };
+        }
+
+        let sample_len = reqs.len().min(ROUTE_SAMPLE_SIZE);
+        let sample = &reqs[..sample_len];
+        let device_started = Instant::now();
+        let device_sample = match self.read_device_host(sample, device, control) {
+            Ok(tiles) => tiles,
+            Err(error) => {
+                tracing::debug!(error = %error, "JP2K device route unavailable; using CPU");
+                let cpu_tiles = self.read_inner_cpu(reqs, control)?;
                 self.runtime
-                    .store_route_controlled(key, decision, control)?;
-            } else {
-                self.runtime.store_route(key, decision);
+                    .store_route(key, DecodeRouteDecision::device_failure(), control)?;
+                record_device_failure_fallback(device, cpu_tiles.len());
+                return Ok(cpu_tiles);
             }
+        };
+        let device_elapsed = device_started.elapsed();
+
+        let cpu_started = Instant::now();
+        let cpu_sample = self.read_inner_cpu(sample, control)?;
+        let cpu_elapsed = cpu_started.elapsed();
+        let decision = DecodeRouteDecision::measured(cpu_elapsed, device_elapsed);
+        let winner = decision.winner;
+        let mut measured_cpu_sample = Some(cpu_sample);
+        let mut tiles = match winner {
+            DecodeRoute::Cpu => measured_cpu_sample
+                .take()
+                .expect("the measured CPU sample is present"),
+            DecodeRoute::Device => device_sample,
+        };
+        if sample_len < reqs.len() {
+            let remainder = match winner {
+                DecodeRoute::Cpu => self.read_inner_cpu(&reqs[sample_len..], control),
+                DecodeRoute::Device => self.read_device_host(&reqs[sample_len..], device, control),
+            };
+            match remainder {
+                Ok(mut remainder) => tiles.append(&mut remainder),
+                Err(error) if winner == DecodeRoute::Device => {
+                    tracing::debug!(
+                        error = %error,
+                        "selected JP2K device route failed; completing the batch on CPU"
+                    );
+                    self.runtime.store_route(
+                        key,
+                        DecodeRouteDecision::device_failure(),
+                        control,
+                    )?;
+                    let mut cpu_tiles = measured_cpu_sample
+                        .take()
+                        .expect("the measured CPU sample remains available for device fallback");
+                    cpu_tiles.extend(self.read_inner_cpu(&reqs[sample_len..], control)?);
+                    record_device_failure_fallback(device, cpu_tiles.len());
+                    return Ok(cpu_tiles);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        tracing::debug!(
+            route = ?winner,
+            sample_tile_count = sample_len,
+            cpu_elapsed_ms = cpu_elapsed.as_secs_f64() * 1000.0,
+            device_elapsed_ms = device_elapsed.as_secs_f64() * 1000.0,
+            route_cache_hit = false,
+            "wsi adaptive JP2K route"
+        );
+        self.runtime.store_route(key, decision, control)?;
+        match winner {
+            DecodeRoute::Cpu => record_adaptive_cpu_route(device, reqs.len()),
+            DecodeRoute::Device => record_device_route(device, reqs.len()),
         }
         Ok(tiles)
     }
@@ -482,91 +659,96 @@ impl AdaptiveDecodeReader {
         control.map_or(Ok(()), crate::ReadControl::check_cancelled)
     }
 
-    fn read_inner(
+    fn read_inner_cpu(
         &self,
         reqs: &[TileRequest],
-        output: TileOutputPreference,
         control: Option<&crate::ReadControl>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        let context = ReadExecutionContext::new(&self.runtime, control);
-        context.check_cancelled()?;
-        let result = context.run_tile_batch(self.inner.as_ref(), reqs, || match control {
-            Some(control) => self.inner.read_tiles_controlled(reqs, output, control),
-            None => self.inner.read_tiles(reqs, output),
-        });
-        let result = if control.is_some() {
-            result.and_then(|tiles| {
-                crate::core::batch::expect_exact_count(
-                    tiles,
-                    reqs.len(),
-                    "adaptive controlled tile batch",
-                )
-            })
-        } else {
-            result
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        Self::check_control(control)?;
+        let operation = || match control {
+            Some(control) => self.inner.read_tiles_cpu_controlled(reqs, control),
+            None => self.inner.read_tiles_cpu(reqs),
         };
-        context.check_cancelled()?;
-        result
+        let result = if batch_uses_jp2k(self.inner.as_ref(), reqs) {
+            self.runtime.install_jp2k_cpu(operation)
+        } else {
+            operation()
+        };
+        Self::check_control(control)?;
+        result.and_then(|tiles| {
+            crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive CPU tile batch")
+        })
     }
 
-    fn measure_route(
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn preferred_device(&self) -> Option<DeviceKind> {
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        if self.runtime.metal_sessions().is_ok() {
+            return Some(DeviceKind::Metal);
+        }
+        #[cfg(feature = "cuda")]
+        {
+            if self.runtime.cuda_sessions().is_ok() {
+                return Some(DeviceKind::Cuda);
+            }
+        }
+        #[allow(unreachable_code)]
+        None
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn configured_device(&self) -> Option<DeviceKind> {
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        {
+            Some(DeviceKind::Metal)
+        }
+        #[cfg(all(feature = "cuda", not(all(feature = "metal", target_os = "macos"))))]
+        {
+            Some(DeviceKind::Cuda)
+        }
+        #[cfg(not(any(all(feature = "metal", target_os = "macos"), feature = "cuda")))]
+        {
+            None
+        }
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn device_identity(&self, device: DeviceKind) -> Result<String, WsiError> {
+        match device {
+            #[cfg(feature = "metal")]
+            DeviceKind::Metal => Ok(self.runtime.metal_sessions()?.device_identity()),
+            #[cfg(feature = "cuda")]
+            DeviceKind::Cuda => Ok(self.runtime.cuda_sessions()?.device_identity().to_owned()),
+        }
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn read_device_host(
         &self,
         reqs: &[TileRequest],
-        device_output: TileOutputPreference,
+        device: DeviceKind,
         control: Option<&crate::ReadControl>,
-    ) -> Result<MeasuredDecodeRoute, WsiError> {
-        let sample_len = reqs.len().min(self.runtime.options.route_sample_size());
-        let sample = &reqs[..sample_len];
-
-        let device_started = Instant::now();
-        let device_result = self.read_inner(sample, device_output, control);
-        let device_elapsed = device_started.elapsed();
-        if matches!(device_result, Err(WsiError::Cancelled)) {
-            return Err(WsiError::Cancelled);
-        }
-        let device_tile_count = device_result
-            .as_ref()
-            .map(|tiles| {
-                tiles
-                    .iter()
-                    .filter(|tile| matches!(tile, TilePixels::Device(_)))
-                    .count()
-            })
-            .unwrap_or(0);
-        let device_result = match device_result {
-            Ok(device_tiles) if device_tile_count == 0 => {
-                return Ok(MeasuredDecodeRoute {
-                    decision: DecodeRouteDecision::measured(
-                        device_tiles.len(),
-                        device_elapsed,
-                        device_elapsed,
-                        device_tile_count,
-                    ),
-                    sample_tiles: device_tiles,
-                });
-            }
-            other => other,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        Self::check_control(control)?;
+        record_device_attempt(device, reqs.len());
+        let tiles = match device {
+            #[cfg(feature = "metal")]
+            DeviceKind::Metal => self
+                .inner
+                .read_tiles_metal(reqs, self.runtime.metal_sessions()?)?
+                .iter()
+                .map(crate::output::metal::MetalDeviceTile::download_cpu)
+                .collect::<Result<Vec<_>, _>>()?,
+            #[cfg(feature = "cuda")]
+            DeviceKind::Cuda => self
+                .inner
+                .read_tiles_cuda(reqs, self.runtime.cuda_sessions()?)?
+                .iter()
+                .map(crate::output::cuda::CudaDeviceTile::download_cpu)
+                .collect::<Result<Vec<_>, _>>()?,
         };
-
-        let cpu_started = Instant::now();
-        let cpu_tiles = self.read_inner(sample, TileOutputPreference::cpu(), control)?;
-        let cpu_elapsed = cpu_started.elapsed();
-
-        let decision = DecodeRouteDecision::measured(
-            cpu_tiles.len(),
-            cpu_elapsed,
-            device_elapsed,
-            device_tile_count,
-        );
-        let sample_tiles = match decision.winner {
-            DecodeRoute::Cpu => cpu_tiles,
-            DecodeRoute::Device => device_result?,
-        };
-
-        Ok(MeasuredDecodeRoute {
-            decision,
-            sample_tiles,
-        })
+        Self::check_control(control)?;
+        crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive device tile batch")
     }
 }
 
@@ -599,29 +781,41 @@ impl SlideReader for AdaptiveDecodeReader {
             .prepare_level_controlled(scene, series, level, control)
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        self.read_tiles_adaptive(reqs, output, None)
-    }
-
-    fn read_tiles_controlled(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-        control: &crate::ReadControl,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        self.read_tiles_adaptive(reqs, output, Some(control))
-    }
-
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        ReadExecutionContext::new(&self.runtime, None).run_tile_batch(
-            self.inner.as_ref(),
-            std::slice::from_ref(req),
-            || self.inner.read_tile_cpu(req),
+        crate::core::batch::exactly_one(
+            self.read_tiles_adaptive(std::slice::from_ref(req), None)?,
+            "adaptive single tile read",
         )
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.read_tiles_adaptive(reqs, None)
+    }
+
+    fn read_tiles_cpu_controlled(
+        &self,
+        reqs: &[TileRequest],
+        control: &crate::ReadControl,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        self.read_tiles_adaptive(reqs, Some(control))
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        self.inner.read_tiles_metal(reqs, session)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        self.inner.read_tiles_cuda(reqs, session)
     }
 
     fn read_raw_compressed_tile(
@@ -638,14 +832,6 @@ impl SlideReader for AdaptiveDecodeReader {
         self.inner.read_raw_compressed_display_tile(req)
     }
 
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        ReadExecutionContext::new(&self.runtime, None).run_tile_batch(
-            self.inner.as_ref(),
-            reqs,
-            || self.inner.read_tiles_cpu(reqs),
-        )
-    }
-
     fn use_display_tile_cache(&self, req: &crate::core::types::TileViewRequest) -> bool {
         self.inner.use_display_tile_cache(req)
     }
@@ -655,61 +841,90 @@ impl SlideReader for AdaptiveDecodeReader {
         ctx: &mut crate::core::registry::SlideReadContext<'_>,
         req: &crate::core::types::RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
-        ReadExecutionContext::new(&self.runtime, None)
-            .run_jp2k(|| self.inner.read_region_fastpath(ctx, req))
+        self.runtime
+            .install_jp2k_cpu(|| self.inner.read_region_fastpath(ctx, req))
     }
 
-    fn read_region(
-        &self,
-        req: &crate::core::types::RegionRequest,
-        output: TileOutputPreference,
-    ) -> Result<TilePixels, WsiError> {
-        ReadExecutionContext::new(&self.runtime, None)
-            .run_jp2k(|| self.inner.read_region(req, output))
+    fn read_region(&self, req: &crate::core::types::RegionRequest) -> Result<CpuTile, WsiError> {
+        self.runtime
+            .install_jp2k_cpu(|| self.inner.read_region(req))
     }
 
     fn read_display_tile(
         &self,
         req: &crate::core::types::TileViewRequest,
     ) -> Result<CpuTile, WsiError> {
-        ReadExecutionContext::new(&self.runtime, None)
-            .run_jp2k(|| self.inner.read_display_tile(req))
+        self.runtime
+            .install_jp2k_cpu(|| self.inner.read_display_tile(req))
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.inner.read_associated(name)
     }
+}
 
-    fn recommended_shared_cache_bytes(&self) -> Option<u64> {
-        self.inner.recommended_shared_cache_bytes()
+impl ManagedSlideReader for AdaptiveDecodeReader {
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        self.inner.tile_encoded_upper_bound(req)
+    }
+
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        self.inner.tile_batch_encoded_upper_bound(reqs)
+    }
+
+    fn display_tile_encoded_upper_bound(
+        &self,
+        req: &crate::core::types::TileViewRequest,
+    ) -> Result<u64, WsiError> {
+        self.inner.display_tile_encoded_upper_bound(req)
+    }
+
+    fn associated_encoded_upper_bound(&self, name: &str) -> Result<u64, WsiError> {
+        self.inner.associated_encoded_upper_bound(name)
+    }
+
+    fn region_fastpath_encoded_upper_bound(
+        &self,
+        req: &crate::core::types::RegionRequest,
+    ) -> Result<u64, WsiError> {
+        self.inner.region_fastpath_encoded_upper_bound(req)
     }
 }
 
-fn should_adapt_output(output: &TileOutputPreference) -> bool {
-    matches!(output, TileOutputPreference::PreferDevice { .. })
-        && output.compressed_device_decode_enabled()
-        && output.adaptive_decode_route_enabled()
+fn batch_uses_jp2k(reader: &dyn SlideReader, reqs: &[TileRequest]) -> bool {
+    jp2k_tile_count(reader, reqs) != 0
 }
 
+fn jp2k_tile_count(reader: &dyn SlideReader, reqs: &[TileRequest]) -> usize {
+    reqs.iter()
+        .filter(|request| {
+            matches!(
+                reader.tile_codec_kind(request),
+                TileCodecKind::Jp2k | TileCodecKind::Htj2k
+            )
+        })
+        .count()
+}
+
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 fn route_key_for_batch(
     reader: &dyn SlideReader,
     reqs: &[TileRequest],
-    output: &TileOutputPreference,
-    route_sample_size: usize,
+    device_identity: &str,
 ) -> Option<DecodeRouteKey> {
     let first = reqs.first()?;
-    if !reqs.iter().all(|req| {
-        req.scene == first.scene && req.series == first.series && req.level == first.level
+    if !reqs.iter().all(|request| {
+        request.scene == first.scene
+            && request.series == first.series
+            && request.level == first.level
     }) {
         return None;
     }
     let codec_kind = reader.tile_codec_kind(first);
-    if !matches!(codec_kind, TileCodecKind::Jp2k | TileCodecKind::Htj2k) {
-        return None;
-    }
-    if !reqs
-        .iter()
-        .all(|req| reader.tile_codec_kind(req) == codec_kind)
+    if !matches!(codec_kind, TileCodecKind::Jp2k | TileCodecKind::Htj2k)
+        || !reqs
+            .iter()
+            .all(|request| reader.tile_codec_kind(request) == codec_kind)
     {
         return None;
     }
@@ -719,20 +934,29 @@ fn route_key_for_batch(
         first.series.get(),
         first.level.get(),
     )?;
-    let tile_grid = route_tile_grid(level)?;
+    let sample_len = reqs.len().min(ROUTE_SAMPLE_SIZE);
+    let mut dimensions = [(0, 0); ROUTE_SAMPLE_SIZE];
+    for (slot, request) in dimensions.iter_mut().zip(&reqs[..sample_len]) {
+        *slot = logical_tile_dimensions(level, request)?;
+    }
+    dimensions[..sample_len].sort_unstable();
+    let sample_geometry = RouteSampleGeometry {
+        tiles: dimensions.map(|(width, height)| RouteTileGeometry { width, height }),
+        len: sample_len as u8,
+    };
     Some(DecodeRouteKey {
         dataset_id: reader.dataset().id.0,
         scene: first.scene.get(),
         series: first.series.get(),
         level: first.level.get(),
-        tile_grid,
+        sample_geometry,
         codec_kind,
-        output_backend: output.backend(),
-        device_backend_identity: device_backend_identity(output),
-        sample_tile_count: reqs.len().min(route_sample_size.max(1)),
+        device_identity: device_identity.to_owned(),
+        sample_tile_count: reqs.len().min(ROUTE_SAMPLE_SIZE),
     })
 }
 
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
 fn dataset_level(dataset: &Dataset, scene: usize, series: usize, level: u32) -> Option<&Level> {
     dataset
         .scenes
@@ -743,33 +967,36 @@ fn dataset_level(dataset: &Dataset, scene: usize, series: usize, level: u32) -> 
         .get(level as usize)
 }
 
-fn route_tile_grid(level: &Level) -> Option<RouteTileGrid> {
+#[cfg(any(test, feature = "metal", feature = "cuda"))]
+fn logical_tile_dimensions(level: &Level, request: &TileRequest) -> Option<(u32, u32)> {
     match &level.tile_layout {
         TileLayout::Regular {
             tile_width,
             tile_height,
             tiles_across,
             tiles_down,
-        } => Some(RouteTileGrid {
-            tile_width: *tile_width,
-            tile_height: *tile_height,
-            tiles_across: *tiles_across,
-            tiles_down: *tiles_down,
-        }),
+        } => {
+            let col = u64::try_from(request.col).ok()?;
+            let row = u64::try_from(request.row).ok()?;
+            if col >= *tiles_across || row >= *tiles_down {
+                return None;
+            }
+            let x = col.checked_mul(u64::from(*tile_width))?;
+            let y = row.checked_mul(u64::from(*tile_height))?;
+            let width = level
+                .dimensions
+                .0
+                .checked_sub(x)?
+                .min(u64::from(*tile_width));
+            let height = level
+                .dimensions
+                .1
+                .checked_sub(y)?
+                .min(u64::from(*tile_height));
+            Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+        }
         _ => None,
     }
-}
-
-fn device_backend_identity(output: &TileOutputPreference) -> String {
-    #[cfg(feature = "metal")]
-    if let Some(metal) = output.metal_sessions() {
-        return format!("{:?}:{}", output.backend(), metal.device_identity());
-    }
-    #[cfg(feature = "cuda")]
-    if let Some(cuda) = output.cuda_sessions() {
-        return format!("{:?}:{}", output.backend(), cuda.device_identity());
-    }
-    format!("{:?}", output.backend())
 }
 
 #[cfg(test)]

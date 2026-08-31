@@ -17,12 +17,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::core::cache::{CacheConfig, PrivateCache};
-use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
-    ConfiguredFormatProbe, ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence,
-    ProbeResult, SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader,
+    ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader, FormatProbe,
+    ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
@@ -88,15 +87,11 @@ const KEY_IMAGE_CONCAT_FACTOR: &str = "IMAGE_CONCAT_FACTOR";
 #[cfg(test)]
 static MIRAX_ASSOCIATED_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) struct MiraxBackend {
-    probe_cache: ConfiguredProbeCache<MiraxSlide>,
-}
+pub(crate) struct MiraxBackend;
 
 impl MiraxBackend {
     pub(crate) fn new() -> Self {
-        Self {
-            probe_cache: ConfiguredProbeCache::new(),
-        }
+        Self
     }
 
     fn parse_with_cache_config(
@@ -110,67 +105,69 @@ impl MiraxBackend {
         )?))
     }
 
-    fn open_cached_or_parse(
+    fn parse_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Arc<MiraxSlide>, WsiError> {
+        Ok(Arc::new(MiraxSlide::parse_with_config(path, config)?))
+    }
+
+    fn open_parsed(
         &self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
-        let key = FileIdentity::from_path(path)?;
-        let slide = match self.probe_cache.take(&key, cache_config) {
-            Some(slide) => slide,
-            None => self.parse_with_cache_config(path, cache_config)?,
-        };
+        let slide = self.parse_with_cache_config(path, cache_config)?;
         Ok(Box::new(MiraxReader { slide }))
     }
-}
 
-impl Default for MiraxBackend {
-    fn default() -> Self {
-        Self::new()
+    fn open_parsed_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        let slide = self.parse_with_config(path, config)?;
+        Ok(Box::new(MiraxReader { slide }))
     }
 }
 
 impl FormatProbe for MiraxBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        self.probe_with_cache_config(path, CacheConfig::deterministic())
+        self.probe_with_config(path, BackendOpenConfig::deterministic())
     }
 }
 
 impl ConfiguredFormatProbe for MiraxBackend {
-    fn probe_with_cache_config(
+    fn probe_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
         if !looks_like_mirax(path) {
             return Ok(ProbeResult::not_detected(""));
         }
-        let key = FileIdentity::from_path(path)?;
-        if self.probe_cache.get(&key, cache_config).is_some() {
-            return Ok(ProbeResult::detected("mirax", ProbeConfidence::Definite));
-        }
-        let slide = match self.parse_with_cache_config(path, cache_config) {
-            Ok(slide) => slide,
-            Err(_) => return Ok(ProbeResult::not_detected("")),
-        };
-        self.probe_cache.insert(key, cache_config, slide);
+        let _ = config;
         Ok(ProbeResult::detected("mirax", ProbeConfidence::Definite))
     }
 }
 
 impl DatasetReader for MiraxBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_cached_or_parse(path, CacheConfig::deterministic())
+        self.open_parsed(path, CacheConfig::deterministic())
     }
 }
 
 impl ConfiguredDatasetReader for MiraxBackend {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_cached_or_parse(path, cache_config)
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        Ok(Box::new(ConservativeManagedReader::new(
+            self.open_parsed_with_config(path, config)?,
+            config.limits.encoded_unit_bytes(),
+        )))
     }
 }
 
@@ -183,21 +180,53 @@ impl SlideReader for MiraxReader {
         &self.slide.dataset
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        read_cpu_tiles_with_backend(
-            reqs,
-            output,
-            "RequireDevice is not supported for MIRAX",
-            |req, backend| self.read_tile_with_backend(req, backend),
-        )
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        match self.tile_for_request(req) {
+            Ok((_, tile)) if tile.image.format == MiraxImageFormat::Jpeg => TileCodecKind::Jpeg,
+            Ok(_) | Err(_) => TileCodecKind::Other,
+        }
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        read_cpu_tiles(reqs, |req, backend| {
+            self.read_tile_with_backend(req, backend)
+        })
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Auto)
+        self.read_tile_with_backend(req, BackendRequest::Cpu)
+    }
+
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        let (entry, tile) = self.tile_for_request(req)?;
+        if tile.image.format != MiraxImageFormat::Jpeg {
+            return Err(WsiError::Unsupported {
+                reason: "MIRAX raw compressed tile access requires a JPEG backing image".into(),
+            });
+        }
+        if tile.src_x != 0 || tile.src_y != 0 {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "MIRAX raw JPEG passthrough cannot represent a logical tile cropped from source offset ({}, {})",
+                    tile.src_x, tile.src_y
+                ),
+            });
+        }
+
+        let data = self.slide.read_record_bytes(&tile.image.record)?;
+        let raw = crate::decode::jpeg::standalone_raw_jpeg_tile(data)?;
+        if (raw.width(), raw.height()) != entry.dimensions {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "MIRAX raw JPEG geometry {}x{} does not exactly match logical tile {}x{}",
+                    raw.width(),
+                    raw.height(),
+                    entry.dimensions.0,
+                    entry.dimensions.1
+                ),
+            });
+        }
+        Ok(raw)
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
@@ -206,11 +235,10 @@ impl SlideReader for MiraxReader {
 }
 
 impl MiraxReader {
-    fn read_tile_with_backend(
-        &self,
+    fn tile_for_request<'a>(
+        &'a self,
         req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
+    ) -> Result<(&'a TileEntry, &'a MiraxTile), WsiError> {
         let scene =
             self.slide
                 .dataset
@@ -272,6 +300,15 @@ impl MiraxReader {
                 level: req.level.get(),
                 reason: format!("invalid MIRAX tile descriptor index {tile_index}"),
             })?;
+        Ok((entry, tile))
+    }
+
+    fn read_tile_with_backend(
+        &self,
+        req: &TileRequest,
+        backend: BackendRequest,
+    ) -> Result<CpuTile, WsiError> {
+        let (entry, tile) = self.tile_for_request(req)?;
         let decoded = self.slide.decode_image_with_backend(&tile.image, backend)?;
         if tile.src_x == 0
             && tile.src_y == 0
@@ -314,6 +351,7 @@ struct MiraxSlide {
     decoded_images: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
     associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     open_files: Mutex<HashMap<PathBuf, File>>,
+    encoded_unit_bytes: u64,
 }
 
 struct MiraxLevel {

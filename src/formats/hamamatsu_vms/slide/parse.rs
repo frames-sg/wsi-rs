@@ -28,18 +28,34 @@ struct VmsDatasetParts {
 }
 
 impl VmsSlide {
+    #[cfg(test)]
     pub(in crate::formats::hamamatsu_vms) fn parse_with_cache_config(
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Self, WsiError> {
-        let sources = load_vms_sources(path, cache_config)?;
+        Self::parse_with_config(
+            path,
+            BackendOpenConfig::new(cache_config, crate::SlideLimits::default()),
+        )
+    }
+
+    pub(in crate::formats::hamamatsu_vms) fn parse_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(config.limits);
+        let sources = load_vms_sources(path, config.cache_config, budget.as_ref())?;
         let parts = build_levels_and_properties(path, sources)?;
         assemble_slide(parts)
     }
 }
 
-fn load_vms_sources(path: &Path, cache_config: CacheConfig) -> Result<VmsSources, WsiError> {
-    let mut ini = parse_vms_ini(path)?;
+fn load_vms_sources(
+    path: &Path,
+    cache_config: CacheConfig,
+    budget: &OpenBudget,
+) -> Result<VmsSources, WsiError> {
+    let mut ini = parse_vms_ini_with_budget(path, budget)?;
     let group = ini
         .groups
         .remove(GROUP_VMS)
@@ -54,7 +70,19 @@ fn load_vms_sources(path: &Path, cache_config: CacheConfig) -> Result<VmsSources
     let image_count = vms_image_count(num_cols, num_rows)
         .ok_or_else(|| invalid_slide(path, "VMS JPEG shard count exceeds safety limit"))?;
     let mut private_cache_budget = cache_config.private_cache_budget(image_count.saturating_add(2));
-    let mut image_paths = vec![None; image_count];
+    let image_index_bytes = u64::try_from(image_count)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(64);
+    budget.retain_index(image_index_bytes)?;
+    let mut image_paths = Vec::new();
+    image_paths
+        .try_reserve_exact(image_count)
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            requested: image_index_bytes,
+            limit: budget.limits().tile_index_bytes(),
+        })?;
+    image_paths.resize(image_count, None);
     for (key, value) in &group {
         if !key.starts_with(KEY_IMAGE_FILE) {
             continue;
@@ -121,12 +149,14 @@ fn load_vms_sources(path: &Path, cache_config: CacheConfig) -> Result<VmsSources
             image_path,
             row_starts,
             &mut private_cache_budget,
+            budget.limits().encoded_unit_bytes(),
         )?));
     }
     let map_image = Arc::new(VmsJpeg::parse_with_private_cache_budget(
         &map_path,
         Vec::new(),
         &mut private_cache_budget,
+        budget.limits().encoded_unit_bytes(),
     )?);
 
     Ok(VmsSources {
@@ -228,16 +258,20 @@ fn build_levels_and_properties(
 }
 
 fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
+    let encoded_unit_bytes = parts
+        .levels
+        .first()
+        .and_then(|level| level.jpegs.first())
+        .map(|jpeg| jpeg.encoded_unit_bytes)
+        .ok_or_else(|| invalid_slide(Path::new(""), "VMS slide created no JPEG sources"))?;
     let mut associated_images = HashMap::new();
     let mut associated_paths = HashMap::new();
     if let Some(macro_path) = parts.macro_path.filter(|path| path.is_file()) {
-        let macro_bytes =
-            read_file_bounded(&macro_path, MAX_COMPRESSED_INPUT_BYTES, "VMS macro JPEG").map_err(
-                |source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: macro_path.clone(),
-                },
-            )?;
+        let macro_bytes = read_file_bounded(&macro_path, encoded_unit_bytes, "VMS macro JPEG")
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: macro_path.clone(),
+            })?;
         let macro_dims = jpeg_dimensions(&macro_bytes)?;
         associated_images.insert(
             "macro".into(),
@@ -245,6 +279,7 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
                 dimensions: macro_dims,
                 sample_type: SampleType::Uint8,
                 channels: 3,
+                icc_profile: Vec::new(),
             },
         );
         associated_paths.insert("macro".into(), macro_path);
@@ -286,5 +321,6 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
         levels: parts.levels,
         associated_paths,
         associated_cache: Mutex::new(associated_cache),
+        encoded_unit_bytes,
     })
 }

@@ -33,6 +33,27 @@ pub(crate) fn composite_fractional_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
+pub(crate) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    max_region_pixels: u64,
+) -> Result<CpuTile, WsiError> {
+    let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
+    compose_resolved_region_streaming(source, cache, req, plan)
+}
+
+pub(crate) fn composite_fractional_region_from_source_streaming<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    origin_px: (f64, f64),
+    max_region_pixels: u64,
+) -> Result<CpuTile, WsiError> {
+    let plan = RegionReadPlan::fractional(source.dataset(), req, origin_px, max_region_pixels)?;
+    compose_resolved_region_streaming(source, cache, req, plan)
+}
+
 fn compose_resolved_region<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
@@ -66,6 +87,54 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
     )
 }
 
+fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    plan: RegionReadPlan<'_>,
+) -> Result<CpuTile, WsiError> {
+    let resolver = RegionTileResolver::new(source, cache, req);
+    if plan.hits.is_empty() {
+        let level = &plan.series.levels[req.level.get() as usize];
+        if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
+            if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
+                return zero_sample_buffer_from_template(
+                    plan.output_width,
+                    plan.output_height,
+                    template.as_ref(),
+                );
+            }
+        }
+        return zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series);
+    }
+
+    let first = resolver.resolve_one(plan.hits[0].col, plan.hits[0].row)?;
+    if plan.hits.len() == 1
+        && hit_covers_output(
+            &plan.hits[0],
+            first.as_ref(),
+            plan.output_width,
+            plan.output_height,
+        )
+    {
+        return Ok(first.as_ref().clone());
+    }
+
+    let mut composer = RegionComposer::new(
+        plan.output_width,
+        plan.output_height,
+        first.as_ref(),
+        plan.preserve_alpha,
+        &plan.hits,
+    )?;
+    composer.blit(&plan.hits[0], first.as_ref())?;
+    for hit in &plan.hits[1..] {
+        let tile = resolver.resolve_one(hit.col, hit.row)?;
+        composer.blit(hit, tile.as_ref())?;
+    }
+    composer.finish()
+}
+
 fn compose_region_tiles(
     hits: &[TileHit],
     hit_tiles: &[Arc<CpuTile>],
@@ -73,12 +142,44 @@ fn compose_region_tiles(
     height: u32,
     preserve_alpha: bool,
 ) -> Result<CpuTile, WsiError> {
+    if hits.len() != hit_tiles.len() || hit_tiles.is_empty() {
+        return Err(WsiError::BackendContract {
+            context: "region compositor tile resolution",
+            expected: hits.len(),
+            actual: hit_tiles.len(),
+        });
+    }
+    for tile in hit_tiles {
+        tile.validate_invariants()?;
+    }
     let first_tile = &hit_tiles[0];
 
     if first_tile.layout == CpuTileLayout::Planar {
         return Err(WsiError::DisplayConversion(
             "planar compositing not supported".into(),
         ));
+    }
+    for tile in &hit_tiles[1..] {
+        if tile.data.sample_type() != first_tile.data.sample_type() {
+            return Err(WsiError::DisplayConversion(
+                "tile sample type mismatch during compositing".into(),
+            ));
+        }
+        if tile.channels != first_tile.channels {
+            return Err(WsiError::DisplayConversion(
+                "tile channel count mismatch during compositing".into(),
+            ));
+        }
+        if tile.color_space != first_tile.color_space {
+            return Err(WsiError::DisplayConversion(
+                "tile color space mismatch during compositing".into(),
+            ));
+        }
+        if tile.layout != first_tile.layout {
+            return Err(WsiError::DisplayConversion(
+                "tile layout mismatch during compositing".into(),
+            ));
+        }
     }
 
     let out_channels = first_tile.channels;
@@ -117,65 +218,136 @@ fn compose_general_region(
     template: &CpuTile,
     preserve_alpha: bool,
 ) -> Result<CpuTile, WsiError> {
-    let out_width = width as usize;
-    let out_height = height as usize;
-    let channels = template.channels;
-    let shape = CompositionShape {
-        width: out_width,
-        height: out_height,
-        channels: usize::from(channels),
-    };
-    let total_samples = checked_total_samples(width, height, channels)?;
-    let mut out_data = match &template.data {
-        CpuTileData::U8(_) => CpuTileData::u8(vec![0u8; total_samples]),
-        CpuTileData::U16(_) => CpuTileData::u16(vec![0u16; total_samples]),
-        CpuTileData::F32(_) => CpuTileData::f32(vec![0.0f32; total_samples]),
-    };
-    let mut alpha_buffer =
-        if matches!(&out_data, CpuTileData::U8(_)) && hits.iter().any(needs_fractional_blit) {
-            Some(vec![0.0f32; checked_region_pixels_usize(width, height)?])
-        } else {
-            None
-        };
-
+    let mut composer = RegionComposer::new(width, height, template, preserve_alpha, hits)?;
     for (hit, tile) in hits.iter().zip(hit_tiles) {
-        blit_region_tile(&mut out_data, alpha_buffer.as_mut(), tile, hit, shape)?;
+        composer.blit(hit, tile.as_ref())?;
     }
-    let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
-    if pixman_compatible {
-        let (CpuTileData::U8(out), Some(alpha)) = (&mut out_data, alpha_buffer.as_deref()) else {
+    composer.finish()
+}
+
+struct RegionComposer {
+    width: u32,
+    height: u32,
+    channels: u16,
+    color_space: ColorSpace,
+    layout: CpuTileLayout,
+    shape: CompositionShape,
+    out_data: CpuTileData,
+    alpha_buffer: Option<Vec<f32>>,
+    preserve_alpha: bool,
+    pixman_compatible: bool,
+}
+
+impl RegionComposer {
+    fn new(
+        width: u32,
+        height: u32,
+        template: &CpuTile,
+        preserve_alpha: bool,
+        hits: &[TileHit],
+    ) -> Result<Self, WsiError> {
+        template.validate_invariants()?;
+        if template.layout == CpuTileLayout::Planar {
             return Err(WsiError::DisplayConversion(
-                "Pixman-compatible composition requires u8 pixels and alpha state".into(),
+                "planar compositing not supported".into(),
             ));
+        }
+        let shape = CompositionShape {
+            width: width as usize,
+            height: height as usize,
+            channels: usize::from(template.channels),
         };
-        unpremultiply_u8(Arc::make_mut(out).as_mut_slice(), alpha, shape.channels);
+        let total_samples = checked_total_samples(width, height, template.channels)?;
+        let out_data = match &template.data {
+            CpuTileData::U8(_) => CpuTileData::u8(vec![0u8; total_samples]),
+            CpuTileData::U16(_) => CpuTileData::u16(vec![0u16; total_samples]),
+            CpuTileData::F32(_) => CpuTileData::f32(vec![0.0f32; total_samples]),
+        };
+        let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
+        let alpha_buffer =
+            if matches!(&out_data, CpuTileData::U8(_)) && hits.iter().any(needs_fractional_blit) {
+                Some(vec![0.0f32; checked_region_pixels_usize(width, height)?])
+            } else {
+                None
+            };
+        Ok(Self {
+            width,
+            height,
+            channels: template.channels,
+            color_space: template.color_space.clone(),
+            layout: template.layout,
+            shape,
+            out_data,
+            alpha_buffer,
+            preserve_alpha,
+            pixman_compatible,
+        })
     }
 
-    let tile = CpuTile {
-        width,
-        height,
-        channels,
-        color_space: template.color_space.clone(),
-        layout: template.layout,
-        data: out_data,
-    };
-    if !preserve_alpha || !pixman_compatible {
-        return Ok(tile);
+    fn blit(&mut self, hit: &TileHit, tile: &CpuTile) -> Result<(), WsiError> {
+        tile.validate_invariants()?;
+        if tile.data.sample_type() != self.out_data.sample_type()
+            || tile.channels != self.channels
+            || tile.color_space != self.color_space
+            || tile.layout != self.layout
+        {
+            return Err(WsiError::DisplayConversion(
+                "tile metadata mismatch during compositing".into(),
+            ));
+        }
+        blit_region_tile(
+            &mut self.out_data,
+            self.alpha_buffer.as_mut(),
+            tile,
+            hit,
+            self.shape,
+        )
     }
 
-    let alpha = alpha_buffer.expect("Pixman-compatible composition has alpha state");
-    let mut rgba = tile.into_rgba()?.into_raw();
-    for (pixel, alpha) in rgba.chunks_exact_mut(4).zip(alpha) {
-        pixel[3] = contract_pixman_unorm8(alpha);
+    fn finish(mut self) -> Result<CpuTile, WsiError> {
+        if self.pixman_compatible {
+            let (CpuTileData::U8(out), Some(alpha)) =
+                (&mut self.out_data, self.alpha_buffer.as_deref())
+            else {
+                return Err(WsiError::DisplayConversion(
+                    "Pixman-compatible composition requires u8 pixels and alpha state".into(),
+                ));
+            };
+            unpremultiply_u8(
+                Arc::make_mut(out).as_mut_slice(),
+                alpha,
+                self.shape.channels,
+            );
+        }
+
+        let tile = CpuTile {
+            width: self.width,
+            height: self.height,
+            channels: self.channels,
+            color_space: self.color_space,
+            layout: self.layout,
+            data: self.out_data,
+        };
+        if !self.preserve_alpha || !self.pixman_compatible {
+            return Ok(tile);
+        }
+
+        let alpha = self
+            .alpha_buffer
+            .expect("Pixman-compatible composition has alpha state");
+        let mut rgba = tile.into_rgba()?.into_raw();
+        for (pixel, alpha) in rgba.chunks_exact_mut(4).zip(alpha) {
+            pixel[3] = contract_pixman_unorm8(alpha);
+        }
+        Ok(CpuTile {
+            width: self.width,
+            height: self.height,
+            channels: 4,
+            color_space: ColorSpace::Rgba,
+            layout: CpuTileLayout::Interleaved,
+            data: CpuTileData::u8(rgba),
+        })
     }
-    Ok(CpuTile {
-        width,
-        height,
-        channels: 4,
-        color_space: ColorSpace::Rgba,
-        layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(rgba),
-    })
 }
 
 #[derive(Clone, Copy)]

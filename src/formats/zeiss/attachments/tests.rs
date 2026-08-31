@@ -1,15 +1,15 @@
 use super::*;
 
 #[test]
-fn embedded_czi_rejects_compressed_subblocks_before_decode() {
+fn embedded_czi_accepts_classic_jpeg_and_rejects_other_compression() {
     assert!(ensure_uncompressed_embedded_czi([
         CziCompressionMode::UnCompressed,
-        CziCompressionMode::UnCompressed,
+        CziCompressionMode::Jpg,
     ])
     .is_ok());
     let error = ensure_uncompressed_embedded_czi([CziCompressionMode::Zstd0])
-        .expect_err("compressed embedded CZI must not reach unbounded dependency decode");
-    assert!(error.to_string().contains("compressed embedded CZI"));
+        .expect_err("unsupported embedded CZI compression must not reach dependency decode");
+    assert!(error.to_string().contains("associated-image compression"));
 }
 
 #[test]

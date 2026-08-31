@@ -6,6 +6,8 @@ use std::time::Instant;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use tracing::debug;
 
+use crate::core::registry::OpenBudget;
+
 use super::super::error::{IfdId, TiffParseError};
 #[cfg(test)]
 use super::model::TagValue;
@@ -19,8 +21,8 @@ const MAX_TOTAL_IFD_ENTRIES: u64 = 2_000_000;
 
 /// Maximum byte size for a single tag payload read. Prevents OOM from crafted
 /// tags with enormous count × type_size products.
-const MAX_TAG_PAYLOAD: u64 = 64 * 1024 * 1024;
-const MAX_TOTAL_TAG_PAYLOAD: u64 = 512 * 1024 * 1024;
+const MAX_TAG_PAYLOAD: u64 = 16 * 1024 * 1024;
+const MAX_TOTAL_TAG_PAYLOAD: u64 = 128 * 1024 * 1024;
 
 // ── ParseReader (used only during open()) ──────────────────────────
 
@@ -82,7 +84,16 @@ impl ParseReader {
 
 impl TiffContainer {
     /// Open and parse a TIFF or BigTIFF file.
+    #[cfg(test)]
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self, TiffParseError> {
+        let budget = OpenBudget::new(crate::SlideLimits::default());
+        Self::open_with_budget(path, budget)
+    }
+
+    pub(crate) fn open_with_budget(
+        path: impl AsRef<Path>,
+        open_budget: Arc<OpenBudget>,
+    ) -> Result<Self, TiffParseError> {
         let started = Instant::now();
         let path = path.as_ref();
         let file = std::fs::File::open(path)?;
@@ -179,6 +190,7 @@ impl TiffContainer {
             ifds: HashMap::new(),
             parsed_ifd_entries: 0,
             declared_tag_payload_bytes: 0,
+            open_budget,
         };
 
         // Walk the IFD chain
@@ -231,6 +243,27 @@ impl TiffContainer {
                 )));
             }
 
+            let ifd_owner_bytes =
+                u64::try_from(std::mem::size_of::<IfdId>() + std::mem::size_of::<(IfdId, Ifd)>())
+                    .unwrap_or(u64::MAX);
+            self.open_budget
+                .retain_index(ifd_owner_bytes)
+                .map_err(tiff_resource_limit)?;
+            self.top_ifds
+                .try_reserve(1)
+                .map_err(|_| TiffParseError::ResourceLimit {
+                    resource: "TIFF IFD index",
+                    requested: ifd_owner_bytes,
+                    limit: self.open_budget.limits().tile_index_bytes(),
+                })?;
+            self.ifds
+                .try_reserve(1)
+                .map_err(|_| TiffParseError::ResourceLimit {
+                    resource: "TIFF IFD index",
+                    requested: ifd_owner_bytes,
+                    limit: self.open_budget.limits().tile_index_bytes(),
+                })?;
+
             let (ifd, next_offset) = self.parse_ifd(reader, ifd_offset)?;
 
             // NDPI detection: tag 65420 in first IFD
@@ -282,7 +315,20 @@ impl TiffContainer {
         }
 
         let slot_size: u64 = if self.bigtiff { 8 } else { 4 };
+        let tags_index_bytes = entry_count.saturating_mul(
+            u64::try_from(std::mem::size_of::<(u16, TagEntry)>()).unwrap_or(u64::MAX),
+        );
+        self.open_budget
+            .retain_index(tags_index_bytes)
+            .map_err(tiff_resource_limit)?;
         let mut tags_map = HashMap::new();
+        tags_map
+            .try_reserve(usize::try_from(entry_count).unwrap_or(usize::MAX))
+            .map_err(|_| TiffParseError::ResourceLimit {
+                resource: "TIFF tag index",
+                requested: tags_index_bytes,
+                limit: self.open_budget.limits().tile_index_bytes(),
+            })?;
 
         for _ in 0..entry_count {
             let tag_id = reader.read_u16()?;
@@ -318,6 +364,23 @@ impl TiffContainer {
                 }
             })?;
 
+            let configured_value_limit = if is_tiff_index_tag(tag_id) {
+                self.open_budget.limits().tile_index_bytes()
+            } else {
+                self.open_budget.limits().metadata_value_bytes()
+            };
+            let value_limit = MAX_TAG_PAYLOAD.min(configured_value_limit);
+            if total_bytes > value_limit {
+                return Err(TiffParseError::ResourceLimit {
+                    resource: if is_tiff_index_tag(tag_id) {
+                        "tile/frame index"
+                    } else {
+                        "individual metadata value"
+                    },
+                    requested: total_bytes,
+                    limit: value_limit,
+                });
+            }
             if total_bytes > MAX_TAG_PAYLOAD {
                 return Err(TiffParseError::InvalidTag {
                     ifd_offset: offset,
@@ -327,6 +390,15 @@ impl TiffContainer {
                         total_bytes, MAX_TAG_PAYLOAD
                     ),
                 });
+            }
+            if is_tiff_index_tag(tag_id) {
+                self.open_budget
+                    .retain_index(total_bytes)
+                    .map_err(tiff_resource_limit)?;
+            } else {
+                self.open_budget
+                    .retain_metadata(total_bytes)
+                    .map_err(tiff_resource_limit)?;
             }
             self.declared_tag_payload_bytes = self
                 .declared_tag_payload_bytes
@@ -530,5 +602,31 @@ impl TiffContainer {
         }
 
         Ok(())
+    }
+}
+
+fn is_tiff_index_tag(tag: u16) -> bool {
+    matches!(
+        tag,
+        tags::STRIP_OFFSETS
+            | tags::STRIP_BYTE_COUNTS
+            | tags::TILE_OFFSETS
+            | tags::TILE_BYTE_COUNTS
+            | 330 // SubIFDs
+    )
+}
+
+fn tiff_resource_limit(error: crate::WsiError) -> TiffParseError {
+    match error {
+        crate::WsiError::ResourceLimit {
+            resource,
+            requested,
+            limit,
+        } => TiffParseError::ResourceLimit {
+            resource,
+            requested,
+            limit,
+        },
+        other => TiffParseError::Structure(other.to_string()),
     }
 }

@@ -206,6 +206,7 @@ impl ReadControl {
         }
     }
 
+    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     pub(crate) fn publish_if_active<T>(&self, publish: impl FnOnce() -> T) -> Result<T, WsiError> {
         let _publication = self
             .cancellation

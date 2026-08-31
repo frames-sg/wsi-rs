@@ -107,6 +107,14 @@ fn metadata_constructors_build_dataset_hierarchy() {
 }
 
 #[test]
+fn associated_image_retains_source_icc_bytes() {
+    let image =
+        AssociatedImage::new((128, 64), SampleType::Uint8, 3).with_icc_profile(vec![1, 2, 3, 4]);
+
+    assert_eq!(image.icc_profile(), Some(&[1, 2, 3, 4][..]));
+}
+
+#[test]
 fn source_icc_profile_builders_and_conflicts_preserve_normalized_identity() {
     let key = SourceIccProfileKey::new(SceneId::new(2), SeriesId::new(3))
         .with_optical_path(4)

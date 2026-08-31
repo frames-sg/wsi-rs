@@ -29,7 +29,9 @@ impl FormatProbe for FalseProbe {
 
 struct CacheConfigRecordingBackend {
     observed_probe_shared_bytes: Arc<AtomicUsize>,
+    observed_probe_metadata_value_bytes: Arc<AtomicUsize>,
     observed_shared_bytes: Arc<AtomicUsize>,
+    observed_metadata_value_bytes: Arc<AtomicUsize>,
 }
 
 impl FormatProbe for CacheConfigRecordingBackend {
@@ -39,13 +41,17 @@ impl FormatProbe for CacheConfigRecordingBackend {
 }
 
 impl ConfiguredFormatProbe for CacheConfigRecordingBackend {
-    fn probe_with_cache_config(
+    fn probe_with_config(
         &self,
         _path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
         self.observed_probe_shared_bytes.store(
-            cache_config.shared_tile_bytes.unwrap_or_default() as usize,
+            config.cache_config.shared_tile_bytes.unwrap_or_default() as usize,
+            Ordering::SeqCst,
+        );
+        self.observed_probe_metadata_value_bytes.store(
+            config.limits.metadata_value_bytes() as usize,
             Ordering::SeqCst,
         );
         Ok(ProbeResult::detected("test", ProbeConfidence::Definite))
@@ -59,16 +65,24 @@ impl DatasetReader for CacheConfigRecordingBackend {
 }
 
 impl ConfiguredDatasetReader for CacheConfigRecordingBackend {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         _path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
         self.observed_shared_bytes.store(
-            cache_config.shared_tile_bytes.unwrap_or_default() as usize,
+            config.cache_config.shared_tile_bytes.unwrap_or_default() as usize,
             Ordering::SeqCst,
         );
-        Ok(Box::new(MockSource::new()))
+        self.observed_metadata_value_bytes.store(
+            config.limits.metadata_value_bytes() as usize,
+            Ordering::SeqCst,
+        );
+        let reader: Box<dyn SlideReader> = Box::new(MockSource::new());
+        Ok(Box::new(ConservativeManagedReader::new(
+            reader,
+            config.limits.encoded_unit_bytes(),
+        )))
     }
 }
 
@@ -83,22 +97,35 @@ impl DatasetReader for MockReader {
 #[test]
 fn slide_open_options_passes_cache_config_to_the_selected_reader() {
     let observed_probe_shared_bytes = Arc::new(AtomicUsize::new(0));
+    let observed_probe_metadata_value_bytes = Arc::new(AtomicUsize::new(0));
     let observed_shared_bytes = Arc::new(AtomicUsize::new(0));
+    let observed_metadata_value_bytes = Arc::new(AtomicUsize::new(0));
     let mut registry = FormatRegistry::new();
     let backend = Arc::new(CacheConfigRecordingBackend {
         observed_probe_shared_bytes: observed_probe_shared_bytes.clone(),
+        observed_probe_metadata_value_bytes: observed_probe_metadata_value_bytes.clone(),
         observed_shared_bytes: observed_shared_bytes.clone(),
+        observed_metadata_value_bytes: observed_metadata_value_bytes.clone(),
     });
     registry.register_cache_configured(backend.clone(), backend);
     let config = CacheConfig::deterministic().with_shared_tile_bytes(512);
+    let limits = SlideLimits::default()
+        .with_metadata_value_bytes(1_234)
+        .unwrap();
 
     let options = SlideOpenOptions::deterministic()
         .with_registry(registry)
-        .with_cache_config(config);
+        .with_cache_config(config)
+        .with_limits(limits);
     Slide::open_with_options("ignored.test", options).expect("open configured test reader");
 
     assert_eq!(observed_probe_shared_bytes.load(Ordering::SeqCst), 512);
+    assert_eq!(
+        observed_probe_metadata_value_bytes.load(Ordering::SeqCst),
+        1_234
+    );
     assert_eq!(observed_shared_bytes.load(Ordering::SeqCst), 512);
+    assert_eq!(observed_metadata_value_bytes.load(Ordering::SeqCst), 1_234);
 }
 
 // Mock SlideReader for testing -- returns solid-color tiles based on (col, row).

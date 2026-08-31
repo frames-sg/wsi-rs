@@ -3,23 +3,20 @@ use std::sync::{Arc, Mutex};
 use crate::error::WsiError;
 use objc2_metal::MTLDevice;
 
-use super::{MetalDevice, MetalDeviceTile, YcbcrToRgb8Converter};
+#[cfg(test)]
+use super::MetalDeviceTile;
+use super::{MetalDevice, YcbcrToRgb8Converter};
 
-/// Codec-specific Metal sessions allocated from one renderer-owned device.
+/// Metal session allocated for JP2K and HTJ2K device decode.
 #[derive(Debug, Clone)]
 pub struct MetalBackendSessions {
-    pub(crate) jpeg: Arc<j2k_jpeg_metal::MetalBackendSession>,
     pub(crate) j2k: Arc<j2k_metal::MetalBackendSession>,
     ycbcr_to_rgb8: Arc<Mutex<Option<Arc<YcbcrToRgb8Converter>>>>,
-    private_jpeg_decode: bool,
 }
 
 impl MetalBackendSessions {
     pub fn new(device: MetalDevice) -> Self {
-        Self::from_sessions(
-            j2k_jpeg_metal::MetalBackendSession::new(device.clone()),
-            j2k_metal::MetalBackendSession::new(device),
-        )
+        Self::from_session(j2k_metal::MetalBackendSession::new(device))
     }
 
     /// Create codec sessions on the system default Metal device.
@@ -29,30 +26,11 @@ impl MetalBackendSessions {
             .map_err(|source| super::interop::support_error("metal-session", source))
     }
 
-    pub(crate) fn from_sessions(
-        jpeg: j2k_jpeg_metal::MetalBackendSession,
-        j2k: j2k_metal::MetalBackendSession,
-    ) -> Self {
+    pub(crate) fn from_session(j2k: j2k_metal::MetalBackendSession) -> Self {
         Self {
-            jpeg: Arc::new(jpeg),
             j2k: Arc::new(j2k),
             ycbcr_to_rgb8: Arc::new(Mutex::new(None)),
-            private_jpeg_decode: false,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_private_jpeg_decode(mut self) -> Self {
-        self.private_jpeg_decode = true;
-        self
-    }
-
-    pub(crate) fn jpeg(&self) -> &j2k_jpeg_metal::MetalBackendSession {
-        &self.jpeg
-    }
-
-    pub(crate) fn private_jpeg_decode(&self) -> bool {
-        self.private_jpeg_decode
     }
 
     pub(crate) fn j2k(&self) -> &j2k_metal::MetalBackendSession {
@@ -86,6 +64,7 @@ impl MetalBackendSessions {
         Ok(converter)
     }
 
+    #[cfg(test)]
     pub(crate) fn ycbcr8_tiles_to_rgb8(
         &self,
         tiles: &[MetalDeviceTile],

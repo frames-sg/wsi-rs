@@ -304,7 +304,7 @@ pub(super) fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-fn jpeg_rgb(width: u16, height: u16, rgb: &[u8]) -> Vec<u8> {
+pub(super) fn jpeg_rgb(width: u16, height: u16, rgb: &[u8]) -> Vec<u8> {
     let mut encoded = Vec::new();
     jpeg_encoder::Encoder::new(&mut encoded, 95)
         .encode(rgb, width, height, jpeg_encoder::ColorType::Rgb)

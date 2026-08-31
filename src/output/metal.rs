@@ -12,8 +12,6 @@ pub type MetalDevice =
 pub type MetalBuffer =
     objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>;
 
-#[cfg(all(test, feature = "parity-metal"))]
-pub(crate) use interop::resident_bytes;
 pub use session::MetalBackendSessions;
 pub use tile::{MetalDeviceStorage, MetalDeviceTile};
 pub(crate) use ycbcr::YcbcrToRgb8Converter;

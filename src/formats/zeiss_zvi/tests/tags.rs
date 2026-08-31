@@ -16,6 +16,9 @@ fn tag_accessors_trim_convert_and_decode_rgb_values() {
         (4, "1122867".to_string()),
         (5, "not numeric".to_string()),
         (6, "   ".to_string()),
+        (7, "NaN".to_string()),
+        (8, "inf".to_string()),
+        (9, "-1.0".to_string()),
     ]);
     assert_eq!(tag_string(&tags, 1).as_deref(), Some("name"));
     assert_eq!(tag_u32(&tags, 2), Some(13));
@@ -23,6 +26,11 @@ fn tag_accessors_trim_convert_and_decode_rgb_values() {
     assert_eq!(tag_color(&tags, 4), Some([0x11, 0x22, 0x33]));
     assert_eq!(tag_u32(&tags, 5), None);
     assert_eq!(tag_string(&tags, 6), None);
+    assert_eq!(tag_u32(&tags, 7), None);
+    assert_eq!(tag_f64(&tags, 7), None);
+    assert_eq!(tag_u32(&tags, 8), None);
+    assert_eq!(tag_f64(&tags, 8), None);
+    assert_eq!(tag_u32(&tags, 9), None);
     assert_eq!(tag_string(&tags, 99), None);
 }
 

@@ -160,10 +160,7 @@ impl<'a> DicomBatchPlanner<'a> {
             }
             #[cfg(any(feature = "metal", feature = "cuda"))]
             DicomBatchPlanMode::Device { requires_device } => {
-                if actual_width != image.tile_width
-                    || actual_height != image.tile_height
-                    || image.samples_per_pixel != 3
-                {
+                if image.samples_per_pixel != 3 {
                     return Ok(DicomResolvedBatchPlanEntry::Skipped);
                 }
                 if !requires_device {

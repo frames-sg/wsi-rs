@@ -1,5 +1,75 @@
 use super::super::*;
 
+fn codec_error(
+    codec: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> WsiError {
+    WsiError::Codec {
+        codec,
+        source: Box::new(source),
+    }
+}
+
+fn tiff_lzw_error(kind: std::io::ErrorKind, message: impl Into<String>) -> WsiError {
+    codec_error("tiff-lzw", std::io::Error::new(kind, message.into()))
+}
+
+fn decode_tiff_lzw(input: &[u8], out: &mut [u8]) -> Result<usize, WsiError> {
+    let scratch_len = out
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| WsiError::UnsupportedFormat("TIFF LZW output length overflow".into()))?;
+    let mut scratch = vec![0u8; scratch_len];
+    let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+    let mut input_offset = 0usize;
+    let mut output_offset = 0usize;
+
+    loop {
+        if output_offset == scratch.len() {
+            return Err(tiff_lzw_error(
+                std::io::ErrorKind::InvalidData,
+                "decoded data exceeds expected TIFF strip size",
+            ));
+        }
+        let result = decoder.decode_bytes(&input[input_offset..], &mut scratch[output_offset..]);
+        input_offset += result.consumed_in;
+        output_offset += result.consumed_out;
+        if output_offset > out.len() {
+            return Err(tiff_lzw_error(
+                std::io::ErrorKind::InvalidData,
+                "decoded data exceeds expected TIFF strip size",
+            ));
+        }
+
+        match result.status {
+            Ok(weezl::LzwStatus::Done) => {
+                out[..output_offset].copy_from_slice(&scratch[..output_offset]);
+                return Ok(output_offset);
+            }
+            Ok(weezl::LzwStatus::Ok) => {
+                if input_offset == input.len() {
+                    return Err(tiff_lzw_error(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "truncated TIFF LZW strip",
+                    ));
+                }
+            }
+            Ok(weezl::LzwStatus::NoProgress) => {
+                return Err(tiff_lzw_error(
+                    std::io::ErrorKind::InvalidData,
+                    "TIFF LZW decoder made no progress",
+                ));
+            }
+            Err(error) => {
+                return Err(tiff_lzw_error(
+                    std::io::ErrorKind::InvalidData,
+                    format!("TIFF LZW decoder error: {error:?}"),
+                ));
+            }
+        }
+    }
+}
+
 impl TiffPixelReader {
     pub(in super::super) fn tiff_jpeg_decode_options_for_data(
         &self,
@@ -83,6 +153,26 @@ impl TiffPixelReader {
             layout: CpuTileLayout::Interleaved,
             data: CpuTileData::u8(vec![0u8; pixel_count]),
         })
+    }
+
+    pub(in super::super) fn empty_transparent_tile(
+        width: u32,
+        height: u32,
+    ) -> Result<CpuTile, WsiError> {
+        let byte_len = usize::try_from(width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(height)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| {
+                WsiError::UnsupportedFormat(format!(
+                    "empty RGBA tile dimensions {width}x{height} overflow output buffer size"
+                ))
+            })?;
+        CpuTile::from_u8_interleaved(width, height, 4, ColorSpace::Rgba, vec![0; byte_len])
     }
 
     /// Decode an uncompressed TIFF tile using IFD metadata.
@@ -249,11 +339,17 @@ impl TiffPixelReader {
                 "unsupported compressed TIFF bits per sample: {bps}"
             )));
         }
-        (width as usize)
-            .checked_mul(height as usize)
-            .and_then(|value| value.checked_mul(spp as usize))
-            .and_then(|value| value.checked_mul((bps / 8) as usize))
-            .ok_or_else(|| WsiError::UnsupportedFormat("compressed TIFF tile size overflow".into()))
+        checked_product_to_usize(
+            &[
+                u64::from(width),
+                u64::from(height),
+                u64::from(spp),
+                u64::from(bps / 8),
+            ],
+            MAX_DECODED_IMAGE_BYTES,
+            "compressed TIFF tile",
+        )
+        .map_err(WsiError::UnsupportedFormat)
     }
 
     pub(in super::super) fn decompress_tiff_payload(
@@ -267,17 +363,16 @@ impl TiffPixelReader {
     ) -> Result<Vec<u8>, WsiError> {
         let mut out = vec![0_u8; expected_bytes];
         let written = match compression {
-            Compression::Lzw => {
-                let mut pool = LzwPool::new();
-                LzwCodec::decompress_into(&mut pool, input, &mut out)
-            }
+            Compression::Lzw => decode_tiff_lzw(input, &mut out)?,
             Compression::Deflate => {
                 let mut pool = DeflatePool::new();
                 DeflateCodec::decompress_into(&mut pool, input, &mut out)
+                    .map_err(|error| codec_error("tiff-deflate", error))?
             }
             Compression::Zstd => {
                 let mut pool = ZstdPool::new();
                 ZstdCodec::decompress_into(&mut pool, input, &mut out)
+                    .map_err(|error| codec_error("tiff-zstd", error))?
             }
             other => {
                 return Err(WsiError::UnsupportedFormat(format!(
@@ -285,17 +380,12 @@ impl TiffPixelReader {
                     other
                 )));
             }
+        };
+        if written > expected_bytes {
+            return Err(WsiError::UnsupportedFormat(format!(
+                "decoded TIFF payload produced {written} bytes for a {expected_bytes}-byte tile"
+            )));
         }
-        .map_err(|err| WsiError::Codec {
-            codec: match compression {
-                Compression::Lzw => "tiff-lzw",
-                Compression::Deflate => "tiff-deflate",
-                Compression::Zstd => "tiff-zstd",
-                _ => "tiff-tilecodec",
-            },
-            source: Box::new(err),
-        })?;
-        out.truncate(written);
         self.apply_tiff_predictor(ifd_id, width, height, &mut out)?;
         Ok(out)
     }
@@ -419,5 +509,63 @@ impl TiffPixelReader {
             height,
         )?;
         self.decode_uncompressed_tile(ifd_id, &decoded, width, height)
+    }
+
+    pub(in super::super) fn crop_interleaved_top_left(
+        tile: CpuTile,
+        width: u32,
+        height: u32,
+    ) -> Result<CpuTile, WsiError> {
+        if tile.width == width && tile.height == height {
+            return Ok(tile);
+        }
+        if tile.layout != CpuTileLayout::Interleaved || width > tile.width || height > tile.height {
+            return Err(WsiError::DisplayConversion(format!(
+                "TIFF edge crop {width}x{height} is incompatible with {}x{} {:?} source",
+                tile.width, tile.height, tile.layout
+            )));
+        }
+        let channels = usize::from(tile.channels);
+        let source_stride = usize::try_from(tile.width)
+            .ok()
+            .and_then(|value| value.checked_mul(channels))
+            .ok_or_else(|| WsiError::DisplayConversion("TIFF source stride overflow".into()))?;
+        let target_stride = usize::try_from(width)
+            .ok()
+            .and_then(|value| value.checked_mul(channels))
+            .ok_or_else(|| WsiError::DisplayConversion("TIFF target stride overflow".into()))?;
+        let rows = usize::try_from(height)
+            .map_err(|_| WsiError::DisplayConversion("TIFF crop height overflow".into()))?;
+
+        macro_rules! crop_samples {
+            ($samples:expr, $constructor:expr) => {{
+                let samples = $samples;
+                let mut cropped = Vec::with_capacity(target_stride.saturating_mul(rows));
+                for row in 0..rows {
+                    let start = row.checked_mul(source_stride).ok_or_else(|| {
+                        WsiError::DisplayConversion("TIFF crop row offset overflow".into())
+                    })?;
+                    let end = start.checked_add(target_stride).ok_or_else(|| {
+                        WsiError::DisplayConversion("TIFF crop row end overflow".into())
+                    })?;
+                    cropped.extend_from_slice(&samples[start..end]);
+                }
+                $constructor(cropped)
+            }};
+        }
+
+        let data = match &tile.data {
+            CpuTileData::U8(samples) => crop_samples!(samples, CpuTileData::u8),
+            CpuTileData::U16(samples) => crop_samples!(samples, CpuTileData::u16),
+            CpuTileData::F32(samples) => crop_samples!(samples, CpuTileData::f32),
+        };
+        CpuTile::new(
+            width,
+            height,
+            tile.channels,
+            tile.color_space,
+            CpuTileLayout::Interleaved,
+            data,
+        )
     }
 }

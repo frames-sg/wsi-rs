@@ -4,8 +4,7 @@ use j2k_core::BackendRequest;
 
 use crate::core::registry::SlideReader;
 use crate::core::types::{
-    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, TileCodecKind,
-    TileOutputPreference, TilePixels, TileRequest,
+    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, TileCodecKind, TileRequest,
 };
 use crate::error::WsiError;
 
@@ -13,16 +12,13 @@ use super::backend::is_encapsulated_transfer_syntax;
 use super::manifest::DicomSlide;
 use super::{
     HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, HTJ2K_LOSSLESS_TRANSFER_SYNTAX, HTJ2K_TRANSFER_SYNTAX,
-    JP2K_TRANSFER_SYNTAXES, JPEG_TRANSFER_SYNTAX,
+    JP2K_TRANSFER_SYNTAXES,
 };
 
 mod batch_plan;
 mod cpu;
 #[cfg(any(feature = "metal", feature = "cuda"))]
 mod device;
-
-#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
-pub(super) use device::complete_mixed_device_batch_with_cpu_remainder;
 
 pub(super) struct DicomReader {
     pub(super) slide: Arc<DicomSlide>,
@@ -82,27 +78,41 @@ impl SlideReader for DicomReader {
         control.check_cancelled()
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        self.read_tiles_with_control(reqs, output, None)
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.read_tiles_cpu_with_backend_controlled(reqs, BackendRequest::Cpu, None)
     }
 
-    fn read_tiles_controlled(
+    fn read_tiles_cpu_controlled(
         &self,
         reqs: &[TileRequest],
-        output: TileOutputPreference,
         control: &crate::ReadControl,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        let result = self.read_tiles_with_control(reqs, output, Some(control));
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        let result =
+            self.read_tiles_cpu_with_backend_controlled(reqs, BackendRequest::Cpu, Some(control));
         control.check_cancelled()?;
         result
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Auto)
+        self.read_tile_with_backend(req, BackendRequest::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        self.read_tiles_jp2k_metal(reqs, sessions)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        self.read_tiles_jp2k_cuda(reqs, sessions)
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -125,14 +135,10 @@ impl SlideReader for DicomReader {
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
         image.read_associated(name)
     }
-
-    fn recommended_shared_cache_bytes(&self) -> Option<u64> {
-        self.slide.recommended_shared_cache_bytes()
-    }
 }
 
 pub(super) fn dicom_tile_codec_kind(transfer_syntax_uid: &str) -> TileCodecKind {
-    if transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
+    if super::is_jpeg_transfer_syntax(transfer_syntax_uid) {
         TileCodecKind::Jpeg
     } else if matches!(
         transfer_syntax_uid,

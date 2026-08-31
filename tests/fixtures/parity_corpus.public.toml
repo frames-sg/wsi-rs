@@ -8,17 +8,9 @@ alias            = "svs-001"
 path             = ""
 format           = "aperio"
 codecs           = ["jpeg"]
-must_decode      = ["base", "level1", "level2", "label", "macro"]
-expected_failures = [
-  "j2k-vs-reference:base",
-  "j2k-vs-reference:level1",
-  "j2k-vs-reference:level2",
-  # The independent JPEG oracle intentionally decodes raw TIFF JPEG tiles; it
-  # does not model the OpenSlide-compatible color path that wsi-rs matches.
-  "reference-vs-openslide:base",
-  "reference-vs-openslide:level1",
-  "reference-vs-openslide:level2",
-]
+must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
+required_properties = ["openslide.vendor", "openslide.mpp-x", "openslide.mpp-y"]
+require_icc_profile = true
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -27,14 +19,6 @@ citation         = "Goode A. et al. OpenSlide: A vendor-neutral software foundat
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs"
 
-[slide.expected_failure_rationale]
-"j2k-vs-reference:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this base-level probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"j2k-vs-reference:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this level-1 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"j2k-vs-reference:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path. wsi-rs matches OpenSlide exactly on this level-2 probe, so this expected failure tracks oracle coverage rather than a production read mismatch."
-"reference-vs-openslide:base" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference base-level comparison."
-"reference-vs-openslide:level1" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference level-1 comparison."
-"reference-vs-openslide:level2" = "The independent JPEG oracle decodes raw TIFF JPEG tile bytes and does not model the OpenSlide-compatible color conversion path used by OpenSlide. This expected failure documents the same oracle limitation as the wsi-rs-vs-reference level-2 comparison."
-
 [[slide]]
 name             = "aperio_svs_brightfield_jp2k_typical"
 alias            = "svs-jp2k-001"
@@ -42,12 +26,7 @@ path             = ""
 format           = "aperio"
 codecs           = ["j2k"]
 must_decode      = ["base", "level1"]
-expected_failures = [
-  # JP2K decode is visually close but outside strict byte tolerance against the
-  # system OpenSlide/OpenJPEG stack on this public Aperio sample.
-  "j2k-vs-openslide:base",
-  "j2k-vs-openslide:level1",
-]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -56,9 +35,69 @@ citation         = "Goode A. et al. OpenSlide..."
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/JP2K-33003-1.svs"
 
-[slide.expected_failure_rationale]
-"j2k-vs-openslide:base" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in wsi-rs and system OpenSlide. The base-level probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
-"j2k-vs-openslide:level1" = "The public Aperio JP2K sample is decoded by different JPEG 2000 stacks in wsi-rs and system OpenSlide. The level-1 probe is visually close but outside the strict byte tolerance, so this is an accepted 0.5 RC limitation pending deeper JP2K color-rounding parity work."
+[[slide]]
+name             = "argos_avs_brightfield_typical"
+alias            = "argos-001"
+path             = ""
+format           = "argos"
+codecs           = ["jpeg"]
+must_decode      = ["base", "level1", "level2", "thumbnail", "macro"]
+required_properties = ["openslide.vendor"]
+source           = "openslide-testdata"
+license          = "CC0-1.0"
+redistributable  = true
+sha256           = "3b68b5be6270344ad1823bb6c74c242d60493be90926002f6cdf6e96ca8ff28d"
+citation         = "OpenSlide testdata, ARGOS AVS sample."
+phi_reviewed     = true
+url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Argos/Argos-1.avs"
+
+[[slide]]
+name             = "argos_avs_brightfield_z_stack"
+alias            = "argos-stacked-001"
+path             = ""
+format           = "argos"
+codecs           = ["jpeg"]
+must_decode      = ["base", "level1", "level2", "thumbnail", "macro"]
+required_properties = ["openslide.vendor"]
+source           = "openslide-testdata"
+license          = "CC0-1.0"
+redistributable  = true
+sha256           = "1b88645342040b62bb3c3feaa1db76f9419cd7749327690b1221475a4d04c34a"
+citation         = "OpenSlide testdata, ARGOS AVS Z-stack sample."
+phi_reviewed     = true
+url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Argos/Argos-1-Stacked.avs"
+
+[[slide]]
+name             = "huron_tiff_brightfield_jpeg"
+alias            = "huron-jpeg-001"
+path             = ""
+format           = "huron"
+codecs           = ["jpeg"]
+must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
+required_properties = ["openslide.vendor"]
+source           = "openslide-testdata"
+license          = "CC0-1.0"
+redistributable  = true
+sha256           = "295506f9872becce44033baa830dfd7a7644d104a832e6a7f73565be990c465d"
+citation         = "OpenSlide testdata, Huron LE176 TIFF sample."
+phi_reviewed     = true
+url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Huron/Huron-1.tif"
+
+[[slide]]
+name             = "huron_tiff_brightfield_uncompressed"
+alias            = "huron-uncompressed-001"
+path             = ""
+format           = "huron"
+codecs           = ["none"]
+must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
+required_properties = ["openslide.vendor"]
+source           = "openslide-testdata"
+license          = "CC0-1.0"
+redistributable  = true
+sha256           = "c67bc0dc203bbb0acf72f843c05b84d52538307165baa7b2bb9d3d3ec05f450d"
+citation         = "OpenSlide testdata, uncompressed Huron LE176 TIFF sample."
+phi_reviewed     = true
+url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Huron/Huron-1-Uncompressed.tif"
 
 [[slide]]
 name             = "hamamatsu_ndpi_brightfield_typical"
@@ -67,6 +106,7 @@ path             = ""
 format           = "ndpi"
 codecs           = ["jpeg"]
 must_decode      = ["base", "level2"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -82,6 +122,7 @@ path             = ""
 format           = "hamamatsu_vms"
 codecs           = ["jpeg"]
 must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -97,6 +138,7 @@ path             = ""
 format           = "leica"
 codecs           = ["jpeg"]
 must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -112,6 +154,7 @@ path             = ""
 format           = "ventana"
 codecs           = ["jpeg"]
 must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -127,6 +170,7 @@ path             = ""
 format           = "mirax"
 codecs           = ["jpeg"]
 must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -140,8 +184,9 @@ name             = "dicom_wsi_jpeg_tiled_full"
 alias            = "dicom-jpeg-001"
 path             = "downloads/openslide-testdata-extracted/dicom/dicom-3dhistech-1/000001.dcm"
 format           = "dicom"
-codecs           = ["jpeg-progressive"]
-must_decode      = []
+codecs           = ["jpeg-baseline"]
+must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -149,7 +194,7 @@ sha256           = "f7306843363c08ab86539f52acbe492917c440df50231d06b9b2e1657ac9
 citation         = "OpenSlide testdata, DICOM WSI 3DHISTECH-1 sample."
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/DICOM/3DHISTECH-1.zip"
-notes            = "Public DICOM JPEG provenance row. Non-gating because this sample uses progressive JPEG, which is a j2k JPEG follow-on."
+notes            = "Public tiled JPEG Baseline DICOM WSI regression row."
 
 [[slide]]
 name             = "dicom_wsi_jp2k_tiled_full"
@@ -158,7 +203,12 @@ path             = "downloads/openslide-testdata-extracted/dicom/dicom-cmu1-jp2k
 format           = "dicom"
 codecs           = ["j2k"]
 must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
 openslide_required = false
+color_paths      = ["RGB"]
+oracle_divergences = [
+  "OpenSlide 4.0.1 applies a known incorrect DICOM JP2K color conversion for this RGB path; wsi-rs validates the declared photometric interpretation instead of copying that output.",
+]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
 redistributable  = true
@@ -166,3 +216,39 @@ sha256           = "da02f7d18c6fe71b1f64b1ec3f0ca1a68dcae6a1aac12c102b587b36c376
 citation         = "OpenSlide testdata, DICOM WSI CMU-1-JP2K-33005 sample."
 phi_reviewed     = true
 url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/DICOM/CMU-1-JP2K-33005.zip"
+
+[[slide]]
+name             = "raw_jp2k_rgb_nomct_tracked_fixture"
+alias            = "raw-jp2k-rgb-nomct"
+path             = "tests/fixtures/jp2k/rgb_nomct.j2k"
+format           = "raw_jp2k"
+codecs           = ["j2k"]
+must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
+lossless         = false
+openslide_required = false
+source           = "wsi-rs generated codec fixtures"
+license          = "MIT OR Apache-2.0"
+redistributable  = true
+sha256           = "c06bf36f197a8057cbe0d496682c1eab5483c6667db8c64e236d087c747896ab"
+citation         = "Generated by tests/fixtures/jp2k/generate.py with OpenJPEG and retained with its decoded PPM oracle."
+phi_reviewed     = true
+url              = ""
+
+[[slide]]
+name             = "raw_jp2k_reversible_rct_tracked_fixture"
+alias            = "raw-jp2k-rgb-rct-lossless"
+path             = "tests/fixtures/jp2k/rgb_rct.j2k"
+format           = "raw_jp2k"
+codecs           = ["j2k"]
+must_decode      = ["base"]
+required_properties = ["openslide.vendor"]
+lossless         = true
+openslide_required = false
+source           = "wsi-rs generated codec fixtures"
+license          = "MIT OR Apache-2.0"
+redistributable  = true
+sha256           = "b2985306397cb664ff89bd0c6e51c64c328ab6ba04773db8182172f5537a0632"
+citation         = "Generated reversible-RCT JP2K fixture with a retained decoded PPM oracle."
+phi_reviewed     = true
+url              = ""

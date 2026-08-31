@@ -1,4 +1,3 @@
-mod device;
 mod display;
 mod geometry;
 mod model;

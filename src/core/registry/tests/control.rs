@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[test]
-fn read_tile_rejects_wrong_batch_cardinality() {
+fn controlled_read_tile_rejects_wrong_batch_cardinality() {
     struct BadBatchReader {
         inner: MockSource,
     }
@@ -14,28 +14,28 @@ fn read_tile_rejects_wrong_batch_cardinality() {
             self.inner.dataset()
         }
 
-        fn read_tiles(
+        fn read_tiles_cpu_controlled(
             &self,
             _reqs: &[TileRequest],
-            _output: TileOutputPreference,
-        ) -> Result<Vec<TilePixels>, WsiError> {
+            _control: &crate::ReadControl,
+        ) -> Result<Vec<CpuTile>, WsiError> {
             Ok(vec![
-                TilePixels::Cpu(self.inner.read_tile_cpu(&TileRequest {
+                self.inner.read_tile_cpu(&TileRequest {
                     scene: 0usize.into(),
                     series: 0usize.into(),
                     level: 0u32.into(),
                     plane: PlaneSelection::default().into(),
                     col: 0,
                     row: 0,
-                })?),
-                TilePixels::Cpu(self.inner.read_tile_cpu(&TileRequest {
+                })?,
+                self.inner.read_tile_cpu(&TileRequest {
                     scene: 0usize.into(),
                     series: 0usize.into(),
                     level: 0u32.into(),
                     plane: PlaneSelection::default().into(),
                     col: 1,
                     row: 0,
-                })?),
+                })?,
             ])
         }
 
@@ -51,8 +51,9 @@ fn read_tile_rejects_wrong_batch_cardinality() {
     let reader = BadBatchReader {
         inner: MockSource::new(),
     };
-    let err = reader
-        .read_tile(
+    let slide = Slide::from_source(Box::new(reader), Arc::new(TileCache::new(1024)));
+    let err = slide
+        .read_tile_controlled(
             &TileRequest {
                 scene: 0usize.into(),
                 series: 0usize.into(),
@@ -61,11 +62,17 @@ fn read_tile_rejects_wrong_batch_cardinality() {
                 col: 0,
                 row: 0,
             },
-            TileOutputPreference::cpu(),
+            &crate::ReadControl::default(),
         )
         .expect_err("single read must reject extra batch outputs");
-    assert!(matches!(err, WsiError::TileRead { .. }));
-    assert!(err.to_string().contains("returned 2 tiles"));
+    assert!(matches!(
+        err,
+        WsiError::BackendContract {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
 }
 
 struct CancellingSource {
@@ -85,11 +92,7 @@ impl SlideReader for FailingCancellingSource {
         self.inner.dataset()
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        _output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         self.token.cancel();
         let req = reqs.first().expect("test submits one tile");
         Err(WsiError::TileRead {
@@ -110,17 +113,13 @@ impl SlideReader for CancellingSource {
         self.inner.dataset()
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        _output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         self.batch_reads.fetch_add(1, Ordering::SeqCst);
         self.batch_tile_count
             .fetch_add(reqs.len(), Ordering::SeqCst);
         self.token.cancel();
         reqs.iter()
-            .map(|req| self.inner.read_tile_cpu(req).map(TilePixels::Cpu))
+            .map(|req| self.inner.read_tile_cpu(req))
             .collect()
     }
 
@@ -147,11 +146,7 @@ fn controlled_tile_reads_preserve_one_full_batch_and_check_cancellation_afterwar
     ];
 
     let error = slide
-        .read_tiles_controlled(
-            &requests,
-            TileOutputPreference::cpu(),
-            &crate::ReadControl::new(token),
-        )
+        .read_tiles_controlled(&requests, &crate::ReadControl::new(token))
         .unwrap_err();
 
     assert!(matches!(error, WsiError::Cancelled));
@@ -171,7 +166,6 @@ fn controlled_read_reports_terminal_cancellation_when_source_also_fails() {
     let error = slide
         .read_tiles_controlled(
             &[TileRequest::new(0usize, 0usize, 0, 0, 0)],
-            TileOutputPreference::cpu(),
             &crate::ReadControl::new(token),
         )
         .expect_err("cancellation must take precedence over a simultaneous source error");
@@ -197,11 +191,7 @@ fn default_controlled_read_preserves_batch_order_and_cardinality() {
     ];
 
     let tiles = slide
-        .read_tiles_controlled(
-            &requests,
-            TileOutputPreference::cpu(),
-            &crate::ReadControl::default(),
-        )
+        .read_tiles_controlled(&requests, &crate::ReadControl::default())
         .expect("controlled batch");
 
     assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
@@ -209,13 +199,7 @@ fn default_controlled_read_preserves_batch_order_and_cardinality() {
     assert_eq!(tile_reads.load(Ordering::SeqCst), 0);
     let first_rgb = tiles
         .iter()
-        .map(|tile| {
-            #[allow(unreachable_patterns)]
-            match tile {
-                TilePixels::Cpu(tile) => &tile.data.as_u8().expect("RGB8 tile")[..3],
-                TilePixels::Device(_) => panic!("test source returns CPU tiles"),
-            }
-        })
+        .map(|tile| &tile.data.as_u8().expect("RGB8 tile")[..3])
         .collect::<Vec<_>>();
     assert_eq!(
         first_rgb,
@@ -232,11 +216,7 @@ impl SlideReader for WrongCardinalitySource {
         self.inner.dataset()
     }
 
-    fn read_tiles(
-        &self,
-        _reqs: &[TileRequest],
-        _output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    fn read_tiles_cpu(&self, _reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         Ok(Vec::new())
     }
 
@@ -257,11 +237,7 @@ fn default_controlled_read_reports_wrong_cardinality_as_backend_contract() {
     ];
 
     let error = slide
-        .read_tiles_controlled(
-            &requests,
-            TileOutputPreference::cpu(),
-            &crate::ReadControl::default(),
-        )
+        .read_tiles_controlled(&requests, &crate::ReadControl::default())
         .expect_err("wrong cardinality must fail");
 
     assert!(matches!(
@@ -291,7 +267,6 @@ fn default_controlled_read_checks_cancellation_before_batch_admission() {
     let error = slide
         .read_tiles_controlled(
             &[TileRequest::new(0usize, 0usize, 0, 0, 0)],
-            TileOutputPreference::cpu(),
             &crate::ReadControl::new(token),
         )
         .expect_err("pre-cancelled batch must not be admitted");
@@ -312,16 +287,15 @@ impl SlideReader for ControlledOverrideSource {
         self.inner.dataset()
     }
 
-    fn read_tiles_controlled(
+    fn read_tiles_cpu_controlled(
         &self,
         reqs: &[TileRequest],
-        _output: TileOutputPreference,
         control: &crate::ReadControl,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    ) -> Result<Vec<CpuTile>, WsiError> {
         control.check_cancelled()?;
         self.controlled_reads.fetch_add(1, Ordering::SeqCst);
         reqs.iter()
-            .map(|req| self.inner.read_tile_cpu(req).map(TilePixels::Cpu))
+            .map(|req| self.inner.read_tile_cpu(req))
             .collect()
     }
 
@@ -342,16 +316,10 @@ fn read_tile_controlled_delegates_to_controlled_batch_path() {
     let tile = slide
         .read_tile_controlled(
             &TileRequest::new(0usize, 0usize, 0, 1, 0),
-            TileOutputPreference::cpu(),
             &crate::ReadControl::default(),
         )
         .expect("controlled single tile");
 
     assert_eq!(controlled_reads.load(Ordering::SeqCst), 1);
-    #[allow(unreachable_patterns)]
-    let tile = match tile {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("test source returns CPU tiles"),
-    };
     assert_eq!(&tile.data.as_u8().expect("RGB8 tile")[..3], &[0, 255, 0]);
 }

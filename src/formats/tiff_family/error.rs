@@ -41,6 +41,13 @@ pub(crate) enum TiffParseError {
     #[error("IFD not found: {0}")]
     IfdNotFound(IfdId),
 
+    #[error("{resource} requires {requested} bytes, exceeding the {limit}-byte limit")]
+    ResourceLimit {
+        resource: &'static str,
+        requested: u64,
+        limit: u64,
+    },
+
     #[error("tag not found: IFD at offset {ifd_offset}, tag {tag}")]
     TagNotFound { ifd_offset: u64, tag: u16 },
 }
@@ -70,6 +77,15 @@ impl TiffParseError {
                 path: io_path
                     .map(|p| p.as_ref().clone())
                     .unwrap_or_else(|| path.to_path_buf()),
+            },
+            TiffParseError::ResourceLimit {
+                resource,
+                requested,
+                limit,
+            } => WsiError::ResourceLimit {
+                resource,
+                requested,
+                limit,
             },
             other => WsiError::Tiff {
                 path: path.to_path_buf(),

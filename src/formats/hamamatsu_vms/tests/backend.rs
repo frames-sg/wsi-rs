@@ -5,13 +5,6 @@ use super::fixtures::VmsFixture;
 use crate::core::registry::Slide;
 use crate::formats::hamamatsu_vms::model::VmsLevel;
 
-fn cpu_tile(pixels: TilePixels) -> CpuTile {
-    match pixels {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("VMS must return CPU pixels"),
-    }
-}
-
 #[test]
 fn complete_vms_probes_opens_and_exposes_normalized_metadata() {
     let fixture = VmsFixture::complete();
@@ -79,6 +72,30 @@ fn complete_vms_probes_opens_and_exposes_normalized_metadata() {
 }
 
 #[test]
+fn configured_metadata_limit_rejects_vms_ini_before_open_allocations() {
+    let fixture = VmsFixture::complete();
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(4)
+        .unwrap();
+    let backend = HamamatsuVmsBackend::new();
+
+    let error = match backend.open_with_config(
+        &fixture.path,
+        BackendOpenConfig::new(CacheConfig::deterministic(), limits),
+    ) {
+        Ok(_) => panic!("tiny configured metadata limit must reject VMS INI values"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn backend_default_and_empty_level_return_defined_results() {
     let _backend = HamamatsuVmsBackend::default();
     assert!(matches!(
@@ -114,27 +131,18 @@ fn vms_reader_decodes_tiles_batches_scales_and_associated_image_cache() {
     assert_eq!(cached.as_u8(), first.as_u8());
 
     let batch = reader
-        .read_tiles(
-            &[
-                TileRequest::new(0, 0, 1, 0, 0),
-                TileRequest::new(0, 0, 3, 0, 0),
-                TileRequest::new(0, 0, 4, 0, 0),
-                TileRequest::new(0, 0, 5, 0, 0),
-            ],
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tiles_cpu(&[
+            TileRequest::new(0, 0, 1, 0, 0),
+            TileRequest::new(0, 0, 3, 0, 0),
+            TileRequest::new(0, 0, 4, 0, 0),
+            TileRequest::new(0, 0, 5, 0, 0),
+        ])
         .expect("read scaled VMS batch");
     let dimensions: Vec<_> = batch
         .into_iter()
-        .map(cpu_tile)
         .map(|tile| (tile.width(), tile.height()))
         .collect();
     assert_eq!(dimensions, vec![(32, 4), (32, 4), (16, 2), (8, 1)]);
-
-    assert!(matches!(
-        reader.read_tiles(&[], TileOutputPreference::require_device_auto()),
-        Err(WsiError::Unsupported { .. })
-    ));
 
     let macro_first = reader.read_associated("macro").expect("decode VMS macro");
     let macro_cached = reader
@@ -175,7 +183,7 @@ fn open_public_slide() -> (VmsFixture, Slide) {
 }
 
 fn public_tile_error(slide: &Slide, request: TileRequest) -> WsiError {
-    match slide.read_tile(&request, TileOutputPreference::cpu_only()) {
+    match slide.read_tile(&request) {
         Ok(_) => panic!("invalid VMS index unexpectedly read a tile"),
         Err(error) => error,
     }
@@ -185,12 +193,8 @@ fn public_tile_error(slide: &Slide, request: TileRequest) -> WsiError {
 fn slide_reads_valid_vms_tile() {
     let (_fixture, slide) = open_public_slide();
     let valid = slide
-        .read_tile(
-            &TileRequest::new(0, 0, 0, 0, 0),
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tile(&TileRequest::new(0, 0, 0, 0, 0))
         .expect("read valid VMS tile through public Slide boundary");
-    let valid = cpu_tile(valid);
     assert_eq!((valid.width(), valid.height()), (64, 8));
 }
 

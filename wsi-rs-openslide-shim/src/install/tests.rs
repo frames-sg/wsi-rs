@@ -223,6 +223,29 @@ fn prepared_restore_keeps_an_uncommitted_original_when_backup_is_absent() {
 }
 
 #[test]
+fn restore_accepts_legacy_major_version_alias_manifests() {
+    let directory = tempfile::tempdir().expect("temporary restore directory");
+    let prefix = directory.path().join("prefix");
+    let lib = prefix.join("lib");
+    std::fs::create_dir_all(&lib).expect("create library directory");
+    let lib = lib.canonicalize().expect("canonical library directory");
+    let destination = lib.join("libopenslide.so.4");
+    std::fs::write(&destination, b"legacy installed shim").expect("write legacy destination");
+    std::fs::write(
+        manifest_path(&prefix),
+        format!(
+            "wsi-rs-openslide-shim\t1\tinstalled\n{}\t\n",
+            destination.display()
+        ),
+    )
+    .expect("write legacy manifest");
+
+    execute_restore(&prefix, 32).expect("legacy manifest should remain restorable");
+    assert!(!destination.exists());
+    assert!(!manifest_path(&prefix).exists());
+}
+
+#[test]
 fn restore_manifest_validation_rejects_duplicates_and_bad_backup_names() {
     let directory = tempfile::tempdir().expect("temporary restore directory");
     let prefix = directory.path().join("prefix");

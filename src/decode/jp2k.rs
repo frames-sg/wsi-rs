@@ -4,7 +4,7 @@ use std::borrow::Cow;
 #[cfg(test)]
 use crate::core::types::CpuTile;
 #[cfg(all(any(feature = "metal", feature = "cuda"), test))]
-use crate::core::types::{DeviceTile, PixelFormat, TilePixels};
+use crate::core::types::PixelFormat;
 #[cfg(test)]
 use crate::error::WsiError;
 
@@ -39,21 +39,20 @@ pub(crate) use batch::decode_batch_jp2k;
 #[cfg(test)]
 pub(crate) use batch::decode_jp2k_tile_batch_to_sample_buffers;
 pub(crate) use cpu::decode_jp2k_to_sample_buffer;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(crate) use device::decode_batch_jp2k_pixels;
+#[cfg(feature = "cuda")]
+pub(crate) use device::decode_batch_jp2k_cuda;
+#[cfg(feature = "metal")]
+pub(crate) use device::decode_batch_jp2k_metal;
 
 #[cfg(test)]
 use batch::{
     decode_jp2k_tile_batch_with_j2k, materialize_jp2k_batch_outputs,
     try_decode_batch_jp2k_with_j2k, PreparedJp2kBatchJob,
 };
-#[cfg(all(any(feature = "metal", feature = "cuda"), test))]
-use device::decode_one_jp2k_pixels;
+#[cfg(all(feature = "cuda", test))]
+use device::decode_one_jp2k_cuda;
 #[cfg(all(feature = "metal", test))]
-use metal_backend::decode_jp2k_tile_batch_to_pixels;
-#[cfg(all(feature = "metal", test))]
-use metal_backend::{decode_jp2k_tile_batch_to_device_pixels, parse_jp2k_device_batch_flag};
-
+use device::decode_one_jp2k_metal;
 #[cfg(test)]
 #[path = "jp2k/tests.rs"]
 mod tests;

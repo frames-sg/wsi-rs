@@ -43,10 +43,10 @@ fn read_associated_thumbnail_assembly_matches_expected_rgb_bytes_with_edge_tiles
     let tiles = [
         vec![10u8; 4],
         vec![20u8; 4],
-        vec![30u8; 2],
-        vec![40u8; 2],
-        vec![50u8; 2],
-        vec![60u8; 1],
+        vec![30u8, 0, 30, 0],
+        vec![40u8, 40, 0, 0],
+        vec![50u8, 50, 0, 0],
+        vec![60u8, 0, 0, 0],
     ];
     let file = build_tiled_associated_tiff(5, 3, 2, 2, &tiles);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
@@ -276,6 +276,150 @@ fn read_associated_deflate_predictor_uses_tilecodec_path() {
     let reader = TiffPixelReader::new(container, layout);
 
     let image = reader.read_associated("thumbnail").unwrap();
+
+    assert_eq!(image.data.as_u8().unwrap(), expected.as_slice());
+}
+
+#[test]
+fn read_associated_decompresses_each_deflate_strip_independently() {
+    let width = 3;
+    let height = 4;
+    let rows_per_strip = 2;
+    let raw_strips = [vec![1u8, 2, 3, 4, 5, 6], vec![7u8, 8, 9, 10, 11, 12]];
+    let strips = raw_strips
+        .iter()
+        .map(|raw| {
+            let mut encoder = ZlibEncoder::new(Vec::new(), DeflateCompression::fast());
+            encoder.write_all(raw).unwrap();
+            encoder.finish().unwrap()
+        })
+        .collect::<Vec<_>>();
+    let file = build_multi_stripped_tiff(width, height, rows_per_strip, &strips, 8, 1, 1);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let layout = associated_image_layout(
+        DatasetId::new(26),
+        "thumbnail",
+        (width, height),
+        1,
+        TileSource::Stripped {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::Deflate,
+            strip_offsets: container
+                .get_u64_array(ifd_id, tags::STRIP_OFFSETS)
+                .unwrap()
+                .to_vec(),
+            strip_byte_counts: container
+                .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)
+                .unwrap()
+                .to_vec(),
+        },
+    );
+    let reader = TiffPixelReader::new(container, layout);
+
+    let image = reader.read_associated("thumbnail").unwrap();
+
+    assert_eq!(image.data.as_u8().unwrap(), raw_strips.concat().as_slice());
+}
+
+#[test]
+fn stripped_compressed_data_validates_metadata_and_zero_fills_missing_strips() {
+    let width = 3;
+    let height = 4;
+    let rows_per_strip = 2;
+    let file =
+        build_multi_stripped_tiff(width, height, rows_per_strip, &[vec![1], vec![2]], 8, 1, 1);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let layout = associated_image_layout(
+        DatasetId::new(28),
+        "thumbnail",
+        (width, height),
+        1,
+        TileSource::Stripped {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::Deflate,
+            strip_offsets: container
+                .get_u64_array(ifd_id, tags::STRIP_OFFSETS)
+                .unwrap()
+                .to_vec(),
+            strip_byte_counts: container
+                .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)
+                .unwrap()
+                .to_vec(),
+        },
+    );
+    let reader = TiffPixelReader::new(container, layout);
+
+    let mismatched = reader
+        .read_stripped_compressed_data(
+            "thumbnail",
+            ifd_id,
+            Compression::Deflate,
+            (width, height),
+            &[0],
+            &[],
+        )
+        .unwrap_err();
+    assert!(mismatched.to_string().contains("mismatched strip metadata"));
+
+    let missing = reader
+        .read_stripped_compressed_data(
+            "thumbnail",
+            ifd_id,
+            Compression::Deflate,
+            (width, height),
+            &[0],
+            &[0],
+        )
+        .unwrap_err();
+    assert!(missing.to_string().contains("expected at least 2 strips"));
+
+    let oversized = reader
+        .read_stripped_compressed_data(
+            "thumbnail",
+            ifd_id,
+            Compression::Deflate,
+            (width, height),
+            &[0, 0],
+            &[MAX_COMPRESSED_INPUT_BYTES, 1],
+        )
+        .unwrap_err();
+    assert!(oversized.to_string().contains("compressed strips exceed"));
+
+    let decoded = reader
+        .read_stripped_compressed_data(
+            "thumbnail",
+            ifd_id,
+            Compression::Deflate,
+            (width, height),
+            &[0, 0],
+            &[0, 0],
+        )
+        .unwrap();
+    assert_eq!(decoded, vec![0; (width * height) as usize]);
+}
+
+#[test]
+fn read_associated_decodes_tiff_flavored_lzw() {
+    let expected = (0u8..=255).cycle().take(256 * 32).collect::<Vec<_>>();
+    let mut encoder = weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+    let compressed = encoder.encode(&expected).unwrap();
+    let file = build_stripped_tiff(256, 32, &compressed, 1, Some(1), None, 5);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let layout = associated_image_layout(
+        DatasetId::new(27),
+        "label",
+        (256, 32),
+        1,
+        stripped_associated_source(&container, ifd_id, Compression::Lzw),
+    );
+    let reader = TiffPixelReader::new(container, layout);
+
+    let image = reader.read_associated("label").unwrap();
 
     assert_eq!(image.data.as_u8().unwrap(), expected.as_slice());
 }

@@ -35,7 +35,7 @@ fn set_i32(bytes: &mut [u8], offset: usize, value: i32) {
 
 #[test]
 fn probe_and_entry_resolution_reject_wrong_or_incomplete_bundles() {
-    let backend = MiraxBackend::default();
+    let backend = MiraxBackend::new();
     let temp = tempfile::tempdir().unwrap();
     let wrong_extension = temp.path().join("slide.txt");
     fs::write(&wrong_extension, b"not MIRAX").unwrap();
@@ -68,6 +68,22 @@ fn probe_and_entry_resolution_reject_wrong_or_incomplete_bundles() {
         slide_dir_from_entry(&fixture.path).unwrap(),
         fixture.slide_dir
     );
+}
+
+#[test]
+fn probe_recognizes_a_mirax_bundle_whose_metadata_is_corrupt() {
+    let fixture = MiraxFixture::complete();
+    let source = fixture.complete_slidedat();
+    fixture.write_slidedat(&source.replacen("IMAGENUMBER_X=4", "IMAGENUMBER_X=0", 1));
+    let backend = MiraxBackend::new();
+
+    let probe = backend.probe(&fixture.path).expect("probe corrupt MIRAX");
+    assert!(probe.detected);
+    assert_eq!(probe.vendor, "mirax");
+    assert!(matches!(
+        error(backend.open(&fixture.path)),
+        WsiError::InvalidSlide { .. }
+    ));
 }
 
 #[test]

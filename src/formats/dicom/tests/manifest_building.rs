@@ -306,6 +306,8 @@ fn opens_complete_sibling_series_from_any_member_file() {
         TestDicomOptions::native(vec![32, 32, 32, 64, 64, 64, 96, 96, 96, 128, 128, 128]);
     thumbnail_options.sop_instance_uid = "1.2.826.0.1.3680043.10.777.3";
     thumbnail_options.image_type = "DERIVED\\PRIMARY\\THUMBNAIL\\RESAMPLED";
+    thumbnail_options.optical_path_icc_profiles =
+        vec![test_optical_path_icc(vec![3, 1, 4, 1, 5, 9])];
     write_test_dicom(&thumbnail, thumbnail_options);
 
     let from_base = Slide::open(&level0).expect("open base member");
@@ -325,6 +327,31 @@ fn opens_complete_sibling_series_from_any_member_file() {
         .dataset()
         .associated_images
         .contains_key("thumbnail"));
+    assert_eq!(
+        from_associated.dataset().associated_images["thumbnail"].icc_profile(),
+        Some(&[3, 1, 4, 1, 5, 9][..])
+    );
+}
+
+#[test]
+fn original_resampled_volume_is_a_level_and_exposes_barcode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original-resampled.dcm");
+    let mut options = TestDicomOptions::native(test_rgb_pixel_data());
+    options.image_type = "ORIGINAL\\PRIMARY\\VOLUME\\RESAMPLED";
+    options.barcode_value = Some("SLIDE-12345");
+    write_test_dicom(&path, options);
+
+    let slide = Slide::open(&path).expect("open original resampled DICOM volume");
+    assert_eq!(series_level_dimensions(&slide), vec![(2, 2)]);
+    assert_eq!(
+        slide.dataset().properties.get("dicom.barcode-value"),
+        Some("SLIDE-12345")
+    );
+    assert_eq!(
+        slide.dataset().properties.get("openslide.barcode"),
+        Some("SLIDE-12345")
+    );
 }
 
 #[test]
@@ -395,17 +422,15 @@ fn opens_3dhistech_split_sparse_level_when_corpus_is_available() {
     assert_eq!(dataset.scenes.len(), 1);
     assert!(!dataset.scenes[0].series[0].levels.is_empty());
     let tile = slide
-        .read_tile(
-            &TileRequest {
-                scene: 0usize.into(),
-                series: 0usize.into(),
-                level: 0u32.into(),
-                plane: PlaneSelection::default().into(),
-                col: 0,
-                row: 0,
-            },
-            TileOutputPreference::cpu(),
-        )
+        .read_tile(&TileRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: PlaneSelection::default().into(),
+            col: 0,
+            row: 0,
+        })
         .expect("read first split-level tile");
-    assert!(matches!(tile, TilePixels::Cpu(_)));
+    assert!(tile.width() > 0);
+    assert!(tile.height() > 0);
 }

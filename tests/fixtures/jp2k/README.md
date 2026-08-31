@@ -4,7 +4,8 @@ Raw JPEG 2000 fixtures for the subset covered by wsi-rs tests:
 - 3 components
 - 8-bit samples
 - single tile
-- RGB and YCbCr 4:4:4 / 4:2:2 / 4:2:0
+- RGB without MCT, RGB with irreversible/reversible MCT, and YCbCr
+  4:4:4 / 4:2:2 / 4:2:0
 
 Regenerate with:
 

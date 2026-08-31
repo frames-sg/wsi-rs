@@ -29,10 +29,11 @@ impl MiraxSlide {
             Some((image.expected_width, image.expected_height)),
             BackendRequest::Auto,
         )?);
+        let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.decoded_images
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(image.id, decoded.clone());
+            .put(image.id, decoded.clone(), retained_bytes);
         Ok(decoded)
     }
 
@@ -60,10 +61,11 @@ impl MiraxSlide {
             None,
             BackendRequest::Auto,
         )?);
+        let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.associated_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(name.to_string(), decoded.clone());
+            .put(name.to_string(), decoded.clone(), retained_bytes);
         Ok((*decoded).clone())
     }
 
@@ -113,9 +115,15 @@ impl MiraxSlide {
         }
     }
 
-    fn read_record_bytes(&self, record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
+    pub(super) fn read_record_bytes(&self, record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
         let mut file = self.open_file_handle(&record.path)?;
-        read_record_bytes_from_file(&mut file, &record.path, record.offset, record.len)
+        read_record_bytes_from_file_with_limit(
+            &mut file,
+            &record.path,
+            record.offset,
+            record.len,
+            self.encoded_unit_bytes,
+        )
     }
 
     fn open_file_handle(&self, path: &Path) -> Result<File, WsiError> {

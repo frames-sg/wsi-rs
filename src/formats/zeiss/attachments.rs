@@ -1,5 +1,5 @@
 use super::preflight::preflight_czi_file;
-use super::tiles::bitmap_to_sample_buffer;
+use super::tiles::{bitmap_from_raw_subblock, bitmap_to_sample_buffer, blit_tile};
 use super::*;
 
 const ASSOCIATED_JPEG_PROBE_BYTES: u64 = 256 << 10;
@@ -39,6 +39,7 @@ pub(super) fn decode_associated_attachment(
                 dimensions: (buffer.width, buffer.height),
                 sample_type: SampleType::Uint8,
                 channels: 3,
+                icc_profile: Vec::new(),
             },
             buffer,
         )));
@@ -67,15 +68,14 @@ pub(super) fn decode_associated_attachment(
                 .max()
                 .unwrap_or(1);
             ensure_embedded_czi_plane_budget((plane_rect.w, plane_rect.h), max_bytes_per_pixel)?;
-            let bitmap = embedded
-                .read_frame_2d(0, 0, 0, 0)
-                .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+            let bitmap = read_embedded_czi_plane(&mut embedded, plane_rect)?;
             let buffer = bitmap_to_sample_buffer(bitmap)?;
             Ok::<_, WsiError>((
                 AssociatedImage {
                     dimensions: (buffer.width, buffer.height),
                     sample_type: buffer.data.sample_type(),
                     channels: buffer.channels,
+                    icc_profile: Vec::new(),
                 },
                 buffer,
             ))
@@ -89,15 +89,80 @@ pub(super) fn decode_associated_attachment(
 fn ensure_uncompressed_embedded_czi(
     compressions: impl IntoIterator<Item = CziCompressionMode>,
 ) -> Result<(), WsiError> {
-    if let Some(compression) = compressions
-        .into_iter()
-        .find(|compression| *compression != CziCompressionMode::UnCompressed)
-    {
+    if let Some(compression) = compressions.into_iter().find(|compression| {
+        !matches!(
+            compression,
+            CziCompressionMode::UnCompressed | CziCompressionMode::Jpg
+        )
+    }) {
         return Err(WsiError::UnsupportedFormat(format!(
-            "compressed embedded CZI associated images are not supported safely ({compression})"
+            "embedded CZI associated-image compression is not supported safely ({compression})"
         )));
     }
     Ok(())
+}
+
+fn read_embedded_czi_plane(
+    embedded: &mut CziFile,
+    plane_rect: IntRect,
+) -> Result<czi_rs::Bitmap, WsiError> {
+    let statistics = embedded.statistics();
+    let mut matching: Vec<_> = embedded
+        .subblocks()
+        .iter()
+        .filter(|subblock| {
+            subblock.is_layer0()
+                && CziDimension::FRAME_ORDER.iter().all(|&dimension| {
+                    let Some(interval) = statistics.dim_bounds.get(dimension) else {
+                        return true;
+                    };
+                    match subblock.coordinate.get(dimension) {
+                        Some(value) => value == interval.start,
+                        None => interval.size <= 1,
+                    }
+                })
+        })
+        .cloned()
+        .collect();
+    if matching.is_empty() {
+        return Err(WsiError::DisplayConversion(
+            "embedded CZI has no layer-0 subblocks for its default plane".into(),
+        ));
+    }
+    matching.sort_by_key(|subblock| (subblock.m_index.unwrap_or(i32::MIN), subblock.file_position));
+
+    let pixel_type = matching[0].pixel_type;
+    if matching
+        .iter()
+        .any(|subblock| subblock.pixel_type != pixel_type)
+    {
+        return Err(WsiError::DisplayConversion(
+            "embedded CZI default plane contains mixed pixel types".into(),
+        ));
+    }
+    let mut bitmap = czi_rs::Bitmap::zeros(
+        pixel_type,
+        u32::try_from(plane_rect.w).map_err(|_| {
+            WsiError::DisplayConversion("embedded CZI plane width is invalid".into())
+        })?,
+        u32::try_from(plane_rect.h).map_err(|_| {
+            WsiError::DisplayConversion("embedded CZI plane height is invalid".into())
+        })?,
+    )
+    .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+    for info in matching {
+        let raw = embedded
+            .read_subblock(info.index)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        let tile = bitmap_from_raw_subblock(&raw)?;
+        blit_tile(
+            &mut bitmap,
+            &tile,
+            info.rect.x - plane_rect.x,
+            info.rect.y - plane_rect.y,
+        )?;
+    }
+    Ok(bitmap)
 }
 
 fn ensure_embedded_czi_plane_budget(
@@ -140,6 +205,7 @@ pub(super) fn probe_associated_attachment(
                     dimensions: (width, height),
                     sample_type: SampleType::Uint8,
                     channels: 3,
+                    icc_profile: Vec::new(),
                 }));
             }
         }

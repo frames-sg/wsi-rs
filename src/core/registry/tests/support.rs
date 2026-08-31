@@ -138,16 +138,12 @@ impl SlideReader for BatchCountingSource {
         self.inner.read_tile_cpu(req)
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        _output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         self.batch_reads.fetch_add(1, Ordering::SeqCst);
         self.batch_tile_count
             .fetch_add(reqs.len(), Ordering::SeqCst);
         reqs.iter()
-            .map(|req| self.inner.read_tile_cpu(req).map(TilePixels::Cpu))
+            .map(|req| self.inner.read_tile_cpu(req))
             .collect()
     }
 

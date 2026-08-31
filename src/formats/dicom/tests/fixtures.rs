@@ -24,6 +24,7 @@ pub(super) struct TestDicomOptions {
     pub(super) number_of_frames: u32,
     pub(super) pixel_spacing: Option<&'static str>,
     pub(super) shared_pixel_spacing: Option<&'static str>,
+    pub(super) barcode_value: Option<&'static str>,
     pub(super) optical_path_icc_profiles: Vec<TestOpticalPathIccProfile>,
     pub(super) pixel_data: TestPixelData,
 }
@@ -45,6 +46,7 @@ impl TestDicomOptions {
             number_of_frames: 1,
             pixel_spacing: Some("0.00025\\0.00025"),
             shared_pixel_spacing: None,
+            barcode_value: None,
             optical_path_icc_profiles: Vec::new(),
             pixel_data: TestPixelData::Native(pixel_data),
         }
@@ -157,6 +159,9 @@ pub(super) fn write_test_dicom(path: &Path, options: TestDicomOptions) {
             DataSetSequence::from(vec![shared]),
         ));
     }
+    if let Some(barcode_value) = options.barcode_value {
+        object.put(DataElement::new(tags::BARCODE_VALUE, VR::LT, barcode_value));
+    }
     if !options.optical_path_icc_profiles.is_empty() {
         let optical_paths = options
             .optical_path_icc_profiles
@@ -240,6 +245,16 @@ pub(super) fn encode_test_jpeg_rgb(width: u16, height: u16, seed: u8) -> Vec<u8>
         .encode(&rgb, width, height, jpeg_encoder::ColorType::Rgb)
         .expect("encode baseline JPEG test frame");
     encoded
+}
+
+pub(super) fn extended_sequential_8x8_jpeg() -> Vec<u8> {
+    let mut jpeg = encode_test_jpeg_rgb(8, 8, 17);
+    let sof = jpeg
+        .windows(2)
+        .position(|marker| marker == [0xff, 0xc0])
+        .expect("baseline fixture contains SOF0");
+    jpeg[sof + 1] = 0xc1;
+    jpeg
 }
 
 fn literal_rle_segment(bytes: &[u8]) -> Vec<u8> {

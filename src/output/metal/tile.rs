@@ -1,10 +1,10 @@
-use crate::{error::WsiError, PixelFormat};
+use crate::{error::WsiError, CpuTile, CpuTileData, CpuTileLayout, PixelFormat};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::{interop, YcbcrToRgb8Converter};
 
-/// Metal-backed device tile returned from `TilePixels::Device`.
+/// Metal-resident tile produced by strict JP2K or HTJ2K decode.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct MetalDeviceTile {
@@ -38,19 +38,6 @@ impl MetalDeviceTile {
             format: PixelFormat::try_from(image.pixel_format())?,
             storage: MetalDeviceStorage::Resident { image },
         })
-    }
-
-    pub(crate) fn from_jpeg(surface: j2k_jpeg_metal::Surface) -> Result<Option<Self>, WsiError> {
-        let Some(image) = surface.into_resident_metal_image() else {
-            return Ok(None);
-        };
-        Self::from_resident(image).map(Some)
-    }
-
-    pub(crate) fn from_private_jpeg(
-        tile: j2k_jpeg_metal::ResidentPrivateJpegTile,
-    ) -> Result<Self, WsiError> {
-        Self::from_resident(tile.into_resident_image())
     }
 
     pub(crate) fn from_j2k(surface: j2k_metal::Surface) -> Result<Option<Self>, WsiError> {
@@ -96,6 +83,26 @@ impl MetalDeviceTile {
         converter.convert_tile(self)
     }
 
+    /// Download this Metal-resident tile into tightly packed CPU-owned storage.
+    ///
+    /// The readback copies only logical row bytes, so cropped views and
+    /// padded Metal rows do not leak padding into the returned tile.
+    pub fn download_cpu(&self) -> Result<CpuTile, WsiError> {
+        let image = self.validated_resident_image()?;
+        let (row_bytes, byte_len) = tight_download_layout(self.width, self.height, self.format)?;
+        enforce_download_limit(byte_len)?;
+        if self.pitch_bytes < row_bytes {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Metal surface pitch {} is smaller than its {}-byte row",
+                    self.pitch_bytes, row_bytes
+                ),
+            });
+        }
+        let bytes = interop::download_resident_rows(image, row_bytes, byte_len)?;
+        downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes)
+    }
+
     /// Validate the public compatibility metadata and borrow the resident image.
     ///
     pub fn validated_resident_image(
@@ -128,4 +135,69 @@ impl MetalDeviceTile {
             .map_err(|source| interop::support_error("metal-resident-input-device", source))?;
         Ok(image)
     }
+}
+
+pub(super) const MAX_DEVICE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+pub(super) fn enforce_download_limit(byte_len: usize) -> Result<(), WsiError> {
+    let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
+    if requested > MAX_DEVICE_DOWNLOAD_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource: "Metal host tile download",
+            requested,
+            limit: MAX_DEVICE_DOWNLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
+
+fn tight_download_layout(
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+) -> Result<(usize, usize), WsiError> {
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(format.bytes_per_pixel()))
+        .ok_or_else(|| {
+            WsiError::DisplayConversion("Metal host download row size overflow".into())
+        })?;
+    let byte_len = usize::try_from(height)
+        .ok()
+        .and_then(|height| height.checked_mul(row_bytes))
+        .ok_or_else(|| WsiError::DisplayConversion("Metal host download size overflow".into()))?;
+    Ok((row_bytes, byte_len))
+}
+
+fn downloaded_bytes_to_cpu_tile(
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    bytes: Vec<u8>,
+) -> Result<CpuTile, WsiError> {
+    let (_, expected) = tight_download_layout(width, height, format)?;
+    if bytes.len() != expected {
+        return Err(WsiError::DisplayConversion(format!(
+            "Metal host download expected {expected} bytes, received {}",
+            bytes.len()
+        )));
+    }
+    let data = match format {
+        PixelFormat::Rgb8 | PixelFormat::Rgba8 | PixelFormat::Gray8 => CpuTileData::u8(bytes),
+        PixelFormat::Rgb16 | PixelFormat::Rgba16 | PixelFormat::Gray16 => {
+            let samples = bytes
+                .chunks_exact(2)
+                .map(|sample| u16::from_ne_bytes([sample[0], sample[1]]))
+                .collect();
+            CpuTileData::u16(samples)
+        }
+    };
+    CpuTile::new(
+        width,
+        height,
+        format.channels() as u16,
+        format.color_space(),
+        CpuTileLayout::Interleaved,
+        data,
+    )
 }

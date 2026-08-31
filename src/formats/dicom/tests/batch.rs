@@ -20,19 +20,12 @@ fn read_tiles_cpu_decodes_jpeg_frames_in_request_order() {
 
     let slide = Slide::open(&path).expect("open generated DICOM JPEG slide");
     let tiles = slide
-        .read_tiles(
-            &[tile_request(1, 0), tile_request(0, 0)],
-            TileOutputPreference::cpu(),
-        )
+        .read_tiles(&[tile_request(1, 0), tile_request(0, 0)])
         .expect("read JPEG CPU tile batch");
 
     assert_eq!(tiles.len(), 2);
-    let TilePixels::Cpu(first) = &tiles[0] else {
-        panic!("CPU output expected");
-    };
-    let TilePixels::Cpu(second) = &tiles[1] else {
-        panic!("CPU output expected");
-    };
+    let first = &tiles[0];
+    let second = &tiles[1];
     assert_ne!(
         first.data.as_u8().expect("first JPEG tile").get(0..3),
         second.data.as_u8().expect("second JPEG tile").get(0..3),
@@ -56,25 +49,20 @@ impl SlideReader for RecordingDicomReader {
         self.inner.tile_codec_kind(req)
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        self.inner.read_tiles(reqs, output)
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.inner.read_tiles_cpu(reqs)
     }
 
-    fn read_tiles_controlled(
+    fn read_tiles_cpu_controlled(
         &self,
         reqs: &[TileRequest],
-        output: TileOutputPreference,
         control: &crate::ReadControl,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    ) -> Result<Vec<CpuTile>, WsiError> {
         self.controlled_admissions
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(reqs.iter().map(|req| (req.col, req.row)).collect());
-        self.inner.read_tiles_controlled(reqs, output, control)
+        self.inner.read_tiles_cpu_controlled(reqs, control)
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -115,11 +103,7 @@ fn controlled_batch_of_eight_reaches_dicom_once_in_original_order() {
         .collect::<Vec<_>>();
 
     let tiles = slide
-        .read_tiles_controlled(
-            &requests,
-            TileOutputPreference::cpu(),
-            &crate::ReadControl::default(),
-        )
+        .read_tiles_controlled(&requests, &crate::ReadControl::default())
         .expect("controlled DICOM batch of eight");
 
     assert_eq!(tiles.len(), requests.len());
@@ -133,14 +117,11 @@ fn controlled_batch_of_eight_reaches_dicom_once_in_original_order() {
             .collect::<Vec<_>>()],
         "the adaptive wrapper must admit one unchanged DICOM batch"
     );
-    for (tile, expected) in tiles.iter().zip(requests.iter().map(|request| {
-        slide
-            .read_tile(request, TileOutputPreference::cpu())
-            .expect("matching sequential tile")
-    })) {
-        let (TilePixels::Cpu(tile), TilePixels::Cpu(expected)) = (tile, expected) else {
-            panic!("CPU output expected");
-        };
+    for (tile, expected) in tiles.iter().zip(
+        requests
+            .iter()
+            .map(|request| slide.read_tile(request).expect("matching sequential tile")),
+    ) {
         assert_eq!(tile.data.as_u8(), expected.data.as_u8());
     }
 }
@@ -164,13 +145,11 @@ fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
     let tiles = slide
         .read_tiles_controlled(
             &[tile_request(1, 0), tile_request(0, 0)],
-            TileOutputPreference::cpu(),
             &crate::ReadControl::default(),
         )
         .expect("read JP2K CPU tile batch");
 
     assert_eq!(tiles.len(), 2);
-    assert!(tiles.iter().all(|tile| matches!(tile, TilePixels::Cpu(_))));
 }
 
 #[test]
@@ -192,17 +171,13 @@ fn controlled_jp2k_batch_preserves_edge_tile_dimensions() {
     let tiles = slide
         .read_tiles_controlled(
             &[tile_request(1, 0), tile_request(0, 0)],
-            TileOutputPreference::cpu(),
             &crate::ReadControl::default(),
         )
         .expect("read controlled JP2K edge batch");
 
     let dimensions = tiles
         .into_iter()
-        .map(|tile| match tile {
-            TilePixels::Cpu(tile) => (tile.width, tile.height),
-            TilePixels::Device(_) => panic!("CPU output expected"),
-        })
+        .map(|tile| (tile.width, tile.height))
         .collect::<Vec<_>>();
     assert_eq!(dimensions, vec![(8, 12), (16, 12)]);
 }
@@ -226,9 +201,8 @@ fn controlled_dicom_batch_cancelled_before_io_does_not_build_index() {
     let cancellation = crate::ReadCancellationToken::new();
     cancellation.cancel();
     let error = reader
-        .read_tiles_controlled(
+        .read_tiles_cpu_controlled(
             &[tile_request(1, 0), tile_request(0, 0)],
-            TileOutputPreference::cpu(),
             &crate::ReadControl::new(cancellation),
         )
         .expect_err("cancelled DICOM batch must stop before I/O");
@@ -266,14 +240,10 @@ fn read_tiles_cpu_skips_decoded_cache_when_batch_exceeds_cache_capacity() {
         CacheConfig::deterministic().with_shared_tile_bytes(9 * 1024),
     );
     let tiles = reader
-        .read_tiles(
-            &[tile_request(0, 0), tile_request(1, 0), tile_request(2, 0)],
-            TileOutputPreference::cpu(),
-        )
+        .read_tiles_cpu(&[tile_request(0, 0), tile_request(1, 0), tile_request(2, 0)])
         .expect("read JP2K CPU tile batch");
 
     assert_eq!(tiles.len(), 3);
-    assert!(tiles.iter().all(|tile| matches!(tile, TilePixels::Cpu(_))));
     assert!(
         (0..3).all(|frame_index| image.cached_decoded_frame(frame_index).is_none()),
         "batch larger than the decoded cache should not clone decoded JP2K frames into the LRU"
@@ -307,18 +277,11 @@ fn read_tiles_cpu_mixes_cache_hits_and_frame_misses_in_request_order() {
     image.cache_decoded_frame(1, Arc::new(cached));
 
     let tiles = reader
-        .read_tiles(
-            &[tile_request(1, 0), tile_request(0, 0)],
-            TileOutputPreference::cpu(),
-        )
+        .read_tiles_cpu(&[tile_request(1, 0), tile_request(0, 0)])
         .expect("read mixed cache-hit/cache-miss DICOM batch");
 
-    let TilePixels::Cpu(hit) = &tiles[0] else {
-        panic!("CPU cache hit expected");
-    };
-    let TilePixels::Cpu(miss) = &tiles[1] else {
-        panic!("CPU decoded miss expected");
-    };
+    let hit = &tiles[0];
+    let miss = &tiles[1];
     assert_eq!(hit.data.as_u8().unwrap().get(0..3), Some(&[251, 7, 3][..]));
     assert_ne!(miss.data.as_u8().unwrap().get(0..3), Some(&[251, 7, 3][..]));
     assert!(
@@ -336,10 +299,7 @@ fn read_tiles_cpu_reports_the_first_invalid_request_deterministically() {
     let mut missing_level = tile_request(0, 0);
     missing_level.level = LevelIdx::new(9);
 
-    let bounds_first = match reader.read_tiles(
-        &[tile_request(-1, 0), missing_level.clone()],
-        TileOutputPreference::cpu(),
-    ) {
+    let bounds_first = match reader.read_tiles_cpu(&[tile_request(-1, 0), missing_level.clone()]) {
         Ok(_) => panic!("out-of-range tile should fail before the later missing level"),
         Err(error) => error,
     };
@@ -353,10 +313,7 @@ fn read_tiles_cpu_reports_the_first_invalid_request_deterministically() {
         other => panic!("unexpected first bounds error: {other}"),
     }
 
-    let level_first = match reader.read_tiles(
-        &[missing_level, tile_request(-1, 0)],
-        TileOutputPreference::cpu(),
-    ) {
+    let level_first = match reader.read_tiles_cpu(&[missing_level, tile_request(-1, 0)]) {
         Ok(_) => panic!("missing level should fail before the later out-of-range tile"),
         Err(error) => error,
     };

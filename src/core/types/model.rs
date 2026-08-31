@@ -389,6 +389,8 @@ pub struct AssociatedImage {
     pub dimensions: (u32, u32),
     pub sample_type: SampleType,
     pub channels: u16,
+    /// Raw ICC profile bytes attached to this associated image, when present.
+    pub icc_profile: Vec<u8>,
 }
 
 impl AssociatedImage {
@@ -397,7 +399,19 @@ impl AssociatedImage {
             dimensions,
             sample_type,
             channels,
+            icc_profile: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_icc_profile(mut self, icc_profile: Vec<u8>) -> Self {
+        self.icc_profile = icc_profile;
+        self
+    }
+
+    #[must_use]
+    pub fn icc_profile(&self) -> Option<&[u8]> {
+        (!self.icc_profile.is_empty()).then_some(self.icc_profile.as_slice())
     }
 }
 

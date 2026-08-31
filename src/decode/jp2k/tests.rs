@@ -4,9 +4,6 @@ use crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance;
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::io::Cursor;
 
-#[cfg(feature = "cuda")]
-use j2k_core::{ImageDecode as _, ImageDecodeDevice as _};
-
 fn load_fixture_rgb(ppm_bytes: &[u8]) -> image::RgbImage {
     match image::load(Cursor::new(ppm_bytes), ImageFormat::Pnm).unwrap() {
         DynamicImage::ImageRgb8(image) => image,

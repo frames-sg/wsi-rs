@@ -20,15 +20,5 @@ pub(crate) fn exactly_one<T>(values: Vec<T>, context: &'static str) -> Result<T,
     Ok(values.pop().expect("length checked above"))
 }
 
-pub(crate) fn exactly_one_or_else<T, E>(
-    mut values: Vec<T>,
-    cardinality_error: impl FnOnce(usize) -> E,
-) -> Result<T, E> {
-    if values.len() != 1 {
-        return Err(cardinality_error(values.len()));
-    }
-    Ok(values.pop().expect("length checked above"))
-}
-
 #[cfg(test)]
 mod tests;

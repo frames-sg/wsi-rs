@@ -17,10 +17,13 @@ use std::sync::{Arc, Mutex};
 use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
-use crate::core::limits::{read_file_bounded, MAX_COMPRESSED_INPUT_BYTES};
+use crate::core::limits::read_file_bounded;
+#[cfg(test)]
+use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
 use crate::core::registry::{
-    read_cpu_tiles_with_backend, ConfiguredDatasetReader, ConfiguredFormatProbe,
-    ConfiguredProbeCache, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
+    ConfiguredProbeCache, ConservativeManagedReader, DatasetReader, FormatProbe,
+    ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -36,7 +39,7 @@ use j2k_jpeg::{
     PixelFormat as J2kPixelFormat, Rect as J2kRect,
 };
 
-use ini::{parse_vms_ini, GROUP_VMS, KEY_NUM_JPEG_COLS, KEY_NUM_JPEG_ROWS};
+use ini::{parse_vms_ini_with_budget, GROUP_VMS, KEY_NUM_JPEG_COLS, KEY_NUM_JPEG_ROWS};
 use model::VmsSlide;
 use slide::VmsReader;
 
@@ -51,26 +54,23 @@ impl HamamatsuVmsBackend {
         }
     }
 
-    fn parse_with_cache_config(
+    fn parse_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<Arc<VmsSlide>, WsiError> {
-        Ok(Arc::new(VmsSlide::parse_with_cache_config(
-            path,
-            cache_config,
-        )?))
+        Ok(Arc::new(VmsSlide::parse_with_config(path, config)?))
     }
 
     fn open_cached_or_parse(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<Box<dyn SlideReader>, WsiError> {
         let key = FileIdentity::from_path(path)?;
-        let slide = match self.probe_cache.take(&key, cache_config) {
+        let slide = match self.probe_cache.take(&key, config) {
             Some(slide) => slide,
-            None => self.parse_with_cache_config(path, cache_config)?,
+            None => self.parse_with_config(path, config)?,
         };
         Ok(Box::new(VmsReader { slide }))
     }
@@ -84,17 +84,18 @@ impl Default for HamamatsuVmsBackend {
 
 impl FormatProbe for HamamatsuVmsBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        self.probe_with_cache_config(path, CacheConfig::deterministic())
+        self.probe_with_config(path, BackendOpenConfig::deterministic())
     }
 }
 
 impl ConfiguredFormatProbe for HamamatsuVmsBackend {
-    fn probe_with_cache_config(
+    fn probe_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
-        let ini = match parse_vms_ini(path) {
+        let probe_budget = OpenBudget::new(config.limits);
+        let ini = match parse_vms_ini_with_budget(path, probe_budget.as_ref()) {
             Ok(ini) => ini,
             Err(_) => {
                 return Ok(ProbeResult::not_detected(""));
@@ -116,14 +117,14 @@ impl ConfiguredFormatProbe for HamamatsuVmsBackend {
         }
 
         let key = FileIdentity::from_path(path)?;
-        if self.probe_cache.get(&key, cache_config).is_some() {
+        if self.probe_cache.get(&key, config).is_some() {
             return Ok(ProbeResult::detected(
                 "hamamatsu",
                 ProbeConfidence::Definite,
             ));
         }
-        let slide = self.parse_with_cache_config(path, cache_config)?;
-        self.probe_cache.insert(key, cache_config, slide);
+        let slide = self.parse_with_config(path, config)?;
+        self.probe_cache.insert(key, config, slide);
 
         Ok(ProbeResult::detected(
             "hamamatsu",
@@ -134,16 +135,19 @@ impl ConfiguredFormatProbe for HamamatsuVmsBackend {
 
 impl DatasetReader for HamamatsuVmsBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_cached_or_parse(path, CacheConfig::deterministic())
+        self.open_cached_or_parse(path, BackendOpenConfig::deterministic())
     }
 }
 
 impl ConfiguredDatasetReader for HamamatsuVmsBackend {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_cached_or_parse(path, cache_config)
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        Ok(Box::new(ConservativeManagedReader::new(
+            self.open_cached_or_parse(path, config)?,
+            config.limits.encoded_unit_bytes(),
+        )))
     }
 }
