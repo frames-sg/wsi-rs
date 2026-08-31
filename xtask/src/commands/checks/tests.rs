@@ -136,3 +136,18 @@ fn public_api_snapshot_update_reports_directory_and_write_failures() {
             .contains("failed to write")
     );
 }
+
+#[test]
+fn fuzz_gate_covers_every_declared_fuzz_binary() {
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fuzz/Cargo.toml"))
+            .expect("read fuzz manifest");
+
+    for target in FUZZ_TARGETS {
+        assert!(
+            manifest.contains(&format!("name = \"{target}\"")),
+            "fuzz target {target} is not declared"
+        );
+    }
+    assert_eq!(manifest.matches("[[bin]]").count(), FUZZ_TARGETS.len());
+}

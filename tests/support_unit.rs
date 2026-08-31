@@ -221,9 +221,10 @@ fn corpus_rejects_unknown_fields_and_accepts_notes() {
     let with_notes = format!("{SAMPLE_MANIFEST}\nnotes = 'documented provenance'\n");
     parse_manifest(&with_notes).expect("notes are part of the corpus schema");
 
-    let with_typo = format!("{SAMPLE_MANIFEST}\nrequried_properties = ['openslide.vendor']\n");
-    let error = parse_manifest(&with_typo).expect_err("unknown corpus fields must fail closed");
-    assert!(error.contains("unknown field `requried_properties`"));
+    let with_unknown =
+        format!("{SAMPLE_MANIFEST}\nunsupported_properties = ['openslide.vendor']\n");
+    let error = parse_manifest(&with_unknown).expect_err("unknown corpus fields must fail closed");
+    assert!(error.contains("unknown field `unsupported_properties`"));
 }
 
 #[test]

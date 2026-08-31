@@ -97,6 +97,20 @@ fn declaration_only_sources_have_no_changed_coverage_candidates() {
 }
 
 #[test]
+fn module_wiring_changes_are_declaration_only_even_when_the_file_has_functions() {
+    let source = "mod candidate;\npub use candidate::is_candidate;\nfn fuzz_only() {}\n";
+
+    assert!(changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([1, 2]),
+    ));
+    assert!(!changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([3]),
+    ));
+}
+
+#[test]
 fn repository_relative_changed_files_are_read_from_the_git_root() {
     let root = tempfile::tempdir().unwrap();
     let relative = PathBuf::from("src/lib.rs");

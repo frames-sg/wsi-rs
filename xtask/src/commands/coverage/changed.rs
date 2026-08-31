@@ -167,15 +167,19 @@ pub(super) fn changed_rust_lines(base: &str) -> Result<HashMap<PathBuf, BTreeSet
         add_repo_file_lines(&mut lines, &repo_root, &path)?;
     }
     let declaration_only = lines
-        .keys()
-        .map(|path| {
+        .iter()
+        .map(|(path, changed_lines)| {
             let source_path = if path.is_absolute() {
                 path.clone()
             } else {
                 repo_root.join(path)
             };
             std::fs::read_to_string(&source_path)
-                .map(|source| (!source_has_function_definition(&source)).then(|| path.clone()))
+                .map(|source| {
+                    (!source_has_function_definition(&source)
+                        || changed_lines_are_declaration_only(&source, changed_lines))
+                    .then(|| path.clone())
+                })
                 .map_err(|err| {
                     format!(
                         "failed to read changed file {}: {err}",
@@ -191,12 +195,40 @@ pub(super) fn changed_rust_lines(base: &str) -> Result<HashMap<PathBuf, BTreeSet
 }
 
 pub(super) fn source_has_function_definition(source: &str) -> bool {
-    source.lines().any(|line| {
-        line.split_once("//")
-            .map_or(line, |(code, _)| code)
-            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
-            .any(|token| token == "fn")
-    })
+    source.lines().any(source_line_has_function_definition)
+}
+
+pub(super) fn changed_lines_are_declaration_only(
+    source: &str,
+    changed_lines: &BTreeSet<u32>,
+) -> bool {
+    let source_lines = source.lines().collect::<Vec<_>>();
+    !changed_lines.is_empty()
+        && changed_lines.iter().all(|line_number| {
+            let Some(index) = line_number.checked_sub(1).map(|value| value as usize) else {
+                return false;
+            };
+            source_lines
+                .get(index)
+                .is_some_and(|line| module_wiring_declaration(line))
+        })
+}
+
+fn source_line_has_function_definition(line: &str) -> bool {
+    line.split_once("//")
+        .map_or(line, |(code, _)| code)
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .any(|token| token == "fn")
+}
+
+fn module_wiring_declaration(line: &str) -> bool {
+    let line = line.trim();
+    let declaration = line
+        .strip_prefix("pub ")
+        .or_else(|| line.strip_prefix("pub(crate) "))
+        .or_else(|| line.strip_prefix("pub(super) "))
+        .unwrap_or(line);
+    declaration.starts_with("mod ") || declaration.starts_with("use ")
 }
 
 pub(super) fn collect_git_diff_lines(
