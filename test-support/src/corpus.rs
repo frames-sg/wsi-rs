@@ -352,6 +352,12 @@ pub fn cache_candidates(entry: &CorpusEntry) -> Vec<PathBuf> {
         candidates.push(cache.join(format!("{}.{}", entry.alias, extension)));
     }
     if let Some(name) = entry.url.rsplit('/').next().filter(|name| !name.is_empty()) {
+        if name.to_ascii_lowercase().ends_with(".zip") {
+            let fetched_archive = cache.join(format!("{}.zip", entry.alias));
+            if !candidates.contains(&fetched_archive) {
+                candidates.push(fetched_archive);
+            }
+        }
         candidates.push(cache.join(name));
     }
     candidates
@@ -521,5 +527,19 @@ mod tests {
         };
         assert_eq!(resolve_candidate(&entry, &archive), None);
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn zip_url_candidates_include_the_fetcher_archive_name() {
+        let entry = CorpusEntry {
+            alias: "dicom-jp2k-001".into(),
+            format: "dicom".into(),
+            url: "https://example.invalid/CMU-1-JP2K-33005.zip".into(),
+            ..CorpusEntry::default()
+        };
+
+        assert!(cache_candidates(&entry)
+            .iter()
+            .any(|candidate| candidate.ends_with("dicom-jp2k-001.zip")));
     }
 }
