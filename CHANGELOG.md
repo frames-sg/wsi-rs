@@ -4,6 +4,86 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added classic JPEG decoding for CZI image subblocks and embedded associated
+  CZI images, while leaving JPEG XR and other CZI compression modes unsupported.
+- Added exact raw JPEG access for eligible CZI, MIRAX, full-resolution VMS, and
+  ordinary tiled-TIFF native/display tiles.
+- Added DICOM JPEG Extended, progressive Huffman (including the retired
+  spectral-selection/full-progression UIDs), and lossless transfer-syntax
+  routing through the existing pure-Rust JPEG decoder.
+
+### Fixed
+
+- Preserved per-IFD `JPEGTables` for generic TIFF and Philips associated-image
+  strips.
+- Matched DICOM JPEG UIDs to their encoded SOF process, enforced lossless-SV1
+  predictor selection, honored RGB/YBR photometric color-transform metadata,
+  and kept grayscale lossless JPEG on the multi-tile batch path.
+
+## [0.7.0] - 2026-08-30
+
+### Added
+
+- Added direct ARGOS and Huron TIFF readers backed by real public-corpus
+  fixtures, including ARGOS sparse tiles and Z planes and associated images for
+  both vendors.
+- Added per-slide resource limits and strict JP2K/HTJ2K Metal and CUDA resident
+  tile APIs. Automatic acceleration measures device decode plus readback and
+  always retains a CPU fallback.
+- Added associated-image ICC metadata and OpenSlide ABI access.
+
+### Changed
+
+- Simplified normal tile, batch, controlled, region, display, and associated
+  reads to return `CpuTile`. `SlideReader` now requires one CPU tile method and
+  preserves batch order and cardinality by default.
+- Replaced public output-routing policy and sampling controls with
+  `DecodeAcceleration::{Auto, CpuOnly}`. The adaptive sample size and 15%
+  device-win threshold are internal policy.
+- Consolidated JP2K CPU work onto one process-wide pool and removed the
+  per-slide thread-pool option and benchmark-only shim adapter.
+- Hardened Aperio, generic TIFF, Ventana, DICOM, NDPI, and MIRAX edge behavior
+  against malformed geometry, sparse data, progressive JPEG, large offsets,
+  and inconsistent metadata.
+- Built-in probes and bundle parsers now receive one configured metadata/index
+  budget, while public custom registry readers remain trusted during `open` and
+  are conservatively admitted for reads afterward. Decode work is accounted as
+  encoded input plus twice the decoded output size.
+- Fixed cache ownership at 64 MiB source tiles, 32 MiB display tiles, and a
+  byte-weighted 32 MiB aggregate private budget; legacy per-cache environment
+  requests are proportionally clamped within that private total.
+
+### Removed
+
+- Removed `TileOutputPreference`, `DeviceOutputContext`,
+  `OutputBackendRequest`, `TilePixels`, `DeviceTile`, public route decision
+  types, the route-sample knob, and ordinary-JPEG GPU routing. No deprecated
+  forwarding API is retained.
+- Removed `SlideReader::recommended_shared_cache_bytes`; cache sizing is now a
+  slide policy rather than a backend-specific public hint.
+- Removed CZI from default detection and the documented 0.7 production format
+  set. Sakura remains unsupported pending a redistributable sample.
+- Removed QuPath-specific integration guidance; QuPath consumer validation is
+  outside the 0.7 architecture and release gate.
+
+### Fixed
+
+- Matched OpenSlide edge semantics for invalid read levels, missing associated
+  images, sticky-error output clearing, zero-length associated ICC reads,
+  associated-image dimension properties, standardized Leica barcodes, and
+  optional non-empty bounds.
+- Decoded compressed TIFF associated images one strip at a time and used the
+  TIFF LZW code-width convention, restoring Aperio label reads through the
+  OpenSlide ABI.
+- Rejected invalid physical metadata and non-finite geometry from DICOM,
+  MIRAX, TIFF, Ventana, and Zeiss ZVI before those values reach public metadata
+  or layout calculations.
+- Kept corrupt but recognizable MIRAX bundles detectable so open returns an
+  error-state handle, and stopped installing incorrect `.4` OpenSlide library
+  aliases while retaining restore support for older manifests.
+
 ## [0.6.0] - 2026-08-25
 
 ### Added
@@ -189,7 +269,8 @@
 
 - Initial public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...v0.5.1
