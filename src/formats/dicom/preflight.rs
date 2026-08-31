@@ -117,6 +117,19 @@ fn preflight_dicom_metadata_with_budget(
                             ),
                         ));
                     }
+                    if let Some(width) = fixed_width_vr_bytes(header.vr) {
+                        if header.len.0 == u32::MAX || header.len.0 % width != 0 {
+                            return Err(invalid_slide(
+                                path,
+                                format!(
+                                    "DICOM metadata element {} with fixed-width VR {} declares a {}-byte value length; the length must be a multiple of {width}",
+                                    header.tag,
+                                    header.vr.to_string(),
+                                    header.len.0
+                                ),
+                            ));
+                        }
+                    }
                     if header.tag == tags::PIXEL_DATA {
                         let value = reader
                             .advance()
@@ -216,6 +229,15 @@ fn preflight_dicom_metadata_with_budget(
         }
     }
     Ok(pixel_data)
+}
+
+fn fixed_width_vr_bytes(vr: VR) -> Option<u32> {
+    match vr {
+        VR::SS | VR::US | VR::OW => Some(2),
+        VR::AT | VR::FL | VR::SL | VR::UL | VR::OF | VR::OL => Some(4),
+        VR::FD | VR::SV | VR::UV | VR::OD | VR::OV => Some(8),
+        _ => None,
+    }
 }
 
 pub(super) fn preflight_file_meta(

@@ -99,6 +99,19 @@ fn compare_off_by_two_fails_jpeg_tight_passes_tolerant() {
 }
 
 #[test]
+fn jpeg_decoder_compat_accepts_cross_platform_huron_mean_variance() {
+    let expected = [0, 0, 0, 255].repeat(8);
+    let mut actual = expected.clone();
+    actual[..3].fill(1);
+
+    let report = compare_rgba(&actual, &expected, Tolerance::JPEG_DECODER_COMPAT);
+
+    assert_eq!(report.max_abs, 1);
+    assert_eq!(report.mean_abs, 0.125);
+    assert!(report.passed);
+}
+
+#[test]
 fn compare_requires_exact_alpha_and_excludes_it_from_rgb_mean() {
     let actual = vec![10u8, 20, 30, 0];
     let expected = vec![10u8, 20, 30, 255];

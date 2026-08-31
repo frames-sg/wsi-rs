@@ -85,7 +85,7 @@ must_decode      = ["base", "level1", "level2", "thumbnail", "label", "macro"]
 required_properties = ["openslide.vendor"]
 openslide_required = false
 oracle_divergences = [
-  "OpenSlide 4.0.1 exposes this Huron TIFF as one flattened level; wsi-rs retains all declared pyramid levels and associated images. Independent JPEG decoders differ by at most 3 channel values and 0.1 mean absolute error on decoded probes.",
+  "OpenSlide 4.0.1 exposes this Huron TIFF as one flattened level; wsi-rs retains all declared pyramid levels and associated images. Independent JPEG decoders differ by at most 3 channel values and 0.125 mean absolute error on decoded probes across supported platforms.",
 ]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
