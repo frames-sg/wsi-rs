@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
-        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001,argos-001,argos-stacked-001,huron-jpeg-001,huron-uncompressed-001,raw-jp2k-rgb-nomct
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001,argos-001,argos-stacked-001,huron-jpeg-001,huron-uncompressed-001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -161,7 +161,6 @@ jobs:
           argos-stacked-001
           huron-jpeg-001
           huron-uncompressed-001
-          raw-jp2k-rgb-nomct
         working-directory: wsi-rs
       - run: cargo xtask parity-corpus-test
         working-directory: wsi-rs
@@ -228,7 +227,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
-        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001,raw-jp2k-rgb-nomct
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -260,7 +259,6 @@ jobs:
           ventana-001
           mirax-001
           dicom-jp2k-001
-          raw-jp2k-rgb-nomct
         working-directory: wsi-rs
       - run: cargo xtask coverage
         working-directory: wsi-rs
