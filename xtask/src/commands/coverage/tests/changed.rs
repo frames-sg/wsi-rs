@@ -165,6 +165,9 @@ fn coverage_candidates_skip_test_harness_paths() {
     )));
     assert!(!is_coverage_candidate(Path::new("tests/integration.rs")));
     assert!(!is_coverage_candidate(Path::new("benches/read_paths.rs")));
+    assert!(!is_coverage_candidate(Path::new(
+        "fuzz/fuzz_targets/open_wsi_bytes.rs"
+    )));
     assert!(is_coverage_candidate(Path::new(
         "xtask/src/commands/perf.rs"
     )));

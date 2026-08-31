@@ -113,7 +113,7 @@ jobs:
       - name: Run bounded fuzz campaigns
         working-directory: wsi-rs
         run: |
-          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes; do
+          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes open_vms_bundle_bytes open_vsi_bundle_bytes; do
             mkdir -p "fuzz/corpus/$target"
             cargo +nightly-2026-04-17 fuzz run "$target" "fuzz/corpus/$target" -- "fuzz/seeds/$target" -max_total_time=15 -timeout=5 -rss_limit_mb=2048
           done
