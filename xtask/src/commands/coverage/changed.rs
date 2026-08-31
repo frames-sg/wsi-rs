@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::lcov::FileCoverage;
-use super::paths::{git_repo_root, is_coverage_candidate};
+use super::paths::{git_repo_root, is_production_coverage_path};
 
 pub(super) const DEFAULT_CHANGED_PATH_COVERAGE_THRESHOLD: f64 = 80.0;
 
@@ -202,16 +202,28 @@ pub(super) fn changed_lines_are_declaration_only(
     source: &str,
     changed_lines: &BTreeSet<u32>,
 ) -> bool {
-    let source_lines = source.lines().collect::<Vec<_>>();
-    !changed_lines.is_empty()
-        && changed_lines.iter().all(|line_number| {
-            let Some(index) = line_number.checked_sub(1).map(|value| value as usize) else {
-                return false;
-            };
-            source_lines
-                .get(index)
-                .is_some_and(|line| module_wiring_declaration(line))
-        })
+    if changed_lines.is_empty() {
+        return false;
+    }
+    let mut declaration_lines = BTreeSet::new();
+    let mut in_use_declaration = false;
+    for (index, line) in source.lines().enumerate() {
+        let line_number = index as u32 + 1;
+        let trimmed = line.trim();
+        let starts_wiring = module_wiring_declaration(trimmed);
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("#[")
+            || starts_wiring
+            || in_use_declaration
+        {
+            declaration_lines.insert(line_number);
+        }
+        if starts_wiring || in_use_declaration {
+            in_use_declaration = !trimmed.contains(';');
+        }
+    }
+    changed_lines.is_subset(&declaration_lines)
 }
 
 fn source_line_has_function_definition(line: &str) -> bool {
@@ -262,7 +274,7 @@ pub(super) fn parse_diff_added_lines(lines: &mut HashMap<PathBuf, BTreeSet<u32>>
     for line in diff.lines() {
         if let Some(path) = line.strip_prefix("+++ b/") {
             let path = PathBuf::from(path);
-            current_path = is_coverage_candidate(&path).then_some(path);
+            current_path = is_production_coverage_path(&path).then_some(path);
             current_line = None;
             continue;
         }
@@ -316,7 +328,7 @@ fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(PathBuf::from)
-        .filter(|path| is_coverage_candidate(path))
+        .filter(|path| is_production_coverage_path(path))
         .collect())
 }
 

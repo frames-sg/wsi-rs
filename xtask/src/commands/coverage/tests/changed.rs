@@ -98,16 +98,38 @@ fn declaration_only_sources_have_no_changed_coverage_candidates() {
 
 #[test]
 fn module_wiring_changes_are_declaration_only_even_when_the_file_has_functions() {
-    let source = "mod candidate;\npub use candidate::is_candidate;\nfn fuzz_only() {}\n";
+    let source = "//! Public docs.\n#[cfg(feature = \"gpu\")]\n#[doc(hidden)]\npub use candidate::{\n    DeviceTile,\n    DeviceContext,\n};\nmod candidate;\nfn fuzz_only() {}\n";
 
     assert!(changed_lines_are_declaration_only(
         source,
-        &BTreeSet::from([1, 2]),
+        &BTreeSet::from([1, 2, 3, 4, 5, 6, 7, 8]),
     ));
     assert!(!changed_lines_are_declaration_only(
         source,
-        &BTreeSet::from([3]),
+        &BTreeSet::from([9]),
     ));
+}
+
+#[test]
+fn portable_changed_coverage_candidates_match_the_lcov_surface() {
+    assert!(is_production_coverage_path(Path::new(
+        "src/decode/jp2k/cpu.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "test-support/src/corpus.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/device.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/cuda.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/metal.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/formats/dicom/reader/device.rs"
+    )));
 }
 
 #[test]
