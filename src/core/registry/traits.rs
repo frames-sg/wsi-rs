@@ -13,12 +13,12 @@ pub trait FormatProbe: Send + Sync {
 /// It keeps probing and opening on the same caller-supplied cache policy so a
 /// successful probe can be reused without first constructing default caches.
 pub(crate) trait ConfiguredFormatProbe: FormatProbe {
-    fn probe_with_cache_config(
+    fn probe_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
-        let _ = cache_config;
+        let _ = config;
         self.probe(path)
     }
 }
@@ -67,50 +67,33 @@ pub trait DatasetReader: Send + Sync {
 }
 
 pub(crate) trait ConfiguredDatasetReader: DatasetReader {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError>;
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError>;
 }
 
 // ── Read interface ─────────────────────────────────────────────────
 
-pub(crate) fn read_cpu_tiles_with_backend(
+pub(crate) fn read_cpu_tiles(
     reqs: &[TileRequest],
-    output: TileOutputPreference,
-    require_device_reason: &'static str,
     mut read_tile: impl FnMut(&TileRequest, BackendRequest) -> Result<CpuTile, WsiError>,
-) -> Result<Vec<TilePixels>, WsiError> {
-    let backend = match output {
-        TileOutputPreference::Cpu { backend }
-        | TileOutputPreference::PreferDevice { backend, .. } => backend.to_j2k(),
-        TileOutputPreference::RequireDevice { .. } => {
-            return Err(WsiError::Unsupported {
-                reason: require_device_reason.into(),
-            });
-        }
-    };
+) -> Result<Vec<CpuTile>, WsiError> {
     reqs.iter()
-        .map(|req| read_tile(req, backend).map(TilePixels::Cpu))
+        .map(|req| read_tile(req, BackendRequest::Cpu))
         .collect()
 }
 
 pub struct SlideReadContext<'a> {
     tile_cache: Option<&'a TileCache>,
-    output: TileOutputPreference,
     max_region_pixels: u64,
 }
 
 impl<'a> SlideReadContext<'a> {
-    pub(crate) fn new(
-        tile_cache: Option<&'a TileCache>,
-        output: TileOutputPreference,
-        max_region_pixels: u64,
-    ) -> Self {
+    pub(crate) fn new(tile_cache: Option<&'a TileCache>, max_region_pixels: u64) -> Self {
         Self {
             tile_cache,
-            output,
             max_region_pixels,
         }
     }
@@ -119,54 +102,27 @@ impl<'a> SlideReadContext<'a> {
         self.tile_cache
     }
 
-    pub fn output(&self) -> &TileOutputPreference {
-        &self.output
-    }
-
     pub fn max_region_pixels(&self) -> u64 {
         self.max_region_pixels
     }
 }
 
-/// Phase-2 read interface.
-///
-/// `read_tile` is a default impl over a 1-element slice into `read_tiles`. A
-/// backend that overrides `read_tiles` automatically gets the right
-/// `read_tile` for free:
+/// Backend interface used by [`Slide`].
 ///
 /// ```
 /// use wsi_rs::{
-///     ColorSpace, CpuTile, Dataset, SlideReader, TileOutputPreference, TilePixels, TileRequest,
-///     WsiError,
+///     ColorSpace, CpuTile, Dataset, SlideReader, TileRequest, WsiError,
 /// };
 /// # fn _example() {
 /// struct Mock;
 /// impl SlideReader for Mock {
 ///     fn dataset(&self) -> &Dataset { unimplemented!() }
-///     fn read_tiles(
-///         &self,
-///         reqs: &[TileRequest],
-///         _: TileOutputPreference,
-///     ) -> Result<Vec<TilePixels>, WsiError> {
-///         Ok(reqs
-///             .iter()
-///             .map(|_| {
-///                 TilePixels::Cpu(
-///                     CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![255, 0, 0])
-///                         .unwrap(),
-///                 )
-///             })
-///             .collect())
-///     }
 ///     fn read_tile_cpu(&self, _: &TileRequest) -> Result<CpuTile, WsiError> {
 ///         Ok(CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![255, 0, 0]).unwrap())
 ///     }
 /// }
 /// let m = Mock;
-/// let _ = m.read_tile(
-///     &TileRequest::new(0usize, 0usize, 0, 0, 0),
-///     TileOutputPreference::cpu(),
-/// );
+/// let _ = m.read_tile_cpu(&TileRequest::new(0usize, 0usize, 0, 0, 0));
 /// # }
 /// ```
 pub trait SlideReader: Send + Sync {
@@ -218,51 +174,53 @@ pub trait SlideReader: Send + Sync {
         self.level_source_kind(scene, series, level)?;
         control.check_cancelled()
     }
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        if matches!(output, TileOutputPreference::RequireDevice { .. }) {
-            return Err(WsiError::Unsupported {
-                reason: "RequireDevice is not supported by this reader".into(),
-            });
-        }
-        reqs.iter()
-            .map(|req| self.read_tile_cpu(req).map(TilePixels::Cpu))
-            .collect()
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError>;
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        reqs.iter().map(|req| self.read_tile_cpu(req)).collect()
     }
-    fn read_tiles_controlled(
+
+    fn read_tiles_cpu_controlled(
         &self,
         reqs: &[TileRequest],
-        output: TileOutputPreference,
         control: &crate::ReadControl,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    ) -> Result<Vec<CpuTile>, WsiError> {
         control.check_cancelled()?;
-        let result = self.read_tiles(reqs, output).and_then(|tiles| {
+        let result = self.read_tiles_cpu(reqs).and_then(|tiles| {
             crate::core::batch::expect_exact_count(tiles, reqs.len(), "controlled tile batch")
         });
         control.check_cancelled()?;
         result
     }
-    fn read_tile(
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
         &self,
-        req: &TileRequest,
-        output: TileOutputPreference,
-    ) -> Result<TilePixels, WsiError> {
-        let tiles = self.read_tiles(std::slice::from_ref(req), output)?;
-        crate::core::batch::exactly_one_or_else(tiles, |count| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: if count == 0 {
-                "empty tile batch result".into()
-            } else {
-                format!("single tile read returned {count} tiles")
-            },
+        reqs: &[TileRequest],
+        _session: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        if reqs.is_empty() {
+            return Ok(Vec::new());
+        }
+        Err(WsiError::Unsupported {
+            reason: "Metal-resident JP2K output is not supported by this reader".into(),
         })
     }
-    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError>;
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        _session: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        if reqs.is_empty() {
+            return Ok(Vec::new());
+        }
+        Err(WsiError::Unsupported {
+            reason: "CUDA-resident JP2K output is not supported by this reader".into(),
+        })
+    }
+
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         Err(WsiError::Unsupported {
             reason: format!(
@@ -286,17 +244,6 @@ pub trait SlideReader: Send + Sync {
             ),
         })
     }
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles(reqs, TileOutputPreference::cpu())?
-            .into_iter()
-            .map(|tile| match tile {
-                TilePixels::Cpu(cpu) => Ok(cpu),
-                TilePixels::Device(_) => Err(WsiError::Unsupported {
-                    reason: "CPU tile request returned device payload".into(),
-                }),
-            })
-            .collect()
-    }
     fn use_display_tile_cache(&self, _req: &TileViewRequest) -> bool {
         true
     }
@@ -307,22 +254,11 @@ pub trait SlideReader: Send + Sync {
     ) -> Option<Result<CpuTile, WsiError>> {
         None
     }
-    fn read_region(
-        &self,
-        req: &RegionRequest,
-        output: TileOutputPreference,
-    ) -> Result<TilePixels, WsiError> {
-        if matches!(output, TileOutputPreference::RequireDevice { .. }) {
-            return Err(WsiError::Unsupported {
-                reason: "region composition requires CPU output; RequireDevice is not supported"
-                    .into(),
-            });
-        }
+    fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
         composite_region_from_source(self, None, req, DEFAULT_MAX_REGION_PIXELS)
-            .map(TilePixels::Cpu)
     }
     fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
-        read_display_tile_from_source(self, None, req, TileOutputPreference::cpu())
+        read_display_tile_from_source(self, None, req)
     }
     fn associated_image(&self, name: &str) -> Result<Option<CpuTile>, WsiError> {
         match self.read_associated(name) {
@@ -334,7 +270,156 @@ pub trait SlideReader: Send + Sync {
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         Err(WsiError::AssociatedImageNotFound(name.into()))
     }
-    fn recommended_shared_cache_bytes(&self) -> Option<u64> {
-        None
+}
+
+/// Internal resource-accounting boundary around public and built-in readers.
+///
+/// Public registry readers cannot provide parse/decode planning metadata, so
+/// they are wrapped by [`ConservativeManagedReader`] and admitted using the
+/// configured encoded-unit ceiling.
+pub(crate) trait ManagedSlideReader: SlideReader {
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError>;
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError>;
+    fn display_tile_encoded_upper_bound(&self, req: &TileViewRequest) -> Result<u64, WsiError>;
+    fn associated_encoded_upper_bound(&self, name: &str) -> Result<u64, WsiError>;
+    fn region_fastpath_encoded_upper_bound(&self, req: &RegionRequest) -> Result<u64, WsiError>;
+}
+
+pub(crate) struct ConservativeManagedReader {
+    inner: Box<dyn SlideReader>,
+    encoded_unit_bytes: u64,
+}
+
+impl ConservativeManagedReader {
+    pub(crate) fn new(inner: Box<dyn SlideReader>, encoded_unit_bytes: u64) -> Self {
+        Self {
+            inner,
+            encoded_unit_bytes,
+        }
+    }
+}
+
+impl SlideReader for ConservativeManagedReader {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        self.inner.tile_codec_kind(req)
+    }
+
+    fn level_source_kind(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Result<LevelSourceKind, WsiError> {
+        self.inner.level_source_kind(scene, series, level)
+    }
+
+    fn prepare_level_controlled(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+        control: &crate::ReadControl,
+    ) -> Result<(), WsiError> {
+        self.inner
+            .prepare_level_controlled(scene, series, level, control)
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_tile_cpu(req)
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.inner.read_tiles_cpu(reqs)
+    }
+
+    fn read_tiles_cpu_controlled(
+        &self,
+        reqs: &[TileRequest],
+        control: &crate::ReadControl,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        self.inner.read_tiles_cpu_controlled(reqs, control)
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        self.inner.read_tiles_metal(reqs, session)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        self.inner.read_tiles_cuda(reqs, session)
+    }
+
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        self.inner.read_raw_compressed_tile(req)
+    }
+
+    fn read_raw_compressed_display_tile(
+        &self,
+        req: &TileViewRequest,
+    ) -> Result<RawCompressedTile, WsiError> {
+        self.inner.read_raw_compressed_display_tile(req)
+    }
+
+    fn use_display_tile_cache(&self, req: &TileViewRequest) -> bool {
+        self.inner.use_display_tile_cache(req)
+    }
+
+    fn read_region_fastpath(
+        &self,
+        ctx: &mut SlideReadContext<'_>,
+        req: &RegionRequest,
+    ) -> Option<Result<CpuTile, WsiError>> {
+        self.inner.read_region_fastpath(ctx, req)
+    }
+
+    fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_region(req)
+    }
+
+    fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_display_tile(req)
+    }
+
+    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
+        self.inner.read_associated(name)
+    }
+}
+
+impl ManagedSlideReader for ConservativeManagedReader {
+    fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
+    }
+
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        Ok(if !reqs.is_empty() {
+            self.encoded_unit_bytes
+        } else {
+            0
+        })
+    }
+
+    fn display_tile_encoded_upper_bound(&self, _req: &TileViewRequest) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
+    }
+
+    fn associated_encoded_upper_bound(&self, _name: &str) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
+    }
+
+    fn region_fastpath_encoded_upper_bound(&self, _req: &RegionRequest) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
     }
 }

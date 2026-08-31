@@ -5,7 +5,7 @@ pub struct SlideOpenOptions {
     pub(super) registry: FormatRegistry,
     pub(super) cache_config: CacheConfig,
     pub(super) svcache_policy: crate::formats::svcache::SvcachePolicy,
-    pub(super) max_region_pixels: u64,
+    pub(super) limits: SlideLimits,
     pub(super) decode_execution_options: DecodeExecutionOptions,
 }
 
@@ -15,7 +15,7 @@ impl SlideOpenOptions {
             registry: FormatRegistry::builtin(),
             cache_config: CacheConfig::deterministic(),
             svcache_policy: crate::formats::svcache::SvcachePolicy::Off,
-            max_region_pixels: DEFAULT_MAX_REGION_PIXELS,
+            limits: SlideLimits::default(),
             decode_execution_options: DecodeExecutionOptions::default(),
         }
     }
@@ -39,7 +39,20 @@ impl SlideOpenOptions {
     }
 
     pub fn with_max_region_pixels(mut self, max_region_pixels: u64) -> Self {
-        self.max_region_pixels = max_region_pixels;
+        self.limits = self.limits.with_region_pixels_compat(max_region_pixels);
+        self
+    }
+
+    /// Replaces all metadata, output, encoded-input, and transient-work limits.
+    ///
+    /// Built-in readers apply these limits while probing and parsing, before
+    /// untrusted metadata and indexes are allocated. Readers registered through
+    /// the public [`FormatRegistry`] extension API are trusted during their
+    /// `open` call because [`DatasetReader::open`] has no options parameter;
+    /// their normalized metadata, encoded/decode admission, outputs, and final
+    /// dataset postconditions are still checked afterward.
+    pub fn with_limits(mut self, limits: SlideLimits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -60,7 +73,11 @@ impl SlideOpenOptions {
     }
 
     pub fn max_region_pixels(&self) -> u64 {
-        self.max_region_pixels
+        self.limits.region_pixels()
+    }
+
+    pub fn limits(&self) -> SlideLimits {
+        self.limits
     }
 
     pub fn decode_execution_options(&self) -> DecodeExecutionOptions {

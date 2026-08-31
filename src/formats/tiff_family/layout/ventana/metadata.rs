@@ -55,12 +55,19 @@ pub(super) fn parse_iscan_properties(xmp: &str, properties: &mut Properties) {
         .map(|s| s.to_string())
     {
         if let Ok(power) = mag.parse::<f64>() {
-            properties.insert("openslide.objective-power", format!("{}", power as u32));
+            if power.is_finite() && power > 0.0 && power <= u32::MAX as f64 {
+                properties.insert("openslide.objective-power", format!("{}", power as u32));
+            }
         }
     }
     if let Some(res) = properties.get("ventana.ScanRes").map(|s| s.to_string()) {
-        properties.insert("openslide.mpp-x", res.clone());
-        properties.insert("openslide.mpp-y", res);
+        if res
+            .parse::<f64>()
+            .is_ok_and(|value| value.is_finite() && value > 0.0)
+        {
+            properties.insert("openslide.mpp-x", res.clone());
+            properties.insert("openslide.mpp-y", res);
+        }
     }
 }
 

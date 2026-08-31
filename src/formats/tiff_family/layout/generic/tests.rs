@@ -258,8 +258,10 @@ fn interpret_stripped_as_associated() {
         vec![
             long_tag(tags::IMAGE_WIDTH, 400),
             long_tag(tags::IMAGE_LENGTH, 300),
+            short_tag(tags::COMPRESSION, 7),
             long_tag(tags::STRIP_OFFSETS, 100),
             long_tag(tags::STRIP_BYTE_COUNTS, 500),
+            (tags::JPEG_TABLES, 7, 4, [0xFF, 0xD8, 0xFF, 0xD9]),
         ],
     ]);
 
@@ -279,10 +281,12 @@ fn interpret_stripped_as_associated() {
     assert!(layout.associated_sources.contains_key("image_0"));
     match layout.associated_sources.get("image_0").unwrap() {
         TileSource::Stripped {
+            jpeg_tables,
             strip_offsets,
             strip_byte_counts,
             ..
         } => {
+            assert_eq!(jpeg_tables.as_deref(), Some(&[0xFF, 0xD8, 0xFF, 0xD9][..]));
             assert_eq!(strip_offsets.as_slice(), &[100]);
             assert_eq!(strip_byte_counts.as_slice(), &[500]);
         }

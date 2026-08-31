@@ -4,32 +4,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[test]
-fn read_display_tile_with_require_device_rejects_cached_cpu_tile() {
-    let slide = Slide::from_source(
-        Box::new(MockSource::new()),
-        Arc::new(TileCache::new(1024 * 1024)),
-    );
-    let req = TileViewRequest {
-        scene: 0usize.into(),
-        series: 0usize.into(),
-        level: 0u32.into(),
-        plane: PlaneSelection::default().into(),
-        col: 0,
-        row: 0,
-        tile_width: 256,
-        tile_height: 256,
-    };
-
-    slide
-        .read_display_tile(&req)
-        .expect("CPU display tile read should populate cache");
-    let err = slide
-        .read_display_tile_with_output(&req, TileOutputPreference::require_device_auto())
-        .expect_err("RequireDevice display read must not use cached CPU tile");
-    assert!(matches!(err, WsiError::Unsupported { .. }));
-}
-
-#[test]
 fn read_display_tile_regular_native_passthrough() {
     let source: Box<dyn SlideReader> = Box::new(MockSource::new());
     let cache = Arc::new(TileCache::new(64 * 1024 * 1024));

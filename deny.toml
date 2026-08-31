@@ -35,10 +35,6 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
-skip = [
-    { crate = "thiserror@1.0.69", reason = "czi-rs still depends on thiserror 1 while wsi-rs and j2k use thiserror 2; revisit on czi-rs upgrade" },
-    { crate = "thiserror-impl@1.0.69", reason = "procedural macro pair for the transitive czi-rs thiserror 1 dependency; revisit together with thiserror" },
-]
 
 [sources]
 unknown-registry = "deny"

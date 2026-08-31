@@ -122,11 +122,7 @@ impl SlideReader for GridReader {
         &self.ds
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        _output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         Ok(reqs
             .iter()
             .map(|req| {
@@ -135,9 +131,7 @@ impl SlideReader for GridReader {
                     pixel[0] = (req.col & 0xff) as u8;
                     pixel[1] = (req.row & 0xff) as u8;
                 }
-                TilePixels::Cpu(
-                    CpuTile::from_u8_interleaved(2, 2, 3, ColorSpace::Rgb, bytes).unwrap(),
-                )
+                CpuTile::from_u8_interleaved(2, 2, 3, ColorSpace::Rgb, bytes).unwrap()
             })
             .collect())
     }
@@ -162,35 +156,12 @@ fn read_region_default_composes_across_tile_boundary() {
         origin_px: (1, 1),
         size_px: (4, 4),
     };
-    let pixels = reader
-        .read_region(&req, TileOutputPreference::cpu())
-        .expect("read region");
-    let cpu = match pixels {
-        TilePixels::Cpu(cpu) => cpu,
-        TilePixels::Device(_) => panic!("CPU region request returned device payload"),
-    };
+    let cpu = reader.read_region(&req).expect("read region");
     assert_eq!((cpu.width, cpu.height), (4, 4));
     let bytes = cpu.data.as_u8().unwrap();
     assert_eq!(&bytes[0..3], &[0, 0, 0]);
     assert_eq!(&bytes[3..6], &[1, 0, 0]);
     assert_eq!(&bytes[12..15], &[0, 1, 0]);
-}
-
-#[test]
-fn read_region_default_rejects_require_device() {
-    let reader = GridReader::new();
-    let req = RegionRequest {
-        scene: SceneId::new(0),
-        series: SeriesId::new(0),
-        level: LevelIdx::new(0),
-        plane: PlaneIdx::default(),
-        origin_px: (0, 0),
-        size_px: (4, 4),
-    };
-    let err = reader
-        .read_region(&req, TileOutputPreference::require_device_auto())
-        .expect_err("RequireDevice must error");
-    assert!(matches!(err, WsiError::Unsupported { .. }));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::compound::read_stream_prefix;
+use super::compound::read_stream_prefix_with_budget;
 use super::model::{ZviCompression, ZviImageHeader};
 use super::*;
 
@@ -7,8 +7,15 @@ const ZVI_HEADER_PROBE_BYTES: usize = 4096;
 pub(super) fn read_zvi_header(
     compound: &mut CompoundFile<File>,
     stream_path: &str,
+    budget: &OpenBudget,
 ) -> Result<ZviImageHeader, WsiError> {
-    let data = read_stream_prefix(compound, stream_path, ZVI_HEADER_PROBE_BYTES)?;
+    let data = read_stream_prefix_with_budget(
+        compound,
+        stream_path,
+        ZVI_HEADER_PROBE_BYTES,
+        "ZVI image header",
+        budget,
+    )?;
     parse_zvi_header(&data)
 }
 

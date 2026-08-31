@@ -9,6 +9,11 @@ pub(crate) struct Tolerance {
 }
 
 impl Tolerance {
+    pub(crate) const EXACT: Self = Self {
+        max_abs: 0,
+        mean_abs: 0.0,
+    };
+
     pub(crate) const JPEG_TIGHT: Self = Self {
         max_abs: 1,
         mean_abs: 0.05,
@@ -26,6 +31,7 @@ pub(crate) struct CompareReport {
     pub max_abs: u8,
     pub mean_abs: f64,
     pub psnr_db: f64,
+    pub alpha_exact: bool,
     pub passed: bool,
     pub diff_dump: Option<PathBuf>,
 }
@@ -49,6 +55,7 @@ pub(crate) fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> Co
             max_abs: 0,
             mean_abs: 0.0,
             psnr_db: f64::INFINITY,
+            alpha_exact: true,
             passed: true,
             diff_dump: None,
         };
@@ -58,17 +65,24 @@ pub(crate) fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> Co
     let mut max_abs = 0u8;
     let mut sum_abs = 0u64;
     let mut sum_sq = 0u64;
-    for (actual, expected) in actual.iter().zip(expected.iter()) {
-        if actual == expected {
-            equal += 1;
+    let mut alpha_exact = true;
+    for (actual, expected) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+        alpha_exact &= actual[3] == expected[3];
+        for channel in 0..3 {
+            if actual[channel] == expected[channel] {
+                equal += 1;
+            }
+            let difference = actual[channel].abs_diff(expected[channel]);
+            max_abs = max_abs.max(difference);
+            sum_abs += u64::from(difference);
+            sum_sq += u64::from(difference) * u64::from(difference);
         }
-        let d = actual.abs_diff(*expected);
-        max_abs = max_abs.max(d);
-        sum_abs += u64::from(d);
-        sum_sq += u64::from(d) * u64::from(d);
     }
 
-    let n = actual.len() as f64;
+    // JP2K tolerances apply independently to color channels. Alpha is geometry
+    // and coverage information, so it is always exact and never allowed to
+    // dilute the RGB mean with a fourth channel of zeros.
+    let n = (actual.len() / 4 * 3) as f64;
     let mean_abs = sum_abs as f64 / n;
     let mse = sum_sq as f64 / n;
     let psnr_db = if mse == 0.0 {
@@ -76,13 +90,14 @@ pub(crate) fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> Co
     } else {
         10.0 * (255.0_f64 * 255.0 / mse).log10()
     };
-    let passed = max_abs <= tol.max_abs && mean_abs <= tol.mean_abs;
+    let passed = alpha_exact && max_abs <= tol.max_abs && mean_abs <= tol.mean_abs;
 
     CompareReport {
         bytewise_equal_rate: equal as f64 / n,
         max_abs,
         mean_abs,
         psnr_db,
+        alpha_exact,
         passed,
         diff_dump: None,
     }
@@ -93,7 +108,11 @@ pub(crate) fn tolerance_failure(label: &str, report: &CompareReport) -> Option<S
         return None;
     }
     Some(format!(
-        "{label}: exceeds tolerance (max_abs={} mean_abs={:.4} psnr={:.2}dB equal_rate={:.4})",
-        report.max_abs, report.mean_abs, report.psnr_db, report.bytewise_equal_rate
+        "{label}: exceeds tolerance (max_abs={} mean_abs={:.4} alpha_exact={} psnr={:.2}dB equal_rate={:.4})",
+        report.max_abs,
+        report.mean_abs,
+        report.alpha_exact,
+        report.psnr_db,
+        report.bytewise_equal_rate
     ))
 }

@@ -68,12 +68,22 @@ pub(super) fn read_record_bytes_from_file(
     offset: u64,
     len: u64,
 ) -> Result<Vec<u8>, WsiError> {
+    read_record_bytes_from_file_with_limit(file, path, offset, len, MAX_COMPRESSED_INPUT_BYTES)
+}
+
+pub(super) fn read_record_bytes_from_file_with_limit(
+    file: &mut File,
+    path: &Path,
+    offset: u64,
+    len: u64,
+    limit: u64,
+) -> Result<Vec<u8>, WsiError> {
     file.seek(SeekFrom::Start(offset))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
-    let len = checked_product_to_usize(&[len], MAX_COMPRESSED_INPUT_BYTES, "MIRAX record")
+    let len = checked_product_to_usize(&[len], limit, "MIRAX record")
         .map_err(|message| invalid_slide(path, message))?;
     let mut buf = vec![0u8; len];
     file.read_exact(&mut buf)
@@ -216,6 +226,24 @@ pub(super) fn parse_ini_i32(
         .map_err(|_| invalid_slide(path, format!("invalid MIRAX integer for {key}")))
 }
 
+pub(super) fn parse_optional_objective_magnification(
+    path: &Path,
+    group: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<i32>, WsiError> {
+    let Some(raw) = group.get(key) else {
+        return Ok(None);
+    };
+    let normalized = raw
+        .strip_suffix('x')
+        .or_else(|| raw.strip_suffix('X'))
+        .unwrap_or(raw);
+    let value = normalized
+        .parse::<i32>()
+        .map_err(|_| invalid_slide(path, format!("invalid MIRAX integer for {key}")))?;
+    Ok((value > 0).then_some(value))
+}
+
 pub(super) fn parse_ini_u32(
     path: &Path,
     group: &HashMap<String, String>,
@@ -241,11 +269,19 @@ pub(super) fn parse_ini_f64(
     group: &HashMap<String, String>,
     key: &str,
 ) -> Result<f64, WsiError> {
-    group
+    let value = group
         .get(key)
         .ok_or_else(|| invalid_slide(path, format!("missing MIRAX key {key}")))?
         .parse::<f64>()
-        .map_err(|_| invalid_slide(path, format!("invalid MIRAX float for {key}")))
+        .map_err(|_| invalid_slide(path, format!("invalid MIRAX float for {key}")))?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(invalid_slide(
+            path,
+            format!("non-finite MIRAX float for {key}"),
+        ))
+    }
 }
 
 pub(super) fn read_exact_string(

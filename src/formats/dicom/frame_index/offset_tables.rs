@@ -14,7 +14,7 @@ use super::raw_little_endian::read_exact_at;
 use crate::formats::dicom::metadata::invalid_slide;
 
 const MAX_BASIC_OFFSET_TABLE_BYTES: u32 = 64 * 1024 * 1024;
-const MAX_EXTENDED_OFFSET_TABLE_BYTES: u32 = 256 * 1024 * 1024;
+const MAX_EXTENDED_OFFSET_TABLE_BYTES: u32 = 128 * 1024 * 1024;
 const TABLE_READ_CHUNK_BYTES: usize = 64 * 1024;
 
 pub(in super::super) fn checked_padded_fragment_len(

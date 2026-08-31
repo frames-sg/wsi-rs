@@ -276,7 +276,11 @@ impl TiffPixelReader {
         let offset = offsets[tile_idx];
         let byte_count = byte_counts[tile_idx];
         if byte_count == 0 {
-            return Self::empty_rgb_tile(width, height);
+            return if self.layout.dataset.properties.vendor() == Some("generic-tiff") {
+                Self::empty_transparent_tile(width, height)
+            } else {
+                Self::empty_rgb_tile(width, height)
+            };
         }
 
         let tile_data = self
@@ -301,12 +305,33 @@ impl TiffPixelReader {
                 rgb_color_space: false,
                 backend,
             }),
-            Compression::None => {
-                // Uncompressed: interpret raw bytes using TIFF metadata
-                self.decode_uncompressed_tile(ifd_id, &tile_data, width, height)
+            Compression::None | Compression::Lzw | Compression::Deflate | Compression::Zstd => {
+                let physical_width = self
+                    .container
+                    .get_u32(ifd_id, tags::TILE_WIDTH)
+                    .unwrap_or(width);
+                let physical_height = self
+                    .container
+                    .get_u32(ifd_id, tags::TILE_LENGTH)
+                    .unwrap_or(height);
+                let physical = if compression == Compression::None {
+                    self.decode_uncompressed_tile(
+                        ifd_id,
+                        &tile_data,
+                        physical_width,
+                        physical_height,
+                    )?
+                } else {
+                    self.decode_compressed_tiff_tile_data(
+                        ifd_id,
+                        compression,
+                        &tile_data,
+                        physical_width,
+                        physical_height,
+                    )?
+                };
+                Self::crop_interleaved_top_left(physical, width, height)
             }
-            Compression::Lzw | Compression::Deflate | Compression::Zstd => self
-                .decode_compressed_tiff_tile_data(ifd_id, compression, &tile_data, width, height),
             other => Err(WsiError::UnsupportedFormat(format!(
                 "unsupported TiledIfd compression: {:?}",
                 other,

@@ -151,6 +151,7 @@ fn interpret_builds_multichannel_scene_macro_and_public_metadata() {
 
     let properties = &layout.dataset.properties;
     assert_eq!(properties.get("leica.barcode"), Some("SLIDE123"));
+    assert_eq!(properties.get("openslide.barcode"), Some("SLIDE123"));
     assert_eq!(
         properties.get("leica.creation-date"),
         Some("2026-01-02T03:04:05Z")
@@ -558,18 +559,16 @@ fn opens_fluorescence_leica_channels_when_corpus_is_available() {
     assert_eq!(series.channels[0].color, Some([0, 0, 255]));
     for c in 0..series.axes.c {
         let tile = slide
-            .read_tile(
-                &TileRequest {
-                    scene: 0usize.into(),
-                    series: 0usize.into(),
-                    level: 0u32.into(),
-                    plane: PlaneSelection { z: 0, c, t: 0 }.into(),
-                    col: 0,
-                    row: 0,
-                },
-                TileOutputPreference::cpu(),
-            )
+            .read_tile(&TileRequest {
+                scene: 0usize.into(),
+                series: 0usize.into(),
+                level: 0u32.into(),
+                plane: PlaneSelection { z: 0, c, t: 0 }.into(),
+                col: 0,
+                row: 0,
+            })
             .expect("read fluorescence channel tile");
-        assert!(matches!(tile, TilePixels::Cpu(_)));
+        assert!(tile.width() > 0);
+        assert!(tile.height() > 0);
     }
 }

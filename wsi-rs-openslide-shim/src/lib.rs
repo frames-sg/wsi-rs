@@ -127,6 +127,17 @@ unsafe fn clear_u32(dest: *mut u32, len: usize) {
     }
 }
 
+/// # Safety
+/// A non-null `dest` must be writable for `len` consecutive bytes.
+unsafe fn clear_u8(dest: *mut c_void, len: usize) {
+    if !dest.is_null() && len > 0 {
+        // SAFETY: Caller supplies a writable `dest` buffer with at least `len`
+        // bytes by OpenSlide ABI contract; null and zero length are handled
+        // above.
+        unsafe { ptr::write_bytes(dest.cast::<u8>(), 0, len) };
+    }
+}
+
 fn first_series(handle: &OpenSlideHandle) -> Option<&wsi_rs::Series> {
     handle
         .slide()?
@@ -376,16 +387,20 @@ pub unsafe extern "C" fn openslide_read_region(
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return Err(FfiPanic);
         };
+        if w < 0 || h < 0 {
+            handle.set_error(format!(
+                "negative region width ({w}) or height ({h}) is not allowed"
+            ));
+            return Err(FfiPanic);
+        }
         if handle.has_error() {
             return Err(FfiPanic);
         }
-        if dest.is_null() {
-            handle.set_error("openslide_read_region destination is NULL");
-            return Err(FfiPanic);
+        if w == 0 || h == 0 {
+            return Ok(());
         }
-        if level < 0 {
-            handle.set_error(format!("level {level} out of range"));
-            return Err(FfiPanic);
+        if dest.is_null() {
+            return Ok(());
         }
         let Some(slide) = handle.slide() else {
             return Err(FfiPanic);
@@ -394,12 +409,14 @@ pub unsafe extern "C" fn openslide_read_region(
             handle.set_error("slide has no readable series");
             return Err(FfiPanic);
         };
+        if level < 0 {
+            return Ok(());
+        }
         let Some(level_meta) = series.levels.get(level as usize) else {
-            handle.set_error(format!("level {level} out of range"));
-            return Err(FfiPanic);
+            return Ok(());
         };
         let Some(pixel_len) = checked_pixel_len(w, h) else {
-            handle.set_error("region dimensions must be non-negative");
+            handle.set_error("region dimensions exceed addressable memory");
             return Err(FfiPanic);
         };
         let width = match u32::try_from(w) {
@@ -492,9 +509,16 @@ pub unsafe extern "C" fn openslide_read_icc_profile(osr: *mut openslide_t, dest:
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return;
         };
-        let Some(profile) = handle.icc_profile() else {
+        let profile = handle.icc_profile_bytes();
+        if handle.has_error() {
+            // SAFETY: The OpenSlide contract requires a destination sized by
+            // the profile-size query; `clear_u8` handles null and zero length.
+            unsafe { clear_u8(dest, profile.len()) };
             return;
-        };
+        }
+        if profile.is_empty() {
+            return;
+        }
         if dest.is_null() {
             handle.set_error("openslide_read_icc_profile destination is NULL");
             return;
@@ -605,7 +629,6 @@ pub unsafe extern "C" fn openslide_get_associated_image_dimensions(
         // the OpenSlide ABI caller.
         let name = unsafe { CStr::from_ptr(name) };
         let Some(info) = handle.associated_image_info(name) else {
-            handle.set_error("associated image not found");
             return;
         };
         // SAFETY: Output pointers are optional and are checked for null before
@@ -639,38 +662,39 @@ pub unsafe extern "C" fn openslide_read_associated_image(
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
             return Err(FfiPanic);
         };
-        if handle.has_error() {
-            return Err(FfiPanic);
-        }
         if name.is_null() {
             handle.set_error("associated image name is NULL");
             return Err(FfiPanic);
         }
-        if dest.is_null() {
-            handle.set_error("associated image destination is NULL");
-            return Err(FfiPanic);
-        }
         // SAFETY: `name` was checked non-null and must be NUL-terminated by
         // the OpenSlide ABI caller.
-        let name = unsafe { CStr::from_ptr(name) }
-            .to_string_lossy()
-            .into_owned();
-        let Some(slide) = handle.slide() else {
-            return Err(FfiPanic);
-        };
-        let Some(info) = handle.associated_image_info(&handle::cstring_sanitized(&name)) else {
-            handle.set_error(format!("associated image not found: {name}"));
-            return Err(FfiPanic);
+        let name = unsafe { CStr::from_ptr(name) };
+        let Some(info) = handle.associated_image_info_bytes(name) else {
+            return Ok(());
         };
         let Some(len) = checked_pixel_len(i64::from(info.width), i64::from(info.height)) else {
             handle.set_error("associated image dimensions exceed addressable memory");
             return Err(FfiPanic);
         };
         cleanup_len = len;
+        if handle.has_error() {
+            // SAFETY: `len` is the validated pixel count for the named image;
+            // `clear_u32` handles a null destination.
+            unsafe { clear_u32(dest, len) };
+            return Ok(());
+        }
+        if dest.is_null() {
+            handle.set_error("associated image destination is NULL");
+            return Err(FfiPanic);
+        }
+        let Some(slide) = handle.slide() else {
+            return Err(FfiPanic);
+        };
+        let name = name.to_string_lossy();
         // SAFETY: `clear_u32` validates null and zero length before writing.
         unsafe { clear_u32(dest, len) };
         match slide
-            .read_associated(&name)
+            .read_associated(name.as_ref())
             .and_then(pixels::tile_to_premultiplied_argb)
         {
             Ok(argb) if argb.len() == len => {
@@ -726,11 +750,10 @@ pub unsafe extern "C" fn openslide_get_associated_image_icc_profile_size(
         // SAFETY: `name` was checked non-null and must be NUL-terminated by
         // the OpenSlide ABI caller.
         let name = unsafe { CStr::from_ptr(name) };
-        if handle.associated_image_info(name).is_none() {
-            handle.set_error("associated image not found");
-            return -1;
-        }
-        0
+        handle
+            .associated_image_info(name)
+            .and_then(|info| i64::try_from(info.icc_profile.len()).ok())
+            .unwrap_or(-1)
     })
 }
 
@@ -758,16 +781,28 @@ pub unsafe extern "C" fn openslide_read_associated_image_icc_profile(
             handle.set_error("associated image name is NULL");
             return;
         }
-        if dest.is_null() {
-            handle.set_error("associated ICC destination is NULL");
-            return;
-        }
         // SAFETY: `name` was checked non-null and must be NUL-terminated by
         // the OpenSlide ABI caller.
         let name = unsafe { CStr::from_ptr(name) };
-        if handle.associated_image_info(name).is_none() {
-            handle.set_error("associated image not found");
+        let Some(info) = handle.associated_image_info(name) else {
+            return;
+        };
+        if info.icc_profile.is_empty() {
+            return;
         }
+        if dest.is_null() {
+            handle.set_error("associated image ICC destination is NULL");
+            return;
+        }
+        // SAFETY: OpenSlide requires callers to allocate the exact byte count
+        // returned by `openslide_get_associated_image_icc_profile_size`.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                info.icc_profile.as_ptr(),
+                dest.cast::<u8>(),
+                info.icc_profile.len(),
+            )
+        };
     }));
 }
 
@@ -833,3 +868,7 @@ mod arithmetic_tests;
 #[cfg(test)]
 #[path = "lib/tests/cache.rs"]
 mod cache_tests;
+
+#[cfg(test)]
+#[path = "lib/tests/compatibility.rs"]
+mod compatibility_tests;

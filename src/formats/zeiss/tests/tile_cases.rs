@@ -1,4 +1,4 @@
-use super::fixtures::{main_fixture, metadata_xml, write_fixture, SubblockSpec};
+use super::fixtures::{jpeg_rgb, main_fixture, metadata_xml, write_fixture, SubblockSpec};
 use crate::formats::zeiss::slide::ZeissSlide;
 use crate::formats::zeiss::tiles::{
     bitmap_from_raw_uncompressed_subblock, bitmap_to_sample_buffer,
@@ -319,6 +319,31 @@ fn compressed_level_zero_declines_unsafe_fallback_without_decoding() {
         .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
         .expect_err("compressed level zero cannot use direct composition");
     assert!(error.to_string().contains("direct subblock composition"));
+}
+
+#[test]
+fn classic_jpeg_subblock_decodes_with_czi_geometry_and_rgb_color() {
+    let rgb = [200, 80, 20].repeat(8 * 8);
+    let mut compressed = SubblockSpec::bgr24(0, 0, 8, 8, jpeg_rgb(8, 8, &rgb));
+    compressed.compression = 1;
+    let fixture = write_fixture(&[compressed], &[], &metadata_xml(8, 8));
+    let slide = ZeissSlide::parse(fixture.path()).expect("parse JPEG-compressed CZI");
+
+    let tile = slide
+        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .expect("decode JPEG-compressed CZI tile");
+    assert_eq!((tile.width, tile.height, tile.channels), (8, 8, 3));
+    let pixel = &tile.data.as_u8().expect("8-bit RGB JPEG tile")[..3];
+    assert!(
+        pixel[0] > pixel[1] && pixel[1] > pixel[2],
+        "decoded CZI JPEG must preserve RGB channel order, got {pixel:?}"
+    );
+
+    let level = slide
+        .scene_level_image(0, 0)
+        .expect("compose JPEG-compressed CZI level");
+    assert_eq!((level.width, level.height, level.channels), (8, 8, 3));
+    assert_eq!(level.data.as_u8(), tile.data.as_u8());
 }
 
 #[test]

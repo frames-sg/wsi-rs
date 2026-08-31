@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use wsi_rs::{
     Compression, CpuTile, EncodedTilePhotometricInterpretation, FormatRegistry, PlaneSelection,
-    RegionRequest, Slide, TileLayout, TileOutputPreference, TilePixels, TileRequest,
+    RegionRequest, Slide, TileLayout, TileRequest,
 };
 
 mod support;
@@ -221,15 +221,8 @@ fn hamamatsu1_ndpi_tile_read_does_not_fail_on_file_absolute_mcu_starts() {
     };
     let handle = Slide::open(path).expect("open Hamamatsu-1 NDPI");
     let tile = handle
-        .read_tile(
-            &TileRequest::new(0usize, 0usize, 0u32, 0, 0),
-            TileOutputPreference::cpu(),
-        )
+        .read_tile(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
         .expect("read Hamamatsu-1 NDPI tile without MCU segment bounds failure");
-
-    let TilePixels::Cpu(tile) = tile else {
-        panic!("CPU output should return a CPU tile");
-    };
     assert!(tile.width() > 0);
     assert!(tile.height() > 0);
 }

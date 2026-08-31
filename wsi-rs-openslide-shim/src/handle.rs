@@ -1,13 +1,11 @@
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString, OsStr};
-use std::num::NonZeroUsize;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wsi_rs::{
-    DecodeExecutionOptions, FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide,
-    SlideOpenOptions, TileCache, TileLayout, WsiError,
+    FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileCache, TileLayout, WsiError,
 };
 
 mod geometry;
@@ -15,10 +13,9 @@ mod geometry;
 use geometry::OpenSlideGeometry;
 
 static DETECTED_VENDORS: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
-// Private benchmark knob. A configured runtime belongs to one slide handle, so
-// the comparison harness uses one JP2K thread per handle and scales with the
-// number of client handles instead of creating nested N-by-N decode pools.
-const BENCHMARK_JP2K_THREADS_ENV: &str = "WSI_RS_SHIM_JP2K_CPU_THREADS";
+
+#[cfg(feature = "route-telemetry")]
+pub(crate) const ROUTE_TELEMETRY_PROPERTY: &str = "wsi-rs.internal.decode-route-telemetry";
 
 pub(crate) struct OpenSlideHandle {
     slide: Option<Slide>,
@@ -29,11 +26,14 @@ pub(crate) struct OpenSlideHandle {
     associated_images: BTreeMap<String, AssociatedImageInfo>,
     associated_names: CStringArray,
     icc_profile: Vec<u8>,
+    #[cfg(feature = "route-telemetry")]
+    route_telemetry_values: Mutex<Vec<CString>>,
 }
 
 pub(crate) struct AssociatedImageInfo {
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) icc_profile: Vec<u8>,
 }
 
 pub(crate) struct CStringArray {
@@ -77,23 +77,7 @@ impl CStringArray {
 
 impl OpenSlideHandle {
     pub(crate) fn open(path: PathBuf) -> Option<Box<Self>> {
-        let threads = match parse_benchmark_jp2k_threads(
-            std::env::var_os(BENCHMARK_JP2K_THREADS_ENV).as_deref(),
-        ) {
-            Ok(threads) => threads,
-            Err(message) => return Some(Box::new(Self::from_error(message))),
-        };
-        Self::open_with_jp2k_threads(path, threads)
-    }
-
-    fn open_with_jp2k_threads(path: PathBuf, threads: Option<NonZeroUsize>) -> Option<Box<Self>> {
-        let mut options = SlideOpenOptions::default();
-        if let Some(threads) = threads {
-            options = options.with_decode_execution_options(
-                DecodeExecutionOptions::default().with_jp2k_cpu_threads(threads),
-            );
-        }
-        match Slide::open_with_options(&path, options) {
+        match Slide::open(&path) {
             Ok(slide) => Some(Box::new(Self::from_slide(slide))),
             Err(err) if should_open_return_null(&err) => None,
             Err(err) => Some(Box::new(Self::from_error(err.to_string()))),
@@ -124,6 +108,7 @@ impl OpenSlideHandle {
                     AssociatedImageInfo {
                         width: image.dimensions.0,
                         height: image.dimensions.1,
+                        icc_profile: image.icc_profile.clone(),
                     },
                 )
             })
@@ -145,6 +130,8 @@ impl OpenSlideHandle {
             associated_images,
             associated_names,
             icc_profile,
+            #[cfg(feature = "route-telemetry")]
+            route_telemetry_values: Mutex::new(Vec::new()),
         }
     }
 
@@ -158,6 +145,8 @@ impl OpenSlideHandle {
             associated_images: BTreeMap::new(),
             associated_names: CStringArray::empty(),
             icc_profile: Vec::new(),
+            #[cfg(feature = "route-telemetry")]
+            route_telemetry_values: Mutex::new(Vec::new()),
         }
     }
 
@@ -242,6 +231,21 @@ impl OpenSlideHandle {
             return std::ptr::null();
         }
         let name = name.to_string_lossy();
+        #[cfg(feature = "route-telemetry")]
+        if name == ROUTE_TELEMETRY_PROPERTY {
+            let mut values = self
+                .route_telemetry_values
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            // OpenSlide property pointers remain handle-owned. Retaining every
+            // feature-only benchmark snapshot keeps prior pointers valid until
+            // this handle is closed.
+            values.push(route_telemetry_cstring());
+            return values
+                .last()
+                .expect("the route telemetry snapshot was just appended")
+                .as_ptr();
+        }
         self.properties
             .get(name.as_ref())
             .map(|value| value.as_ptr())
@@ -259,6 +263,10 @@ impl OpenSlideHandle {
         if self.has_error() {
             return None;
         }
+        self.associated_image_info_bytes(name)
+    }
+
+    pub(crate) fn associated_image_info_bytes(&self, name: &CStr) -> Option<&AssociatedImageInfo> {
         let name = name.to_string_lossy();
         self.associated_images.get(name.as_ref())
     }
@@ -267,7 +275,11 @@ impl OpenSlideHandle {
         if self.has_error() {
             return None;
         }
-        Some(&self.icc_profile)
+        Some(self.icc_profile_bytes())
+    }
+
+    pub(crate) fn icc_profile_bytes(&self) -> &[u8] {
+        &self.icc_profile
     }
 
     fn error_lock(&self) -> MutexGuard<'_, Option<CString>> {
@@ -277,17 +289,10 @@ impl OpenSlideHandle {
     }
 }
 
-fn parse_benchmark_jp2k_threads(value: Option<&OsStr>) -> Result<Option<NonZeroUsize>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let value = value
-        .to_str()
-        .ok_or_else(|| format!("{BENCHMARK_JP2K_THREADS_ENV} must contain valid UTF-8"))?;
-    let threads = value
-        .parse::<NonZeroUsize>()
-        .map_err(|err| format!("invalid {BENCHMARK_JP2K_THREADS_ENV}={value:?}: {err}"))?;
-    Ok(Some(threads))
+#[cfg(feature = "route-telemetry")]
+fn route_telemetry_cstring() -> CString {
+    CString::new(wsi_rs::decode_route_telemetry_json())
+        .expect("route telemetry JSON contains no NUL bytes")
 }
 
 pub(crate) fn empty_names() -> *const *const c_char {
@@ -376,21 +381,6 @@ fn build_properties(slide: &Slide, geometry: &OpenSlideGeometry) -> BTreeMap<Str
                     tile_height.to_string(),
                 );
             }
-        }
-
-        if let Some(level0) = geometry.level_dimensions(0) {
-            properties
-                .entry("openslide.bounds-x".to_string())
-                .or_insert_with(|| "0".to_string());
-            properties
-                .entry("openslide.bounds-y".to_string())
-                .or_insert_with(|| "0".to_string());
-            properties
-                .entry("openslide.bounds-width".to_string())
-                .or_insert_with(|| level0.0.to_string());
-            properties
-                .entry("openslide.bounds-height".to_string())
-                .or_insert_with(|| level0.1.to_string());
         }
     }
 

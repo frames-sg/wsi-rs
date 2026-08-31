@@ -107,21 +107,10 @@ fn open_exposes_one_rgb_level_and_decodes_the_codestream() {
     assert_eq!(tile.as_u8().expect("u8 JP2K pixels").len(), 16 * 12 * 3);
 
     let batch = reader
-        .read_tiles(
-            &[request.clone(), request.clone()],
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tiles_cpu(&[request.clone(), request.clone()])
         .expect("decode ordered raw JP2K batch");
     assert_eq!(batch.len(), 2);
-    let first = match &batch[0] {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("raw JP2K CPU request returned device pixels"),
-    };
-    let second = match &batch[1] {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("raw JP2K CPU request returned device pixels"),
-    };
-    assert_eq!(first.as_u8(), second.as_u8());
+    assert_eq!(batch[0].as_u8(), batch[1].as_u8());
 }
 
 #[test]
@@ -153,7 +142,7 @@ fn raw_tile_preserves_the_original_codestream_and_metadata() {
 }
 
 #[test]
-fn request_validation_rejects_non_default_axes_tiles_and_device_only_output() {
+fn request_validation_rejects_non_default_axes_and_tiles() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let reader = RawJp2kBackend
         .open(&fixture.path)
@@ -182,15 +171,6 @@ fn request_validation_rejects_non_default_axes_tiles_and_device_only_output() {
         reader.read_tile_cpu(&non_default_plane),
         Err(WsiError::Unsupported { .. })
     ));
-
-    let error = expect_error(
-        reader.read_tiles(
-            &[TileRequest::new(0, 0, 0, 0, 0)],
-            TileOutputPreference::require_device_auto(),
-        ),
-        "device-only raw JP2K batch must fail",
-    );
-    assert!(matches!(error, WsiError::Unsupported { .. }));
 }
 
 #[test]
@@ -207,4 +187,48 @@ fn open_reports_path_context_and_rejects_truncated_or_unsupported_codestreams() 
         let fixture = write_fixture("j2k", bytes);
         assert!(RawJp2kBackend.open(&fixture.path).is_err());
     }
+}
+
+#[test]
+fn configured_encoded_limit_rejects_before_reading_the_codestream() {
+    let fixture = write_fixture("j2k", RGB_CODESTREAM);
+    let limits = crate::SlideLimits::default()
+        .with_encoded_unit_bytes(1)
+        .expect("nonzero encoded limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = expect_error(
+        RawJp2kBackend.open_with_config(&fixture.path, config),
+        "tiny encoded limit must reject raw JP2K input",
+    );
+    assert!(matches!(error, WsiError::ResourceLimit { .. }));
+}
+
+#[test]
+fn managed_reader_reports_encoded_working_set_bounds() {
+    let fixture = write_fixture("j2k", RGB_CODESTREAM);
+    let reader = RawJp2kBackend
+        .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
+        .expect("open managed raw JP2K fixture");
+    let encoded_len = RGB_CODESTREAM.len() as u64;
+    let tile = TileRequest::new(0, 0, 0, 0, 0);
+    let display = TileViewRequest::new(0, 0, 0, 0, 0, 16, 12);
+    let region = RegionRequest::new(0, 0, 0, (0, 0), (16, 12));
+
+    assert_eq!(reader.tile_encoded_upper_bound(&tile).unwrap(), encoded_len);
+    assert_eq!(reader.tile_batch_encoded_upper_bound(&[]).unwrap(), 0);
+    assert_eq!(
+        reader
+            .tile_batch_encoded_upper_bound(&[tile.clone(), tile])
+            .unwrap(),
+        encoded_len
+    );
+    assert_eq!(
+        reader.display_tile_encoded_upper_bound(&display).unwrap(),
+        encoded_len
+    );
+    assert_eq!(reader.associated_encoded_upper_bound("label").unwrap(), 0);
+    assert_eq!(
+        reader.region_fastpath_encoded_upper_bound(&region).unwrap(),
+        encoded_len
+    );
 }

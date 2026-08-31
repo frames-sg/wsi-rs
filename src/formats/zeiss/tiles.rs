@@ -20,6 +20,163 @@ impl ZeissSlide {
         Ok(())
     }
 
+    pub(super) fn exact_raw_jpeg_subblock(
+        &self,
+        req: &TileRequest,
+    ) -> Result<Option<czi_rs::DirectorySubBlockInfo>, WsiError> {
+        if req.plane.get() != PlaneSelection::default() {
+            return Ok(None);
+        }
+        let scene = self
+            .dataset
+            .scenes
+            .get(req.scene.get())
+            .ok_or(WsiError::SceneOutOfRange {
+                index: req.scene.get(),
+                count: self.dataset.scenes.len(),
+            })?;
+        let series = scene
+            .series
+            .get(req.series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: req.series.get(),
+                count: scene.series.len(),
+            })?;
+        let level =
+            series
+                .levels
+                .get(req.level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: req.level.get(),
+                    count: series.levels.len() as u32,
+                })?;
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = level.tile_layout
+        else {
+            return Ok(None);
+        };
+        if req.col < 0
+            || req.row < 0
+            || req.col >= tiles_across as i64
+            || req.row >= tiles_down as i64
+        {
+            return Err(WsiError::TileRead {
+                col: req.col,
+                row: req.row,
+                level: req.level.get(),
+                reason: format!(
+                    "tile ({},{}) out of range ({}x{})",
+                    req.col, req.row, tiles_across, tiles_down
+                ),
+            });
+        }
+
+        let candidate_indices = self
+            .canvas_level_tile_subblocks
+            .get(req.level.get() as usize)
+            .and_then(|tiles| tiles.get(&(req.col, req.row)));
+        let Some([index]) = candidate_indices.map(Vec::as_slice) else {
+            return Ok(None);
+        };
+        let info = {
+            let czi = self.czi.lock().unwrap_or_else(|error| error.into_inner());
+            czi.subblocks().get(*index).cloned().ok_or_else(|| {
+                WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
+            })?
+        };
+        if info.compression != CziCompressionMode::Jpg {
+            return Ok(None);
+        }
+
+        let downsample = level.downsample;
+        if !downsample.is_finite()
+            || downsample < 1.0
+            || downsample > i64::MAX as f64
+            || downsample.fract() != 0.0
+        {
+            return Ok(None);
+        }
+        let ratio = downsample as i64;
+        let tile_x = req.col.checked_mul(i64::from(tile_width));
+        let tile_y = req.row.checked_mul(i64::from(tile_height));
+        let Some((tile_x, tile_y)) = tile_x.zip(tile_y) else {
+            return Ok(None);
+        };
+        let tile_w = level
+            .dimensions
+            .0
+            .saturating_sub(tile_x as u64)
+            .min(u64::from(tile_width));
+        let tile_h = level
+            .dimensions
+            .1
+            .saturating_sub(tile_y as u64)
+            .min(u64::from(tile_height));
+        let expected_x = tile_x
+            .checked_mul(ratio)
+            .and_then(|x| i64::from(self.subblock_origin.0).checked_add(x));
+        let expected_y = tile_y
+            .checked_mul(ratio)
+            .and_then(|y| i64::from(self.subblock_origin.1).checked_add(y));
+        let expected_rect_w = i64::try_from(tile_w)
+            .ok()
+            .and_then(|width| width.checked_mul(ratio));
+        let expected_rect_h = i64::try_from(tile_h)
+            .ok()
+            .and_then(|height| height.checked_mul(ratio));
+        if expected_x != Some(i64::from(info.rect.x))
+            || expected_y != Some(i64::from(info.rect.y))
+            || expected_rect_w != Some(i64::from(info.rect.w))
+            || expected_rect_h != Some(i64::from(info.rect.h))
+            || u64::from(info.stored_size.w) != tile_w
+            || u64::from(info.stored_size.h) != tile_h
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(info))
+    }
+
+    pub(super) fn read_raw_jpeg_tile(
+        &self,
+        req: &TileRequest,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let Some(info) = self.exact_raw_jpeg_subblock(req)? else {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Zeiss raw JPEG access requires one exact classic-JPEG subblock for tile ({}, {}) at level {}",
+                    req.col,
+                    req.row,
+                    req.level.get()
+                ),
+            });
+        };
+        self.preflight_source_subblock(info.file_position)?;
+        let raw = self
+            .czi
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .read_subblock(info.index)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        let tile = crate::decode::jpeg::standalone_raw_jpeg_tile(raw.data)?;
+        if (tile.width(), tile.height()) != (info.stored_size.w, info.stored_size.h) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Zeiss raw JPEG dimensions {}x{} do not match stored subblock {}x{}",
+                    tile.width(),
+                    tile.height(),
+                    info.stored_size.w,
+                    info.stored_size.h
+                ),
+            });
+        }
+        Ok(tile)
+    }
+
     pub(super) fn read_tile(
         &self,
         scene: usize,
@@ -93,10 +250,11 @@ impl ZeissSlide {
                 crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
             };
         let arc = Arc::new(buffer);
+        let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
         self.tile_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(key, arc.clone());
+            .put(key, arc.clone(), retained_bytes);
         Ok(arc.as_ref().clone())
     }
 
@@ -166,7 +324,10 @@ impl ZeissSlide {
                         "Zeiss subblock index {index} out of range"
                     ))
                 })?;
-                if info.compression != CziCompressionMode::UnCompressed {
+                if !matches!(
+                    info.compression,
+                    CziCompressionMode::UnCompressed | CziCompressionMode::Jpg
+                ) {
                     #[cfg(test)]
                     eprintln!(
                         "zeiss local tile: unsupported compression {:?} for subblock {index}",
@@ -214,9 +375,10 @@ impl ZeissSlide {
                 .map(Some);
         }
 
-        let direct_uncompressed_rgb = subblocks
-            .iter()
-            .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
+        let direct_uncompressed_rgb = subblocks.iter().all(|info| {
+            info.compression == CziCompressionMode::UnCompressed
+                && matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
+        });
         let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         if direct_uncompressed_rgb {
             let mut destination = vec![0u8; tile_rgb_len];
@@ -245,7 +407,7 @@ impl ZeissSlide {
             let raw = czi
                 .read_subblock(info.index)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-            let bitmap = bitmap_from_raw_uncompressed_subblock(&raw)?;
+            let bitmap = bitmap_from_raw_subblock(&raw)?;
             let sample = bitmap_to_sample_buffer(bitmap)?;
             let sample_data = sample.data.as_u8().ok_or_else(|| {
                 WsiError::DisplayConversion(
@@ -308,10 +470,11 @@ impl ZeissSlide {
             rgb_u8_tile(resized.width(), resized.height(), resized.into_raw())?
         };
         let arc = Arc::new(buffer);
+        let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
         self.level_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put((scene, level), arc.clone());
+            .put((scene, level), arc.clone(), retained_bytes);
         Ok(arc)
     }
 
@@ -339,7 +502,10 @@ impl ZeissSlide {
                         "Zeiss subblock index {index} out of range"
                     ))
                 })?;
-                if info.compression != CziCompressionMode::UnCompressed {
+                if !matches!(
+                    info.compression,
+                    CziCompressionMode::UnCompressed | CziCompressionMode::Jpg
+                ) {
                     return Ok(None);
                 }
                 selected.push(info);
@@ -357,9 +523,10 @@ impl ZeissSlide {
         let mut subblocks = candidate_infos;
         subblocks.sort_by_key(|info| (info.m_index.unwrap_or(i32::MIN), info.file_position));
 
-        let direct_uncompressed_rgb = subblocks
-            .iter()
-            .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
+        let direct_uncompressed_rgb = subblocks.iter().all(|info| {
+            info.compression == CziCompressionMode::UnCompressed
+                && matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
+        });
         let level_ratio = level_ref.downsample.round().max(1.0) as i32;
         if direct_uncompressed_rgb {
             let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
@@ -402,7 +569,7 @@ impl ZeissSlide {
                 czi.read_subblock(info.index)
                     .map_err(|source| WsiError::DisplayConversion(source.to_string()))?
             };
-            let bitmap = bitmap_from_raw_uncompressed_subblock(&raw)?;
+            let bitmap = bitmap_from_raw_subblock(&raw)?;
             let blit_x = (info.rect.x - self.subblock_origin.0).div_euclid(level_ratio);
             let blit_y = (info.rect.y - self.subblock_origin.1).div_euclid(level_ratio);
             match destination.as_mut() {
@@ -708,4 +875,70 @@ pub(super) fn bitmap_from_raw_uncompressed_subblock(
         stride,
         data: decoded,
     })
+}
+
+pub(super) fn bitmap_from_raw_subblock(
+    raw: &czi_rs::RawSubBlock,
+) -> Result<czi_rs::Bitmap, WsiError> {
+    match raw.info.compression {
+        CziCompressionMode::UnCompressed => bitmap_from_raw_uncompressed_subblock(raw),
+        CziCompressionMode::Jpg => bitmap_from_raw_jpeg_subblock(raw),
+        other => Err(WsiError::DisplayConversion(format!(
+            "unsupported Zeiss compression {}",
+            other.as_str()
+        ))),
+    }
+}
+
+fn bitmap_from_raw_jpeg_subblock(raw: &czi_rs::RawSubBlock) -> Result<czi_rs::Bitmap, WsiError> {
+    if raw.info.pixel_type != CziPixelType::Bgr24 {
+        return Err(WsiError::DisplayConversion(format!(
+            "Zeiss JPEG subblocks require Bgr24 pixels, got {:?}",
+            raw.info.pixel_type
+        )));
+    }
+
+    let expected_width = raw.info.stored_size.w;
+    let expected_height = raw.info.stored_size.h;
+    if expected_width == 0 || expected_height == 0 {
+        return Err(WsiError::DisplayConversion(
+            "Zeiss JPEG subblock has zero stored dimensions".into(),
+        ));
+    }
+
+    let decoded = crate::core::batch::exactly_one(
+        decode_batch_jpeg(&[JpegDecodeJob {
+            data: Cow::Borrowed(&raw.data),
+            tables: None,
+            expected_width,
+            expected_height,
+            color_transform: j2k_jpeg::ColorTransform::Auto,
+            force_dimensions: false,
+            requested_size: None,
+        }]),
+        "Zeiss JPEG subblock decode",
+    )?
+    .map_err(|error| {
+        WsiError::DisplayConversion(format!(
+            "failed to decode Zeiss JPEG subblock at file offset {}: {error}",
+            raw.info.file_position
+        ))
+    })?;
+
+    if (decoded.width, decoded.height) != (expected_width, expected_height) {
+        return Err(WsiError::DisplayConversion(format!(
+            "Zeiss JPEG subblock decoded as {}x{} but CZI stored geometry is {}x{}",
+            decoded.width, decoded.height, expected_width, expected_height
+        )));
+    }
+    let rgb = decoded.data.as_u8().ok_or_else(|| {
+        WsiError::DisplayConversion("Zeiss JPEG subblock did not decode to 8-bit RGB".into())
+    })?;
+    let mut bgr = Vec::with_capacity(rgb.len());
+    for pixel in rgb.chunks_exact(3) {
+        bgr.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+    }
+
+    czi_rs::Bitmap::new(CziPixelType::Bgr24, expected_width, expected_height, bgr)
+        .map_err(|source| WsiError::DisplayConversion(source.to_string()))
 }

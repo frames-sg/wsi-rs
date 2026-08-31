@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use wsi_rs_openslide_shim::install::{
-    execute_install, execute_restore, install_destinations, manifest_path, plan_install,
-    InstallStep, PlatformLibraryNames,
+    execute_install, execute_restore, install_destinations, manifest_path, PlatformLibraryNames,
 };
 
 fn built_shim_library() -> PathBuf {
@@ -32,61 +31,20 @@ fn run_installer(arguments: &[&str]) -> Output {
 #[test]
 fn install_destinations_include_all_loader_compatible_names() {
     let mac = PlatformLibraryNames::MacOS;
-    assert_eq!(
-        mac.names(),
-        [
-            "libopenslide.1.dylib",
-            "libopenslide.dylib",
-            "libopenslide.4.dylib"
-        ]
-    );
+    assert_eq!(mac.names(), &["libopenslide.1.dylib", "libopenslide.dylib"]);
 
     let linux = PlatformLibraryNames::Linux;
-    assert_eq!(
-        linux.names(),
-        ["libopenslide.so.1", "libopenslide.so", "libopenslide.so.4"]
-    );
+    assert_eq!(linux.names(), &["libopenslide.so.1", "libopenslide.so"]);
+
+    let windows = PlatformLibraryNames::Windows;
+    assert_eq!(windows.names(), &["libopenslide-1.dll"]);
 
     let destinations = install_destinations(Path::new("/prefix"), mac);
     assert_eq!(
         destinations[0],
         Path::new("/prefix/lib/libopenslide.1.dylib")
     );
-    assert_eq!(
-        destinations[2],
-        Path::new("/prefix/lib/libopenslide.4.dylib")
-    );
-}
-
-#[test]
-fn install_plan_backs_up_existing_destinations_before_copying_shim() {
-    let prefix = Path::new("/prefix");
-    let shim = Path::new("/build/libwsi_rs_openslide_shim.dylib");
-    let steps = plan_install(prefix, shim, PlatformLibraryNames::MacOS, 42, |path| {
-        path.ends_with("libopenslide.1.dylib")
-    });
-
-    assert_eq!(
-        steps,
-        vec![
-            InstallStep::Backup {
-                from: Path::new("/prefix/lib/libopenslide.1.dylib").to_path_buf(),
-                to: Path::new("/prefix/lib/libopenslide.1.dylib.wsi_rs-backup-42").to_path_buf(),
-            },
-            InstallStep::CopyShim {
-                from: shim.to_path_buf(),
-                to: Path::new("/prefix/lib/libopenslide.1.dylib").to_path_buf(),
-            },
-            InstallStep::CopyShim {
-                from: shim.to_path_buf(),
-                to: Path::new("/prefix/lib/libopenslide.dylib").to_path_buf(),
-            },
-            InstallStep::CopyShim {
-                from: shim.to_path_buf(),
-                to: Path::new("/prefix/lib/libopenslide.4.dylib").to_path_buf(),
-            },
-        ]
-    );
+    assert_eq!(destinations.len(), 2);
 }
 
 #[test]

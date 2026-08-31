@@ -26,13 +26,16 @@ impl Properties {
     }
 
     pub fn mpp(&self) -> Option<(f64, f64)> {
-        let x = self.get("openslide.mpp-x")?.parse().ok()?;
-        let y = self.get("openslide.mpp-y")?.parse().ok()?;
-        Some((x, y))
+        let x: f64 = self.get("openslide.mpp-x")?.parse().ok()?;
+        let y: f64 = self.get("openslide.mpp-y")?.parse().ok()?;
+        (x.is_finite() && x > 0.0 && y.is_finite() && y > 0.0).then_some((x, y))
     }
 
     pub fn objective_power(&self) -> Option<f64> {
-        self.get("openslide.objective-power")?.parse().ok()
+        self.get("openslide.objective-power")?
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
     }
 
     pub fn background_color(&self) -> [u8; 3] {

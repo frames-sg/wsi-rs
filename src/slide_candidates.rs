@@ -6,7 +6,7 @@ use std::path::Path;
 /// [`is_builtin_slide_candidate_path`] when matching a path so extension case
 /// is handled consistently.
 pub const BUILTIN_SLIDE_CANDIDATE_EXTENSIONS: &[&str] = &[
-    "svs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "czi", "zvi", "mrxs", "vms", "vmu", "vsi",
+    "svs", "avs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "zvi", "mrxs", "vms", "vmu", "vsi",
     "j2k", "j2c", "svcache",
 ];
 

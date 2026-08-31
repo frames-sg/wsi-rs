@@ -18,6 +18,7 @@ use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
+use base64::Engine;
 
 use super::{
     compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
@@ -120,6 +121,14 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
                         .unwrap_or_default();
                     let comp_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
                     let compression = compression_from_tag(comp_val);
+                    let jpeg_tables = if compression == Compression::Jpeg {
+                        container
+                            .get_bytes(ifd_id, tags::JPEG_TABLES)
+                            .ok()
+                            .map(<[u8]>::to_vec)
+                    } else {
+                        None
+                    };
 
                     associated_images.insert(
                         name.clone(),
@@ -130,13 +139,14 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
                             ),
                             sample_type: SampleType::Uint8,
                             channels: 3,
+                            icc_profile: Vec::new(),
                         },
                     );
                     associated_sources.insert(
                         name,
                         TileSource::Stripped {
                             ifd_id,
-                            jpeg_tables: None,
+                            jpeg_tables,
                             compression,
                             strip_offsets,
                             strip_byte_counts,
@@ -474,6 +484,20 @@ fn parse_properties(
         if let Some((mpp_x, mpp_y)) = resolve_mpp_pair(None, base_spacing) {
             properties.insert("openslide.mpp-x", mpp_x.to_string());
             properties.insert("openslide.mpp-y", mpp_y.to_string());
+        }
+    }
+
+    if let Some(encoded) = properties
+        .get("philips.PIM_DP_UFS_BARCODE")
+        .map(str::to_owned)
+    {
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+            if let Ok(value) = String::from_utf8(bytes) {
+                let value = value.trim_end_matches('\0');
+                if !value.is_empty() {
+                    properties.insert("openslide.barcode", value);
+                }
+            }
         }
     }
 

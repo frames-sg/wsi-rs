@@ -35,6 +35,27 @@ impl SyntheticTag {
         }
     }
 
+    pub(crate) fn long_array(tag: u16, values: &[u32]) -> Self {
+        let data = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut inline_value = [0; 4];
+        let ool_data = if data.len() <= inline_value.len() {
+            inline_value[..data.len()].copy_from_slice(&data);
+            None
+        } else {
+            Some(data)
+        };
+        Self {
+            tag,
+            tiff_type: 4,
+            count: values.len() as u32,
+            inline_value,
+            ool_data,
+        }
+    }
+
     pub(crate) fn short(tag: u16, value: u16) -> Self {
         let mut inline_value = [0; 4];
         inline_value[..2].copy_from_slice(&value.to_le_bytes());
@@ -60,12 +81,20 @@ impl SyntheticTag {
     }
 
     pub(crate) fn bytes(tag: u16, data: Vec<u8>) -> Self {
+        let count = data.len() as u32;
+        let (inline_value, ool_data) = if data.len() <= 4 {
+            let mut inline = [0; 4];
+            inline[..data.len()].copy_from_slice(&data);
+            (inline, None)
+        } else {
+            ([0; 4], Some(data))
+        };
         Self {
             tag,
             tiff_type: 7,
-            count: data.len() as u32,
-            inline_value: [0; 4],
-            ool_data: Some(data),
+            count,
+            inline_value,
+            ool_data,
         }
     }
 }
@@ -119,8 +148,10 @@ pub(crate) fn build_tiff(ifds: &[Vec<SyntheticTag>]) -> NamedTempFile {
         next_ifd_patch_positions.push(next_pos);
     }
 
-    buf[first_ifd_offset_pos..first_ifd_offset_pos + 4]
-        .copy_from_slice(&ifd_offsets[0].to_le_bytes());
+    if let Some(first_ifd_offset) = ifd_offsets.first() {
+        buf[first_ifd_offset_pos..first_ifd_offset_pos + 4]
+            .copy_from_slice(&first_ifd_offset.to_le_bytes());
+    }
     for idx in 0..ifd_offsets.len().saturating_sub(1) {
         let pos = next_ifd_patch_positions[idx];
         buf[pos..pos + 4].copy_from_slice(&ifd_offsets[idx + 1].to_le_bytes());

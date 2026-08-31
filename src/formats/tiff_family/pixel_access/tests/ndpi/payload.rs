@@ -1,6 +1,67 @@
 use super::super::*;
 use super::fixtures::*;
 
+fn build_ndpi_mcu_word_tiff(low: &[u32], high: &[u32]) -> NamedTempFile {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&le_u16(42));
+    let first_ifd_pos = buf.len();
+    buf.extend_from_slice(&le_u32(0));
+
+    let low_offset = append_optional_u32_array(&mut buf, low);
+    let high_offset = append_optional_u32_array(&mut buf, high);
+    let ifd_offset = buf.len() as u32;
+    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
+    append_ifd_tags(
+        &mut buf,
+        vec![
+            (256, 4, 1, le_u32(1)),
+            (257, 4, 1, le_u32(1)),
+            (
+                65426,
+                4,
+                low.len() as u32,
+                u32_array_offset_or_inline_value(low, low_offset),
+            ),
+            (
+                65432,
+                4,
+                high.len() as u32,
+                u32_array_offset_or_inline_value(high, high_offset),
+            ),
+        ],
+    );
+    temp_tiff_from_buffer(&buf)
+}
+
+#[test]
+fn ndpi_mcu_starts_combine_low_and_high_words() {
+    let file = build_ndpi_mcu_word_tiff(&[5, 7], &[1, 2]);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let reader = TiffPixelReader::new(
+        Arc::clone(&container),
+        single_series_layout(DatasetId::new(1), vec![], HashMap::new()),
+    );
+
+    let starts = reader
+        .ndpi_mcu_starts(ifd_id, 65426, 8, u64::MAX)
+        .expect("combine NDPI MCU-start words");
+    assert_eq!(starts.as_slice(), &[0x1_0000_0005, 0x2_0000_0007]);
+
+    let mismatch = build_ndpi_mcu_word_tiff(&[5, 7], &[1]);
+    let container = Arc::new(TiffContainer::open(mismatch.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let reader = TiffPixelReader::new(
+        Arc::clone(&container),
+        single_series_layout(DatasetId::new(2), vec![], HashMap::new()),
+    );
+    let error = reader
+        .ndpi_mcu_starts(ifd_id, 65426, 8, u64::MAX)
+        .expect_err("mismatched high-word count must fail");
+    assert!(error.to_string().contains("high MCU-start count"));
+}
+
 #[test]
 fn ndpi_jpeg_tile_payload_rejects_malformed_strip_metadata() {
     let (file, jpeg_header, strip_byte_count) = build_ndpi_scan_data_tiff_from_blobs(
@@ -192,9 +253,7 @@ fn ndpi_jpeg_tile_payload_accepts_relative_and_file_absolute_mcu_starts() {
                 .ndpi_mcu_starts_cache
                 .lock()
                 .unwrap()
-                .values()
-                .next()
-                .cloned()
+                .first_value()
                 .expect("MCU starts were cached");
             assert!(
                 cached.iter().all(|start| *start < strip_byte_count),

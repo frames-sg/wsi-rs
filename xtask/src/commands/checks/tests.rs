@@ -52,11 +52,11 @@ fn semver_check_uses_checksum_pinned_published_baseline() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
     )
     .expect("read semver script");
-    assert!(script.contains("BASELINE_VERSION=\"0.5.2\""));
+    assert!(script.contains("BASELINE_VERSION=\"0.6.0\""));
     assert!(script.contains(
-        "BASELINE_SHA256=\"0118b54cd6fe19b48d9170c1a54a089599e61442f076eff6a6da05d0f3891a98\""
+        "BASELINE_SHA256=\"c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75\""
     ));
-    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.6.0"));
+    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.7.0"));
     assert!(script.contains("--baseline-rustdoc"));
     assert!(script.contains("cargo +nightly-2026-04-17 rustdoc"));
     assert!(!script.contains("cargo +nightly rustdoc"));

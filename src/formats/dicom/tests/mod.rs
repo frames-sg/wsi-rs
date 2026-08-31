@@ -10,6 +10,7 @@ use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
 mod batch;
 mod cache;
 mod decode_formats;
+#[cfg(any(feature = "metal", feature = "cuda"))]
 mod device;
 mod fixtures;
 mod frame_boundaries;

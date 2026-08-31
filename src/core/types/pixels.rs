@@ -241,16 +241,29 @@ impl CpuTile {
         layout: CpuTileLayout,
         data: CpuTileData,
     ) -> Result<Self, WsiError> {
-        let expected = (width as usize)
-            .checked_mul(height as usize)
-            .and_then(|wh| wh.checked_mul(channels as usize))
+        let tile = Self {
+            width,
+            height,
+            channels,
+            color_space,
+            layout,
+            data,
+        };
+        tile.validate_invariants()?;
+        Ok(tile)
+    }
+
+    pub(crate) fn validate_invariants(&self) -> Result<(), WsiError> {
+        let expected = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .and_then(|wh| wh.checked_mul(self.channels as usize))
             .ok_or_else(|| {
                 WsiError::DisplayConversion(format!(
                     "CpuTile dimensions overflow: {}x{}x{}",
-                    width, height, channels,
+                    self.width, self.height, self.channels,
                 ))
             })?;
-        let actual = match &data {
+        let actual = match &self.data {
             CpuTileData::U8(v) => v.len(),
             CpuTileData::U16(v) => v.len(),
             CpuTileData::F32(v) => v.len(),
@@ -258,17 +271,10 @@ impl CpuTile {
         if actual != expected {
             return Err(WsiError::DisplayConversion(format!(
                 "CpuTile invariant violated: {}x{}x{} = {} samples, but data has {}",
-                width, height, channels, expected, actual,
+                self.width, self.height, self.channels, expected, actual,
             )));
         }
-        Ok(Self {
-            width,
-            height,
-            channels,
-            color_space,
-            layout,
-            data,
-        })
+        Ok(())
     }
 
     /// Construct an interleaved U8 CPU tile.

@@ -6,6 +6,7 @@ use super::interop::{resident_bytes, resident_test_image, u64_buffer_values};
 
 mod address;
 mod conversion;
+mod download;
 mod perf;
 
 fn test_device() -> Option<MetalDevice> {

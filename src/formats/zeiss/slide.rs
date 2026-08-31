@@ -23,21 +23,82 @@ impl SlideReader for ZeissReader {
         &self.slide.dataset
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        read_cpu_tiles_with_backend(
-            reqs,
-            output,
-            "RequireDevice is not supported for Zeiss",
-            |req, backend| self.read_tile_with_backend(req, backend),
-        )
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        match self.slide.exact_raw_jpeg_subblock(req) {
+            Ok(Some(_)) => TileCodecKind::Jpeg,
+            Ok(None) | Err(_) => TileCodecKind::Other,
+        }
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        read_cpu_tiles(reqs, |req, backend| {
+            self.read_tile_with_backend(req, backend)
+        })
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Auto)
+        self.read_tile_with_backend(req, BackendRequest::Cpu)
+    }
+
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        self.slide.read_raw_jpeg_tile(req)
+    }
+
+    fn read_raw_compressed_display_tile(
+        &self,
+        req: &TileViewRequest,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let scene =
+            self.slide
+                .dataset
+                .scenes
+                .get(req.scene.get())
+                .ok_or(WsiError::SceneOutOfRange {
+                    index: req.scene.get(),
+                    count: self.slide.dataset.scenes.len(),
+                })?;
+        let series = scene
+            .series
+            .get(req.series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: req.series.get(),
+                count: scene.series.len(),
+            })?;
+        let level =
+            series
+                .levels
+                .get(req.level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: req.level.get(),
+                    count: series.levels.len() as u32,
+                })?;
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            ..
+        } = level.tile_layout
+        else {
+            return Err(WsiError::Unsupported {
+                reason: "Zeiss raw JPEG display access requires a regular native tile grid".into(),
+            });
+        };
+        if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Zeiss raw JPEG display tile size {}x{} does not match native tile size {}x{}",
+                    req.tile_width, req.tile_height, tile_width, tile_height
+                ),
+            });
+        }
+
+        self.slide.read_raw_jpeg_tile(&TileRequest {
+            scene: req.scene,
+            series: req.series,
+            level: req.level,
+            plane: req.plane,
+            col: req.col,
+            row: req.row,
+        })
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
@@ -103,10 +164,11 @@ impl ZeissSlide {
             buffer
         };
         let arc = Arc::new(buffer);
+        let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
         self.associated_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(name.to_string(), arc.clone());
+            .put(name.to_string(), arc.clone(), retained_bytes);
         Ok(arc.as_ref().clone())
     }
 }

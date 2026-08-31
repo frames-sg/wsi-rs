@@ -5,6 +5,7 @@ pub(super) struct VmsSlide {
     pub(super) levels: Vec<VmsLevel>,
     pub(super) associated_paths: HashMap<String, PathBuf>,
     pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
+    pub(super) encoded_unit_bytes: u64,
 }
 
 pub(super) struct VmsLevel {
@@ -31,6 +32,7 @@ pub(super) struct VmsJpeg {
     pub(super) unreliable_mcu_starts: Vec<Option<u64>>,
     pub(super) decoded_tile_cache: Mutex<PrivateCache<(usize, u32), Arc<CpuTile>>>,
     pub(super) comment: Option<String>,
+    pub(super) encoded_unit_bytes: u64,
 }
 
 impl VmsLevel {

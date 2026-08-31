@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 
 const MAX_INSTALL_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_INSTALL_MANIFEST_ENTRIES: usize = 3;
+const LEGACY_LIBRARY_NAMES: [&str; 2] = ["libopenslide.4.dylib", "libopenslide.so.4"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformLibraryNames {
     MacOS,
     Linux,
+    Windows,
 }
 
 impl PlatformLibraryNames {
@@ -19,27 +21,20 @@ impl PlatformLibraryNames {
             Ok(Self::MacOS)
         } else if cfg!(target_os = "linux") {
             Ok(Self::Linux)
+        } else if cfg!(target_os = "windows") {
+            Ok(Self::Windows)
         } else {
-            Err("wsi_rs OpenSlide shim install supports macOS and Linux only".into())
+            Err("wsi_rs OpenSlide shim install supports macOS, Linux, and Windows only".into())
         }
     }
 
-    pub fn names(self) -> [&'static str; 3] {
+    pub fn names(self) -> &'static [&'static str] {
         match self {
-            Self::MacOS => [
-                "libopenslide.1.dylib",
-                "libopenslide.dylib",
-                "libopenslide.4.dylib",
-            ],
-            Self::Linux => ["libopenslide.so.1", "libopenslide.so", "libopenslide.so.4"],
+            Self::MacOS => &["libopenslide.1.dylib", "libopenslide.dylib"],
+            Self::Linux => &["libopenslide.so.1", "libopenslide.so"],
+            Self::Windows => &["libopenslide-1.dll"],
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstallStep {
-    Backup { from: PathBuf, to: PathBuf },
-    CopyShim { from: PathBuf, to: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,32 +102,9 @@ impl From<String> for InstallError {
 pub fn install_destinations(prefix: &Path, platform: PlatformLibraryNames) -> Vec<PathBuf> {
     platform
         .names()
-        .into_iter()
+        .iter()
         .map(|name| prefix.join("lib").join(name))
         .collect()
-}
-
-pub fn plan_install(
-    prefix: &Path,
-    shim: &Path,
-    platform: PlatformLibraryNames,
-    stamp: u64,
-    exists: impl Fn(&Path) -> bool,
-) -> Vec<InstallStep> {
-    let mut steps = Vec::new();
-    for destination in install_destinations(prefix, platform) {
-        if exists(&destination) {
-            steps.push(InstallStep::Backup {
-                from: destination.clone(),
-                to: backup_path(&destination, stamp),
-            });
-        }
-        steps.push(InstallStep::CopyShim {
-            from: shim.to_path_buf(),
-            to: destination,
-        });
-    }
-    steps
 }
 
 pub fn execute_install(
@@ -164,7 +136,7 @@ pub fn execute_install_detailed(
 
     let destinations = platform
         .names()
-        .into_iter()
+        .iter()
         .map(|name| lib_dir.join(name))
         .collect::<Vec<_>>();
     let entries = destinations
@@ -549,8 +521,11 @@ fn read_and_validate_manifest(
     }
     let allowed = PlatformLibraryNames::MacOS
         .names()
-        .into_iter()
-        .chain(PlatformLibraryNames::Linux.names())
+        .iter()
+        .chain(PlatformLibraryNames::Linux.names().iter())
+        .chain(PlatformLibraryNames::Windows.names().iter())
+        .copied()
+        .chain(LEGACY_LIBRARY_NAMES)
         .collect::<std::collections::HashSet<_>>();
     let mut destinations = std::collections::HashSet::new();
     for entry in &entries {

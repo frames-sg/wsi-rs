@@ -2,13 +2,6 @@ use super::super::*;
 use super::fixtures::MiraxFixture;
 use crate::core::registry::Slide;
 
-fn cpu_tile(pixels: TilePixels) -> CpuTile {
-    match pixels {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("MIRAX must return CPU pixels"),
-    }
-}
-
 #[test]
 fn synthetic_mirax_probes_opens_and_exposes_metadata() {
     let fixture = MiraxFixture::complete();
@@ -21,13 +14,11 @@ fn synthetic_mirax_probes_opens_and_exposes_metadata() {
     assert!(
         backend
             .probe(&fixture.path)
-            .expect("repeat cached MIRAX probe")
+            .expect("repeat MIRAX probe")
             .detected
     );
 
-    let reader = backend
-        .open(&fixture.path)
-        .expect("open cached synthetic MIRAX");
+    let reader = backend.open(&fixture.path).expect("open synthetic MIRAX");
     let dataset = reader.dataset();
     assert_eq!(dataset.properties.vendor(), Some("mirax"));
     assert_eq!(dataset.properties.objective_power(), Some(20.0));
@@ -89,6 +80,53 @@ fn synthetic_mirax_probes_opens_and_exposes_metadata() {
 }
 
 #[test]
+fn configured_metadata_limit_rejects_mirax_ini_before_open_allocations() {
+    let fixture = MiraxFixture::complete();
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(4)
+        .unwrap();
+    let backend = MiraxBackend::new();
+
+    let error = match backend.open_with_config(
+        &fixture.path,
+        BackendOpenConfig::new(CacheConfig::deterministic(), limits),
+    ) {
+        Ok(_) => panic!("tiny configured metadata limit must reject MIRAX INI values"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn objective_magnification_is_optional_and_accepts_legacy_x_suffix() {
+    let suffixed = MiraxFixture::complete();
+    let source = suffixed.complete_slidedat();
+    suffixed.write_slidedat(&source.replacen(
+        "OBJECTIVE_MAGNIFICATION=20",
+        "OBJECTIVE_MAGNIFICATION=20x",
+        1,
+    ));
+    let reader = MiraxBackend::new()
+        .open(&suffixed.path)
+        .expect("open MIRAX with suffixed objective power");
+    assert_eq!(reader.dataset().properties.objective_power(), Some(20.0));
+
+    let missing = MiraxFixture::complete();
+    let source = missing.complete_slidedat();
+    missing.write_slidedat(&source.replacen("OBJECTIVE_MAGNIFICATION=20\n", "", 1));
+    let reader = MiraxBackend::new()
+        .open(&missing.path)
+        .expect("open MIRAX without objective power");
+    assert_eq!(reader.dataset().properties.objective_power(), None);
+}
+
+#[test]
 fn reader_decodes_jpeg_png_bmp_crops_batches_and_caches() {
     let fixture = MiraxFixture::complete();
     let slide = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
@@ -123,25 +161,21 @@ fn reader_decodes_jpeg_png_bmp_crops_batches_and_caches() {
     );
 
     let batch = reader
-        .read_tiles(
-            &[
-                TileRequest::new(0, 0, 2, 0, 0),
-                TileRequest::new(0, 0, 2, 2, 1),
-            ],
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tiles_cpu(&[
+            TileRequest::new(0, 0, 2, 0, 0),
+            TileRequest::new(0, 0, 2, 2, 1),
+        ])
         .expect("decode MIRAX BMP crop batch");
     let dimensions = batch
         .into_iter()
-        .map(cpu_tile)
         .map(|tile| (tile.width(), tile.height()))
         .collect::<Vec<_>>();
     assert_eq!(dimensions, vec![(4, 4), (4, 4)]);
 
-    assert!(matches!(
-        reader.read_tiles(&[], TileOutputPreference::require_device_auto()),
-        Err(WsiError::Unsupported { .. })
-    ));
+    assert!(reader
+        .read_tiles_cpu(&[])
+        .expect("empty MIRAX batch")
+        .is_empty());
     assert!(matches!(
         reader.read_tile_cpu(&TileRequest::new(0, 0, 0, 3, 3)),
         Err(WsiError::TileRead { .. })
@@ -214,7 +248,7 @@ fn open_public_slide() -> (MiraxFixture, Slide) {
 }
 
 fn public_tile_error(slide: &Slide, request: TileRequest) -> WsiError {
-    match slide.read_tile(&request, TileOutputPreference::cpu_only()) {
+    match slide.read_tile(&request) {
         Ok(_) => panic!("invalid MIRAX request unexpectedly read a tile"),
         Err(error) => error,
     }

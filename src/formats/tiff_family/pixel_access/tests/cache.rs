@@ -82,3 +82,34 @@ fn synthetic_level_cache_default_budget_holds_common_tail_overview_level() {
         "default synthetic cache should hold a common NDPI tail overview level"
     );
 }
+
+#[test]
+fn tiff_private_cache_defaults_sum_to_thirty_two_mib() {
+    let (full, strips, mcu, synthetic) =
+        super::super::reader::private_cache_budgets(crate::CacheConfig::deterministic());
+
+    assert_eq!(full + strips + mcu + synthetic * 2, 32 * 1024 * 1024);
+}
+
+#[test]
+fn private_cache_environment_shares_are_clamped_to_the_aggregate() {
+    let [full, strips, mcu, synthetic] =
+        super::super::reader::clamp_private_cache_budgets(1_000, [10_000; 4]);
+
+    assert!(full + strips + mcu + synthetic * 2 <= 1_000);
+    assert!(full > 0 && strips > 0 && mcu > 0 && synthetic > 0);
+}
+
+#[test]
+fn ndpi_mcu_starts_cache_evicts_by_retained_bytes() {
+    let mut cache = NdpiMcuStartsCache::new(200);
+    let first_key = (IfdId(1), 65426, 0, 100);
+    let second_key = (IfdId(2), 65426, 100, 100);
+
+    cache.put(first_key, Arc::new(vec![1; 8]));
+    cache.put(second_key, Arc::new(vec![2; 8]));
+
+    assert!(cache.current_bytes() <= cache.max_bytes());
+    assert!(cache.get(&first_key).is_none());
+    assert!(cache.get(&second_key).is_some());
+}

@@ -1,10 +1,15 @@
 [package]
 name = "wsi-rs-openslide-shim"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "OpenSlide-compatible C ABI shim backed by wsi-rs"
 publish = false
+
+[features]
+default = []
+# Internal bridge used by the performance runner. It adds no C ABI symbols.
+route-telemetry = ["wsi-rs/route-telemetry"]
 
 [lib]
 name = "wsi_rs_openslide_shim"

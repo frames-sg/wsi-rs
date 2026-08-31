@@ -1,24 +1,19 @@
 use super::fixtures::*;
 use super::*;
+use ::image::{DynamicImage, ImageFormat};
+use std::io::Cursor;
 fn read_first_tile(path: &Path) -> CpuTile {
     let slide = Slide::open(path).expect("open DICOM slide");
-    match slide
-        .read_tile(
-            &TileRequest {
-                scene: 0usize.into(),
-                series: 0usize.into(),
-                level: 0u32.into(),
-                plane: PlaneSelection::default().into(),
-                col: 0,
-                row: 0,
-            },
-            TileOutputPreference::cpu(),
-        )
+    slide
+        .read_tile(&TileRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: PlaneSelection::default().into(),
+            col: 0,
+            row: 0,
+        })
         .expect("read first tile")
-    {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("DICOM tests request CPU output"),
-    }
 }
 
 fn read_first_raw_compressed_tile(path: &Path) -> RawCompressedTile {
@@ -69,6 +64,13 @@ fn rgb_bytes(tile: &CpuTile) -> Vec<u8> {
     assert_eq!(tile.color_space, ColorSpace::Rgb);
     assert_eq!(tile.layout, CpuTileLayout::Interleaved);
     tile.data.as_u8().expect("u8 RGB tile").to_vec()
+}
+
+fn load_rgb_fixture(bytes: &[u8]) -> ::image::RgbImage {
+    match ::image::load(Cursor::new(bytes), ImageFormat::Pnm).expect("load JP2K reference PPM") {
+        DynamicImage::ImageRgb8(image) => image,
+        other => other.to_rgb8(),
+    }
 }
 
 #[test]
@@ -131,6 +133,33 @@ fn expands_monochrome_8bit_native_frames_to_rgb() {
         rgb_bytes(&read_first_tile(&path)),
         vec![0, 0, 0, 64, 64, 64, 128, 128, 128, 255, 255, 255]
     );
+}
+
+#[test]
+fn decodes_jpeg_extended_sequential_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("extended-sequential-jpeg.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::JPEG_EXTENDED12_BIT,
+            photometric_interpretation: "YBR_FULL_422",
+            rows: 8,
+            columns: 8,
+            total_pixel_matrix_rows: 8,
+            total_pixel_matrix_columns: 8,
+            pixel_data: TestPixelData::Encapsulated(extended_sequential_8x8_jpeg()),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+
+    let tile = read_first_tile(&path);
+    assert_eq!((tile.width, tile.height, tile.channels), (8, 8, 3));
+    assert_eq!(tile.color_space, ColorSpace::Rgb);
+
+    let raw = read_first_raw_compressed_tile(&path);
+    assert_eq!(raw.compression(), Compression::Jpeg);
+    assert_eq!(raw.data(), extended_sequential_8x8_jpeg());
 }
 
 #[test]
@@ -255,10 +284,9 @@ fn reads_legacy_htj2k_ybr_full_422_raw_compressed_frame_as_ycbcr() {
 
 #[test]
 fn tile_codec_kind_classifies_dicom_transfer_syntaxes() {
-    assert_eq!(
-        dicom_tile_codec_kind(JPEG_TRANSFER_SYNTAX),
-        TileCodecKind::Jpeg
-    );
+    for transfer_syntax in JPEG_TRANSFER_SYNTAXES {
+        assert_eq!(dicom_tile_codec_kind(transfer_syntax), TileCodecKind::Jpeg);
+    }
     assert_eq!(
         dicom_tile_codec_kind(uids::JPEG2000_LOSSLESS),
         TileCodecKind::Jp2k
@@ -310,6 +338,68 @@ fn reads_jpeg2000_ybr_rct_raw_compressed_frame_as_ycbcr() {
 }
 
 #[test]
+fn decodes_jpeg2000_rgb_ybr_ict_and_ybr_rct_paths_independently() {
+    let cases = [
+        (
+            "rgb",
+            uids::JPEG2000,
+            "RGB",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.ppm").as_slice(),
+            4,
+            100,
+        ),
+        (
+            "ybr-ict",
+            uids::JPEG2000,
+            "YBR_ICT",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.ppm").as_slice(),
+            4,
+            100,
+        ),
+        (
+            "ybr-rct",
+            uids::JPEG2000_LOSSLESS,
+            "YBR_RCT",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.ppm").as_slice(),
+            0,
+            0,
+        ),
+    ];
+
+    for (name, transfer_syntax, photometric, codestream, reference, max_delta, mean_x100) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(format!("{name}.dcm"));
+        write_test_dicom(
+            &path,
+            TestDicomOptions {
+                transfer_syntax,
+                samples_per_pixel: 3,
+                photometric_interpretation: photometric,
+                planar_configuration: Some(0),
+                rows: 12,
+                columns: 16,
+                total_pixel_matrix_rows: 12,
+                total_pixel_matrix_columns: 16,
+                pixel_data: TestPixelData::Encapsulated(codestream.to_vec()),
+                ..TestDicomOptions::native(Vec::new())
+            },
+        );
+
+        let tile = read_first_tile(&path);
+        crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance(
+            &tile,
+            &load_rgb_fixture(reference),
+            max_delta,
+            mean_x100,
+            name,
+        );
+    }
+}
+
+#[test]
 fn corrupt_compressed_frames_preserve_tile_context_for_each_codec() {
     for (file_name, transfer_syntax, frame) in [
         ("corrupt-jpeg.dcm", JPEG_TRANSFER_SYNTAX, vec![0; 16]),
@@ -332,7 +422,7 @@ fn corrupt_compressed_frames_preserve_tile_context_for_each_codec() {
             row: 0,
         };
 
-        let error = match slide.read_tile(&request, TileOutputPreference::cpu()) {
+        let error = match slide.read_tile(&request) {
             Ok(_) => panic!("corrupt {transfer_syntax} frame must fail decoding"),
             Err(error) => error,
         };

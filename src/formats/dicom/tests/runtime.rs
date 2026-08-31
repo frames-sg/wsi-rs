@@ -20,8 +20,10 @@ pub(super) fn test_dicom_image_with_transfer_syntax(
         grid,
         pixel_spacing: None,
         objective_lens_power: None,
+        icc_profile: Vec::new(),
         frame_store: DicomFrameStore {
             path: PathBuf::from(format!("{sop_instance_uid}.dcm")),
+            encoded_unit_bytes: crate::SlideLimits::default().encoded_unit_bytes(),
             native_pixel_data: None,
             encapsulated_frames: Mutex::new(None),
             compressed_frame_cache: Mutex::new(test_private_cache()),

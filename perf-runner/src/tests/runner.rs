@@ -87,14 +87,14 @@ fn workload_accounting_covers_cache_shares_buffers_and_checksums() {
         }],
     );
     let first =
-        finish_workload("first", vec![10, 20, 30], 3_000, 2, 30, checksum).expect("workload");
+        finish_workload("first", vec![10, 20, 30], 3_000, 2, 30, checksum, None).expect("workload");
     assert_eq!(first.n, 3);
     assert_eq!(first.throughput_bytes_per_second, 100_000_000);
 
-    let zero_elapsed =
-        finish_workload("zero", vec![1], 100, 1, 0, Sha256::new()).expect("zero-elapsed workload");
+    let zero_elapsed = finish_workload("zero", vec![1], 100, 1, 0, Sha256::new(), None)
+        .expect("zero-elapsed workload");
     assert_eq!(zero_elapsed.throughput_bytes_per_second, 0);
-    assert!(finish_workload("empty", vec![], 0, 1, 0, Sha256::new()).is_err());
+    assert!(finish_workload("empty", vec![], 0, 1, 0, Sha256::new(), None).is_err());
     assert_ne!(first.checksum_sha256, zero_elapsed.checksum_sha256);
 
     let level = LevelResult::from(LevelInfo {
@@ -104,6 +104,34 @@ fn workload_accounting_covers_cache_shares_buffers_and_checksums() {
     });
     assert_eq!((level.width, level.height, level.downsample), (5, 4, 2.0));
     assert!(elapsed_micros(Instant::now()) <= 1_000_000);
+}
+
+#[test]
+fn route_diagnostics_distinguish_device_cpu_choice_and_fallback() {
+    let before = RouteTelemetrySnapshot::default();
+    let after = RouteTelemetrySnapshot {
+        metal: RouteBackendSnapshot {
+            device_attempt_tiles: 12,
+            device_tiles: 8,
+            adaptive_cpu_tiles: 3,
+            fallback_tiles: 1,
+            device_failure_fallback_tiles: 1,
+            unavailable_fallback_tiles: 0,
+        },
+        ..RouteTelemetrySnapshot::default()
+    };
+
+    let diagnostics = route_diagnostics(Some(before), Some(after))
+        .unwrap()
+        .expect("route activity");
+    assert_eq!(diagnostics["decode_route"]["feature"], "metal");
+    assert_eq!(diagnostics["decode_route"]["device_tiles"], 8);
+    assert_eq!(diagnostics["decode_route"]["adaptive_cpu_tiles"], 3);
+    assert_eq!(diagnostics["decode_route"]["fallback_tiles"], 1);
+    assert_eq!(
+        diagnostics["decode_route"]["device_failure_fallback_tiles"],
+        1
+    );
 }
 
 #[test]
@@ -151,7 +179,9 @@ fn orchestration_fails_with_context_before_or_during_dynamic_loading() {
             },
         ],
     };
-    assert!(run_read_workload(&manifest, &manifest, 1_024, 2, workload)
-        .unwrap_err()
-        .contains("failed to load"));
+    assert!(
+        run_read_workload(&manifest, &manifest, 1_024, 2, workload, None)
+            .unwrap_err()
+            .contains("failed to load")
+    );
 }

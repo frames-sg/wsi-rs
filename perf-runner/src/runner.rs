@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -14,11 +15,12 @@ use crate::{
     CAPTURE_WORKLOAD_NAMES,
 };
 use wsi_rs_test_support::openslide::{
-    OpenSlideApi, OpenSlideBounds, OpenSlideCache, OpenSlideLevel,
+    OpenSlide, OpenSlideApi, OpenSlideBounds, OpenSlideCache, OpenSlideLevel,
 };
 
-pub const WORKER_SCHEMA_VERSION: u32 = 3;
+pub const WORKER_SCHEMA_VERSION: u32 = 4;
 const OPEN_SAMPLE_COUNT: usize = 10;
+const ROUTE_TELEMETRY_PROPERTY: &str = "wsi-rs.internal.decode-route-telemetry";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkerResult {
@@ -59,6 +61,24 @@ pub struct WorkloadResult {
     pub effective_elapsed_us: u64,
     pub throughput_bytes_per_second: u64,
     pub checksum_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+struct RouteBackendSnapshot {
+    device_attempt_tiles: u64,
+    device_tiles: u64,
+    adaptive_cpu_tiles: u64,
+    fallback_tiles: u64,
+    device_failure_fallback_tiles: u64,
+    unavailable_fallback_tiles: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+struct RouteTelemetrySnapshot {
+    metal: RouteBackendSnapshot,
+    cuda: RouteBackendSnapshot,
 }
 
 pub fn run(config: &WorkerConfig) -> Result<WorkerResult, String> {
@@ -108,6 +128,7 @@ pub fn run(config: &WorkerConfig) -> Result<WorkerResult, String> {
                 config.cache_bytes,
                 config.workers,
                 workload,
+                Some(&slide),
             )?);
         }
     }
@@ -192,6 +213,7 @@ fn run_open_latency(
         1,
         effective_elapsed_us,
         checksum,
+        None,
     )
 }
 
@@ -215,7 +237,12 @@ fn run_read_workload(
     cache_bytes: usize,
     requested_workers: usize,
     workload: Workload,
+    diagnostics_slide: Option<&OpenSlide>,
 ) -> Result<WorkloadResult, String> {
+    let route_before = diagnostics_slide
+        .map(read_route_telemetry)
+        .transpose()?
+        .flatten();
     let worker_count = requested_workers.min(workload.reads.len()).max(1);
     let barrier = Arc::new(Barrier::new(worker_count));
     let worker_results = thread::scope(|scope| {
@@ -272,6 +299,11 @@ fn run_read_workload(
         checksum.update(sample.digest);
         bytes_read = bytes_read.saturating_add(sample.bytes_read);
     }
+    let route_after = diagnostics_slide
+        .map(read_route_telemetry)
+        .transpose()?
+        .flatten();
+    let diagnostics = route_diagnostics(route_before, route_after)?;
     finish_workload(
         workload.name,
         samples,
@@ -279,6 +311,7 @@ fn run_read_workload(
         worker_count,
         effective_elapsed_us,
         checksum,
+        diagnostics,
     )
 }
 
@@ -374,6 +407,7 @@ fn finish_workload(
     workers: usize,
     effective_elapsed_us: u64,
     checksum: Sha256,
+    diagnostics: Option<Value>,
 ) -> Result<WorkloadResult, String> {
     let summary = summarize_samples(&samples_us)
         .ok_or_else(|| format!("workload {name} produced no samples"))?;
@@ -399,7 +433,76 @@ fn finish_workload(
         effective_elapsed_us,
         throughput_bytes_per_second: throughput,
         checksum_sha256: format!("{:x}", checksum.finalize()),
+        diagnostics,
     })
+}
+
+fn read_route_telemetry(
+    slide: &wsi_rs_test_support::openslide::OpenSlide,
+) -> Result<Option<RouteTelemetrySnapshot>, String> {
+    let Some(raw) = slide.property(ROUTE_TELEMETRY_PROPERTY) else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| format!("invalid wsi-rs route telemetry property: {error}"))
+}
+
+fn route_diagnostics(
+    before: Option<RouteTelemetrySnapshot>,
+    after: Option<RouteTelemetrySnapshot>,
+) -> Result<Option<Value>, String> {
+    let (Some(before), Some(after)) = (before, after) else {
+        return Ok(None);
+    };
+    let metal = route_delta(after.metal, before.metal);
+    let cuda = route_delta(after.cuda, before.cuda);
+    let mut active = [("metal", metal), ("cuda", cuda)]
+        .into_iter()
+        .filter(|(_, counters)| route_activity(*counters));
+    let Some((feature, counters)) = active.next() else {
+        return Ok(None);
+    };
+    if active.next().is_some() {
+        return Err("workload reported route activity from both Metal and CUDA".into());
+    }
+    Ok(Some(json!({
+        "decode_route": {
+            "feature": feature,
+            "device_attempt_tiles": counters.device_attempt_tiles,
+            "device_tiles": counters.device_tiles,
+            "adaptive_cpu_tiles": counters.adaptive_cpu_tiles,
+            "fallback_tiles": counters.fallback_tiles,
+            "device_failure_fallback_tiles": counters.device_failure_fallback_tiles,
+            "unavailable_fallback_tiles": counters.unavailable_fallback_tiles,
+        }
+    })))
+}
+
+fn route_activity(counters: RouteBackendSnapshot) -> bool {
+    counters.device_attempt_tiles != 0
+        || counters.device_tiles != 0
+        || counters.adaptive_cpu_tiles != 0
+        || counters.fallback_tiles != 0
+}
+
+fn route_delta(after: RouteBackendSnapshot, before: RouteBackendSnapshot) -> RouteBackendSnapshot {
+    RouteBackendSnapshot {
+        device_attempt_tiles: after
+            .device_attempt_tiles
+            .saturating_sub(before.device_attempt_tiles),
+        device_tiles: after.device_tiles.saturating_sub(before.device_tiles),
+        adaptive_cpu_tiles: after
+            .adaptive_cpu_tiles
+            .saturating_sub(before.adaptive_cpu_tiles),
+        fallback_tiles: after.fallback_tiles.saturating_sub(before.fallback_tiles),
+        device_failure_fallback_tiles: after
+            .device_failure_fallback_tiles
+            .saturating_sub(before.device_failure_fallback_tiles),
+        unavailable_fallback_tiles: after
+            .unavailable_fallback_tiles
+            .saturating_sub(before.unavailable_fallback_tiles),
+    }
 }
 
 fn elapsed_micros(started: Instant) -> u64 {

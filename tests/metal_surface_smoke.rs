@@ -2,37 +2,13 @@
 
 use j2k_core::{BackendKind, BackendRequest, DeviceSurface, ImageDecodeDevice, PixelFormat};
 
-const JPEG_FIXTURE: &[u8] = include_bytes!("fixtures/jpeg/baseline_420_16x16.jpg");
-
 const _: () = {
     fn assert_send<T: Send>() {}
-    let _ = assert_send::<j2k_jpeg_metal::Surface>;
     let _ = assert_send::<j2k_metal::Surface>;
 };
 
 #[test]
-fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
-    let mut jpeg_decoder = j2k_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg decoder");
-    let jpeg_surface = jpeg_decoder
-        .decode_to_device(PixelFormat::Rgb8, BackendRequest::Metal)
-        .expect("jpeg metal surface");
-    describe_jpeg_surface("jpeg-metal", &jpeg_surface);
-    let jpeg_image = jpeg_surface
-        .resident_metal_image()
-        .expect("jpeg resident Metal image");
-    assert_eq!(jpeg_surface.backend_kind(), BackendKind::Metal);
-    assert_eq!(jpeg_image.byte_offset(), 0);
-    assert!(jpeg_image.byte_len() >= jpeg_surface.byte_len());
-
-    let mut jpeg_cpu_decoder =
-        j2k_jpeg_metal::Decoder::new(JPEG_FIXTURE).expect("jpeg cpu decoder");
-    let jpeg_cpu_surface = jpeg_cpu_decoder
-        .decode_to_device(PixelFormat::Rgb8, BackendRequest::Cpu)
-        .expect("jpeg cpu surface");
-    describe_jpeg_surface("jpeg-cpu", &jpeg_cpu_surface);
-    assert_eq!(jpeg_cpu_surface.backend_kind(), BackendKind::Cpu);
-    assert!(jpeg_cpu_surface.resident_metal_image().is_none());
-
+fn metal_surface_accessors_are_public_for_j2k() {
     let j2k_bytes = fixture_gray8_j2k();
     let mut j2k_decoder = j2k_metal::J2kDecoder::new(&j2k_bytes).expect("j2k decoder");
     let j2k_surface = j2k_decoder
@@ -53,19 +29,6 @@ fn metal_surface_accessors_are_public_for_jpeg_and_j2k() {
     describe_j2k_surface("j2k-cpu", &j2k_cpu_surface);
     assert_eq!(j2k_cpu_surface.backend_kind(), BackendKind::Cpu);
     assert!(j2k_cpu_surface.resident_metal_image().is_none());
-}
-
-fn describe_jpeg_surface(label: &str, surface: &j2k_jpeg_metal::Surface) {
-    let resident = surface
-        .resident_metal_image()
-        .map(|image| (image.device_registry_id(), image.byte_offset()));
-    println!(
-        "{label}: dimensions={:?} pitch_bytes={} pixel_format={:?} backend={:?} resident={resident:?}",
-        surface.dimensions(),
-        surface.pitch_bytes(),
-        surface.pixel_format(),
-        surface.backend_kind(),
-    );
 }
 
 fn describe_j2k_surface(label: &str, surface: &j2k_metal::Surface) {

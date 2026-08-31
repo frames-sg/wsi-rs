@@ -11,13 +11,14 @@ use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
 
 use super::DicomImage;
-use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
+use crate::formats::dicom::backend::{is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax};
 use crate::formats::dicom::decode::{
-    decode_rle_lossless_frame, frame_bytes_to_rgb_tile, jp2k_photometric_is_ycbcr,
+    decode_rle_lossless_frame, dicom_jpeg_color_transform, frame_bytes_to_rgb_tile,
+    jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::frame_index::read_exact_at;
 use crate::formats::dicom::metadata::invalid_slide;
-use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, JPEG_TRANSFER_SYNTAX, RLE_TRANSFER_SYNTAX};
+use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
 
 impl DicomImage {
     pub(in super::super) fn decode_uncompressed_frame_sample_buffer(
@@ -147,16 +148,23 @@ impl DicomImage {
             }
         }
 
-        let buffer = if self.transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
+        let buffer = if is_jpeg_transfer_syntax(&self.transfer_syntax_uid) {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
+            validate_jpeg_transfer_syntax_frame(&self.transfer_syntax_uid, bytes.as_slice())
+                .map_err(|err| WsiError::TileRead {
+                    col,
+                    row,
+                    level,
+                    reason: err.to_string(),
+                })?;
             crate::core::batch::exactly_one(
                 decode_batch_jpeg(&[JpegDecodeJob {
                     data: Cow::Borrowed(bytes.as_slice()),
                     tables: None,
                     expected_width: self.tile_width,
                     expected_height: self.tile_height,
-                    color_transform: j2k_jpeg::ColorTransform::Auto,
+                    color_transform: dicom_jpeg_color_transform(&self.photometric_interpretation),
                     force_dimensions: false,
                     requested_size: None,
                 }]),

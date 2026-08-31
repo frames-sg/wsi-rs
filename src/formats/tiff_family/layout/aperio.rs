@@ -16,6 +16,8 @@ use super::{
     TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
+const TIFF_SUBFILE_TYPE: u16 = 254;
+
 // ── AperioInterpreter ────────────────────────────────────────────
 
 pub(crate) struct AperioInterpreter;
@@ -198,6 +200,16 @@ impl TiffLayoutInterpreter for AperioInterpreter {
         // Phase 3: Classify stripped IFDs as associated images
         let mut associated_images: HashMap<String, AssociatedImage> = HashMap::new();
         let mut associated_sources: HashMap<String, TileSource> = HashMap::new();
+        let main_ifd = tiled_ifds
+            .first()
+            .ok_or_else(|| TiffParseError::Structure("No tiled pyramid levels".into()))?
+            .ifd_id;
+        let main_icc_name = aperio_ifd_property(container, main_ifd, "ICC Profile");
+        let main_icc = container
+            .get_bytes(main_ifd, tags::ICC_PROFILE)
+            .ok()
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
 
         for sifd in &stripped_ifds {
             if sifd.width == 0 || sifd.height == 0 {
@@ -207,26 +219,42 @@ impl TiffLayoutInterpreter for AperioInterpreter {
             let name = if sifd.ifd_index == 1 {
                 "thumbnail".to_string()
             } else {
-                // Check ImageDescription for "label" or "macro"
-                container
-                    .get_string(sifd.ifd_id, tags::IMAGE_DESCRIPTION)
-                    .ok()
-                    .and_then(|desc| {
-                        let lower = desc.to_lowercase();
-                        if lower.contains("label") {
-                            Some("label".to_string())
-                        } else if lower.contains("macro") {
-                            Some("macro".to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| format!("image_{}", sifd.ifd_index))
+                match container.get_u32(sifd.ifd_id, TIFF_SUBFILE_TYPE).ok() {
+                    Some(1) => Some("label".to_string()),
+                    Some(9) => Some("macro".to_string()),
+                    _ => None,
+                }
+                .or_else(|| {
+                    // Older slides often identify associated images only in
+                    // ImageDescription; newer slides use TIFF SubfileType.
+                    container
+                        .get_string(sifd.ifd_id, tags::IMAGE_DESCRIPTION)
+                        .ok()
+                        .and_then(|desc| {
+                            let lower = desc.to_lowercase();
+                            if lower.contains("label") {
+                                Some("label".to_string())
+                            } else if lower.contains("macro") {
+                                Some("macro".to_string())
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .unwrap_or_else(|| format!("image_{}", sifd.ifd_index))
             };
 
             let spp = container
                 .get_u32(sifd.ifd_id, tags::SAMPLES_PER_PIXEL)
                 .unwrap_or(3) as u16;
+            let icc_profile = if name == "thumbnail"
+                && main_icc_name.is_some()
+                && main_icc_name == aperio_ifd_property(container, sifd.ifd_id, "ICC Profile")
+            {
+                main_icc.clone()
+            } else {
+                Vec::new()
+            };
 
             associated_images.insert(
                 name.clone(),
@@ -234,6 +262,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
                     dimensions: (sifd.width, sifd.height),
                     sample_type: SampleType::Uint8,
                     channels: spp,
+                    icc_profile,
                 },
             );
             associated_sources.insert(
@@ -277,6 +306,17 @@ impl TiffLayoutInterpreter for AperioInterpreter {
             tiled_ifds.iter().map(|ifd| ifd.ifd_id),
         )
     }
+}
+
+fn aperio_ifd_property(container: &TiffContainer, ifd_id: IfdId, key: &str) -> Option<String> {
+    let description = container.get_string(ifd_id, tags::IMAGE_DESCRIPTION).ok()?;
+    description.split('|').skip(1).find_map(|part| {
+        let (candidate, value) = part.split_once('=')?;
+        (candidate.trim() == key)
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
 }
 
 impl AperioInterpreter {

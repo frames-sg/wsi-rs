@@ -14,8 +14,9 @@ use crate::core::limits::{
     checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES, MAX_DECODED_IMAGE_BYTES,
 };
 use crate::core::registry::{
-    read_cpu_tiles_with_backend, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult,
-    SlideReader,
+    read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
+    ConservativeManagedReader, DatasetReader, FormatProbe, ManagedSlideReader, OpenBudget,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
@@ -47,11 +48,28 @@ impl FormatProbe for OlympusVsiBackend {
     }
 }
 
+impl ConfiguredFormatProbe for OlympusVsiBackend {}
+
 impl DatasetReader for OlympusVsiBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        Ok(Box::new(OlympusVsiReader {
-            slide: Arc::new(OlympusVsiSlide::parse(path)?),
-        }))
+        let reader = self.open_with_config(path, BackendOpenConfig::deterministic())?;
+        Ok(reader)
+    }
+}
+
+impl ConfiguredDatasetReader for OlympusVsiBackend {
+    fn open_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        let reader: Box<dyn SlideReader> = Box::new(OlympusVsiReader {
+            slide: Arc::new(OlympusVsiSlide::parse_with_config(path, config)?),
+        });
+        Ok(Box::new(ConservativeManagedReader::new(
+            reader,
+            config.limits.encoded_unit_bytes(),
+        )))
     }
 }
 
@@ -64,21 +82,14 @@ impl SlideReader for OlympusVsiReader {
         &self.slide.dataset
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        read_cpu_tiles_with_backend(
-            reqs,
-            output,
-            "RequireDevice not supported for Olympus VSI",
-            |req, backend| self.read_tile_with_backend(req, backend),
-        )
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        read_cpu_tiles(reqs, |req, backend| {
+            self.read_tile_with_backend(req, backend)
+        })
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Auto)
+        self.read_tile_with_backend(req, BackendRequest::Cpu)
     }
 }
 
@@ -155,18 +166,35 @@ struct OlympusVsiSlide {
 }
 
 impl OlympusVsiSlide {
+    #[cfg(test)]
     fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_config(path, BackendOpenConfig::deterministic())
+    }
+
+    fn parse_with_config(path: &Path, config: BackendOpenConfig) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(config.limits);
         let dir =
             companion_dir(path).ok_or_else(|| invalid_slide(path, "missing companion dir"))?;
-        let mut ets_paths = find_ets_files(&dir)?;
+        let mut ets_paths = find_ets_files(&dir, &budget)?;
         if ets_paths.is_empty() {
             return Err(invalid_slide(path, "no ETS frame files found"));
         }
 
-        let mut scenes = ets_paths
-            .drain(..)
-            .map(|ets_path| EtsScene::parse(&ets_path))
-            .collect::<Result<Vec<_>, _>>()?;
+        let scene_index_bytes = u64::try_from(ets_paths.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<EtsScene>()).unwrap_or(u64::MAX));
+        budget.retain_index(scene_index_bytes)?;
+        let mut scenes = Vec::new();
+        scenes
+            .try_reserve_exact(ets_paths.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS scene index",
+                requested: scene_index_bytes,
+                limit: config.limits.tile_index_bytes(),
+            })?;
+        for ets_path in ets_paths.drain(..) {
+            scenes.push(EtsScene::parse_with_budget(&ets_path, &budget)?);
+        }
         scenes.sort_by_key(|scene| Reverse(scene.level0_area()));
 
         let mut quickhash = Quickhash1::new();
@@ -237,10 +265,18 @@ struct EtsScene {
     samples_per_pixel: u32,
     background: Vec<u8>,
     channels: Vec<ChannelInfo>,
+    encoded_unit_limit: u64,
+    decoded_output_limit: u64,
 }
 
 impl EtsScene {
+    #[cfg(test)]
     fn parse(path: &Path) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(crate::SlideLimits::default());
+        Self::parse_with_budget(path, &budget)
+    }
+
+    fn parse_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
         let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
@@ -287,7 +323,31 @@ impl EtsScene {
             tile_height,
         )
         .map_err(|message| invalid_slide(path, message))?;
-        let mut background = vec![0; background_len];
+        let decoded_tile_bytes = u64::from(tile_width)
+            .checked_mul(u64::from(tile_height))
+            .and_then(|pixels| pixels.checked_mul(u64::from(samples_per_pixel.max(3))))
+            .and_then(|samples| {
+                samples.checked_mul(u64::try_from(sample_type.byte_size()).unwrap_or(u64::MAX))
+            })
+            .unwrap_or(u64::MAX);
+        let decoded_limit = MAX_DECODED_IMAGE_BYTES.min(budget.limits().decoded_output_bytes());
+        if decoded_tile_bytes > decoded_limit {
+            return Err(WsiError::ResourceLimit {
+                resource: "decoded output",
+                requested: decoded_tile_bytes,
+                limit: decoded_limit,
+            });
+        }
+        budget.retain_metadata(u64::try_from(background_len).unwrap_or(u64::MAX))?;
+        let mut background = Vec::new();
+        background
+            .try_reserve_exact(background_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS background metadata",
+                requested: u64::try_from(background_len).unwrap_or(u64::MAX),
+                limit: budget.limits().aggregate_metadata_bytes(),
+            })?;
+        background.resize(background_len, 0);
         file.read_exact(&mut background)?;
         let remaining_background = ETS_BACKGROUND_BYTES as usize - background_len;
         file.seek(SeekFrom::Current(remaining_background as i64))?;
@@ -305,9 +365,14 @@ impl EtsScene {
 
         file.seek(SeekFrom::Start(used_chunk_offset))?;
         let tile_index_limit = u64::from(MAX_ETS_TILES)
-            * u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX);
-        let tile_index_bytes = u64::from(n_used_chunks)
-            * u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX);
+            .saturating_mul(
+                u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX),
+            )
+            .min(budget.limits().tile_index_bytes());
+        let tile_index_bytes = u64::from(n_used_chunks).saturating_mul(
+            u64::try_from(std::mem::size_of::<(EtsTileKey, EtsTile)>()).unwrap_or(u64::MAX),
+        );
+        budget.retain_index(tile_index_bytes)?;
         let mut tiles = HashMap::new();
         tiles
             .try_reserve(n_used_chunks as usize)
@@ -322,7 +387,15 @@ impl EtsScene {
         let mut max_t = 0u32;
         for _ in 0..n_used_chunks {
             file.seek(SeekFrom::Current(4))?;
-            let mut coords = Vec::with_capacity(n_dimensions as usize);
+            let coordinate_count = n_dimensions as usize;
+            let mut coords = Vec::new();
+            coords
+                .try_reserve_exact(coordinate_count)
+                .map_err(|_| WsiError::ResourceLimit {
+                    resource: "Olympus ETS chunk coordinates",
+                    requested: u64::from(n_dimensions).saturating_mul(4),
+                    limit: u64::from(MAX_ETS_DIMENSIONS).saturating_mul(4),
+                })?;
             for _ in 0..n_dimensions {
                 coords.push(file.read_i32::<LittleEndian>()?);
             }
@@ -338,6 +411,13 @@ impl EtsScene {
             }
             if byte_count == 0 {
                 return Err(invalid_slide(path, "ETS tile payload is empty"));
+            }
+            if u64::from(byte_count) > budget.limits().encoded_unit_bytes() {
+                return Err(WsiError::ResourceLimit {
+                    resource: "encoded tile/frame unit",
+                    requested: u64::from(byte_count),
+                    limit: budget.limits().encoded_unit_bytes(),
+                });
             }
             let tile_end = offset
                 .checked_add(u64::from(byte_count))
@@ -361,8 +441,28 @@ impl EtsScene {
 
         let level_count =
             checked_ets_level_count(max_level).map_err(|message| invalid_slide(path, message))?;
-        let mut max_col_by_level = vec![0u32; level_count];
-        let mut max_row_by_level = vec![0u32; level_count];
+        let level_index_bytes = u64::try_from(level_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(8);
+        budget.retain_index(level_index_bytes)?;
+        let mut max_col_by_level = Vec::new();
+        max_col_by_level
+            .try_reserve_exact(level_count)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS level index",
+                requested: level_index_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
+        max_col_by_level.resize(level_count, 0u32);
+        let mut max_row_by_level = Vec::new();
+        max_row_by_level
+            .try_reserve_exact(level_count)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS level index",
+                requested: level_index_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
+        max_row_by_level.resize(level_count, 0u32);
         for key in tiles.keys() {
             let idx = key.level as usize;
             max_col_by_level[idx] = max_col_by_level[idx].max(key.col);
@@ -394,10 +494,26 @@ impl EtsScene {
         let channels = if samples_per_pixel == 3 {
             Vec::new()
         } else {
+            let channel_name_bytes = (0..axes.c)
+                .try_fold(0u64, |total, channel| {
+                    let digits = if channel == 0 {
+                        1
+                    } else {
+                        u64::from(channel.ilog10()) + 1
+                    };
+                    total.checked_add(8 + digits)
+                })
+                .unwrap_or(u64::MAX);
             let channel_bytes = u64::from(axes.c)
-                * u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX);
+                .checked_mul(u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX))
+                .and_then(|bytes| bytes.checked_add(channel_name_bytes))
+                .unwrap_or(u64::MAX);
             let channel_limit = u64::from(MAX_ETS_AXIS_INDEX + 1)
-                * u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX);
+                .saturating_mul(
+                    u64::try_from(std::mem::size_of::<ChannelInfo>()).unwrap_or(u64::MAX),
+                )
+                .min(budget.limits().aggregate_metadata_bytes());
+            budget.retain_metadata(channel_bytes)?;
             let mut channels = Vec::new();
             channels
                 .try_reserve_exact(axes.c as usize)
@@ -417,11 +533,16 @@ impl EtsScene {
 
         Ok(Self {
             path: path.to_path_buf(),
-            name: path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .map(ToOwned::to_owned),
+            name: {
+                let name = path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str());
+                if let Some(name) = name {
+                    budget.retain_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
+                }
+                name.map(ToOwned::to_owned)
+            },
             levels,
             tiles,
             axes,
@@ -429,6 +550,8 @@ impl EtsScene {
             samples_per_pixel,
             background,
             channels,
+            encoded_unit_limit: budget.limits().encoded_unit_bytes(),
+            decoded_output_limit: budget.limits().decoded_output_bytes(),
         })
     }
 
@@ -447,7 +570,7 @@ impl EtsScene {
         file.seek(SeekFrom::Start(tile.offset))?;
         let encoded_len = checked_product_to_usize(
             &[u64::from(tile.byte_count)],
-            MAX_COMPRESSED_INPUT_BYTES,
+            MAX_COMPRESSED_INPUT_BYTES.min(self.encoded_unit_limit),
             "Olympus ETS tile payload",
         )
         .map_err(WsiError::DisplayConversion)?;
@@ -468,13 +591,13 @@ impl EtsScene {
     fn background_tile(&self, width: u32, height: u32) -> Result<CpuTile, WsiError> {
         let byte_len = checked_product_to_usize(
             &[u64::from(width), u64::from(height), 3],
-            MAX_DECODED_IMAGE_BYTES,
+            MAX_DECODED_IMAGE_BYTES.min(self.decoded_output_limit),
             "Olympus background tile",
         )
         .map_err(WsiError::DisplayConversion)?;
         let pixel_count = checked_product_to_usize(
             &[u64::from(width), u64::from(height)],
-            MAX_DECODED_IMAGE_BYTES,
+            MAX_DECODED_IMAGE_BYTES.min(self.decoded_output_limit),
             "Olympus background pixel count",
         )
         .map_err(WsiError::DisplayConversion)?;
@@ -702,7 +825,7 @@ fn sample_type_from_ets(pixel_type: u32) -> Result<SampleType, WsiError> {
     }
 }
 
-fn find_ets_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
+fn find_ets_files(dir: &Path, budget: &OpenBudget) -> Result<Vec<PathBuf>, WsiError> {
     let mut paths = Vec::new();
     for entry in fs::read_dir(dir).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
@@ -728,6 +851,15 @@ fn find_ets_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
                     format!("Olympus dataset exceeds the {MAX_ETS_SCENES}-scene limit"),
                 ));
             }
+            let retained_bytes = u64::try_from(std::mem::size_of::<PathBuf>())
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::try_from(frame.as_os_str().len()).unwrap_or(u64::MAX));
+            budget.retain_index(retained_bytes)?;
+            paths.try_reserve(1).map_err(|_| WsiError::ResourceLimit {
+                resource: "Olympus ETS bundle index",
+                requested: retained_bytes,
+                limit: budget.limits().tile_index_bytes(),
+            })?;
             paths.push(frame);
         }
     }

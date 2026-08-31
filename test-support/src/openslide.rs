@@ -858,6 +858,27 @@ mod tests {
             pixels,
             vec![0xff00_0009, 0xff00_0009, 0xff00_000b, 0xff00_000b]
         );
+
+        let plain = api.open(Path::new("normal.svs")).unwrap();
+        assert_eq!(plain.level_count(), 3);
+        assert_eq!(plain.level_dimensions(1), (2_048, 2_048));
+        assert_eq!(plain.property("openslide.bounds-x").as_deref(), Some("100"));
+        assert_eq!(
+            plain.bounds(),
+            Some(OpenSlideBounds {
+                x: 100,
+                y: 200,
+                width: 3_000,
+                height: 2_000,
+            })
+        );
+        assert_eq!(plain.read_region(0, 0, 0, 1, 1).unwrap().len(), 4);
+        assert_eq!(plain.read_region_rgba(0, 0, 0, 1, 1).unwrap().len(), 4);
+        assert!(plain.read_region_rgba(0, 0, -1, 1, 1).is_err());
+        assert!(plain.associated_names().is_empty());
+        assert!(plain.associated_dimensions("label").is_err());
+        assert!(plain.associated_dimensions("bad\0name").is_err());
+        assert!(!library_candidates().is_empty());
     }
 
     #[test]
@@ -913,5 +934,34 @@ mod tests {
         }
         .unwrap_err();
         assert!(error.contains("missing symbol"));
+
+        // SAFETY: All requested symbols use the same function-pointer type and
+        // deliberately do not exist in the current process image.
+        unsafe {
+            assert!(optional_symbol_set3::<GetVersion, GetVersion, GetVersion>(
+                &library,
+                b"missing_optional_one\0",
+                b"missing_optional_two\0",
+                b"missing_optional_three\0",
+            )
+            .unwrap()
+            .is_none());
+            assert!(optional_symbol_set2::<GetVersion, GetVersion>(
+                &library,
+                b"missing_optional_one\0",
+                b"missing_optional_two\0",
+            )
+            .unwrap()
+            .is_none());
+        }
+
+        let api = fake_api(fake_version);
+        assert!(api.open(Path::new("bad\0path.svs")).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let invalid = PathBuf::from(std::ffi::OsString::from_vec(vec![0xff]));
+            assert!(api.open(&invalid).is_err());
+        }
     }
 }

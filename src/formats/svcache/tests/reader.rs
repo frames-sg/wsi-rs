@@ -85,9 +85,9 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
         row: 0,
     };
     let batch = reader
-        .read_tiles(std::slice::from_ref(&request), TileOutputPreference::cpu())
+        .read_tiles_cpu(std::slice::from_ref(&request))
         .unwrap();
-    assert!(matches!(&batch[..], [TilePixels::Cpu(_)]));
+    assert_eq!(batch.len(), 1);
     assert_eq!(
         reader
             .read_associated("label")
@@ -101,14 +101,6 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
         reader.read_associated("missing"),
         Err(WsiError::AssociatedImageNotFound(_))
     ));
-    assert!(matches!(
-        reader.read_tiles(
-            std::slice::from_ref(&request),
-            TileOutputPreference::require_device_auto()
-        ),
-        Err(WsiError::Unsupported { .. })
-    ));
-
     for invalid in [
         TileRequest {
             scene: 1usize.into(),
@@ -185,6 +177,7 @@ fn reader_recovers_from_a_poisoned_file_lock() {
         dataset: super::super::storage::dataset_from_metadata(&path, &metadata),
         metadata,
         associated_index: HashMap::new(),
+        encoded_unit_bytes: u64::MAX,
     });
     let poisoner = std::sync::Arc::clone(&reader);
     assert!(std::thread::spawn(move || {
@@ -205,4 +198,56 @@ fn reader_recovers_from_a_poisoned_file_lock() {
         })
         .unwrap();
     assert_eq!(decoded.data.as_u8().unwrap(), &[7, 8, 9]);
+}
+
+#[test]
+fn configured_metadata_limit_rejects_before_json_allocation() {
+    let payload = tempfile::tempfile().unwrap();
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("metadata-limit.svcache");
+    let metadata = single_level_svcache_metadata(source.path(), false, 1, 1, vec![None]);
+    write_svcache_file(&path, &metadata, payload).unwrap();
+
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(1)
+        .expect("nonzero metadata limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = match SvcacheBackend.open_with_config(&path, config) {
+        Ok(_) => panic!("tiny configured metadata limit must reject svcache JSON"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn configured_index_limit_rejects_deserialized_tile_tables() {
+    let payload = tempfile::tempfile().unwrap();
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index-limit.svcache");
+    let metadata = single_level_svcache_metadata(source.path(), false, 1, 1, vec![None]);
+    write_svcache_file(&path, &metadata, payload).unwrap();
+
+    let limits = crate::SlideLimits::default()
+        .with_tile_index_bytes(1)
+        .expect("nonzero index limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = match SvcacheBackend.open_with_config(&path, config) {
+        Ok(_) => panic!("tiny configured index limit must reject svcache indexes"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            ..
+        }
+    ));
 }

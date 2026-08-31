@@ -38,7 +38,7 @@ fn ndpi_restart_tile_decodes_target_strip_via_public_read_path() {
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
 #[test]
-fn ndpi_restart_tile_decodes_to_resident_device_tile() {
+fn strict_device_read_rejects_ndpi_jpeg_restart_tile() {
     #[cfg(feature = "metal")]
     let Ok(sessions) = crate::output::metal::MetalBackendSessions::system_default() else {
         return;
@@ -66,43 +66,24 @@ fn ndpi_restart_tile_decodes_to_resident_device_tile() {
     });
     let reader = TiffPixelReader::new(container, layout);
 
+    let requests = [TileRequest {
+        scene: 0usize.into(),
+        series: 0usize.into(),
+        level: 0u32.into(),
+        plane: PlaneSelection::default().into(),
+        col: 1,
+        row: 1,
+    }];
     #[cfg(feature = "metal")]
-    let output =
-        TileOutputPreference::require_device_auto_with_metal_and_compressed_decode(sessions)
-            .without_adaptive_decode_route();
+    let error = reader
+        .read_tiles_metal(&requests, &sessions)
+        .expect_err("strict Metal output supports JP2K/HTJ2K only");
     #[cfg(all(not(feature = "metal"), feature = "cuda"))]
-    let output = TileOutputPreference::require_device_auto_with_cuda_and_compressed_decode(
-        crate::output::cuda::CudaBackendSessions::new(),
-    )
-    .without_adaptive_decode_route();
+    let error = reader
+        .read_tiles_cuda(&requests, &crate::output::cuda::CudaBackendSessions::new())
+        .expect_err("strict CUDA output supports JP2K/HTJ2K only");
 
-    let tiles = reader
-        .read_tiles(
-            &[TileRequest {
-                scene: 0usize.into(),
-                series: 0usize.into(),
-                level: 0u32.into(),
-                plane: PlaneSelection::default().into(),
-                col: 1,
-                row: 1,
-            }],
-            output,
-        )
-        .unwrap();
-
-    assert_eq!(tiles.len(), 1);
-    #[cfg(feature = "metal")]
-    let TilePixels::Device(DeviceTile::Metal(tile)) = &tiles[0] else {
-        panic!("expected NDPI tile to decode to Metal");
-    };
-    #[cfg(all(not(feature = "metal"), feature = "cuda"))]
-    let TilePixels::Device(DeviceTile::Cuda(tile)) = &tiles[0] else {
-        panic!("expected NDPI tile to decode to CUDA");
-    };
-    assert_eq!((tile.width, tile.height), (64, 8));
-    assert_eq!(tile.format, PixelFormat::Rgb8);
-    #[cfg(all(not(feature = "metal"), feature = "cuda"))]
-    assert_ne!(tile.storage.device_ptr(), 0);
+    assert!(matches!(error, WsiError::TileRead { .. }));
 }
 
 #[test]

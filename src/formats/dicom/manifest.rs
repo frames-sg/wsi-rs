@@ -1,7 +1,8 @@
 use super::*;
+use crate::core::registry::OpenBudget;
+#[cfg(test)]
+use crate::SlideLimits;
 
-const DICOM_SHARED_CACHE_TARGET_REGION_SIDE: u32 = 2048;
-const DICOM_SHARED_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_DICOM_DIRECTORY_FILES: usize = 1_024;
 
 pub(super) struct DicomSlide {
@@ -16,39 +17,62 @@ impl DicomSlide {
         Self::parse_with_cache_config(path, CacheConfig::deterministic())
     }
 
+    #[cfg(test)]
     pub(super) fn parse_with_cache_config(
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Self, WsiError> {
+        Self::parse_with_config(
+            path,
+            BackendOpenConfig::new(cache_config, SlideLimits::default()),
+        )
+    }
+
+    pub(super) fn parse_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(config.limits);
         let DicomSeriesManifest {
             study_instance_uid,
             series_instance_uid,
             frame_of_reference_uid,
             container_identifier,
             specimen_identifier,
+            barcode_value,
             volume_images,
             associated_images,
             source_file_count,
-        } = DicomSeriesManifest::resolve(path)?;
+        } = DicomSeriesManifest::resolve_with_budget(path, budget.as_ref())?;
         let private_cache_count = volume_images
             .len()
             .saturating_add(associated_images.len())
             .saturating_mul(2);
-        let mut private_cache_budget = cache_config.private_cache_budget(private_cache_count);
+        let mut private_cache_budget = config
+            .cache_config
+            .private_cache_budget(private_cache_count);
         let source_icc_profiles = source_icc_profiles(&volume_images)?;
         let level_images = volume_images
             .into_iter()
             .map(|meta| {
-                DicomImage::from_metadata_with_private_cache_budget(meta, &mut private_cache_budget)
+                DicomImage::from_metadata_with_private_cache_budget(
+                    meta,
+                    &mut private_cache_budget,
+                    budget.as_ref(),
+                )
             })
             .map(|result| result.map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         let mut associated_images = associated_images
             .into_iter()
             .map(|(kind, meta)| {
-                DicomImage::from_metadata_with_private_cache_budget(meta, &mut private_cache_budget)
-                    .map(Arc::new)
-                    .map(|image| (kind.name().to_string(), image))
+                DicomImage::from_metadata_with_private_cache_budget(
+                    meta,
+                    &mut private_cache_budget,
+                    budget.as_ref(),
+                )
+                .map(Arc::new)
+                .map(|image| (kind.name().to_string(), image))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -105,6 +129,10 @@ impl DicomSlide {
         if let Some(specimen_identifier) = &specimen_identifier {
             properties.insert("dicom.specimen-identifier", specimen_identifier);
         }
+        if let Some(barcode_value) = &barcode_value {
+            properties.insert("dicom.barcode-value", barcode_value);
+            properties.insert("openslide.barcode", barcode_value);
+        }
         properties.insert("dicom.source-file-count", source_file_count.to_string());
         let (shared_pixel_spacing, shared_objective_lens_power) =
             if level0.pixel_spacing.is_none() || level0.objective_lens_power.is_none() {
@@ -132,6 +160,7 @@ impl DicomSlide {
                         dimensions: (image.width, image.height),
                         sample_type: SampleType::Uint8,
                         channels: 3,
+                        icc_profile: image.icc_profile.clone(),
                     },
                 )
             })
@@ -169,16 +198,6 @@ impl DicomSlide {
             levels,
             associated,
         })
-    }
-
-    pub(super) fn recommended_shared_cache_bytes(&self) -> Option<u64> {
-        self.levels
-            .iter()
-            .filter(|level| level.has_encapsulated_frames())
-            .filter_map(DicomLevel::cache_bytes_for_target_region)
-            .max()
-            .map(|bytes| bytes.min(DICOM_SHARED_CACHE_MAX_BYTES))
-            .filter(|bytes| *bytes > crate::core::cache::DEFAULT_TILE_CACHE_SIZE)
     }
 }
 
@@ -262,29 +281,6 @@ impl DicomLevel {
 
     pub(super) fn photometric_interpretation(&self) -> &str {
         &self.parts[0].photometric_interpretation
-    }
-
-    pub(super) fn has_encapsulated_frames(&self) -> bool {
-        self.parts
-            .iter()
-            .any(|part| is_encapsulated_transfer_syntax(&part.transfer_syntax_uid))
-    }
-
-    pub(super) fn cache_bytes_for_target_region(&self) -> Option<u64> {
-        let tile_width = u64::from(self.tile_width);
-        let tile_height = u64::from(self.tile_height);
-        if tile_width == 0 || tile_height == 0 {
-            return None;
-        }
-        let tiles_x = u64::from(DICOM_SHARED_CACHE_TARGET_REGION_SIDE).div_ceil(tile_width);
-        let tiles_y = u64::from(DICOM_SHARED_CACHE_TARGET_REGION_SIDE).div_ceil(tile_height);
-        let samples_per_pixel = u64::from(self.samples_per_pixel());
-        tiles_x
-            .checked_mul(tiles_y)?
-            .checked_mul(tile_width)?
-            .checked_mul(tile_height)?
-            .checked_mul(samples_per_pixel)?
-            .checked_mul(u64::from(SampleType::Uint8.byte_size() as u32))
     }
 
     pub(super) fn image_for_tile(&self, col: u32, row: u32) -> Option<Arc<DicomImage>> {
@@ -488,22 +484,23 @@ pub(super) struct DicomSeriesManifest {
     pub(super) frame_of_reference_uid: Option<String>,
     pub(super) container_identifier: Option<String>,
     pub(super) specimen_identifier: Option<String>,
+    pub(super) barcode_value: Option<String>,
     pub(super) volume_images: Vec<ParsedDicomMetadata>,
     pub(super) associated_images: Vec<(AssociatedKind, ParsedDicomMetadata)>,
     pub(super) source_file_count: usize,
 }
 
 impl DicomSeriesManifest {
-    pub(super) fn resolve(path: &Path) -> Result<Self, WsiError> {
+    pub(super) fn resolve_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
         if path.is_dir() {
-            Self::from_directory(path)
+            Self::from_directory_with_budget(path, budget)
         } else {
-            Self::from_selected_file(path)
+            Self::from_selected_file_with_budget(path, budget)
         }
     }
 
-    pub(super) fn from_selected_file(path: &Path) -> Result<Self, WsiError> {
-        let selected_meta = parse_metadata_object(path)?;
+    fn from_selected_file_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
+        let selected_meta = parse_metadata_object_with_budget(path, budget)?;
         let selected_series_uid = selected_meta.series_instance_uid.clone();
         let scan_root = path.parent().unwrap_or_else(|| Path::new("."));
         let selected_key = canonicalize_or_fallback(path);
@@ -513,7 +510,7 @@ impl DicomSeriesManifest {
             if canonicalize_or_fallback(&sibling_path) == selected_key {
                 continue;
             }
-            let meta = match parse_metadata_object(&sibling_path) {
+            let meta = match parse_metadata_object_with_budget(&sibling_path, budget) {
                 Ok(meta) => meta,
                 Err(_) => continue,
             };
@@ -525,10 +522,10 @@ impl DicomSeriesManifest {
         Self::from_group(path, metas)
     }
 
-    pub(super) fn from_directory(path: &Path) -> Result<Self, WsiError> {
+    fn from_directory_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
         let mut by_series = HashMap::<String, Vec<ParsedDicomMetadata>>::new();
         for child_path in direct_child_files(path)? {
-            let meta = match parse_metadata_object(&child_path) {
+            let meta = match parse_metadata_object_with_budget(&child_path, budget) {
                 Ok(meta) => meta,
                 Err(_) => continue,
             };
@@ -581,6 +578,9 @@ impl DicomSeriesManifest {
             common_optional_value(path, "SpecimenIdentifier", &metas, |meta| {
                 meta.specimen_identifier.as_deref()
             })?;
+        let barcode_value = common_optional_value(path, "BarcodeValue", &metas, |meta| {
+            meta.barcode_value.as_deref()
+        })?;
         let source_file_count = metas.len();
 
         for meta in &metas {
@@ -608,6 +608,7 @@ impl DicomSeriesManifest {
             frame_of_reference_uid,
             container_identifier,
             specimen_identifier,
+            barcode_value,
             volume_images,
             associated_images,
             source_file_count,

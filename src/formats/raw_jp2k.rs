@@ -1,3 +1,5 @@
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -6,12 +8,13 @@ use std::path::Path;
 use crate::core::hash::Quickhash1;
 use crate::core::limits::{read_to_end_bounded, MAX_COMPRESSED_INPUT_BYTES};
 use crate::core::registry::{
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
+    ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::{
     AssociatedImage, AxesShape, ChannelInfo, Compression, CpuTile, Dataset, DatasetId,
-    EncodedTilePhotometricInterpretation, Level, PlaneSelection, RawCompressedTile, SampleType,
-    Scene, Series, TileCodecKind, TileLayout, TileOutputPreference, TilePixels, TileRequest,
+    EncodedTilePhotometricInterpretation, Level, PlaneSelection, RawCompressedTile, RegionRequest,
+    SampleType, Scene, Series, TileCodecKind, TileLayout, TileRequest, TileViewRequest,
 };
 use crate::decode::jp2k::{decode_jp2k_to_sample_buffer, Jp2kColorSpace};
 use crate::decode::jp2k_codestream::{parse_codestream_header, validate_narrow_subset};
@@ -47,25 +50,55 @@ impl FormatProbe for RawJp2kBackend {
     }
 }
 
+impl ConfiguredFormatProbe for RawJp2kBackend {}
+
 impl DatasetReader for RawJp2kBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
+        let reader = self.open_with_config(path, BackendOpenConfig::deterministic())?;
+        Ok(reader)
+    }
+}
+
+impl ConfiguredDatasetReader for RawJp2kBackend {
+    fn open_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
         let file = File::open(path).map_err(|source| WsiError::IoWithPath {
             source: std::sync::Arc::new(source),
             path: path.to_path_buf(),
         })?;
-        let data = read_to_end_bounded(file, MAX_COMPRESSED_INPUT_BYTES, "raw JP2K input")
+        let max_input = MAX_COMPRESSED_INPUT_BYTES.min(config.limits.encoded_unit_bytes());
+        let declared_len = file
+            .metadata()
             .map_err(|source| WsiError::IoWithPath {
                 source: std::sync::Arc::new(source),
                 path: path.to_path_buf(),
-            })?;
+            })?
+            .len();
+        if declared_len > max_input {
+            return Err(WsiError::ResourceLimit {
+                resource: "encoded tile/frame unit",
+                requested: declared_len,
+                limit: max_input,
+            });
+        }
+        let data = read_to_end_bounded(file, max_input, "raw JP2K input").map_err(|source| {
+            WsiError::IoWithPath {
+                source: std::sync::Arc::new(source),
+                path: path.to_path_buf(),
+            }
+        })?;
         let header = parse_codestream_header(&data)?;
         validate_narrow_subset(&header)?;
-        Ok(Box::new(RawJp2kReader {
+        let reader = RawJp2kReader {
             dataset: dataset_for_codestream(path, &data, header.image_width, header.image_height)?,
             data,
             width: header.image_width,
             height: header.image_height,
-        }))
+        };
+        Ok(Box::new(reader))
     }
 }
 
@@ -185,24 +218,63 @@ impl SlideReader for RawJp2kReader {
         TileCodecKind::Jp2k
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        if matches!(output, TileOutputPreference::RequireDevice { .. }) {
-            return Err(WsiError::Unsupported {
-                reason: "raw JP2K backend does not provide resident device tiles".into(),
-            });
-        }
-        reqs.iter()
-            .map(|req| self.read_tile_cpu(req).map(TilePixels::Cpu))
-            .collect()
-    }
-
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.validate_request(req)?;
         decode_jp2k_to_sample_buffer(&self.data, self.width, self.height, Jp2kColorSpace::Rgb)
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        for request in reqs {
+            self.validate_request(request)?;
+        }
+        let jobs = reqs
+            .iter()
+            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
+                data: Cow::Borrowed(self.data.as_slice()),
+                expected_width: self.width,
+                expected_height: self.height,
+                rgb_color_space: true,
+                backend: j2k_core::BackendRequest::Metal,
+            })
+            .collect::<Vec<_>>();
+        crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|tiles| {
+                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K Metal batch")
+            })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        for request in reqs {
+            self.validate_request(request)?;
+        }
+        let jobs = reqs
+            .iter()
+            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
+                data: Cow::Borrowed(self.data.as_slice()),
+                expected_width: self.width,
+                expected_height: self.height,
+                rgb_color_space: true,
+                backend: j2k_core::BackendRequest::Cuda,
+            })
+            .collect::<Vec<_>>();
+        crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|tiles| {
+                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K CUDA batch")
+            })
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -214,5 +286,31 @@ impl SlideReader for RawJp2kReader {
             .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
             .data(self.data.clone())
             .build()?)
+    }
+}
+
+impl ManagedSlideReader for RawJp2kReader {
+    fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
+    }
+
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        Ok(if reqs.is_empty() {
+            0
+        } else {
+            u64::try_from(self.data.len()).unwrap_or(u64::MAX)
+        })
+    }
+
+    fn display_tile_encoded_upper_bound(&self, _req: &TileViewRequest) -> Result<u64, WsiError> {
+        Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
+    }
+
+    fn associated_encoded_upper_bound(&self, _name: &str) -> Result<u64, WsiError> {
+        Ok(0)
+    }
+
+    fn region_fastpath_encoded_upper_bound(&self, _req: &RegionRequest) -> Result<u64, WsiError> {
+        Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
     }
 }

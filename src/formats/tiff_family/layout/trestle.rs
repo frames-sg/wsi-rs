@@ -178,6 +178,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
                     dimensions: (width, height),
                     sample_type: SampleType::Uint8,
                     channels: 3,
+                    icc_profile: Vec::new(),
                 },
             );
             associated_sources.insert("macro".into(), TileSource::ExternalJpeg { path });

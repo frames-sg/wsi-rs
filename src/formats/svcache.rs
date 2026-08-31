@@ -25,12 +25,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::core::registry::{
-    DatasetReader, FormatProbe, FormatRegistry, ProbeConfidence, ProbeResult, Slide, SlideReader,
+    BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
+    FormatRegistry, ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, Slide,
+    SlideReader,
 };
 use crate::core::types::{
     AssociatedImage, AxesShape, ChannelInfo, ColorSpace, CpuTile, CpuTileData, CpuTileLayout,
-    Dataset, DatasetId, Level, LevelIdx, PlaneIdx, PlaneSelection, SampleType, Scene, SceneId,
-    Series, SeriesId, TileLayout, TileOutputPreference, TilePixels, TileRequest, TileViewRequest,
+    Dataset, DatasetId, Level, LevelIdx, PlaneIdx, PlaneSelection, RegionRequest, SampleType,
+    Scene, SceneId, Series, SeriesId, TileLayout, TileRequest, TileViewRequest,
 };
 use crate::error::WsiError;
 use crate::properties::Properties;
@@ -212,6 +214,7 @@ pub(crate) struct SvcacheReader {
     metadata: SvcacheMetadata,
     dataset: Dataset,
     associated_index: HashMap<String, usize>,
+    encoded_unit_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

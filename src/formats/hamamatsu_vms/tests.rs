@@ -95,15 +95,15 @@ fn vms_private_tile_cache_capacity_tracks_cache_config() {
             .decoded_tile_cache
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .capacity_entries(),
-        2
+            .capacity_bytes(),
+        6 * 1024
     );
     assert_eq!(
         large
             .decoded_tile_cache
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .capacity_entries(),
-        8
+            .capacity_bytes(),
+        24 * 1024
     );
 }

@@ -281,6 +281,61 @@ fn parse_level0_xml_rejects_invalid_or_overflowing_tile_grids() {
 }
 
 #[test]
+fn cve_2026_48977_negative_row_count_is_rejected() {
+    let xml = r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="11" NumRows="-17" Pos-X="0" Pos-Y="0"/></SlideStitchInfo></EncodeInfo>"#;
+
+    let error = match parse_level0_xml(xml, 256, 256) {
+        Err(error) => error,
+        Ok(_) => panic!("CVE-2026-48977 negative tile count must be rejected"),
+    };
+    assert!(error.to_string().contains("tile grid dimensions"));
+}
+
+#[test]
+fn parse_level0_xml_rejects_coordinate_and_confidence_overflow() {
+    let coordinate = r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="1" NumRows="1" Pos-X="0" Pos-Y="9223372036854775807"/></SlideStitchInfo></EncodeInfo>"#;
+    let error = match parse_level0_xml(coordinate, 256, 256) {
+        Err(error) => error,
+        Ok(_) => panic!("out-of-range Ventana coordinate must fail"),
+    };
+    assert!(error.to_string().contains("Pos-Y"));
+
+    let confidence = r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="2" NumRows="1" Pos-X="0" Pos-Y="0"><TileJointInfo Direction="RIGHT" OverlapX="1" OverlapY="0" Confidence="9223372036854775807" Tile1="1" Tile2="2"/><TileJointInfo Direction="RIGHT" OverlapX="1" OverlapY="0" Confidence="9223372036854775807" Tile1="1" Tile2="2"/></ImageInfo></SlideStitchInfo></EncodeInfo>"#;
+    let error = match parse_level0_xml(confidence, 256, 256) {
+        Err(error) => error,
+        Ok(_) => panic!("overflowing Ventana confidence total must fail"),
+    };
+    assert!(error.to_string().contains("Confidence"));
+}
+
+#[test]
+fn parse_level0_xml_rejects_non_finite_or_non_positive_geometry() {
+    for attribute in [r#"Pos-X="NaN""#, r#"OverlapX="inf""#] {
+        let xml = r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="2" NumRows="1" Pos-X="0" Pos-Y="0"><TileJointInfo Direction="RIGHT" OverlapX="0" OverlapY="0" Confidence="1" Tile1="1" Tile2="2"/></ImageInfo></SlideStitchInfo></EncodeInfo>"#
+        .to_string()
+        .replacen(
+            if attribute.starts_with("Pos-X") {
+                r#"Pos-X="0""#
+            } else {
+                r#"OverlapX="0""#
+            },
+            attribute,
+            1,
+        );
+        let Err(error) = parse_level0_xml(&xml, 256, 256) else {
+            panic!("non-finite geometry unexpectedly parsed")
+        };
+        assert!(error.to_string().contains("finite"));
+    }
+
+    let non_positive_advance = r#"<EncodeInfo><SlideStitchInfo><ImageInfo AOIScanned="1" NumCols="2" NumRows="1" Pos-X="0" Pos-Y="0"><TileJointInfo Direction="RIGHT" OverlapX="300" OverlapY="0" Confidence="1" Tile1="1" Tile2="2"/></ImageInfo></SlideStitchInfo></EncodeInfo>"#;
+    let Err(error) = parse_level0_xml(non_positive_advance, 256, 256) else {
+        panic!("non-positive tile advance unexpectedly parsed")
+    };
+    assert!(error.to_string().contains("greater than zero"));
+}
+
+#[test]
 fn ventana_level0_dimensions_normalize_to_minimum_scanned_origin() {
     let bif = BifInfo {
         areas: vec![
@@ -370,6 +425,13 @@ fn ventana_level0_dimensions_prefers_area_model_when_present() {
 }
 
 #[test]
+fn ventana_public_level_dimensions_rejects_invalid_shift() {
+    let error = ventana_public_level_dimensions((1024, 768), 64)
+        .expect_err("level index beyond u64 shift width must fail");
+    assert!(error.to_string().contains("downsample"));
+}
+
+#[test]
 fn joint_delta_supports_left_and_down() {
     assert_eq!(
         joint_delta("LEFT", 256.0, 256.0, 12.0, 8.0),
@@ -379,6 +441,12 @@ fn joint_delta_supports_left_and_down() {
         joint_delta("DOWN", 256.0, 256.0, 12.0, 8.0),
         Some((12.0, -248.0))
     );
+}
+
+#[test]
+fn joint_delta_rejects_non_finite_geometry() {
+    assert_eq!(joint_delta("RIGHT", 256.0, 256.0, f64::NAN, 0.0), None);
+    assert_eq!(joint_delta("UP", 256.0, 256.0, 0.0, f64::INFINITY), None);
 }
 
 #[test]
@@ -671,6 +739,21 @@ fn parse_iscan_properties_no_iscan() {
     let mut props = Properties::new();
     parse_iscan_properties(xmp, &mut props);
     assert!(props.is_empty());
+}
+
+#[test]
+fn parse_iscan_properties_does_not_publish_invalid_physical_metadata() {
+    for invalid in ["0", "-1", "NaN", "inf", "not-a-number"] {
+        let xmp = format!(r#"<iScan Magnification="{invalid}" ScanRes="{invalid}"/>"#);
+        let mut props = Properties::new();
+        parse_iscan_properties(&xmp, &mut props);
+
+        assert_eq!(props.get("ventana.Magnification"), Some(invalid));
+        assert_eq!(props.get("ventana.ScanRes"), Some(invalid));
+        assert_eq!(props.get("openslide.objective-power"), None);
+        assert_eq!(props.get("openslide.mpp-x"), None);
+        assert_eq!(props.get("openslide.mpp-y"), None);
+    }
 }
 
 #[test]

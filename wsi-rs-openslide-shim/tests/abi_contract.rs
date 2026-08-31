@@ -162,7 +162,7 @@ fn read_region_keeps_pixels_outside_the_slide_transparent() {
 }
 
 #[test]
-fn read_errors_zero_dest_and_make_handle_terminal() {
+fn invalid_read_level_zeroes_dest_without_making_handle_terminal() {
     let path = fixture_path();
 
     // SAFETY: `path` is a live NUL-terminated fixture path, `argb`/dimension
@@ -175,15 +175,13 @@ fn read_errors_zero_dest_and_make_handle_terminal() {
         openslide_read_region(osr, argb.as_mut_ptr(), 0, 0, 99, 2, 2);
         assert_eq!(argb, [0; 4]);
 
-        let err = openslide_get_error(osr);
-        assert!(!err.is_null());
-        assert!(c_string(err).contains("level"));
-        assert_eq!(openslide_get_level_count(osr), -1);
+        assert!(openslide_get_error(osr).is_null());
+        assert_eq!(openslide_get_level_count(osr), 1);
 
         let mut w = 123;
         let mut h = 456;
         openslide_get_level_dimensions(osr, 0, &mut w, &mut h);
-        assert_eq!((w, h), (-1, -1));
+        assert_eq!((w, h), (16, 12));
 
         openslide_close(osr);
     }
@@ -210,6 +208,34 @@ fn associated_icc_and_cache_apis_have_v4_safe_defaults() {
         openslide_set_cache(osr, cache);
         openslide_cache_release(cache);
 
+        openslide_close(osr);
+    }
+}
+
+#[test]
+fn one_handle_supports_concurrent_region_reads() {
+    let path = fixture_path();
+
+    // SAFETY: The handle remains open until every scoped thread joins.
+    // OpenSlide requires all calls except close to be thread-safe, and each
+    // thread owns its destination buffer.
+    unsafe {
+        let osr = openslide_open(path.as_ptr());
+        assert!(!osr.is_null());
+        let address = osr as usize;
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(move || {
+                    let osr = address as *mut openslide_t;
+                    let mut pixels = [0u32; 8 * 8];
+                    openslide_read_region(osr, pixels.as_mut_ptr(), 0, 0, 0, 8, 8);
+                    assert!(pixels.iter().any(|pixel| *pixel != 0));
+                });
+            }
+        });
+
+        assert!(openslide_get_error(osr).is_null());
         openslide_close(osr);
     }
 }

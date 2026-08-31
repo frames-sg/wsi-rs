@@ -33,6 +33,7 @@ const JPEG_HEADER_PROBE_BYTES: u64 = 4096;
 #[derive(Clone)]
 struct JpegGeometryProbe {
     header: Vec<u8>,
+    dimensions: (u32, u32),
     restart_interval: u16,
     mcu_w: u32,
     mcu_h: u32,
@@ -53,6 +54,7 @@ fn probe_jpeg_geometry_bytes_via_j2k(header: Vec<u8>) -> Result<JpegGeometryProb
     match J2kJpegDecoder::inspect(&header) {
         Ok(info) => Ok(JpegGeometryProbe {
             header: jpeg_header_prefix(&header)?.to_vec(),
+            dimensions: info.dimensions,
             restart_interval: info.restart_interval.unwrap_or(0),
             mcu_w: info.mcu_geometry.width,
             mcu_h: info.mcu_geometry.height,
@@ -76,6 +78,7 @@ fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe,
     }
 
     let mut restart_interval = 0;
+    let mut dimensions = None;
     let mut mcu_w = None;
     let mut mcu_h = None;
     let mut i = 2usize;
@@ -107,6 +110,7 @@ fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe,
                 })?;
                 return Ok(JpegGeometryProbe {
                     header: prefix.to_vec(),
+                    dimensions: dimensions.unwrap_or((0, 0)),
                     restart_interval,
                     mcu_w,
                     mcu_h,
@@ -135,6 +139,10 @@ fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe,
                 ));
             }
             let component_count = payload[5] as usize;
+            dimensions = Some((
+                u32::from(u16::from_be_bytes([payload[3], payload[4]])),
+                u32::from(u16::from_be_bytes([payload[1], payload[2]])),
+            ));
             let components = &payload[6..];
             if components.len() < component_count * 3 {
                 return Err(TiffParseError::Structure(
@@ -217,6 +225,7 @@ struct ClassifiedIfd {
     focal_plane: i64,
     strip_offset: u64,
     strip_byte_count: u64,
+    jpeg_probe: JpegGeometryProbe,
 }
 
 impl TiffLayoutInterpreter for NdpiInterpreter {
@@ -264,6 +273,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                 if strip_offset == 0 || strip_byte_count == 0 {
                     continue;
                 }
+                let jpeg_probe = probe_jpeg_geometry_via_j2k(container, ifd_id)?;
 
                 pyramid_ifds.push(ClassifiedIfd {
                     ifd_id,
@@ -273,6 +283,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                     focal_plane,
                     strip_offset,
                     strip_byte_count,
+                    jpeg_probe,
                 });
             } else if (source_lens as i64) == -1 {
                 let name = "macro";
@@ -313,6 +324,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                         ),
                         sample_type: SampleType::Uint8,
                         channels,
+                        icc_profile: Vec::new(),
                     },
                 );
                 associated_sources.insert(
@@ -339,7 +351,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
 
         // Phase 2: Group pyramid IFDs by SOURCELENS, sort by dimensions
         // Within each SOURCELENS group, sub-group by FOCAL_PLANE for z-stack
-        let (levels, tile_sources, z_count) = self.build_pyramid(container, &mut pyramid_ifds)?;
+        let (levels, tile_sources, z_count) = self.build_pyramid(&mut pyramid_ifds)?;
 
         // Phase 3: Parse properties
         let properties = self.parse_properties(container)?;
@@ -379,13 +391,26 @@ impl NdpiInterpreter {
     #[allow(clippy::type_complexity)]
     fn build_pyramid(
         &self,
-        container: &TiffContainer,
         pyramid_ifds: &mut [ClassifiedIfd],
     ) -> Result<(Vec<Level>, HashMap<TileSourceKey, TileSource>, u32), TiffParseError> {
         // Sort by area descending (largest first = level 0)
         pyramid_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
+            let area_a = u128::from(a.width) * u128::from(a.height);
+            let area_b = u128::from(b.width) * u128::from(b.height);
+            area_b.cmp(&area_a)
+        });
+
+        let tiff_base_dims = (pyramid_ifds[0].width, pyramid_ifds[0].height);
+        for ifd in pyramid_ifds.iter_mut().skip(1) {
+            (ifd.width, ifd.height) = reconcile_ndpi_dimensions(
+                tiff_base_dims,
+                (ifd.width, ifd.height),
+                &ifd.jpeg_probe,
+            )?;
+        }
+        pyramid_ifds.sort_by(|a, b| {
+            let area_a = u128::from(a.width) * u128::from(a.height);
+            let area_b = u128::from(b.width) * u128::from(b.height);
             area_b.cmp(&area_a)
         });
 
@@ -449,8 +474,7 @@ impl NdpiInterpreter {
             if let Some(group) = physical_groups_by_factor.remove(&expected_factor) {
                 let representative = group[0];
 
-                let representative_probe =
-                    probe_jpeg_geometry_via_j2k(container, representative.ifd_id)?;
+                let representative_probe = representative.jpeg_probe.clone();
                 let restart_interval = representative_probe.restart_interval;
                 let (mcu_w, mcu_h) = (representative_probe.mcu_w, representative_probe.mcu_h);
 
@@ -491,7 +515,7 @@ impl NdpiInterpreter {
                     let ifd_probe = if ifd.ifd_id == representative.ifd_id {
                         representative_probe.clone()
                     } else {
-                        probe_jpeg_geometry_via_j2k(container, ifd.ifd_id)?
+                        ifd.jpeg_probe.clone()
                     };
 
                     let plane_ri = ifd_probe.restart_interval;
@@ -681,6 +705,29 @@ impl NdpiInterpreter {
 
         Ok(properties)
     }
+}
+
+fn reconcile_ndpi_dimensions(
+    base_dims: (u64, u64),
+    tiff_dims: (u64, u64),
+    probe: &JpegGeometryProbe,
+) -> Result<(u64, u64), TiffParseError> {
+    let (tiff_width, tiff_height) = tiff_dims;
+    if tiff_width == 0 || tiff_height == 0 {
+        return Ok(tiff_dims);
+    }
+    let highly_downsampled = base_dims.0 / tiff_width >= 32 && base_dims.1 / tiff_height >= 32;
+    let jpeg_dims = (u64::from(probe.dimensions.0), u64::from(probe.dimensions.1));
+    if !highly_downsampled || jpeg_dims.0 == 0 || jpeg_dims.1 == 0 || jpeg_dims == tiff_dims {
+        return Ok(tiff_dims);
+    }
+    if probe.restart_interval == 0 {
+        return Ok(jpeg_dims);
+    }
+    Err(TiffParseError::Structure(format!(
+        "NDPI JPEG dimension mismatch: TIFF declares {}x{}, JPEG declares {}x{}",
+        tiff_width, tiff_height, jpeg_dims.0, jpeg_dims.1
+    )))
 }
 
 fn ndpi_power_of_two_factor(base_dims: (u64, u64), dims: (u64, u64)) -> Option<u32> {
