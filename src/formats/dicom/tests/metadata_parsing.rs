@@ -102,6 +102,31 @@ fn metadata_preflight_rejects_odd_value_length_before_parser_desynchronization()
 }
 
 #[test]
+fn metadata_preflight_rejects_misaligned_fixed_width_value_before_object_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("misaligned-fixed-width-value.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    let samples_per_pixel_header = [0x28, 0x00, 0x02, 0x00, b'U', b'S', 0x02, 0x00];
+    let header_offset = bytes
+        .windows(samples_per_pixel_header.len())
+        .position(|candidate| candidate == samples_per_pixel_header)
+        .expect("test DICOM should contain explicit-VR Samples Per Pixel");
+    bytes[header_offset + 4..header_offset + 6].copy_from_slice(b"SL");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut file = File::open(&path).unwrap();
+    let error = preflight_dicom_metadata(&mut file, &path)
+        .expect_err("misaligned fixed-width values must be rejected before object parsing");
+
+    assert!(
+        error.to_string().contains("fixed-width VR SL"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn metadata_parse_rejects_zero_geometry_and_frame_count() {
     type ZeroDimensionCase = (&'static str, fn(&mut TestDicomOptions), &'static str);
     let cases: [ZeroDimensionCase; 5] = [
