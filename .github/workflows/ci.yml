@@ -143,6 +143,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update
@@ -224,6 +226,7 @@ jobs:
         working-directory: wsi-rs
 
   coverage:
+    needs: parity-corpus
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
@@ -244,6 +247,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update
