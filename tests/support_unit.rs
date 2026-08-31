@@ -333,6 +333,31 @@ fn oracle_top_left_probe_falls_back_to_region_for_irregular_layout() {
 }
 
 #[test]
+fn oracle_top_left_probe_clips_virtual_tiles_to_logical_level_geometry() {
+    let slide = OpenedSlide {
+        path: PathBuf::from("fixture.bif"),
+        oracle_name: "fixture",
+        level_count: 1,
+        level_dimensions: vec![(225, 150)],
+        tile_sizes: vec![Some((1024, 1360))],
+        probe_regions: vec![None],
+        reader: Box::new(|_, _, _, _, _| Err("tile reader should not be used".into())),
+        region_reader: Box::new(|_, _, _, width, height| {
+            Ok(TileBuffer {
+                pixels_rgba: vec![0; width as usize * height as usize * 4],
+                width,
+                height,
+            })
+        }),
+    };
+
+    let probe = top_left_probe(&slide, 0).expect("probe");
+
+    assert_eq!(probe.kind, ProbeKind::Region);
+    assert_eq!((probe.width, probe.height), (225, 150));
+}
+
+#[test]
 fn oracle_top_left_probe_prefers_sparse_layout_probe_when_available() {
     let slide = OpenedSlide {
         path: PathBuf::from("fixture.mrxs"),

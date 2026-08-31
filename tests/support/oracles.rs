@@ -55,18 +55,20 @@ pub(crate) fn top_left_probe(slide: &OpenedSlide, level: u32) -> Option<ProbeReq
         return Some(*probe);
     }
 
+    let (level_width, level_height) = *slide.level_dimensions.get(level as usize)?;
     if let Some(Some((width, height))) = slide.tile_sizes.get(level as usize) {
-        return Some(ProbeRequest {
-            level,
-            x: 0,
-            y: 0,
-            width: *width,
-            height: *height,
-            kind: ProbeKind::Tile,
-        });
+        if u64::from(*width) <= level_width && u64::from(*height) <= level_height {
+            return Some(ProbeRequest {
+                level,
+                x: 0,
+                y: 0,
+                width: *width,
+                height: *height,
+                kind: ProbeKind::Tile,
+            });
+        }
     }
 
-    let (level_width, level_height) = *slide.level_dimensions.get(level as usize)?;
     let width = u32::try_from(level_width.min(256)).ok()?;
     let height = u32::try_from(level_height.min(256)).ok()?;
     if width == 0 || height == 0 {
