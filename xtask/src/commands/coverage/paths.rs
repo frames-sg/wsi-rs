@@ -56,6 +56,7 @@ pub(super) fn is_coverage_candidate(path: &Path) -> bool {
             .any(|component| component.as_os_str() == "tests")
         && !path.starts_with("tests")
         && !path.starts_with("benches")
+        && !path.starts_with("fuzz")
 }
 
 #[cfg(test)]
