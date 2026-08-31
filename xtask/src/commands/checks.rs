@@ -9,6 +9,17 @@ const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
 const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-04-17";
+const FUZZ_TARGETS: [&str; 9] = [
+    "open_wsi_bytes",
+    "open_jp2k_codestream_bytes",
+    "open_svcache_bytes",
+    "parse_xml_bytes",
+    "open_dicom_bytes",
+    "open_zvi_bytes",
+    "open_mirax_bundle_bytes",
+    "open_vms_bundle_bytes",
+    "open_vsi_bundle_bytes",
+];
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
@@ -253,15 +264,7 @@ pub(super) fn fuzz_check() -> Result<(), String> {
     let root_lock = fs::read("Cargo.lock").map_err(|err| format!("read Cargo.lock: {err}"))?;
     let fuzz_lock =
         fs::read("fuzz/Cargo.lock").map_err(|err| format!("read fuzz/Cargo.lock: {err}"))?;
-    for target in [
-        "open_wsi_bytes",
-        "open_jp2k_codestream_bytes",
-        "open_svcache_bytes",
-        "parse_xml_bytes",
-        "open_dicom_bytes",
-        "open_zvi_bytes",
-        "open_mirax_bundle_bytes",
-    ] {
+    for target in FUZZ_TARGETS {
         run_program(
             OsString::from("rustup"),
             &[

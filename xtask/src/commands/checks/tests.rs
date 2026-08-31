@@ -119,3 +119,18 @@ fn public_api_snapshot_update_creates_parent_and_trailing_newline() {
         "pub struct Updated;\n"
     );
 }
+
+#[test]
+fn fuzz_gate_covers_every_declared_fuzz_binary() {
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fuzz/Cargo.toml"))
+            .expect("read fuzz manifest");
+
+    for target in FUZZ_TARGETS {
+        assert!(
+            manifest.contains(&format!("name = \"{target}\"")),
+            "fuzz target {target} is not declared"
+        );
+    }
+    assert_eq!(manifest.matches("[[bin]]").count(), FUZZ_TARGETS.len());
+}
