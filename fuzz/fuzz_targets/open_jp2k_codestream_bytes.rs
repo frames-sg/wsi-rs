@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use wsi_rs::{Slide, TileOutputPreference, TileRequest};
+use wsi_rs::{Slide, TileRequest};
 
 const MAX_INPUT_BYTES: usize = 1 << 20;
 
@@ -22,5 +22,5 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let request = TileRequest::new(0, 0, 0, 0, 0);
-    let _ = slide.read_tile(&request, TileOutputPreference::cpu());
+    let _ = slide.read_tile(&request);
 });

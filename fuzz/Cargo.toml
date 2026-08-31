@@ -61,4 +61,18 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "open_vms_bundle_bytes"
+path = "fuzz_targets/open_vms_bundle_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_vsi_bundle_bytes"
+path = "fuzz_targets/open_vsi_bundle_bytes.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

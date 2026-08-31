@@ -6,7 +6,7 @@ use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, Slide};
 const MAX_INPUT_BYTES: usize = 1 << 20;
 const MAX_REGION_SIDE: u64 = 32;
 const WSI_FUZZ_EXTENSIONS: &[&str] = &[
-    "svs", "ndpi", "scn", "tif", "tiff", "bif", "mrxs", "vms", "vmu", "vsi", "dcm", "czi", "zvi",
+    "svs", "avs", "ndpi", "scn", "tif", "tiff", "bif", "mrxs", "vms", "vmu", "vsi", "dcm", "zvi",
 ];
 
 fuzz_target!(|data: &[u8]| {
