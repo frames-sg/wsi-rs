@@ -226,6 +226,7 @@ impl CaptureWorkload {
             "p95_us" => self.p95_us,
             "p99_us" => self.p99_us,
             "mean_us" => self.mean_us,
+            "throughput_bytes_per_second" => self.throughput_bytes_per_second,
             _ => None,
         }
     }
@@ -246,6 +247,7 @@ impl From<wsi_rs_perf::WorkloadResult> for CaptureWorkload {
             effective_elapsed_us: Some(workload.effective_elapsed_us),
             throughput_bytes_per_second: Some(workload.throughput_bytes_per_second),
             checksum_sha256: Some(workload.checksum_sha256),
+            diagnostics: workload.diagnostics,
             ..Self::default()
         }
     }

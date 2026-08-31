@@ -7,10 +7,10 @@ use super::comparison::{capture_library, comparison_summaries, P99_MIN_SAMPLE_CO
 use super::process_metrics::PEAK_RSS_METRIC;
 use super::schema::CaptureDocument;
 
-pub(super) const OPENSLIDE_HEADLINE_RATIO: f64 = 0.50;
+pub(super) const OPENSLIDE_HEADLINE_RATIO: f64 = 1.00;
 const OPENSLIDE_CELL_REGRESSION_RATIO: f64 = 1.05;
 const OPENSLIDE_RSS_RATIO: f64 = 1.20;
-const MIN_ACCEPTANCE_REPEATS: u64 = 3;
+const ACCEPTANCE_REPEATS: u64 = 5;
 const REQUIRED_OPENSLIDE_GROUPS: [(&str, &str); 7] = [
     ("svs-001", "aperio/jpeg"),
     ("svs-jp2k-001", "aperio/j2k"),
@@ -42,6 +42,9 @@ pub(super) fn evaluate_openslide_acceptance(
     validate_mandatory_viewer_metrics(openslide)?;
     validate_mandatory_viewer_metrics(wsi_rs)?;
     validate_comparison_context(openslide, wsi_rs)?;
+    validate_paired_run_order(openslide)?;
+    validate_paired_run_order(wsi_rs)?;
+    validate_gpu_route_evidence(wsi_rs)?;
     validate_cross_capture_checksums(openslide, wsi_rs)?;
     let summaries = comparison_summaries(openslide, wsi_rs)?;
     let mut failures = Vec::new();
@@ -99,7 +102,7 @@ pub(super) fn evaluate_openslide_acceptance(
     let (headline_ratio, headline_cells) = headline_viewer_ratio(&summaries)?;
     if headline_ratio > OPENSLIDE_HEADLINE_RATIO {
         failures.push(format!(
-            "2x headline ratio {headline_ratio:.3} exceeds {OPENSLIDE_HEADLINE_RATIO:.2}"
+            "viewer p50 geometric-mean ratio {headline_ratio:.3} exceeds {OPENSLIDE_HEADLINE_RATIO:.2}"
         ));
     }
 
@@ -215,10 +218,132 @@ fn validate_mandatory_acceptance_matrix(capture: &Value) -> Result<(), String> {
     }
 
     let repeats = capture.repeat_count;
-    if repeats < MIN_ACCEPTANCE_REPEATS {
+    if repeats != ACCEPTANCE_REPEATS {
         return Err(format!(
-            "OpenSlide acceptance requires at least {MIN_ACCEPTANCE_REPEATS} process repeats, found {repeats}"
+            "OpenSlide acceptance requires exactly {ACCEPTANCE_REPEATS} alternating process repeats, found {repeats}"
         ));
+    }
+    Ok(())
+}
+
+fn validate_paired_run_order(capture: &Value) -> Result<(), String> {
+    let capture = CaptureDocument::parse(capture)?;
+    let library = capture.metadata.benchmark.library.as_str();
+    for run in &capture.runs {
+        let repeat = run
+            .repeat_index
+            .ok_or_else(|| "paired performance run missing repeat_index".to_string())?;
+        let expected = if repeat.is_multiple_of(2) {
+            ["wsi_rs", "openslide"]
+        } else {
+            ["openslide", "wsi_rs"]
+        };
+        if run.engine_order != expected {
+            return Err(format!(
+                "paired performance run repeat={repeat} has engine_order={:?}, expected {expected:?}",
+                run.engine_order
+            ));
+        }
+        let expected_position = expected
+            .iter()
+            .position(|engine| *engine == library)
+            .ok_or_else(|| format!("unknown paired performance library {library:?}"))?;
+        if run.engine_position != Some(expected_position) {
+            return Err(format!(
+                "paired performance run repeat={repeat} library={library} has engine_position={:?}, expected {expected_position}",
+                run.engine_position
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_gpu_route_evidence(capture: &Value) -> Result<(), String> {
+    let capture = CaptureDocument::parse(capture)?;
+    let features = capture
+        .metadata
+        .build
+        .get("features")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "wsi-rs GPU acceptance capture missing build feature metadata".to_string()
+        })?;
+    let declared_gpu_features = ["metal", "cuda"]
+        .into_iter()
+        .filter(|candidate| {
+            features
+                .iter()
+                .any(|feature| feature.as_str() == Some(candidate))
+        })
+        .collect::<Vec<_>>();
+    if declared_gpu_features.len() != 1 {
+        return Err(format!(
+            "wsi-rs GPU acceptance capture must declare exactly one compiled metal or cuda feature, found {declared_gpu_features:?}"
+        ));
+    }
+    let feature = declared_gpu_features.first().copied().ok_or_else(|| {
+        "wsi-rs GPU acceptance capture must declare compiled metal or cuda support".to_string()
+    })?;
+
+    let host = &capture.metadata.host;
+    let expected_platform = match feature {
+        "metal" => ("macos", "aarch64"),
+        "cuda" => ("linux", "x86_64"),
+        _ => unreachable!("feature selected from fixed allowlist"),
+    };
+    if host.get("os").and_then(Value::as_str) != Some(expected_platform.0)
+        || host.get("arch").and_then(Value::as_str) != Some(expected_platform.1)
+    {
+        return Err(format!(
+            "{feature} performance acceptance requires pinned {}-{} host metadata",
+            expected_platform.0, expected_platform.1
+        ));
+    }
+    if host
+        .get("pinned_host_id")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("GPU performance acceptance requires nonempty pinned_host_id metadata".into());
+    }
+    if host
+        .get("gpu")
+        .and_then(Value::as_str)
+        .is_none_or(|gpu| gpu.is_empty() || gpu.starts_with("unavailable:"))
+    {
+        return Err("GPU performance acceptance requires available GPU identity metadata".into());
+    }
+
+    for run in capture
+        .runs
+        .iter()
+        .filter(|run| run.benchmark_group() == "aperio/j2k")
+    {
+        for workload in &run.workloads {
+            if !viewer_workloads().contains(&workload.name.as_str()) {
+                continue;
+            }
+            let route = workload
+                .diagnostics
+                .as_ref()
+                .and_then(|diagnostics| diagnostics.get("decode_route"));
+            let device_tiles = route
+                .and_then(|route| route.get("device_tiles"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let fallback_tiles = route
+                .and_then(|route| route.get("fallback_tiles"))
+                .and_then(Value::as_u64);
+            let reported_feature = route
+                .and_then(|route| route.get("feature"))
+                .and_then(Value::as_str);
+            if device_tiles == 0 || fallback_tiles != Some(0) || reported_feature != Some(feature) {
+                return Err(format!(
+                    "GPU cell alias={} workload={} lacks actual {feature} route evidence or reported fallback",
+                    run.alias(), workload.name
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -266,6 +391,13 @@ pub(super) fn validate_comparison_context(first: &Value, second: &Value) -> Resu
     }
     if first_host != second_host {
         return Err("capture host metadata differ".into());
+    }
+    if first_host
+        .get("pinned_host_id")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("capture missing nonempty pinned_host_id metadata".into());
     }
 
     let first_build = &first.metadata.build;

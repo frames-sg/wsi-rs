@@ -38,14 +38,21 @@ except ModuleNotFoundError as exc:
 
 FORMAT_EXTENSIONS = {
     "aperio": "svs",
+    "argos": "avs",
+    "huron": "tif",
     "leica": "scn",
     "ventana": "bif",
     "philips_tiff": "tif",
     "tiff": "tif",
     "ndpi": "ndpi",
     "hamamatsu_vms": "zip",
+    "hamamatsu_vmu": "zip",
     "dicom": "dcm",
     "mirax": "zip",
+    "olympus_vsi": "vsi",
+    "raw_jp2k": "j2k",
+    "svcache": "svcache",
+    "zeiss_zvi": "zvi",
 }
 MAX_ZIP_MEMBERS = 50_000
 MAX_ZIP_MEMBER_BYTES = 2 * 1024**3

@@ -128,7 +128,6 @@ mod unix {
     fn engineering_commands_execute_their_complete_orchestration_contracts() {
         let fixture = FakeRepository::new();
         for (task, arguments) in [
-            ("rc-preflight", Vec::<&str>::new()),
             ("ci", vec![]),
             ("test", vec![]),
             ("parity-corpus-test", vec![]),
@@ -148,11 +147,15 @@ mod unix {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        let output = fixture.run("rc-preflight", &[]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("WSI_RS_RC_OPENSLIDE_CAPTURE"));
         let log = fs::read_to_string(&fixture.log_path).unwrap();
         for expected in [
             "public-api -p wsi-rs",
             "cargo-machete",
             "fuzz check open_zvi_bytes",
+            "fuzz run --sanitizer address open_vsi_bundle_bytes",
             "hack check --locked --workspace",
             "nextest run --locked",
             "package --locked",
@@ -195,6 +198,8 @@ mod unix {
             "src/formats/tiff_family.rs",
             "src/formats/tiff_family/layout/generic.rs",
             "src/formats/tiff_family/layout/aperio.rs",
+            "src/formats/tiff_family/layout/argos.rs",
+            "src/formats/tiff_family/layout/huron.rs",
             "src/formats/tiff_family/layout/ndpi.rs",
             "src/formats/tiff_family/layout/leica.rs",
             "src/formats/tiff_family/layout/philips.rs",

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::capture::worker_count;
 use super::worker::{
     cache_bytes, shim_library_name, target_directory, worker_args, workspace_root, BenchInvocation,
-    BenchLibrary, DEFAULT_CACHE_BYTES, RAYON_NUM_THREADS_ENV, WSI_RS_SHIM_JP2K_CPU_THREADS_ENV,
+    BenchLibrary, DEFAULT_CACHE_BYTES, RAYON_NUM_THREADS_ENV,
 };
 
 const PROFILE_DIR_ENV: &str = "WSI_RS_PERF_PROFILE_DIR";
@@ -65,7 +65,6 @@ fn profile_recipes(slide: &Path, workload: Option<&str>, label: &str) -> Profile
         [
             "env".to_string(),
             format!("{RAYON_NUM_THREADS_ENV}={workers}"),
-            format!("{WSI_RS_SHIM_JP2K_CPU_THREADS_ENV}=1"),
             invocation.worker.display().to_string(),
         ],
     );

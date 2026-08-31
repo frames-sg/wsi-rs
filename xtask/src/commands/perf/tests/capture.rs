@@ -149,7 +149,6 @@ fn run_context_records_manifest_identity_worker_and_engine_order() {
         run["decode_cpu_concurrency"]["rayon_threads_process_wide"],
         2
     );
-    assert_eq!(run["decode_cpu_concurrency"]["jp2k_threads_per_handle"], 1);
     assert_eq!(
         run["decode_cpu_concurrency"]["active_jp2k_thread_budget"],
         2

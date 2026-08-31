@@ -59,6 +59,14 @@ pub(super) const REQUIRED_COMPONENTS: &[CoverageComponent] = &[
         root: "src/formats/tiff_family/layout/aperio",
     },
     CoverageComponent {
+        name: "ARGOS",
+        root: "src/formats/tiff_family/layout/argos",
+    },
+    CoverageComponent {
+        name: "Huron",
+        root: "src/formats/tiff_family/layout/huron",
+    },
+    CoverageComponent {
         name: "NDPI",
         root: "src/formats/tiff_family/layout/ndpi",
     },

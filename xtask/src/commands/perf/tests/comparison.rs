@@ -46,7 +46,12 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
     json!({
         "schema_version": PERF_CAPTURE_SCHEMA_VERSION,
         "metadata": {
-            "host": {"os": "test", "arch": "test", "cpu": "test-cpu"},
+            "host": {
+                "os": "test",
+                "arch": "test",
+                "cpu": "test-cpu",
+                "pinned_host_id": "test-host",
+            },
             "build": {
                 "profile": "release",
                 "features": [],
@@ -59,7 +64,7 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
                 "workloads": ["pan_trace_l0"],
             },
         },
-        "runs": (0..3).map(|repeat| json!({
+        "runs": (0..5).map(|repeat| json!({
             "slide_path": "fixture.svs",
             "slide_sha256": "slide-hash",
             "repeat_index": repeat,
@@ -80,16 +85,20 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
 }
 
 #[test]
-fn compare_flags_regression_when_two_of_three_runs_exceed_guard() {
+fn compare_flags_regression_when_three_of_five_runs_exceed_guard() {
     let before = capture_json(&[
         (0, 10_000, 20_000),
         (1, 10_000, 20_000),
         (2, 10_000, 20_000),
+        (3, 10_000, 20_000),
+        (4, 10_000, 20_000),
     ]);
     let after = capture_json(&[
         (0, 10_700, 20_000),
         (1, 10_800, 21_200),
-        (2, 10_000, 21_300),
+        (2, 10_700, 21_300),
+        (3, 10_000, 21_300),
+        (4, 10_000, 20_000),
     ]);
 
     let regressions = compare_captures(&before, &after).expect("compare captures");
@@ -97,12 +106,12 @@ fn compare_flags_regression_when_two_of_three_runs_exceed_guard() {
     assert!(regressions.iter().any(|regression| {
         regression.workload == "single_tile_l0"
             && regression.metric == "p50_us"
-            && regression.regressed_runs == 2
+            && regression.regressed_runs == 3
     }));
     assert!(regressions.iter().any(|regression| {
         regression.workload == "single_tile_l0"
             && regression.metric == "p95_us"
-            && regression.regressed_runs == 2
+            && regression.regressed_runs == 3
     }));
 }
 
@@ -123,7 +132,7 @@ fn two_wsi_rs_captures_use_the_five_percent_regression_gate() {
 fn same_engine_input_validation_rejects_mismatched_output_cells() {
     let capture = |checksum: &str| {
         let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
-        capture["repeat_count"] = json!(3);
+        capture["repeat_count"] = json!(5);
         capture["slide_manifest"] = json!([{
             "path": "fixture.svs",
             "alias": "fixture",
@@ -152,7 +161,7 @@ fn same_engine_input_validation_rejects_mismatched_output_cells() {
 fn same_engine_input_validation_rejects_cross_host_results() {
     let capture = || {
         let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
-        capture["repeat_count"] = json!(3);
+        capture["repeat_count"] = json!(5);
         capture["slide_manifest"] = json!([{
             "path": "fixture.svs",
             "alias": "fixture",
@@ -185,11 +194,15 @@ fn compare_ignores_single_noisy_regression() {
         (0, 10_000, 20_000),
         (1, 10_000, 20_000),
         (2, 10_000, 20_000),
+        (3, 10_000, 20_000),
+        (4, 10_000, 20_000),
     ]);
     let after = capture_json(&[
         (0, 13_000, 26_000),
         (1, 10_000, 20_000),
         (2, 10_000, 20_000),
+        (3, 10_000, 20_000),
+        (4, 10_000, 20_000),
     ]);
 
     let regressions = compare_captures(&before, &after).expect("compare captures");
@@ -219,11 +232,15 @@ fn compare_does_not_gate_tail_metrics_when_sample_count_is_too_low() {
         (0, 400, 1_100, 1_100, 500),
         (1, 400, 1_100, 1_100, 500),
         (2, 400, 1_100, 1_100, 500),
+        (3, 400, 1_100, 1_100, 500),
+        (4, 400, 1_100, 1_100, 500),
     ]);
     let after = capture(&[
         (0, 400, 1_650, 1_650, 500),
         (1, 400, 1_600, 1_600, 500),
         (2, 400, 1_580, 1_580, 500),
+        (3, 400, 1_580, 1_580, 500),
+        (4, 400, 1_580, 1_580, 500),
     ]);
 
     let regressions = compare_captures(&before, &after).expect("compare captures");
@@ -233,8 +250,20 @@ fn compare_does_not_gate_tail_metrics_when_sample_count_is_too_low() {
 
 #[test]
 fn same_engine_gate_does_not_waive_small_cells_with_large_ratios() {
-    let before = capture_json(&[(0, 10, 90), (1, 10, 90), (2, 10, 90)]);
-    let after = capture_json(&[(0, 20, 150), (1, 20, 150), (2, 10, 90)]);
+    let before = capture_json(&[
+        (0, 10, 90),
+        (1, 10, 90),
+        (2, 10, 90),
+        (3, 10, 90),
+        (4, 10, 90),
+    ]);
+    let after = capture_json(&[
+        (0, 20, 150),
+        (1, 20, 150),
+        (2, 20, 150),
+        (3, 10, 90),
+        (4, 10, 90),
+    ]);
 
     let regressions = compare_captures(&before, &after).expect("compare captures");
 
@@ -256,11 +285,15 @@ fn compare_checks_p99_mean_and_peak_rss_regressions() {
         (0, 1_000, 2_000, 3_000, 1_500, 1_000),
         (1, 1_000, 2_000, 3_000, 1_500, 1_000),
         (2, 1_000, 2_000, 3_000, 1_500, 1_000),
+        (3, 1_000, 2_000, 3_000, 1_500, 1_000),
+        (4, 1_000, 2_000, 3_000, 1_500, 1_000),
     ]);
     let after = full_capture_json(&[
-        (0, 1_000, 2_000, 3_600, 2_100, 1_100),
+        (0, 1_000, 2_000, 3_600, 2_100, 1_101),
         (1, 1_000, 2_000, 3_610, 2_110, 1_110),
-        (2, 1_000, 2_000, 3_000, 1_500, 1_000),
+        (2, 1_000, 2_000, 3_620, 2_120, 1_120),
+        (3, 1_000, 2_000, 3_000, 1_500, 1_000),
+        (4, 1_000, 2_000, 3_000, 1_500, 1_000),
     ]);
 
     let regressions = compare_captures(&before, &after).expect("compare captures");
@@ -268,17 +301,12 @@ fn compare_checks_p99_mean_and_peak_rss_regressions() {
     assert!(regressions.iter().any(|regression| {
         regression.workload == "single_tile_l0"
             && regression.metric == "p99_us"
-            && regression.regressed_runs == 2
-    }));
-    assert!(regressions.iter().any(|regression| {
-        regression.workload == "single_tile_l0"
-            && regression.metric == "mean_us"
-            && regression.regressed_runs == 2
+            && regression.regressed_runs == 3
     }));
     assert!(regressions.iter().any(|regression| {
         regression.workload == PROCESS_METRICS_WORKLOAD
             && regression.metric == "peak_rss_bytes"
-            && regression.regressed_runs == 2
+            && regression.regressed_runs == 3
     }));
 }
 
@@ -290,7 +318,7 @@ fn compare_skips_peak_rss_when_workload_sets_differ() {
                 "workloads": ["single_tile_l0"]
             }
         },
-        "runs": (0..3).map(|repeat| json!({
+        "runs": (0..5).map(|repeat| json!({
             "slide_path": "fixture.svs",
             "repeat_index": repeat,
             "peak_rss_bytes": 1_000,
@@ -306,7 +334,7 @@ fn compare_skips_peak_rss_when_workload_sets_differ() {
                 "workloads": ["raw_tile_l0", "single_tile_l0"]
             }
         },
-        "runs": (0..3).map(|repeat| json!({
+        "runs": (0..5).map(|repeat| json!({
             "slide_path": "fixture.svs",
             "repeat_index": repeat,
             "peak_rss_bytes": 2_000,
@@ -328,10 +356,10 @@ fn compare_skips_peak_rss_when_workload_sets_differ() {
 }
 
 #[test]
-fn compare_checks_higher_is_worse_cache_diagnostics() {
+fn compare_reports_but_does_not_gate_cache_diagnostics() {
     let capture = |misses: u64| {
         json!({
-            "runs": (0..3).map(|repeat| json!({
+            "runs": (0..5).map(|repeat| json!({
                 "slide_path": "fixture.svs",
                 "repeat_index": repeat,
                 "workloads": [{
@@ -362,10 +390,44 @@ fn compare_checks_higher_is_worse_cache_diagnostics() {
 
     let regressions = compare_captures(&capture(2), &capture(4)).expect("compare captures");
 
-    assert!(regressions.iter().any(|regression| {
+    assert!(!regressions.iter().any(|regression| {
         regression.workload == "region_2k" && regression.metric == "shared_cache_misses"
     }));
     assert!(!regressions.iter().any(|regression| {
         regression.workload == "region_2k" && regression.metric == "shared_cache_hits"
     }));
+}
+
+#[test]
+fn previous_release_gate_requires_three_throughput_regressions_in_five_repeats() {
+    let capture = |throughputs: [u64; 5]| {
+        json!({
+            "runs": throughputs.into_iter().enumerate().map(|(repeat, throughput)| json!({
+                "slide_path": "fixture.svs",
+                "repeat_index": repeat,
+                "workloads": [{
+                    "name": "pan_trace_l0",
+                    "n": 100,
+                    "p50_us": 1_000,
+                    "p95_us": 2_000,
+                    "p99_us": 3_000,
+                    "throughput_bytes_per_second": throughput,
+                }]
+            })).collect::<Vec<_>>()
+        })
+    };
+    let baseline = capture([1_000; 5]);
+    let two_slow = capture([900, 900, 1_000, 1_000, 1_000]);
+    let three_slow = capture([900, 900, 900, 1_000, 1_000]);
+
+    assert!(compare_captures(&baseline, &two_slow)
+        .expect("two noisy repeats")
+        .is_empty());
+    assert!(compare_captures(&baseline, &three_slow)
+        .expect("confirmed throughput regression")
+        .iter()
+        .any(
+            |regression| regression.metric == "throughput_bytes_per_second"
+                && regression.regressed_runs == 3
+        ));
 }
