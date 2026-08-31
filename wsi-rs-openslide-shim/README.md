@@ -12,8 +12,8 @@ Library names:
 
 | Platform | Build output | OpenSlide-compatible names |
 | --- | --- | --- |
-| macOS | `target/release/libwsi_rs_openslide_shim.dylib` | `libopenslide.1.dylib`, `libopenslide.dylib`, `libopenslide.4.dylib` |
-| Linux | `target/release/libwsi_rs_openslide_shim.so` | `libopenslide.so.1`, `libopenslide.so`, `libopenslide.so.4` |
+| macOS | `target/release/libwsi_rs_openslide_shim.dylib` | `libopenslide.1.dylib`, `libopenslide.dylib` |
+| Linux | `target/release/libwsi_rs_openslide_shim.so` | `libopenslide.so.1`, `libopenslide.so` |
 
 Install into a private prefix:
 

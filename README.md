@@ -8,7 +8,7 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-orange.svg)](#license)
 
 `wsi-rs` is a Rust whole-slide image reader. It opens TIFF-family WSI,
-DICOM VL WSI, Zeiss CZI/ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
+including ARGOS and Huron, DICOM VL WSI, Zeiss ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
 JPEG 2000 codestream fixtures, and `.svcache` containers. JPEG, JPEG 2000,
 and HTJ2K decode is delegated to the
 [J2K pure-Rust JPEG 2000 codec](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/)
@@ -31,7 +31,7 @@ required j2k 0.10 series does not support 32-bit targets.
 ## Quick Start
 
 ```rust,no_run
-use wsi_rs::{RegionRequest, Slide, TileOutputPreference, TilePixels, TileRequest};
+use wsi_rs::{RegionRequest, Slide, TileRequest};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slide = Slide::open("sample.svs")?;
@@ -43,9 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     slide.read_region_rgba(&region)?.save("region.png")?;
 
     let tile = TileRequest::builder(0usize, 0usize, 0u32).tile(0, 0).build()?;
-    if let TilePixels::Cpu(cpu_tile) = slide.read_tile(&tile, TileOutputPreference::cpu())? {
-        println!("{}x{}", cpu_tile.width(), cpu_tile.height());
-    }
+    let cpu_tile = slide.read_tile(&tile)?;
+    println!("{}x{}", cpu_tile.width(), cpu_tile.height());
 
     Ok(())
 }
@@ -54,12 +53,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `SlideOpenOptions` for explicit cache budgets, read-through `.svcache`
 lookup, custom registries, region limits, or decode execution settings.
 
+Every slide also has checked hostile-input limits. The defaults are 128 MiB
+aggregate metadata, 16 MiB per metadata value, 128 MiB each for tile indexes,
+encoded units, and decoded outputs, 33,554,432 pixels/128 MiB RGBA per region,
+384 MiB transient work per operation, 512 MiB in flight per slide, and a
+256 MiB internal batch-chunk target. Oversized batches are processed in order;
+only an individually oversized tile, associated image, or region is rejected.
+Use `SlideLimits` through `SlideOpenOptions::with_limits` to choose stricter
+checked limits.
+
 ## Architecture
 
 `wsi-rs` presents a format-independent `Slide` façade backed by a
 `SlideReader`. Format modules own metadata validation, tile or frame lookup,
 and source I/O; the shared core owns typed requests, byte-bounded caches,
-decode policy, and CPU or device output types. Unsupported or invalid input
+decode policy, and CPU output types. Unsupported or invalid input
 returns a typed `WsiError` instead of silently producing a partial tile.
 The detailed internal ownership map is in
 [`docs/architecture.md`](docs/architecture.md).
@@ -92,14 +100,16 @@ caller. `.svcache` freshness policies stream the complete source through SHA-256
 so opting into cache resolution performs a full source-file read; implicit
 `.svcache` resolution remains disabled by default.
 
-Metal and CUDA features expose renderer-uploadable device payloads. Output
-residency and codec backend selection are related but separate choices. Metal
-tiles normally retain an immutable resident allocation through downstream GPU
-use; within the main `wsi-rs` library crate, the only production unsafe-code
-exception is the audited Metal ownership adapter. CUDA payload support does not
-by itself provide cross-API renderer interoperability. Consumers that present
-through another GPU API can call `CudaDeviceTile::download_cpu` for checked,
-pitch-aware, tightly packed host staging without accessing CUDA surface internals.
+Default retained caches are capped at 128 MiB per slide: 64 MiB for decoded
+source tiles, 32 MiB for display tiles, and 32 MiB across private and
+full-decode caches. Explicit cache settings may choose a different budget.
+
+Metal and CUDA features accelerate JP2K/HTJ2K CPU reads automatically when a
+measured device route, including readback, wins by at least 15%. The ordinary
+API always returns `CpuTile` and falls back safely. Expert
+`read_tile(s)_metal` and `read_tile(s)_cuda` methods are strict: they support
+only JP2K/HTJ2K and either return typed resident tiles or an error. Both tile
+types provide checked, pitch-aware `download_cpu()` staging.
 
 Controlled-read diagnostics are opt-in and delivered outside internal locks.
 The library emits operational events through `tracing`, but installs no
@@ -128,14 +138,19 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 
 | Input family | Typical paths |
 | --- | --- |
-| TIFF-family WSI and uncompressed RGB TIFF | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif` |
+| TIFF-family WSI (including ARGOS and Huron) and uncompressed RGB TIFF | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif`, `.avs` |
 | DICOM VL WSI | `.dcm` files or a DICOM series directory |
-| Zeiss | `.czi`, `.zvi` |
+| Zeiss ZVI | `.zvi` |
 | MIRAX | `.mrxs` plus sibling data files |
 | Hamamatsu VMS/VMU | `.vms`, `.vmu` plus sibling image files |
 | Olympus VSI | `.vsi` plus matching ETS companion data |
 | Raw JPEG 2000 codestream | `.j2k`, `.j2c` |
 | `.svcache` | `.svcache` |
+
+CZI and Sakura are explicitly unsupported in 0.7. CZI is not registered for
+default detection because the available corpus does not justify a production
+claim beyond uncompressed inputs. Sakura remains excluded until a
+redistributable real sample is available.
 
 Generic strip-based TIFF support is intentionally limited to one top-level,
 uncompressed 8-bit RGB image with top-left orientation, no predictor, and
