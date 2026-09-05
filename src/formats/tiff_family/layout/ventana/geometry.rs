@@ -114,13 +114,8 @@ pub(super) fn ventana_level0_dimensions(
             .iter()
             .map(|tile| tile.y + tile.height as f64)
             .fold(f64::NEG_INFINITY, f64::max);
-        let width = (max_right - min_x).ceil() as u64;
-        let height = (max_bottom - min_y).ceil() as u64;
-        if width == 0 || height == 0 {
-            return Err(TiffParseError::Structure(
-                "Ventana BIF: stitched level-0 dimensions resolved to zero".into(),
-            ));
-        }
+        let width = checked_ventana_dimension(max_right - min_x)?;
+        let height = checked_ventana_dimension(max_bottom - min_y)?;
         return Ok((width, height));
     }
 
@@ -143,25 +138,34 @@ pub(super) fn ventana_level0_dimensions(
         max_bottom = max_bottom.max(bottom);
     }
 
-    let width = max_right.ceil() as u64;
-    let height = max_bottom.ceil() as u64;
-    if width == 0 || height == 0 {
-        return Err(TiffParseError::Structure(
-            "Ventana BIF: stitched level-0 dimensions resolved to zero".into(),
-        ));
-    }
+    let width = checked_ventana_dimension(max_right)?;
+    let height = checked_ventana_dimension(max_bottom)?;
     Ok((width, height))
+}
+
+fn checked_ventana_dimension(value: f64) -> Result<u64, TiffParseError> {
+    let value = value.ceil();
+    if !value.is_finite() || value < 1.0 || value >= u64::MAX as f64 {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: stitched level-0 dimension is out of range ({value})"
+        )));
+    }
+    Ok(value as u64)
 }
 
 pub(super) fn ventana_public_level_dimensions(
     level0_dims: (u64, u64),
     level_idx: u32,
-) -> (u64, u64) {
-    let factor = 1u64 << level_idx;
-    (
+) -> Result<(u64, u64), TiffParseError> {
+    let factor = 1u64.checked_shl(level_idx).ok_or_else(|| {
+        TiffParseError::Structure(format!(
+            "Ventana BIF: level {level_idx} downsample overflows"
+        ))
+    })?;
+    Ok((
         level0_dims.0.div_ceil(factor),
         level0_dims.1.div_ceil(factor),
-    )
+    ))
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

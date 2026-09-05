@@ -2,7 +2,12 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+use wsi_rs::Slide;
 
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
 use support::corpus::{load_public, resolve_entry_path, CorpusEntry};
@@ -24,6 +29,11 @@ fn preflight() {
             return;
         }
     };
+    if std::env::var_os("WSI_RS_PARITY_ALIASES").is_none() {
+        if let Err(error) = wsi_rs_test_support::corpus::validate_release_coverage(&manifest) {
+            panic!("[preflight] release-corpus coverage is incomplete:\n{error}");
+        }
+    }
 
     #[cfg(feature = "parity-openslide")]
     let openslide = openslide_oracle();
@@ -50,6 +60,11 @@ fn preflight() {
             }
             continue;
         }
+        if let Err(error) = validate_entry_sha256(entry, &path) {
+            failures.push(error);
+            continue;
+        }
+        validate_wsi_contract(entry, &path, &mut failures);
 
         let baseline = match ReferenceOracle.open(&path) {
             Ok(slide) => slide,
@@ -66,45 +81,76 @@ fn preflight() {
             }
         };
 
+        if j2k_report.as_ref().is_some_and(|slide| {
+            slide.level_count != baseline.level_count
+                || slide.level_dimensions != baseline.level_dimensions
+        }) {
+            failures.push(format!(
+                "{}: internal oracle geometry mismatch",
+                entry.alias
+            ));
+        }
+
         #[cfg(feature = "parity-openslide")]
-        match openslide.open(&path) {
-            Ok(os_slide) => {
-                if os_slide.level_count != baseline.level_count {
-                    failures.push(format!(
-                        "{}: OpenSlide level count mismatch openslide={} wsi_rs={}",
-                        entry.alias, os_slide.level_count, baseline.level_count
-                    ));
-                }
-                for (level, (ours, theirs)) in baseline
-                    .level_dimensions
-                    .iter()
-                    .zip(os_slide.level_dimensions.iter())
-                    .enumerate()
-                {
-                    if !dimensions_within_one_pixel(*ours, *theirs) {
+        let os_report = if entry.openslide_required {
+            match openslide.open(&path) {
+                Ok(os_slide) => {
+                    if os_slide.level_count != baseline.level_count {
                         failures.push(format!(
+                            "{}: OpenSlide level count mismatch openslide={} wsi_rs={}",
+                            entry.alias, os_slide.level_count, baseline.level_count
+                        ));
+                    }
+                    for (level, (ours, theirs)) in baseline
+                        .level_dimensions
+                        .iter()
+                        .zip(os_slide.level_dimensions.iter())
+                        .enumerate()
+                    {
+                        if !dimensions_within_one_pixel(*ours, *theirs) {
+                            failures.push(format!(
                             "{}: OpenSlide dimension mismatch at level {level}: wsi_rs={ours:?} openslide={theirs:?}",
                             entry.alias
                         ));
+                        }
                     }
+                    Some(os_slide)
+                }
+                Err(err) => {
+                    failures.push(format!(
+                        "{}: required OpenSlide open failed: {err}",
+                        entry.alias
+                    ));
+                    None
                 }
             }
-            Err(err) => eprintln!("[preflight] {} OpenSlide open failed: {err}", entry.alias),
-        }
+        } else {
+            for divergence in &entry.oracle_divergences {
+                eprintln!(
+                    "[preflight] {} intentional oracle divergence: {divergence}",
+                    entry.alias
+                );
+            }
+            None
+        };
 
-        for level in 0..baseline.level_count.min(3) {
-            let required = entry.must_decode_level(level);
+        let required_levels = match entry.required_level_indices(baseline.level_count) {
+            Ok(levels) => levels,
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        };
+        for level in required_levels {
             let Some(probe) = top_left_probe(&baseline, level) else {
                 eprintln!(
                     "[preflight] {} level={level}: no readable probe available; skipping decode",
                     entry.alias
                 );
-                if required {
-                    failures.push(format!(
-                        "{} level={level}: required decode has no readable probe",
-                        entry.alias
-                    ));
-                }
+                failures.push(format!(
+                    "{} level={level}: required decode has no readable probe",
+                    entry.alias
+                ));
                 continue;
             };
 
@@ -119,12 +165,10 @@ fn preflight() {
                         unsupported_reference += 1;
                         None
                     } else {
-                        if required {
-                            failures.push(format!(
-                                "{} level={level}: required reference read failed: {err}",
-                                entry.alias
-                            ));
-                        }
+                        failures.push(format!(
+                            "{} level={level}: required reference read failed: {err}",
+                            entry.alias
+                        ));
                         continue;
                     }
                 }
@@ -151,11 +195,11 @@ fn preflight() {
                                 report.bytewise_equal_rate,
                                 report.passed
                             );
-                            if required {
+                            // When OpenSlide is the declared compatibility authority, its
+                            // comparison below adjudicates decoder-specific reference drift.
+                            // Entries without that authority must pass the independent oracle.
+                            if !entry.openslide_required {
                                 record_comparison_failure(
-                                    entry,
-                                    "j2k-vs-reference",
-                                    level,
                                     &format!("{} level={level}: j2k vs reference", entry.alias),
                                     &report,
                                     &mut failures,
@@ -177,73 +221,60 @@ fn preflight() {
                             "[preflight] {} level={level} j2k report read failed: {err}",
                             entry.alias
                         );
-                        if required {
-                            failures.push(format!(
-                                "{} level={level}: required j2k read failed: {err}",
-                                entry.alias
-                            ));
-                        }
+                        failures.push(format!(
+                            "{} level={level}: required j2k read failed: {err}",
+                            entry.alias
+                        ));
                     }
                 }
             }
             checked += 1;
 
             #[cfg(feature = "parity-openslide")]
-            match openslide
-                .open(&path)
-                .and_then(|opened| read_probe(&opened, probe))
-            {
-                Ok(os_buf) => {
-                    if let Some(ref baseline_buf) = baseline_buf {
-                        let report = compare_rgba(
-                            &baseline_buf.pixels_rgba,
-                            &os_buf.pixels_rgba,
-                            Tolerance::TOLERANT,
-                        );
-                        eprintln!(
+            // `required_level_indices` keeps decode coverage broad; pixel parity follows the
+            // manifest's explicit `must_decode` levels so synthetic/background-only levels do
+            // not invent a stronger compatibility contract than the corpus declares.
+            if entry.openslide_must_decode_level(level) {
+                match os_report.as_ref().map_or_else(
+                    || Err("OpenSlide comparison intentionally not required".to_string()),
+                    |opened| read_probe(opened, probe),
+                ) {
+                    Ok(os_buf) => {
+                        if let Some(ref baseline_buf) = baseline_buf {
+                            let report = compare_rgba(
+                                &baseline_buf.pixels_rgba,
+                                &os_buf.pixels_rgba,
+                                tolerance_for_entry(entry),
+                            );
+                            eprintln!(
                             "[preflight] {} level={level} reference-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
                             entry.alias, report.max_abs, report.mean_abs, report.psnr_db
                         );
-                        if required {
-                            record_comparison_failure(
-                                entry,
-                                "reference-vs-openslide",
-                                level,
-                                &format!("{} level={level}: reference vs OpenSlide", entry.alias),
-                                &report,
-                                &mut failures,
-                            );
                         }
-                    }
-                    if let Some(ref sc_buf) = j2k_buf {
-                        let report = compare_rgba(
-                            &sc_buf.pixels_rgba,
-                            &os_buf.pixels_rgba,
-                            Tolerance::TOLERANT,
-                        );
-                        eprintln!(
+                        if let Some(ref sc_buf) = j2k_buf {
+                            let report = compare_rgba(
+                                &sc_buf.pixels_rgba,
+                                &os_buf.pixels_rgba,
+                                tolerance_for_entry(entry),
+                            );
+                            eprintln!(
                             "[preflight] {} level={level} j2k-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
                             entry.alias, report.max_abs, report.mean_abs, report.psnr_db
                         );
-                        if required {
                             record_comparison_failure(
-                                entry,
-                                "j2k-vs-openslide",
-                                level,
                                 &format!("{} level={level}: j2k vs OpenSlide", entry.alias),
                                 &report,
                                 &mut failures,
                             );
                         }
                     }
-                }
-                Err(err) => {
-                    eprintln!("[preflight] {} OpenSlide read failed: {err}", entry.alias);
-                    if entry.openslide_must_decode_level(level) {
-                        failures.push(format!(
-                            "{} level={level}: required OpenSlide read failed: {err}",
-                            entry.alias
-                        ));
+                    Err(err) => {
+                        if entry.openslide_required {
+                            failures.push(format!(
+                                "{} level={level}: required OpenSlide read failed: {err}",
+                                entry.alias
+                            ));
+                        }
                     }
                 }
             }
@@ -264,14 +295,140 @@ fn preflight() {
     );
 }
 
+fn validate_entry_sha256(entry: &CorpusEntry, resolved_path: &Path) -> Result<(), String> {
+    let source_path = if entry
+        .url
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
+    {
+        wsi_rs_test_support::corpus::source_archive_path(entry).ok_or_else(|| {
+            format!(
+                "{}: source archive is missing, so its declared SHA-256 cannot be verified",
+                entry.alias
+            )
+        })?
+    } else {
+        resolved_path.to_path_buf()
+    };
+    let file = File::open(&source_path).map_err(|error| {
+        format!(
+            "{}: open hash source {}: {error}",
+            entry.alias,
+            source_path.display()
+        )
+    })?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+    loop {
+        let count = reader.read(&mut buffer).map_err(|error| {
+            format!(
+                "{}: read hash source {}: {error}",
+                entry.alias,
+                source_path.display()
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(&entry.sha256) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: SHA-256 mismatch for {}: expected {}, found {actual}",
+            entry.alias,
+            source_path.display(),
+            entry.sha256
+        ))
+    }
+}
+
+fn validate_wsi_contract(entry: &CorpusEntry, path: &Path, failures: &mut Vec<String>) {
+    let slide = match Slide::open(path) {
+        Ok(slide) => slide,
+        Err(error) => {
+            failures.push(format!("{}: contract open failed: {error}", entry.alias));
+            return;
+        }
+    };
+    let dataset = slide.dataset();
+    for property in &entry.required_properties {
+        if dataset
+            .properties
+            .get(property)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            failures.push(format!(
+                "{}: required property {property:?} is missing",
+                entry.alias
+            ));
+        }
+    }
+    let has_icc_profile = dataset.icc_profiles.values().any(|bytes| !bytes.is_empty())
+        || dataset
+            .source_icc_profiles
+            .iter()
+            .any(|profile| !profile.bytes.is_empty());
+    if entry.require_icc_profile && !has_icc_profile {
+        failures.push(format!(
+            "{}: required pyramid ICC profile is missing",
+            entry.alias
+        ));
+    }
+    for name in entry.required_associated_images() {
+        let Some(metadata) = dataset.associated_images.get(name) else {
+            failures.push(format!(
+                "{}: required associated image {name:?} is missing",
+                entry.alias
+            ));
+            continue;
+        };
+        if metadata.dimensions.0 == 0 || metadata.dimensions.1 == 0 {
+            failures.push(format!(
+                "{}: associated image {name:?} has zero dimensions",
+                entry.alias
+            ));
+            continue;
+        }
+        match slide.read_associated(name) {
+            Ok(image) if (image.width(), image.height()) == metadata.dimensions => {}
+            Ok(image) => failures.push(format!(
+                "{}: associated image {name:?} geometry mismatch metadata={:?} decoded={}x{}",
+                entry.alias,
+                metadata.dimensions,
+                image.width(),
+                image.height()
+            )),
+            Err(error) => failures.push(format!(
+                "{}: required associated image {name:?} failed to decode: {error}",
+                entry.alias
+            )),
+        }
+    }
+    for name in &entry.required_associated_icc {
+        match dataset.associated_images.get(name) {
+            Some(image) if image.icc_profile().is_some() => {}
+            Some(_) => failures.push(format!(
+                "{}: associated image {name:?} is missing its required ICC profile",
+                entry.alias
+            )),
+            None => failures.push(format!(
+                "{}: associated ICC requirement names missing image {name:?}",
+                entry.alias
+            )),
+        }
+    }
+}
+
 fn strict_corpus_required() -> bool {
     true
 }
 
 fn record_comparison_failure(
-    entry: &CorpusEntry,
-    pair: &str,
-    level: u32,
     label: &str,
     report: &support::compare::CompareReport,
     failures: &mut Vec<String>,
@@ -279,16 +436,20 @@ fn record_comparison_failure(
     let Some(failure) = tolerance_failure(label, report) else {
         return;
     };
-    if entry.expected_failure(pair, level) {
-        eprintln!("[preflight] expected parity failure: {failure}");
-    } else {
-        failures.push(failure);
-    }
+    failures.push(failure);
 }
 
 fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
-    if entry.codecs.iter().any(|codec| codec == "j2k") || entry.format == "leica" {
+    if entry.lossless {
+        Tolerance::EXACT
+    } else if entry
+        .codecs
+        .iter()
+        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
+    {
         Tolerance::TOLERANT
+    } else if entry.format == "huron" && entry.codecs.iter().any(|codec| codec == "jpeg") {
+        Tolerance::JPEG_DECODER_COMPAT
     } else {
         Tolerance::JPEG_TIGHT
     }

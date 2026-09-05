@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
-use crate::core::types::{CpuTile, TileOutputPreference, TilePixels, TileRequest};
+use crate::core::types::{CpuTile, TileRequest};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
@@ -14,71 +14,12 @@ use super::batch_plan::{
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::{
-    crop_or_keep_sample_buffer_rgb, decode_rle_lossless_frame, jp2k_photometric_is_ycbcr,
+    crop_or_keep_sample_buffer_rgb, decode_rle_lossless_frame, dicom_jpeg_color_transform,
+    jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
-use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, JPEG_TRANSFER_SYNTAX, RLE_TRANSFER_SYNTAX};
+use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
 
 impl DicomReader {
-    pub(super) fn read_tiles_with_control(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-        control: Option<&crate::ReadControl>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        check_read_control(control)?;
-        let backend = output.backend().to_j2k();
-
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        if output.prefers_device() {
-            match self.read_tiles_jp2k_device_batch(reqs, &output, backend, control) {
-                Ok(Some(tiles)) => {
-                    check_read_control(control)?;
-                    return Ok(tiles);
-                }
-                Ok(None) => {}
-                Err(WsiError::Cancelled) => return Err(WsiError::Cancelled),
-                Err(err) if output.requires_device() => return Err(err),
-                Err(err) => {
-                    tracing::debug!(
-                        error = %err,
-                        fallback_to_cpu = true,
-                        fallback_reason = "dicom_jp2k_device_batch_failed",
-                        "DICOM JP2K device batch failed; retrying through CPU output"
-                    );
-                }
-            }
-            check_read_control(control)?;
-            match self.read_tiles_jpeg_device_batch(reqs, &output, backend, control) {
-                Ok(Some(tiles)) => {
-                    check_read_control(control)?;
-                    return Ok(tiles);
-                }
-                Ok(None) => {}
-                Err(WsiError::Cancelled) => return Err(WsiError::Cancelled),
-                Err(err) if output.requires_device() => return Err(err),
-                Err(err) => {
-                    tracing::debug!(
-                        error = %err,
-                        fallback_to_cpu = true,
-                        fallback_reason = "dicom_jpeg_device_batch_failed",
-                        "DICOM JPEG device batch failed; retrying through CPU output"
-                    );
-                }
-            }
-        }
-
-        check_read_control(control)?;
-        if output.requires_device() {
-            return Err(WsiError::Unsupported {
-                reason: "RequireDevice not supported for DICOM CPU fallback".into(),
-            });
-        }
-
-        let tiles = self.read_tiles_cpu_with_backend_controlled(reqs, backend, control)?;
-        check_read_control(control)?;
-        Ok(tiles.into_iter().map(TilePixels::Cpu).collect())
-    }
-
     pub(super) fn read_tiles_cpu_with_backend_controlled(
         &self,
         reqs: &[TileRequest],
@@ -103,7 +44,7 @@ impl DicomReader {
                     results[slot] = Some(tile);
                 }
                 DicomResolvedBatchPlanEntry::Frame(meta) => {
-                    if meta.image.transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
+                    if is_jpeg_transfer_syntax(&meta.image.transfer_syntax_uid) {
                         jpeg_metas.push(meta);
                     } else if JP2K_TRANSFER_SYNTAXES
                         .contains(&meta.image.transfer_syntax_uid.as_str())
@@ -126,16 +67,30 @@ impl DicomReader {
             attach_encapsulated_frame_bytes(jpeg_metas, false, control, DicomFrameBatchKind::Cpu)?;
         let jpeg_decode_jobs = jpeg_jobs
             .iter()
-            .map(|(meta, bytes)| JpegDecodeJob {
-                data: Cow::Borrowed(bytes.as_slice()),
-                tables: None,
-                expected_width: meta.image.tile_width,
-                expected_height: meta.image.tile_height,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
+            .map(|(meta, bytes)| {
+                validate_jpeg_transfer_syntax_frame(
+                    &meta.image.transfer_syntax_uid,
+                    bytes.as_slice(),
+                )
+                .map_err(|err| WsiError::TileRead {
+                    col: meta.req.col,
+                    row: meta.req.row,
+                    level: meta.req.level.get(),
+                    reason: err.to_string(),
+                })?;
+                Ok(JpegDecodeJob {
+                    data: Cow::Borrowed(bytes.as_slice()),
+                    tables: None,
+                    expected_width: meta.image.tile_width,
+                    expected_height: meta.image.tile_height,
+                    color_transform: dicom_jpeg_color_transform(
+                        &meta.image.photometric_interpretation,
+                    ),
+                    force_dimensions: false,
+                    requested_size: None,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, WsiError>>()?;
         check_read_control(control)?;
         let jpeg_decoded = crate::core::batch::expect_exact_count(
             decode_batch_jpeg(&jpeg_decode_jobs),

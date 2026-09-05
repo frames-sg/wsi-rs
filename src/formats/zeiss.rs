@@ -1,7 +1,12 @@
 mod attachments;
+mod composition;
+mod level;
 mod metadata;
 mod preflight;
+mod raster;
 mod slide;
+mod source;
+mod subblock;
 mod tiles;
 
 #[cfg(test)]
@@ -21,7 +26,7 @@ use czi_rs::{
     AttachmentBlob, CompressionMode as CziCompressionMode, CziFile, Dimension as CziDimension,
     IntRect, PixelType as CziPixelType,
 };
-use image::imageops::{self, FilterType};
+
 use j2k_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
@@ -30,8 +35,9 @@ use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles_with_backend, ConfiguredDatasetReader,
-    ConfiguredFormatProbe, DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    crop_rgb_interleaved_u8_buffer, read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader,
+    ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader, FormatProbe,
+    ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -73,17 +79,24 @@ impl ConfiguredFormatProbe for ZeissBackend {}
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         let slide = Arc::new(ZeissSlide::parse(path)?);
+        slide.validate_wsi_pixels()?;
         Ok(Box::new(ZeissReader { slide }))
     }
 }
 
 impl ConfiguredDatasetReader for ZeissBackend {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        let slide = Arc::new(ZeissSlide::parse_with_cache_config(path, cache_config)?);
-        Ok(Box::new(ZeissReader { slide }))
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        let encoded_unit_bytes = config.limits.encoded_unit_bytes();
+        let slide = Arc::new(ZeissSlide::parse_with_config(path, config)?);
+        slide.validate_wsi_pixels()?;
+        let reader: Box<dyn SlideReader> = Box::new(ZeissReader { slide });
+        Ok(Box::new(ConservativeManagedReader::new(
+            reader,
+            encoded_unit_bytes,
+        )))
     }
 }

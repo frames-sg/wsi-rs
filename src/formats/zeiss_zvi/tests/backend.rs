@@ -36,6 +36,46 @@ fn probe_accepts_only_zvi_shaped_compound_files() {
 }
 
 #[test]
+fn configured_metadata_limit_rejects_zvi_tag_streams() {
+    let fixture = ZviFixture::whole_u8();
+    let limits = crate::SlideLimits::default()
+        .with_metadata_value_bytes(1)
+        .expect("nonzero metadata limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = match ZeissZviBackend.open_with_config(&fixture.path, config) {
+        Ok(_) => panic!("tiny configured metadata limit must reject ZVI tags"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn configured_index_limit_rejects_zvi_stream_table() {
+    let fixture = ZviFixture::whole_u8();
+    let limits = crate::SlideLimits::default()
+        .with_tile_index_bytes(1)
+        .expect("nonzero index limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+    let error = match ZeissZviBackend.open_with_config(&fixture.path, config) {
+        Ok(_) => panic!("tiny configured index limit must reject ZVI stream indexes"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn whole_image_opens_with_metadata_channels_and_associated_thumbnail() {
     let fixture = ZviFixture::whole_u8();
     let reader = ZeissZviBackend
@@ -142,15 +182,11 @@ fn default_batch_and_region_composition_preserve_pixels_and_zero_fill() {
         TileRequest::new(0, 0, 0, 0, 0).with_plane(PlaneSelection::new(0, 1, 0)),
     ];
     let batch = reader
-        .read_tiles(&requests, TileOutputPreference::cpu_only())
+        .read_tiles_cpu(&requests)
         .expect("read ordered ZVI batch");
     assert_eq!(batch.len(), 2);
-    assert!(matches!(&batch[0], TilePixels::Cpu(tile) if tile.as_u8().unwrap()[0] == 0));
-    assert!(matches!(&batch[1], TilePixels::Cpu(tile) if tile.as_u8().unwrap()[0] == 100));
-    assert!(matches!(
-        reader.read_tiles(&[], TileOutputPreference::require_device_auto()),
-        Err(WsiError::Unsupported { .. })
-    ));
+    assert_eq!(batch[0].as_u8().unwrap()[0], 0);
+    assert_eq!(batch[1].as_u8().unwrap()[0], 100);
 
     let slide = Slide::from_source_with_cache_bytes(reader, 1 << 20);
     let region = slide

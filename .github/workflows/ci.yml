@@ -28,7 +28,7 @@ jobs:
           - { os: ubuntu-latest, rust: "1.96" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -45,7 +45,7 @@ jobs:
   feature-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -60,7 +60,7 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           fetch-depth: 0
@@ -97,7 +97,7 @@ jobs:
   fuzz-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -113,9 +113,11 @@ jobs:
       - name: Run bounded fuzz campaigns
         working-directory: wsi-rs
         run: |
-          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes; do
+          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes open_vms_bundle_bytes open_vsi_bundle_bytes; do
             mkdir -p "fuzz/corpus/$target"
-            cargo +nightly-2026-04-17 fuzz run "$target" "fuzz/corpus/$target" -- "fuzz/seeds/$target" -max_total_time=15 -timeout=5 -rss_limit_mb=2048
+            inputs=("fuzz/corpus/$target")
+            if [[ -d "fuzz/seeds/$target" ]]; then inputs+=("fuzz/seeds/$target"); fi
+            cargo +nightly-2026-04-17 fuzz run "$target" "${inputs[@]}" -- -max_total_time=15 -timeout=5 -rss_limit_mb=2048
           done
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
@@ -128,9 +130,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
-        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
+        svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001,argos-001,argos-stacked-001,huron-jpeg-001,huron-uncompressed-001
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -141,6 +143,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update
@@ -155,6 +159,10 @@ jobs:
           ventana-001
           mirax-001
           dicom-jp2k-001
+          argos-001
+          argos-stacked-001
+          huron-jpeg-001
+          huron-uncompressed-001
         working-directory: wsi-rs
       - run: cargo xtask parity-corpus-test
         working-directory: wsi-rs
@@ -162,7 +170,7 @@ jobs:
   typos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: crate-ci/typos@96d9af6217dc2855210655af7e1ff19d23d4e593 # v1
@@ -174,7 +182,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -187,7 +195,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -202,7 +210,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           persist-credentials: false
@@ -218,12 +226,13 @@ jobs:
         working-directory: wsi-rs
 
   coverage:
+    needs: parity-corpus
     runs-on: ubuntu-latest
     env:
       WSI_RS_PARITY_ALIASES: >-
         svs-001,svs-jp2k-001,ndpi-001,vms-001,leica-001,ventana-001,mirax-001,dicom-jp2k-001
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: wsi-rs
           fetch-depth: 0
@@ -238,6 +247,8 @@ jobs:
         with:
           path: ~/.cache/slideviewer/parity-corpus
           key: wsi-rs-parity-corpus-${{ hashFiles('wsi-rs/tests/fixtures/parity_corpus.public.toml') }}
+          restore-keys: |
+            wsi-rs-parity-corpus-
       - name: Install OpenSlide runtime
         run: |
           sudo apt-get update

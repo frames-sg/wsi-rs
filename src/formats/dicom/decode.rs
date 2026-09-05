@@ -1,5 +1,83 @@
 use super::*;
 
+pub(super) fn validate_jpeg_transfer_syntax_frame(
+    transfer_syntax_uid: &str,
+    frame: &[u8],
+) -> Result<(), WsiError> {
+    let (sof, lossless_predictor) = jpeg_process_header(frame)?;
+    let valid = match transfer_syntax_uid {
+        uids::JPEG_BASELINE8_BIT => sof == j2k_jpeg::SofKind::Baseline8,
+        uids::JPEG_EXTENDED12_BIT => {
+            matches!(
+                sof,
+                j2k_jpeg::SofKind::Extended8 | j2k_jpeg::SofKind::Extended12
+            )
+        }
+        JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX => {
+            matches!(
+                sof,
+                j2k_jpeg::SofKind::Progressive8 | j2k_jpeg::SofKind::Progressive12
+            )
+        }
+        uids::JPEG_LOSSLESS => sof == j2k_jpeg::SofKind::Lossless,
+        uids::JPEG_LOSSLESS_SV1 => {
+            sof == j2k_jpeg::SofKind::Lossless && lossless_predictor == Some(1)
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "DICOM JPEG transfer syntax {transfer_syntax_uid} does not match encoded process {sof:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn jpeg_process_header(frame: &[u8]) -> Result<(j2k_jpeg::SofKind, Option<u8>), WsiError> {
+    let mut sof = None;
+    for segment in j2k_jpeg::iter_segments(frame) {
+        let segment = segment.map_err(|err| WsiError::Jpeg(err.to_string()))?;
+        if j2k_jpeg::is_sof_marker(segment.marker) && sof.is_none() {
+            sof = Some(
+                j2k_jpeg::parse_sof_info(segment.marker, segment.payload)
+                    .map_err(|err| WsiError::Jpeg(err.to_string()))?
+                    .sof_kind,
+            );
+        }
+        if segment.marker != 0xda {
+            continue;
+        }
+        let component_count = segment.payload.first().copied().unwrap_or(0) as usize;
+        let predictor_offset = 1usize
+            .checked_add(component_count.checked_mul(2).ok_or_else(|| {
+                WsiError::Jpeg("DICOM lossless JPEG SOS component count overflow".into())
+            })?)
+            .ok_or_else(|| WsiError::Jpeg("DICOM lossless JPEG SOS offset overflow".into()))?;
+        let predictor = segment
+            .payload
+            .get(predictor_offset)
+            .copied()
+            .ok_or_else(|| WsiError::Jpeg("DICOM JPEG SOS is truncated".into()));
+        return Ok((
+            sof.ok_or_else(|| WsiError::Jpeg("DICOM JPEG frame has no SOF marker".into()))?,
+            Some(predictor?),
+        ));
+    }
+    Err(WsiError::Jpeg("DICOM JPEG frame has no SOS marker".into()))
+}
+
+pub(super) fn dicom_jpeg_color_transform(
+    photometric_interpretation: &str,
+) -> j2k_jpeg::ColorTransform {
+    match photometric_interpretation {
+        "RGB" => j2k_jpeg::ColorTransform::ForceRgb,
+        "YBR_FULL" | "YBR_FULL_422" => j2k_jpeg::ColorTransform::ForceYCbCr,
+        _ => j2k_jpeg::ColorTransform::Auto,
+    }
+}
+
 pub(super) fn frame_bytes_to_rgb_tile(
     frame_bytes: &[u8],
     width: u32,
@@ -309,7 +387,7 @@ pub(super) fn raw_compression_for_transfer_syntax(
     transfer_syntax_uid: &str,
     photometric_interpretation: &str,
 ) -> Result<Compression, WsiError> {
-    if transfer_syntax_uid == JPEG_TRANSFER_SYNTAX {
+    if is_jpeg_transfer_syntax(transfer_syntax_uid) {
         return Ok(Compression::Jpeg);
     }
     if JP2K_TRANSFER_SYNTAXES.contains(&transfer_syntax_uid) {
@@ -321,7 +399,7 @@ pub(super) fn raw_compression_for_transfer_syntax(
     }
     Err(WsiError::Unsupported {
         reason: format!(
-            "raw compressed DICOM tile access requires JPEG Baseline or J2K/HTJ2K transfer syntax, got {transfer_syntax_uid}"
+            "raw compressed DICOM tile access requires JPEG or J2K/HTJ2K transfer syntax, got {transfer_syntax_uid}"
         ),
     })
 }

@@ -79,7 +79,6 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
         "decode_cpu_concurrency": {
             "client_handles": 2,
             "rayon_threads_process_wide": 2,
-            "jp2k_threads_per_handle": 1,
             "active_jp2k_thread_budget": 2,
             "enforced": true,
         },

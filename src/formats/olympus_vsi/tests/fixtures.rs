@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use super::super::{ETS_BACKGROUND_BYTES, OLYMPUS_JPEG_2000};
+use super::super::scene::header::{ETS_BACKGROUND_BYTES, OLYMPUS_JPEG_2000};
 
 pub(super) const ADDITIONAL_HEADER_OFFSET: usize = 64;
 pub(super) const CHUNK_TABLE_OFFSET: usize = 256;

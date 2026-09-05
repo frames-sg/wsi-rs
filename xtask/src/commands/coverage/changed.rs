@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::lcov::FileCoverage;
-use super::paths::{git_repo_root, is_coverage_candidate};
+use super::paths::{git_repo_root, is_production_coverage_path};
 
 pub(super) const DEFAULT_CHANGED_PATH_COVERAGE_THRESHOLD: f64 = 80.0;
 
@@ -167,15 +167,19 @@ pub(super) fn changed_rust_lines(base: &str) -> Result<HashMap<PathBuf, BTreeSet
         add_repo_file_lines(&mut lines, &repo_root, &path)?;
     }
     let declaration_only = lines
-        .keys()
-        .map(|path| {
+        .iter()
+        .map(|(path, changed_lines)| {
             let source_path = if path.is_absolute() {
                 path.clone()
             } else {
                 repo_root.join(path)
             };
             std::fs::read_to_string(&source_path)
-                .map(|source| (!source_has_function_definition(&source)).then(|| path.clone()))
+                .map(|source| {
+                    (!source_has_function_definition(&source)
+                        || changed_lines_are_declaration_only(&source, changed_lines))
+                    .then(|| path.clone())
+                })
                 .map_err(|err| {
                     format!(
                         "failed to read changed file {}: {err}",
@@ -191,15 +195,55 @@ pub(super) fn changed_rust_lines(base: &str) -> Result<HashMap<PathBuf, BTreeSet
 }
 
 pub(super) fn source_has_function_definition(source: &str) -> bool {
-    source.lines().any(|line| {
-        line.split_once("//")
-            .map_or(line, |(code, _)| code)
-            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
-            .any(|token| token == "fn")
-    })
+    source.lines().any(source_line_has_function_definition)
 }
 
-fn collect_git_diff_lines(
+pub(super) fn changed_lines_are_declaration_only(
+    source: &str,
+    changed_lines: &BTreeSet<u32>,
+) -> bool {
+    if changed_lines.is_empty() {
+        return false;
+    }
+    let mut declaration_lines = BTreeSet::new();
+    let mut in_use_declaration = false;
+    for (index, line) in source.lines().enumerate() {
+        let line_number = index as u32 + 1;
+        let trimmed = line.trim();
+        let starts_wiring = module_wiring_declaration(trimmed);
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("#[")
+            || starts_wiring
+            || in_use_declaration
+        {
+            declaration_lines.insert(line_number);
+        }
+        if starts_wiring || in_use_declaration {
+            in_use_declaration = !trimmed.contains(';');
+        }
+    }
+    changed_lines.is_subset(&declaration_lines)
+}
+
+fn source_line_has_function_definition(line: &str) -> bool {
+    line.split_once("//")
+        .map_or(line, |(code, _)| code)
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .any(|token| token == "fn")
+}
+
+fn module_wiring_declaration(line: &str) -> bool {
+    let line = line.trim();
+    let declaration = line
+        .strip_prefix("pub ")
+        .or_else(|| line.strip_prefix("pub(crate) "))
+        .or_else(|| line.strip_prefix("pub(super) "))
+        .unwrap_or(line);
+    declaration.starts_with("mod ") || declaration.starts_with("use ")
+}
+
+pub(super) fn collect_git_diff_lines(
     lines: &mut HashMap<PathBuf, BTreeSet<u32>>,
     repo_root: &Path,
     name_args: &[&str],
@@ -230,7 +274,7 @@ pub(super) fn parse_diff_added_lines(lines: &mut HashMap<PathBuf, BTreeSet<u32>>
     for line in diff.lines() {
         if let Some(path) = line.strip_prefix("+++ b/") {
             let path = PathBuf::from(path);
-            current_path = is_coverage_candidate(&path).then_some(path);
+            current_path = is_production_coverage_path(&path).then_some(path);
             current_line = None;
             continue;
         }
@@ -267,7 +311,7 @@ fn parse_new_hunk_start(hunk: &str) -> Option<u32> {
         .ok()
 }
 
-fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+pub(super) fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let args = ["ls-files", "--others", "--exclude-standard"];
     let output = Command::new("git")
         .current_dir(repo_root)
@@ -284,7 +328,7 @@ fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(PathBuf::from)
-        .filter(|path| is_coverage_candidate(path))
+        .filter(|path| is_production_coverage_path(path))
         .collect())
 }
 

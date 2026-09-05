@@ -1,14 +1,25 @@
 use std::{env, ffi::OsString, fs, path::Path};
 
-use super::coverage;
 use super::process::{
     ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
+use super::{artifact, coverage};
 
 const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
 const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-04-17";
+const FUZZ_TARGETS: [&str; 9] = [
+    "open_wsi_bytes",
+    "open_jp2k_codestream_bytes",
+    "open_svcache_bytes",
+    "parse_xml_bytes",
+    "open_dicom_bytes",
+    "open_zvi_bytes",
+    "open_mirax_bundle_bytes",
+    "open_vms_bundle_bytes",
+    "open_vsi_bundle_bytes",
+];
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
@@ -16,11 +27,17 @@ pub(super) fn ci() -> Result<(), String> {
 }
 
 pub(super) fn rc_preflight() -> Result<(), String> {
+    artifact::smoke_configured()?;
     api_check()?;
     deps()?;
     fuzz_check()?;
+    release_fuzz()?;
     feature_check()?;
     validate()?;
+    release_test()?;
+    parity_corpus_test()?;
+    coverage()?;
+    performance_preflight()?;
     package()
 }
 
@@ -122,6 +139,14 @@ pub(super) fn feature_check() -> Result<(), String> {
 }
 
 pub(super) fn parity_corpus_test() -> Result<(), String> {
+    run_cargo(&[
+        "test",
+        "--locked",
+        "--test",
+        "argos_huron",
+        "--",
+        "--ignored",
+    ])?;
     run_cargo(&[
         "test",
         "--locked",
@@ -253,15 +278,7 @@ pub(super) fn fuzz_check() -> Result<(), String> {
     let root_lock = fs::read("Cargo.lock").map_err(|err| format!("read Cargo.lock: {err}"))?;
     let fuzz_lock =
         fs::read("fuzz/Cargo.lock").map_err(|err| format!("read fuzz/Cargo.lock: {err}"))?;
-    for target in [
-        "open_wsi_bytes",
-        "open_jp2k_codestream_bytes",
-        "open_svcache_bytes",
-        "parse_xml_bytes",
-        "open_dicom_bytes",
-        "open_zvi_bytes",
-        "open_mirax_bundle_bytes",
-    ] {
+    for target in FUZZ_TARGETS {
         run_program(
             OsString::from("rustup"),
             &[
@@ -286,6 +303,52 @@ pub(super) fn fuzz_check() -> Result<(), String> {
         return Err("cargo-fuzz changed a tracked lockfile; update and review lockfiles before rerunning the gate".into());
     }
     Ok(())
+}
+
+pub(super) fn release_fuzz() -> Result<(), String> {
+    for target in FUZZ_TARGETS {
+        let corpus = format!("fuzz/corpus/{target}");
+        fs::create_dir_all(&corpus)
+            .map_err(|error| format!("create release fuzz corpus {corpus}: {error}"))?;
+        let seed = format!("fuzz/seeds/{target}");
+        let mut owned_args = vec![
+            "run".to_string(),
+            PINNED_NIGHTLY_TOOLCHAIN.to_string(),
+            "cargo".to_string(),
+            "fuzz".to_string(),
+            "run".to_string(),
+            "--sanitizer".to_string(),
+            "address".to_string(),
+            target.to_string(),
+            corpus,
+        ];
+        if Path::new(&seed).is_dir() {
+            owned_args.push(seed);
+        }
+        owned_args.extend([
+            "--".to_string(),
+            "-max_total_time=300".to_string(),
+            "-timeout=10".to_string(),
+            "-rss_limit_mb=2048".to_string(),
+        ]);
+        let args = owned_args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_program(OsString::from("rustup"), &args, &[])
+            .map_err(|error| format!("release fuzz campaign failed for {target}: {error}"))?;
+    }
+    Ok(())
+}
+
+fn performance_preflight() -> Result<(), String> {
+    let capture = |name: &str| {
+        env::var(name).map_err(|_| {
+            format!("release performance gate requires {name} to name a reviewed capture JSON")
+        })
+    };
+    let openslide = capture("WSI_RS_RC_OPENSLIDE_CAPTURE")?;
+    let previous = capture("WSI_RS_RC_PREVIOUS_CAPTURE")?;
+    let current = capture("WSI_RS_RC_CURRENT_CAPTURE")?;
+    super::perf::compare(vec![openslide, current.clone()])?;
+    super::perf::compare(vec![previous, current])
 }
 
 fn check_public_api_snapshot_for(snapshot_path: &str, args: &[&str]) -> Result<(), String> {

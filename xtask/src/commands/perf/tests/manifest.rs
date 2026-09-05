@@ -198,6 +198,8 @@ fn benchmark_groups_extensions_and_candidate_search_cover_supported_shapes() {
 
     for (format, extension) in [
         ("aperio", Some("svs")),
+        ("argos", Some("avs")),
+        ("huron", Some("tif")),
         ("leica", Some("scn")),
         ("ventana", Some("bif")),
         ("philips_tiff", Some("tif")),
@@ -206,8 +208,7 @@ fn benchmark_groups_extensions_and_candidate_search_cover_supported_shapes() {
         ("hamamatsu_vms", Some("zip")),
         ("mirax", Some("zip")),
         ("dicom", Some("dcm")),
-        ("zeiss_czi", Some("czi")),
-        ("raw_jp2k", None),
+        ("raw_jp2k", Some("j2k")),
     ] {
         assert_eq!(format_default_extension(format), extension, "{format}");
     }

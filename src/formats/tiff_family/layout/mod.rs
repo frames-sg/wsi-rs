@@ -18,7 +18,9 @@ use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 pub(crate) mod aperio;
+pub(crate) mod argos;
 pub(crate) mod generic;
+pub(crate) mod huron;
 pub(crate) mod leica;
 pub(crate) mod ndpi;
 pub(crate) mod philips;
@@ -42,6 +44,7 @@ fn compression_from_tag(val: u32) -> Compression {
         8 | 32946 => Compression::Deflate,
         6 | 7 => Compression::Jpeg,
         50000 => Compression::Zstd,
+        22610 => Compression::JpegXr,
         33003 | 33005 => Compression::Jp2kYcbcr,
         33004 => Compression::Jp2kRgb,
         _ => Compression::Other(val as u16),
@@ -98,6 +101,30 @@ fn regular_tiff_level(
             tiles_down,
         },
     })
+}
+
+fn add_tiff_resolution_properties(
+    container: &TiffContainer,
+    ifd_id: IfdId,
+    properties: &mut Properties,
+) {
+    let unit_microns = match container
+        .get_u32(ifd_id, tags::RESOLUTION_UNIT)
+        .unwrap_or(2)
+    {
+        3 => 10_000.0,
+        _ => 25_400.0,
+    };
+    if let Ok(value) = container.get_f64(ifd_id, tags::X_RESOLUTION) {
+        if value > 0.0 {
+            properties.insert("openslide.mpp-x", (unit_microns / value).to_string());
+        }
+    }
+    if let Ok(value) = container.get_f64(ifd_id, tags::Y_RESOLUTION) {
+        if value > 0.0 {
+            properties.insert("openslide.mpp-y", (unit_microns / value).to_string());
+        }
+    }
 }
 
 fn compute_tiff_dataset_id_and_record_quickhash(
@@ -292,10 +319,34 @@ pub(crate) fn compute_tiff_dataset_identity(
     lowest_resolution_ifd: IfdId,
     property_ifd: IfdId,
 ) -> Result<DatasetIdentity, TiffParseError> {
-    let quickhash1 = compute_tiff_quickhash(container, lowest_resolution_ifd, property_ifd)?;
+    compute_tiff_dataset_identity_with_extra_strings(
+        container,
+        lowest_resolution_ifd,
+        property_ifd,
+        &[],
+    )
+}
+
+pub(crate) fn compute_tiff_dataset_identity_with_extra_strings(
+    container: &TiffContainer,
+    lowest_resolution_ifd: IfdId,
+    property_ifd: IfdId,
+    extra_strings: &[&str],
+) -> Result<DatasetIdentity, TiffParseError> {
+    let quickhash1 = compute_tiff_quickhash(
+        container,
+        lowest_resolution_ifd,
+        property_ifd,
+        extra_strings,
+    )?;
     let dataset_id = match quickhash1.as_deref() {
         Some(hash) => dataset_id_from_hex(hash)?,
-        None => fallback_dataset_id(container, lowest_resolution_ifd, property_ifd)?,
+        None => fallback_dataset_id(
+            container,
+            lowest_resolution_ifd,
+            property_ifd,
+            extra_strings,
+        )?,
     };
     Ok(DatasetIdentity {
         dataset_id,
@@ -307,6 +358,7 @@ fn compute_tiff_quickhash(
     container: &TiffContainer,
     lowest_resolution_ifd: IfdId,
     property_ifd: IfdId,
+    extra_strings: &[&str],
 ) -> Result<Option<String>, TiffParseError> {
     let mut hash = Quickhash1::new();
 
@@ -315,6 +367,9 @@ fn compute_tiff_quickhash(
     }
 
     hash_tiff_string_properties(&mut hash, container, property_ifd);
+    for value in extra_strings {
+        hash.hash_string(value);
+    }
     Ok(hash.finish())
 }
 
@@ -432,6 +487,7 @@ fn fallback_dataset_id(
     container: &TiffContainer,
     lowest_resolution_ifd: IfdId,
     property_ifd: IfdId,
+    extra_strings: &[&str],
 ) -> Result<DatasetId, TiffParseError> {
     let mut hash = Quickhash1::new();
     hash.update(&container.ifd_count().to_le_bytes());
@@ -449,6 +505,9 @@ fn fallback_dataset_id(
         hash.update(&len.to_le_bytes());
     }
     hash_tiff_string_properties(&mut hash, container, property_ifd);
+    for value in extra_strings {
+        hash.hash_string(value);
+    }
 
     let hex = hash.finish().ok_or_else(|| {
         TiffParseError::Structure("fallback dataset hash unexpectedly disabled".into())

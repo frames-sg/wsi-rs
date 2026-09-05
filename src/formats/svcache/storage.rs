@@ -11,10 +11,18 @@ const MAX_ASSOCIATED_IMAGES: usize = 1_024;
 const MAX_PROPERTIES: usize = 100_000;
 const MAX_STRING_BYTES: usize = 1024 * 1024;
 const MAX_TILES_PER_LEVEL: u64 = 16 * 1024 * 1024;
-const MAX_TILE_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_DECODED_TILE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TILE_PAYLOAD_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_DECODED_TILE_BYTES: u64 = 128 * 1024 * 1024;
 
 pub(super) fn read_svcache(path: &Path) -> Result<(File, u64, SvcacheMetadata), WsiError> {
+    let budget = OpenBudget::new(crate::SlideLimits::default());
+    read_svcache_with_budget(path, &budget)
+}
+
+pub(super) fn read_svcache_with_budget(
+    path: &Path,
+    budget: &OpenBudget,
+) -> Result<(File, u64, SvcacheMetadata), WsiError> {
     let mut file = File::open(path)?;
     let mut magic = [0_u8; 8];
     file.read_exact(&mut magic)?;
@@ -33,7 +41,29 @@ pub(super) fn read_svcache(path: &Path) -> Result<(File, u64, SvcacheMetadata), 
             message: "svcache metadata is too large".into(),
         });
     }
-    let mut metadata_bytes = vec![0_u8; metadata_len as usize];
+    let metadata_limit = MAX_METADATA_BYTES.min(budget.limits().metadata_value_bytes());
+    if metadata_len > budget.limits().metadata_value_bytes() {
+        return Err(WsiError::ResourceLimit {
+            resource: "individual metadata value",
+            requested: metadata_len,
+            limit: metadata_limit,
+        });
+    }
+    budget.retain_metadata(metadata_len)?;
+    let metadata_len = usize::try_from(metadata_len).map_err(|_| WsiError::ResourceLimit {
+        resource: "svcache metadata",
+        requested: metadata_len,
+        limit: metadata_limit,
+    })?;
+    let mut metadata_bytes = Vec::new();
+    metadata_bytes
+        .try_reserve_exact(metadata_len)
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "svcache metadata",
+            requested: u64::try_from(metadata_len).unwrap_or(u64::MAX),
+            limit: metadata_limit,
+        })?;
+    metadata_bytes.resize(metadata_len, 0);
     file.read_exact(&mut metadata_bytes)?;
     let metadata: SvcacheMetadata =
         serde_json::from_slice(&metadata_bytes).map_err(|err| WsiError::InvalidSlide {
@@ -47,10 +77,10 @@ pub(super) fn read_svcache(path: &Path) -> Result<(File, u64, SvcacheMetadata), 
         )));
     }
     let payload_start = 16_u64
-        .checked_add(metadata_len)
+        .checked_add(u64::try_from(metadata_len).unwrap_or(u64::MAX))
         .ok_or_else(|| invalid_svcache(path, "svcache payload start overflow"))?;
     let file_len = file.metadata()?.len();
-    validate_svcache_metadata(path, file_len, payload_start, &metadata)?;
+    validate_svcache_metadata(path, file_len, payload_start, &metadata, budget)?;
     Ok((file, payload_start, metadata))
 }
 
@@ -66,6 +96,7 @@ fn validate_svcache_metadata(
     file_len: u64,
     payload_start: u64,
     metadata: &SvcacheMetadata,
+    budget: &OpenBudget,
 ) -> Result<(), WsiError> {
     if payload_start > file_len {
         return Err(invalid_svcache(path, "svcache metadata extends past EOF"));
@@ -106,7 +137,19 @@ fn validate_svcache_metadata(
     }
 
     let payload_len = file_len - payload_start;
+    let retained_index_bytes = svcache_index_bytes(metadata)?;
+    budget.retain_index(retained_index_bytes)?;
+    let payload_range_count = svcache_payload_count(metadata)?;
+    let payload_range_bytes = payload_range_count
+        .saturating_mul(u64::try_from(std::mem::size_of::<(u64, u64)>()).unwrap_or(u64::MAX));
     let mut payload_ranges = Vec::new();
+    payload_ranges
+        .try_reserve_exact(usize::try_from(payload_range_count).unwrap_or(usize::MAX))
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "svcache payload range index",
+            requested: payload_range_bytes,
+            limit: budget.limits().tile_index_bytes(),
+        })?;
     let mut series_count = 0usize;
     let mut level_count = 0usize;
     let mut scene_ids = HashSet::new();
@@ -166,6 +209,7 @@ fn validate_svcache_metadata(
                     metadata.complete,
                     level,
                     &mut payload_ranges,
+                    budget,
                 )?;
             }
         }
@@ -192,7 +236,13 @@ fn validate_svcache_metadata(
                 ),
             ));
         }
-        validate_tile(path, payload_len, &associated.tile, &mut payload_ranges)?;
+        validate_tile(
+            path,
+            payload_len,
+            &associated.tile,
+            &mut payload_ranges,
+            budget,
+        )?;
     }
 
     payload_ranges.sort_unstable_by_key(|range| range.0);
@@ -210,6 +260,7 @@ fn validate_level(
     complete: bool,
     level: &LevelMeta,
     payload_ranges: &mut Vec<(u64, u64)>,
+    budget: &OpenBudget,
 ) -> Result<(), WsiError> {
     if level.dimensions.0 == 0
         || level.dimensions.1 == 0
@@ -258,7 +309,7 @@ fn validate_level(
             ));
         }
         for tile in level.tiles.iter().flatten() {
-            validate_tile(path, payload_len, tile, payload_ranges)?;
+            validate_tile(path, payload_len, tile, payload_ranges, budget)?;
         }
     } else {
         if complete && u64::try_from(level.sparse_tiles.len()).ok() != Some(tile_count) {
@@ -276,7 +327,7 @@ fn validate_level(
                 ));
             }
             previous = Some(entry.index);
-            validate_tile(path, payload_len, &entry.tile, payload_ranges)?;
+            validate_tile(path, payload_len, &entry.tile, payload_ranges, budget)?;
         }
     }
     Ok(())
@@ -287,6 +338,7 @@ fn validate_tile(
     payload_file_len: u64,
     tile: &TileMeta,
     payload_ranges: &mut Vec<(u64, u64)>,
+    budget: &OpenBudget,
 ) -> Result<(), WsiError> {
     if tile.width == 0 || tile.height == 0 {
         return Err(invalid_svcache(
@@ -309,7 +361,7 @@ fn validate_tile(
         .checked_mul(u64::from(tile.height))
         .and_then(|pixels| pixels.checked_mul(u64::from(tile.channels)))
         .ok_or_else(|| invalid_svcache(path, "svcache decoded tile length overflow"))?;
-    if decoded_len > MAX_DECODED_TILE_BYTES
+    if decoded_len > MAX_DECODED_TILE_BYTES.min(budget.limits().decoded_output_bytes())
         || usize::try_from(decoded_len).ok() != Some(tile.decoded_len)
     {
         return Err(invalid_svcache(
@@ -317,7 +369,9 @@ fn validate_tile(
             "svcache decoded tile length is invalid",
         ));
     }
-    if tile.payload_len == 0 || tile.payload_len > MAX_TILE_PAYLOAD_BYTES {
+    if tile.payload_len == 0
+        || tile.payload_len > MAX_TILE_PAYLOAD_BYTES.min(budget.limits().encoded_unit_bytes())
+    {
         return Err(invalid_svcache(
             path,
             "svcache encoded tile length is invalid",
@@ -343,6 +397,83 @@ fn validate_tile(
     }
     payload_ranges.push((tile.payload_offset, payload_end));
     Ok(())
+}
+
+fn svcache_payload_count(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+    let level_tiles = metadata.scenes.iter().try_fold(0u64, |total, scene| {
+        scene.series.iter().try_fold(total, |total, series| {
+            series.levels.iter().try_fold(total, |total, level| {
+                let dense = u64::try_from(level.tiles.iter().flatten().count()).unwrap_or(u64::MAX);
+                let sparse = u64::try_from(level.sparse_tiles.len()).unwrap_or(u64::MAX);
+                total
+                    .checked_add(dense)
+                    .and_then(|value| value.checked_add(sparse))
+                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+            })
+        })
+    })?;
+    level_tiles
+        .checked_add(u64::try_from(metadata.associated.len()).unwrap_or(u64::MAX))
+        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+}
+
+fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+    let mut bytes = u64::try_from(metadata.scenes.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(std::mem::size_of::<SceneMeta>()).unwrap_or(u64::MAX));
+    for scene in &metadata.scenes {
+        bytes = bytes
+            .checked_add(
+                u64::try_from(scene.series.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(
+                        u64::try_from(std::mem::size_of::<SeriesMeta>()).unwrap_or(u64::MAX),
+                    ),
+            )
+            .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+        for series in &scene.series {
+            bytes = bytes
+                .checked_add(
+                    u64::try_from(series.levels.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(
+                            u64::try_from(std::mem::size_of::<LevelMeta>()).unwrap_or(u64::MAX),
+                        ),
+                )
+                .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+            for level in &series.levels {
+                bytes = bytes
+                    .checked_add(
+                        u64::try_from(level.tiles.len())
+                            .unwrap_or(u64::MAX)
+                            .saturating_mul(
+                                u64::try_from(std::mem::size_of::<Option<TileMeta>>())
+                                    .unwrap_or(u64::MAX),
+                            ),
+                    )
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(level.sparse_tiles.len())
+                                .unwrap_or(u64::MAX)
+                                .saturating_mul(
+                                    u64::try_from(std::mem::size_of::<SparseTileMeta>())
+                                        .unwrap_or(u64::MAX),
+                                ),
+                        )
+                    })
+                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+            }
+        }
+    }
+    bytes
+        .checked_add(
+            u64::try_from(metadata.associated.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(
+                    u64::try_from(std::mem::size_of::<AssociatedMeta>()).unwrap_or(u64::MAX),
+                ),
+        )
+        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))
 }
 
 fn validate_string(path: &Path, label: &str, value: &str) -> Result<(), WsiError> {
@@ -494,6 +625,7 @@ pub(super) fn dataset_from_metadata(path: &Path, metadata: &SvcacheMetadata) -> 
                         dimensions: assoc.dimensions,
                         sample_type: SampleType::Uint8,
                         channels: assoc.tile.channels,
+                        icc_profile: Vec::new(),
                     },
                 )
             })

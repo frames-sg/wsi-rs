@@ -181,94 +181,11 @@ impl TiffPixelReader {
     }
 
     #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(in super::super) fn decode_tiled_ifd_jpeg_pixels(
+    fn collect_tiled_ifd_jp2k_jobs(
         &self,
         reqs: &[TileRequest],
         backend: BackendRequest,
-        require_device: bool,
-        metal_sessions: MetalBackendSessionsRef<'_>,
-        cuda_sessions: CudaBackendSessionsRef<'_>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        let jobs = self.collect_tiled_ifd_jpeg_jobs(reqs)?;
-        decode_batch_jpeg_pixels(
-            &jobs,
-            backend,
-            require_device,
-            metal_sessions,
-            cuda_sessions,
-        )
-        .into_iter()
-        .zip(reqs.iter())
-        .map(|(result, req)| {
-            result.map_err(|err| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: err.to_string(),
-            })
-        })
-        .collect()
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(in super::super) fn collect_tiled_ifd_jpeg_jobs<'a>(
-        &'a self,
-        reqs: &[TileRequest],
-    ) -> Result<Vec<JpegDecodeJob<'a>>, WsiError> {
-        let mut jobs = Vec::with_capacity(reqs.len());
-        for req in reqs {
-            let source = self.tile_source_for(req)?;
-            let TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables,
-                compression: Compression::Jpeg,
-            } = source
-            else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "JPEG tiled device batch received a non-JPEG tile source".into(),
-                });
-            };
-
-            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
-            if span.byte_count == 0 {
-                return Err(WsiError::Unsupported {
-                    reason: "device backend not available for empty jpeg tile".into(),
-                });
-            }
-
-            let tile_data = self.read_tiled_ifd_tile_span(span)?;
-            let options = self.tiff_jpeg_decode_options_for_data(
-                *ifd_id,
-                false,
-                &tile_data,
-                jpeg_tables.as_deref(),
-            );
-            jobs.push(JpegDecodeJob {
-                data: Cow::Owned(tile_data),
-                tables: jpeg_tables.as_deref().map(Cow::Borrowed),
-                expected_width: span.width,
-                expected_height: span.height,
-                color_transform: options.color_transform,
-                force_dimensions: options.force_dimensions,
-                requested_size: None,
-            });
-        }
-        Ok(jobs)
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(in super::super) fn decode_tiled_ifd_jp2k_pixels(
-        &self,
-        reqs: &[TileRequest],
-        compression: Compression,
-        backend: BackendRequest,
-        require_device: bool,
-        metal_sessions: MetalBackendSessionsRef<'_>,
-        cuda_sessions: CudaBackendSessionsRef<'_>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
+    ) -> Result<Vec<Jp2kDecodeJob<'static>>, WsiError> {
         let mut jobs = Vec::with_capacity(reqs.len());
         for req in reqs {
             let source = self.tile_source_for(req)?;
@@ -285,12 +202,15 @@ impl TiffPixelReader {
                     reason: "JP2K tiled device batch received a non-tiled tile source".into(),
                 });
             };
-            if *actual_compression != compression {
+            if !matches!(
+                actual_compression,
+                Compression::Jp2kRgb | Compression::Jp2kYcbcr
+            ) {
                 return Err(WsiError::TileRead {
                     col: req.col,
                     row: req.row,
                     level: req.level.get(),
-                    reason: "JP2K tiled device batch received mixed compression".into(),
+                    reason: "strict TIFF device reads support JP2K/HTJ2K tiles only".into(),
                 });
             }
 
@@ -305,12 +225,42 @@ impl TiffPixelReader {
                 data: Cow::Owned(data),
                 expected_width: span.width,
                 expected_height: span.height,
-                rgb_color_space: matches!(compression, Compression::Jp2kRgb),
+                rgb_color_space: matches!(actual_compression, Compression::Jp2kRgb),
                 backend,
             });
         }
+        Ok(jobs)
+    }
 
-        decode_batch_jp2k_pixels(&jobs, require_device, metal_sessions, cuda_sessions)
+    #[cfg(feature = "metal")]
+    pub(in super::super) fn decode_tiled_ifd_jp2k_metal(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Metal)?;
+        crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
+            .into_iter()
+            .zip(reqs.iter())
+            .map(|(result, req)| {
+                result.map_err(|err| WsiError::TileRead {
+                    col: req.col,
+                    row: req.row,
+                    level: req.level.get(),
+                    reason: err.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(in super::super) fn decode_tiled_ifd_jp2k_cuda(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Cuda)?;
+        crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
             .map(|(result, req)| {

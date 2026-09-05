@@ -1,23 +1,167 @@
-use super::preflight::preflight_czi_subblock;
+pub(super) use super::raster::bitmap_to_sample_buffer;
+#[cfg(test)]
+pub(super) use super::raster::blit_tile;
+use super::raster::rgb_u8_tile;
+#[cfg(test)]
+pub(super) use super::raster::{blit_raw_uncompressed_rgb_subblock, blit_rgb_sample, RgbSample};
 use super::slide::ZeissSlide;
 #[cfg(test)]
-use super::slide::{
-    ZEISS_DIRECT_LEVEL_COMPOSE_HITS, ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS, ZEISS_LOCAL_TILE_HITS,
-};
+use super::slide::ZEISS_LOCAL_TILE_HITS;
+
+#[cfg(test)]
+pub(super) use super::subblock::bitmap_from_raw_uncompressed_subblock;
 use super::*;
-use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 
 impl ZeissSlide {
-    fn preflight_source_subblock(&self, offset: u64) -> Result<(), WsiError> {
-        let actual_identity = preflight_czi_subblock(&self.source_path, offset)?;
-        if actual_identity != self.source_identity {
-            return Err(WsiError::InvalidSlide {
-                path: self.source_path.clone(),
-                message: "CZI source identity check failed because the source path was replaced"
-                    .into(),
+    pub(super) fn exact_raw_jpeg_subblock(
+        &self,
+        req: &TileRequest,
+    ) -> Result<Option<czi_rs::DirectorySubBlockInfo>, WsiError> {
+        if req.plane.get() != PlaneSelection::default() {
+            return Ok(None);
+        }
+        let scene = self
+            .dataset
+            .scenes
+            .get(req.scene.get())
+            .ok_or(WsiError::SceneOutOfRange {
+                index: req.scene.get(),
+                count: self.dataset.scenes.len(),
+            })?;
+        let series = scene
+            .series
+            .get(req.series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: req.series.get(),
+                count: scene.series.len(),
+            })?;
+        let level =
+            series
+                .levels
+                .get(req.level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: req.level.get(),
+                    count: series.levels.len() as u32,
+                })?;
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = level.tile_layout
+        else {
+            return Ok(None);
+        };
+        if req.col < 0
+            || req.row < 0
+            || req.col >= tiles_across as i64
+            || req.row >= tiles_down as i64
+        {
+            return Err(WsiError::TileRead {
+                col: req.col,
+                row: req.row,
+                level: req.level.get(),
+                reason: format!(
+                    "tile ({},{}) out of range ({}x{})",
+                    req.col, req.row, tiles_across, tiles_down
+                ),
             });
         }
-        Ok(())
+
+        let candidate_indices = self
+            .canvas_level_tile_subblocks
+            .get(req.level.get() as usize)
+            .and_then(|tiles| tiles.get(&(req.col, req.row)));
+        let Some([index]) = candidate_indices.map(Vec::as_slice) else {
+            return Ok(None);
+        };
+        let info = {
+            let czi = self.czi.lock().unwrap_or_else(|error| error.into_inner());
+            czi.subblocks().get(*index).cloned().ok_or_else(|| {
+                WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
+            })?
+        };
+        if info.compression != CziCompressionMode::Jpg {
+            return Ok(None);
+        }
+
+        let downsample = level.downsample;
+        if !downsample.is_finite()
+            || downsample < 1.0
+            || downsample > i64::MAX as f64
+            || downsample.fract() != 0.0
+        {
+            return Ok(None);
+        }
+        let ratio = downsample as i64;
+        let tile_x = req.col.checked_mul(i64::from(tile_width));
+        let tile_y = req.row.checked_mul(i64::from(tile_height));
+        let Some((tile_x, tile_y)) = tile_x.zip(tile_y) else {
+            return Ok(None);
+        };
+        let tile_w = level
+            .dimensions
+            .0
+            .saturating_sub(tile_x as u64)
+            .min(u64::from(tile_width));
+        let tile_h = level
+            .dimensions
+            .1
+            .saturating_sub(tile_y as u64)
+            .min(u64::from(tile_height));
+        let expected_x = tile_x
+            .checked_mul(ratio)
+            .and_then(|x| i64::from(self.subblock_origin.0).checked_add(x));
+        let expected_y = tile_y
+            .checked_mul(ratio)
+            .and_then(|y| i64::from(self.subblock_origin.1).checked_add(y));
+        let expected_rect_w = i64::try_from(tile_w)
+            .ok()
+            .and_then(|width| width.checked_mul(ratio));
+        let expected_rect_h = i64::try_from(tile_h)
+            .ok()
+            .and_then(|height| height.checked_mul(ratio));
+        if expected_x != Some(i64::from(info.rect.x))
+            || expected_y != Some(i64::from(info.rect.y))
+            || expected_rect_w != Some(i64::from(info.rect.w))
+            || expected_rect_h != Some(i64::from(info.rect.h))
+            || u64::from(info.stored_size.w) != tile_w
+            || u64::from(info.stored_size.h) != tile_h
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(info))
+    }
+
+    pub(super) fn read_raw_jpeg_tile(
+        &self,
+        req: &TileRequest,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let Some(info) = self.exact_raw_jpeg_subblock(req)? else {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Zeiss raw JPEG access requires one exact classic-JPEG subblock for tile ({}, {}) at level {}",
+                    req.col,
+                    req.row,
+                    req.level.get()
+                ),
+            });
+        };
+        let raw = self.read_source_subblock(&info)?;
+        let tile = crate::decode::jpeg::standalone_raw_jpeg_tile(raw.data)?;
+        if (tile.width(), tile.height()) != (info.stored_size.w, info.stored_size.h) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "Zeiss raw JPEG dimensions {}x{} do not match stored subblock {}x{}",
+                    tile.width(),
+                    tile.height(),
+                    info.stored_size.w,
+                    info.stored_size.h
+                ),
+            });
+        }
+        Ok(tile)
     }
 
     pub(super) fn read_tile(
@@ -93,10 +237,11 @@ impl ZeissSlide {
                 crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
             };
         let arc = Arc::new(buffer);
+        let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
         self.tile_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(key, arc.clone());
+            .put(key, arc.clone(), retained_bytes);
         Ok(arc.as_ref().clone())
     }
 
@@ -166,7 +311,12 @@ impl ZeissSlide {
                         "Zeiss subblock index {index} out of range"
                     ))
                 })?;
-                if info.compression != CziCompressionMode::UnCompressed {
+                if !matches!(
+                    info.compression,
+                    CziCompressionMode::UnCompressed
+                        | CziCompressionMode::Jpg
+                        | CziCompressionMode::JpgXr
+                ) {
                     #[cfg(test)]
                     eprintln!(
                         "zeiss local tile: unsupported compression {:?} for subblock {index}",
@@ -214,498 +364,17 @@ impl ZeissSlide {
                 .map(Some);
         }
 
-        let direct_uncompressed_rgb = subblocks
-            .iter()
-            .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
-        let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-        if direct_uncompressed_rgb {
-            let mut destination = vec![0u8; tile_rgb_len];
-            for info in subblocks {
-                self.preflight_source_subblock(info.file_position)?;
-                let raw = czi
-                    .read_subblock(info.index)
-                    .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-                blit_raw_uncompressed_rgb_subblock(
-                    &mut destination,
-                    tile_w,
-                    tile_h,
-                    &raw,
-                    (info.rect.x - self.subblock_origin.0).div_euclid(_level_ratio) - tile_origin_x,
-                    (info.rect.y - self.subblock_origin.1).div_euclid(_level_ratio) - tile_origin_y,
-                )?;
-            }
-            #[cfg(test)]
-            ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.fetch_add(1, Ordering::Relaxed);
-            return rgb_u8_tile(tile_w, tile_h, destination).map(Some);
-        }
-
-        let mut destination = vec![0u8; tile_rgb_len];
-        for info in subblocks {
-            self.preflight_source_subblock(info.file_position)?;
-            let raw = czi
-                .read_subblock(info.index)
-                .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-            let bitmap = bitmap_from_raw_uncompressed_subblock(&raw)?;
-            let sample = bitmap_to_sample_buffer(bitmap)?;
-            let sample_data = sample.data.as_u8().ok_or_else(|| {
-                WsiError::DisplayConversion(
-                    "Zeiss local tile path requires 8-bit RGB-compatible subblocks".into(),
-                )
-            })?;
-            let blit_x =
-                (info.rect.x - self.subblock_origin.0).div_euclid(_level_ratio) - tile_origin_x;
-            let blit_y =
-                (info.rect.y - self.subblock_origin.1).div_euclid(_level_ratio) - tile_origin_y;
-            blit_rgb_sample(
-                &mut destination,
-                (tile_w, tile_h),
-                RgbSample {
-                    width: sample.width,
-                    height: sample.height,
-                    data: sample_data,
-                },
-                (blit_x, blit_y),
-            )?;
-        }
-
-        rgb_u8_tile(tile_w, tile_h, destination).map(Some)
-    }
-
-    pub(super) fn scene_level_image(
-        &self,
-        scene: usize,
-        level: usize,
-    ) -> Result<Arc<CpuTile>, WsiError> {
-        if let Some(cached) = self
-            .level_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(scene, level))
-            .cloned()
-        {
-            return Ok(cached);
-        }
-
-        let series = &self.dataset.scenes[scene].series[0];
-        let level_ref = &series.levels[level];
-        let buffer = if let Some(buffer) = self.scene_level_image_from_subblocks(scene, level)? {
-            #[cfg(test)]
-            ZEISS_DIRECT_LEVEL_COMPOSE_HITS.fetch_add(1, Ordering::Relaxed);
-            buffer
-        } else if level == 0 {
-            return Err(WsiError::UnsupportedFormat(
-                "Zeiss level 0 requires direct subblock composition".into(),
+        let tile = self.compose_subblocks(
+            &subblocks,
+            (tile_w, tile_h),
+            (tile_origin_x, tile_origin_y),
+            _level_ratio,
+        )?;
+        if tile.data.as_u8().is_none() {
+            return Err(WsiError::DisplayConversion(
+                "Zeiss local tile path requires 8-bit RGB-compatible subblocks".into(),
             ));
-        } else {
-            let base = self.scene_level_image(scene, 0)?;
-            let rgb = base.as_ref().clone().into_rgb()?;
-            let resized = imageops::resize(
-                &rgb,
-                level_ref.dimensions.0 as u32,
-                level_ref.dimensions.1 as u32,
-                FilterType::Triangle,
-            );
-            rgb_u8_tile(resized.width(), resized.height(), resized.into_raw())?
-        };
-        let arc = Arc::new(buffer);
-        self.level_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .put((scene, level), arc.clone());
-        Ok(arc)
-    }
-
-    fn scene_level_image_from_subblocks(
-        &self,
-        scene: usize,
-        level: usize,
-    ) -> Result<Option<CpuTile>, WsiError> {
-        let candidate_indices = self
-            .canvas_level_subblocks
-            .get(level)
-            .cloned()
-            .unwrap_or_default();
-        if candidate_indices.is_empty() {
-            return Ok(None);
         }
-
-        let candidate_infos = {
-            let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let all = czi.subblocks();
-            let mut selected = Vec::with_capacity(candidate_indices.len());
-            for index in candidate_indices {
-                let info = all.get(index).cloned().ok_or_else(|| {
-                    WsiError::DisplayConversion(format!(
-                        "Zeiss subblock index {index} out of range"
-                    ))
-                })?;
-                if info.compression != CziCompressionMode::UnCompressed {
-                    return Ok(None);
-                }
-                selected.push(info);
-            }
-            selected
-        };
-
-        if candidate_infos.is_empty() {
-            return Ok(None);
-        }
-
-        let series = &self.dataset.scenes[scene].series[0];
-        let level_ref = &series.levels[level];
-
-        let mut subblocks = candidate_infos;
-        subblocks.sort_by_key(|info| (info.m_index.unwrap_or(i32::MIN), info.file_position));
-
-        let direct_uncompressed_rgb = subblocks
-            .iter()
-            .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
-        let level_ratio = level_ref.downsample.round().max(1.0) as i32;
-        if direct_uncompressed_rgb {
-            let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let destination_len = checked_product_to_usize(
-                &[level_ref.dimensions.0, level_ref.dimensions.1, 3],
-                MAX_DECODED_IMAGE_BYTES,
-                "Zeiss composed level",
-            )
-            .map_err(WsiError::DisplayConversion)?;
-            let mut destination = vec![0u8; destination_len];
-            for info in subblocks {
-                self.preflight_source_subblock(info.file_position)?;
-                let raw = czi
-                    .read_subblock(info.index)
-                    .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-                blit_raw_uncompressed_rgb_subblock(
-                    &mut destination,
-                    level_ref.dimensions.0 as u32,
-                    level_ref.dimensions.1 as u32,
-                    &raw,
-                    (info.rect.x - self.subblock_origin.0).div_euclid(level_ratio),
-                    (info.rect.y - self.subblock_origin.1).div_euclid(level_ratio),
-                )?;
-            }
-            #[cfg(test)]
-            ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.fetch_add(1, Ordering::Relaxed);
-            return rgb_u8_tile(
-                level_ref.dimensions.0 as u32,
-                level_ref.dimensions.1 as u32,
-                destination,
-            )
-            .map(Some);
-        }
-
-        let mut destination: Option<czi_rs::Bitmap> = None;
-        for info in subblocks {
-            self.preflight_source_subblock(info.file_position)?;
-            let raw = {
-                let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-                czi.read_subblock(info.index)
-                    .map_err(|source| WsiError::DisplayConversion(source.to_string()))?
-            };
-            let bitmap = bitmap_from_raw_uncompressed_subblock(&raw)?;
-            let blit_x = (info.rect.x - self.subblock_origin.0).div_euclid(level_ratio);
-            let blit_y = (info.rect.y - self.subblock_origin.1).div_euclid(level_ratio);
-            match destination.as_mut() {
-                Some(destination_bitmap) => {
-                    if destination_bitmap.pixel_type != bitmap.pixel_type {
-                        return Ok(None);
-                    }
-                    blit_tile(destination_bitmap, &bitmap, blit_x, blit_y)?;
-                }
-                None => {
-                    let mut destination_bitmap = czi_rs::Bitmap::zeros(
-                        bitmap.pixel_type,
-                        level_ref.dimensions.0 as u32,
-                        level_ref.dimensions.1 as u32,
-                    )
-                    .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-                    blit_tile(&mut destination_bitmap, &bitmap, blit_x, blit_y)?;
-                    destination = Some(destination_bitmap);
-                }
-            }
-        }
-
-        destination.map(bitmap_to_sample_buffer).transpose()
+        Ok(Some(tile))
     }
-}
-
-fn rgb_u8_tile(width: u32, height: u32, data: Vec<u8>) -> Result<CpuTile, WsiError> {
-    CpuTile::new(
-        width,
-        height,
-        3,
-        ColorSpace::Rgb,
-        CpuTileLayout::Interleaved,
-        CpuTileData::u8(data),
-    )
-}
-
-pub(super) fn blit_tile(
-    destination: &mut czi_rs::Bitmap,
-    source: &czi_rs::Bitmap,
-    offset_x: i32,
-    offset_y: i32,
-) -> Result<(), WsiError> {
-    if destination.pixel_type != source.pixel_type {
-        return Err(WsiError::DisplayConversion(
-            "cannot compose Zeiss tiles with mismatched pixel types".into(),
-        ));
-    }
-
-    let source_rect = IntRect::new(
-        offset_x,
-        offset_y,
-        source.width as i32,
-        source.height as i32,
-    );
-    let destination_rect = IntRect::new(0, 0, destination.width as i32, destination.height as i32);
-    let Some(intersection) = source_rect.intersect(destination_rect) else {
-        return Ok(());
-    };
-
-    let bytes_per_pixel = destination.pixel_type.bytes_per_pixel();
-    for row in 0..intersection.h as usize {
-        let src_x = (intersection.x - offset_x) as usize;
-        let src_y = (intersection.y - offset_y) as usize + row;
-        let dst_x = intersection.x as usize;
-        let dst_y = intersection.y as usize + row;
-        let row_bytes = intersection.w as usize * bytes_per_pixel;
-
-        let src_offset = src_y
-            .checked_mul(source.stride)
-            .and_then(|value| value.checked_add(src_x * bytes_per_pixel))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss source tile offset overflow".into())
-            })?;
-        let dst_offset = dst_y
-            .checked_mul(destination.stride)
-            .and_then(|value| value.checked_add(dst_x * bytes_per_pixel))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss destination tile offset overflow".into())
-            })?;
-
-        destination.data[dst_offset..dst_offset + row_bytes]
-            .copy_from_slice(&source.data[src_offset..src_offset + row_bytes]);
-    }
-
-    Ok(())
-}
-
-pub(super) struct RgbSample<'a> {
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) data: &'a [u8],
-}
-
-pub(super) fn blit_rgb_sample(
-    destination: &mut [u8],
-    dest_size: (u32, u32),
-    source: RgbSample<'_>,
-    offset: (i32, i32),
-) -> Result<(), WsiError> {
-    let (dest_width, dest_height) = dest_size;
-    let (offset_x, offset_y) = offset;
-    let source_rect = IntRect::new(
-        offset_x,
-        offset_y,
-        source.width as i32,
-        source.height as i32,
-    );
-    let destination_rect = IntRect::new(0, 0, dest_width as i32, dest_height as i32);
-    let Some(intersection) = source_rect.intersect(destination_rect) else {
-        return Ok(());
-    };
-
-    let src_stride = source.width as usize * 3;
-    let dest_stride = dest_width as usize * 3;
-    for row in 0..intersection.h as usize {
-        let src_x = (intersection.x - offset_x) as usize;
-        let src_y = (intersection.y - offset_y) as usize + row;
-        let dst_x = intersection.x as usize;
-        let dst_y = intersection.y as usize + row;
-        let row_bytes = intersection.w as usize * 3;
-
-        let src_offset = src_y
-            .checked_mul(src_stride)
-            .and_then(|value| value.checked_add(src_x * 3))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss source RGB tile offset overflow".into())
-            })?;
-        let dst_offset = dst_y
-            .checked_mul(dest_stride)
-            .and_then(|value| value.checked_add(dst_x * 3))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss destination RGB tile offset overflow".into())
-            })?;
-        destination[dst_offset..dst_offset + row_bytes]
-            .copy_from_slice(&source.data[src_offset..src_offset + row_bytes]);
-    }
-
-    Ok(())
-}
-
-pub(super) fn blit_raw_uncompressed_rgb_subblock(
-    destination: &mut [u8],
-    dest_width: u32,
-    dest_height: u32,
-    raw: &czi_rs::RawSubBlock,
-    offset_x: i32,
-    offset_y: i32,
-) -> Result<(), WsiError> {
-    let source_width = raw.info.stored_size.w;
-    let source_height = raw.info.stored_size.h;
-    let source_rect = IntRect::new(
-        offset_x,
-        offset_y,
-        source_width as i32,
-        source_height as i32,
-    );
-    let destination_rect = IntRect::new(0, 0, dest_width as i32, dest_height as i32);
-    let Some(intersection) = source_rect.intersect(destination_rect) else {
-        return Ok(());
-    };
-
-    let source_bytes = raw.data.as_slice();
-    let source_stride = source_width as usize
-        * match raw.info.pixel_type {
-            CziPixelType::Bgr24 => 3,
-            CziPixelType::Bgra32 => 4,
-            other => {
-                return Err(WsiError::DisplayConversion(format!(
-                    "unsupported Zeiss direct blit pixel type {other:?}"
-                )));
-            }
-        };
-    let dest_stride = dest_width as usize * 3;
-    let bytes_per_pixel = source_stride / source_width as usize;
-    let source_needed = source_stride * source_height as usize;
-    if source_bytes.len() < source_needed {
-        return Err(WsiError::DisplayConversion(
-            "Zeiss raw subblock shorter than expected".into(),
-        ));
-    }
-
-    for row in 0..intersection.h as usize {
-        let src_x = (intersection.x - offset_x) as usize;
-        let src_y = (intersection.y - offset_y) as usize + row;
-        let dst_x = intersection.x as usize;
-        let dst_y = intersection.y as usize + row;
-        let src_offset = src_y
-            .checked_mul(source_stride)
-            .and_then(|value| value.checked_add(src_x * bytes_per_pixel))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss raw source offset overflow".into())
-            })?;
-        let dst_offset = dst_y
-            .checked_mul(dest_stride)
-            .and_then(|value| value.checked_add(dst_x * 3))
-            .ok_or_else(|| {
-                WsiError::DisplayConversion("Zeiss raw destination offset overflow".into())
-            })?;
-        match raw.info.pixel_type {
-            CziPixelType::Bgr24 => {
-                let src_row = &source_bytes[src_offset..src_offset + intersection.w as usize * 3];
-                let dst_row =
-                    &mut destination[dst_offset..dst_offset + intersection.w as usize * 3];
-                for (src_px, dst_px) in src_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(3)) {
-                    dst_px[0] = src_px[2];
-                    dst_px[1] = src_px[1];
-                    dst_px[2] = src_px[0];
-                }
-            }
-            CziPixelType::Bgra32 => {
-                let src_row = &source_bytes[src_offset..src_offset + intersection.w as usize * 4];
-                let dst_row =
-                    &mut destination[dst_offset..dst_offset + intersection.w as usize * 3];
-                for (src_px, dst_px) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
-                    dst_px[0] = src_px[2];
-                    dst_px[1] = src_px[1];
-                    dst_px[2] = src_px[0];
-                }
-            }
-            other => {
-                return Err(WsiError::DisplayConversion(format!(
-                    "unsupported Zeiss direct blit pixel type {other:?}"
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile, WsiError> {
-    match bitmap.pixel_type {
-        CziPixelType::Bgr24 => {
-            let mut rgb = Vec::with_capacity(bitmap.data.len());
-            for chunk in bitmap.data.chunks_exact(3) {
-                rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
-            }
-            rgb_u8_tile(bitmap.width, bitmap.height, rgb)
-        }
-        CziPixelType::Bgra32 => {
-            let mut rgb =
-                Vec::with_capacity((bitmap.width as usize) * (bitmap.height as usize) * 3);
-            for chunk in bitmap.data.chunks_exact(4) {
-                rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
-            }
-            rgb_u8_tile(bitmap.width, bitmap.height, rgb)
-        }
-        CziPixelType::Bgr48 => {
-            let values = bitmap
-                .to_u16_vec()
-                .expect("Bgr48 samples always have an even byte width");
-            let mut rgb = Vec::with_capacity(values.len());
-            for chunk in values.chunks_exact(3) {
-                rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
-            }
-            CpuTile::new(
-                bitmap.width,
-                bitmap.height,
-                3,
-                ColorSpace::Rgb,
-                CpuTileLayout::Interleaved,
-                CpuTileData::u16(rgb),
-            )
-        }
-        other => Err(WsiError::DisplayConversion(format!(
-            "unsupported Zeiss pixel type {other:?}"
-        ))),
-    }
-}
-
-pub(super) fn bitmap_from_raw_uncompressed_subblock(
-    raw: &czi_rs::RawSubBlock,
-) -> Result<czi_rs::Bitmap, WsiError> {
-    if raw.info.compression != CziCompressionMode::UnCompressed {
-        return Err(WsiError::DisplayConversion(format!(
-            "unsupported Zeiss compression {}",
-            raw.info.compression.as_str()
-        )));
-    }
-    let Some(stride) =
-        (raw.info.stored_size.w as usize).checked_mul(raw.info.pixel_type.bytes_per_pixel())
-    else {
-        return Err(WsiError::DisplayConversion(
-            "Zeiss bitmap size overflow".into(),
-        ));
-    };
-    let Some(expected_len) = stride.checked_mul(raw.info.stored_size.h as usize) else {
-        return Err(WsiError::DisplayConversion(
-            "Zeiss bitmap size overflow".into(),
-        ));
-    };
-    let mut decoded = raw.data.clone();
-    if decoded.len() < expected_len {
-        decoded.resize(expected_len, 0);
-    } else {
-        decoded.truncate(expected_len);
-    }
-    Ok(czi_rs::Bitmap {
-        pixel_type: raw.info.pixel_type,
-        width: raw.info.stored_size.w,
-        height: raw.info.stored_size.h,
-        stride,
-        data: decoded,
-    })
 }

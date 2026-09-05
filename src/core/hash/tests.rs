@@ -108,3 +108,54 @@ fn hash_file_part_range_past_eof_errors() {
     let err = h.hash_file_part(tmp.path(), 8, Some(5)).unwrap_err();
     assert!(err.to_string().contains("only 2 bytes remain"));
 }
+
+#[test]
+fn quickhash_matches_independent_vectors_across_padding_and_file_boundaries() {
+    // Expected values were generated independently with Python hashlib/OpenSSL.
+    let input: Vec<_> = (0..4097).map(|i| (i % 251) as u8).collect();
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(&input).unwrap();
+    file.flush().unwrap();
+    for (len, expected) in [
+        (
+            0,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            55,
+            "463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59",
+        ),
+        (
+            56,
+            "da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562",
+        ),
+        (
+            63,
+            "29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488",
+        ),
+        (
+            64,
+            "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108",
+        ),
+        (
+            65,
+            "4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781",
+        ),
+        (
+            4097,
+            "a16560d668b843fb3be99ace41dbd18471f342bd3255a1d21204b35e43f74436",
+        ),
+    ] {
+        for chunk_bytes in [1, 17, 64, 4096] {
+            let mut hash = Quickhash1::new();
+            for chunk in input[..len].chunks(chunk_bytes) {
+                hash.update(chunk);
+            }
+            assert_eq!(hash.finish().unwrap(), expected);
+        }
+        let mut hash = Quickhash1::new();
+        hash.hash_file_part(file.path(), 0, Some(len as u64))
+            .unwrap();
+        assert_eq!(hash.finish().unwrap(), expected);
+    }
+}

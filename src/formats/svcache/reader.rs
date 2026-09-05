@@ -1,4 +1,4 @@
-use super::storage::{dataset_from_metadata, hex_encode, read_svcache};
+use super::storage::{dataset_from_metadata, hex_encode, read_svcache_with_budget};
 use super::*;
 
 impl FormatProbe for SvcacheBackend {
@@ -20,23 +20,50 @@ impl FormatProbe for SvcacheBackend {
     }
 }
 
+impl ConfiguredFormatProbe for SvcacheBackend {}
+
 impl DatasetReader for SvcacheBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let (file, payload_start, metadata) = read_svcache(path)?;
+        let reader = self.open_with_config(path, BackendOpenConfig::deterministic())?;
+        Ok(reader)
+    }
+}
+
+impl ConfiguredDatasetReader for SvcacheBackend {
+    fn open_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        let budget = OpenBudget::new(config.limits);
+        let (file, payload_start, metadata) = read_svcache_with_budget(path, &budget)?;
         let dataset = dataset_from_metadata(path, &metadata);
-        let associated_index = metadata
-            .associated
-            .iter()
-            .enumerate()
-            .map(|(idx, assoc)| (assoc.name.clone(), idx))
-            .collect();
-        Ok(Box::new(SvcacheReader {
+        let associated_index_bytes = u64::try_from(metadata.associated.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                u64::try_from(std::mem::size_of::<(String, usize)>()).unwrap_or(u64::MAX),
+            );
+        budget.retain_index(associated_index_bytes)?;
+        let mut associated_index = HashMap::new();
+        associated_index
+            .try_reserve(metadata.associated.len())
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "svcache associated-image index",
+                requested: associated_index_bytes,
+                limit: config.limits.tile_index_bytes(),
+            })?;
+        for (idx, assoc) in metadata.associated.iter().enumerate() {
+            associated_index.insert(assoc.name.clone(), idx);
+        }
+        let reader = SvcacheReader {
             file: Mutex::new(file),
             payload_start,
             metadata,
             dataset,
             associated_index,
-        }))
+            encoded_unit_bytes: config.limits.encoded_unit_bytes(),
+        };
+        Ok(Box::new(reader))
     }
 }
 
@@ -50,21 +77,6 @@ impl SlideReader for SvcacheReader {
         self.read_tile_meta(tile)
     }
 
-    fn read_tiles(
-        &self,
-        reqs: &[TileRequest],
-        output: TileOutputPreference,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        if matches!(output, TileOutputPreference::RequireDevice { .. }) {
-            return Err(WsiError::Unsupported {
-                reason: ".svcache device output is not implemented".into(),
-            });
-        }
-        reqs.iter()
-            .map(|req| self.read_tile_cpu(req).map(TilePixels::Cpu))
-            .collect()
-    }
-
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         let idx = self
             .associated_index
@@ -72,6 +84,41 @@ impl SlideReader for SvcacheReader {
             .copied()
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
         self.read_tile_meta(&self.metadata.associated[idx].tile)
+    }
+}
+
+impl ManagedSlideReader for SvcacheReader {
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(self.tile_meta(req)?.payload_len)
+    }
+
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        reqs.iter().try_fold(0_u64, |total, req| {
+            total
+                .checked_add(self.tile_meta(req)?.payload_len)
+                .ok_or(WsiError::ResourceLimit {
+                    resource: "per-operation transient work",
+                    requested: u64::MAX,
+                    limit: self.encoded_unit_bytes,
+                })
+        })
+    }
+
+    fn display_tile_encoded_upper_bound(&self, _req: &TileViewRequest) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
+    }
+
+    fn associated_encoded_upper_bound(&self, name: &str) -> Result<u64, WsiError> {
+        let idx = self
+            .associated_index
+            .get(name)
+            .copied()
+            .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
+        Ok(self.metadata.associated[idx].tile.payload_len)
+    }
+
+    fn region_fastpath_encoded_upper_bound(&self, _req: &RegionRequest) -> Result<u64, WsiError> {
+        Ok(self.encoded_unit_bytes)
     }
 }
 

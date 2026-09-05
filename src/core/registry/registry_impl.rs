@@ -11,12 +11,12 @@ impl<T: FormatProbe> FormatProbe for Arc<T> {
 }
 
 impl<T: ConfiguredFormatProbe> ConfiguredFormatProbe for Arc<T> {
-    fn probe_with_cache_config(
+    fn probe_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
-        (**self).probe_with_cache_config(path, cache_config)
+        (**self).probe_with_config(path, config)
     }
 }
 
@@ -27,12 +27,12 @@ impl<T: DatasetReader> DatasetReader for Arc<T> {
 }
 
 impl<T: ConfiguredDatasetReader> ConfiguredDatasetReader for Arc<T> {
-    fn open_with_cache_config(
+    fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        (**self).open_with_cache_config(path, cache_config)
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        (**self).open_with_config(path, config)
     }
 }
 
@@ -56,9 +56,10 @@ struct RegisteredBackend {
     reader: Box<RegistryReader>,
 }
 
-type RegistryProbe = dyn Fn(&Path, CacheConfig) -> Result<ProbeResult, WsiError> + Send + Sync;
+type RegistryProbe =
+    dyn Fn(&Path, BackendOpenConfig) -> Result<ProbeResult, WsiError> + Send + Sync;
 type RegistryReader =
-    dyn Fn(&Path, CacheConfig) -> Result<Box<dyn SlideReader>, WsiError> + Send + Sync;
+    dyn Fn(&Path, BackendOpenConfig) -> Result<Box<dyn ManagedSlideReader>, WsiError> + Send + Sync;
 
 impl FormatRegistry {
     pub fn new() -> Self {
@@ -71,8 +72,13 @@ impl FormatRegistry {
         reader: impl DatasetReader + 'static,
     ) {
         self.backends.push(RegisteredBackend {
-            probe: Box::new(move |path, _cache_config| probe.probe(path)),
-            reader: Box::new(move |path, _cache_config| reader.open(path)),
+            probe: Box::new(move |path, _config| probe.probe(path)),
+            reader: Box::new(move |path, config| {
+                Ok(Box::new(ConservativeManagedReader::new(
+                    reader.open(path)?,
+                    config.limits.encoded_unit_bytes(),
+                )))
+            }),
         });
     }
 
@@ -82,12 +88,8 @@ impl FormatRegistry {
         reader: impl ConfiguredDatasetReader + 'static,
     ) {
         self.backends.push(RegisteredBackend {
-            probe: Box::new(move |path, cache_config| {
-                probe.probe_with_cache_config(path, cache_config)
-            }),
-            reader: Box::new(move |path, cache_config| {
-                reader.open_with_cache_config(path, cache_config)
-            }),
+            probe: Box::new(move |path, config| probe.probe_with_config(path, config)),
+            reader: Box::new(move |path, config| reader.open_with_config(path, config)),
         });
     }
 
@@ -95,24 +97,25 @@ impl FormatRegistry {
     ///
     /// Definite confidence beats Likely. First-registered wins ties.
     pub fn detect_vendor(&self, path: &Path) -> Result<Option<ProbeResult>, WsiError> {
-        self.best_probe(path, CacheConfig::deterministic())
+        self.best_probe(path, BackendOpenConfig::deterministic())
             .map(|best| best.map(|(result, _)| result))
     }
 
     /// Probe all backends, open with best match.
     /// Definite confidence beats Likely. First-registered wins ties.
     pub fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_with_cache_config(path, CacheConfig::deterministic())
+        let managed = self.open_with_config(path, BackendOpenConfig::deterministic())?;
+        Ok(managed)
     }
 
     /// Probe all backends and open the best match with the supplied cache policy.
-    pub(crate) fn open_with_cache_config(
+    pub(crate) fn open_with_config(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
-        match self.best_probe(path, cache_config)? {
-            Some((_, i)) => (self.backends[i].reader)(path, cache_config),
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        match self.best_probe(path, config)? {
+            Some((_, i)) => (self.backends[i].reader)(path, config),
             None => Err(WsiError::UnsupportedFormat(path.display().to_string())),
         }
     }
@@ -120,13 +123,13 @@ impl FormatRegistry {
     fn best_probe(
         &self,
         path: &Path,
-        cache_config: CacheConfig,
+        config: BackendOpenConfig,
     ) -> Result<Option<(ProbeResult, usize)>, WsiError> {
         let mut best: Option<(ProbeResult, usize)> = None;
         let mut first_error: Option<WsiError> = None;
 
         for (i, backend) in self.backends.iter().enumerate() {
-            match (backend.probe)(path, cache_config) {
+            match (backend.probe)(path, config) {
                 Ok(result) => {
                     if result.detected {
                         if result.confidence == ProbeConfidence::Definite {

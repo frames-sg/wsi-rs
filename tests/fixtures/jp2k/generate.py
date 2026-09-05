@@ -158,6 +158,13 @@ def main() -> None:
         )
         build_fixture(
             tmp,
+            "rgb_rct",
+            ["-i", str(rgb_source), "-mct", "1", "-n", "3"],
+            upsample=False,
+            convert_ycbcr_reference=False,
+        )
+        build_fixture(
+            tmp,
             "ycbcr_444",
             [
                 "-i",

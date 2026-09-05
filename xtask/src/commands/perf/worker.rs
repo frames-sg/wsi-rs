@@ -10,10 +10,20 @@ const OPENSLIDE_LIBRARY_FALLBACK_ENV: &str = "OPENSLIDE_LIB_PATH";
 const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
 const WSI_RS_LIBRARY_ENV: &str = "WSI_RS_BENCH_WSI_RS_LIBRARY";
 pub(super) const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
-pub(super) const WSI_RS_SHIM_JP2K_CPU_THREADS_ENV: &str = "WSI_RS_SHIM_JP2K_CPU_THREADS";
 
 pub(super) const DEFAULT_CACHE_BYTES: usize = 256 * 1024 * 1024;
 pub(super) const PINNED_OPENSLIDE_VERSION: &str = "4.0.1";
+
+pub(super) fn performance_gpu_feature() -> Result<Option<String>, String> {
+    match std::env::var("WSI_RS_PERF_GPU_FEATURE") {
+        Ok(feature) if matches!(feature.as_str(), "metal" | "cuda") => Ok(Some(feature)),
+        Ok(feature) => Err(format!(
+            "invalid WSI_RS_PERF_GPU_FEATURE={feature:?}; expected metal or cuda"
+        )),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("failed to read WSI_RS_PERF_GPU_FEATURE: {error}")),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BenchInvocation {
@@ -109,11 +119,9 @@ fn configure_worker_environment(
     match library {
         BenchLibrary::WsiRs => {
             command.env(RAYON_NUM_THREADS_ENV, workers.to_string());
-            command.env(WSI_RS_SHIM_JP2K_CPU_THREADS_ENV, "1");
         }
         BenchLibrary::OpenSlide => {
             command.env_remove(RAYON_NUM_THREADS_ENV);
-            command.env_remove(WSI_RS_SHIM_JP2K_CPU_THREADS_ENV);
         }
     }
     decode_cpu_concurrency(library, workers)
@@ -124,10 +132,9 @@ pub(super) fn decode_cpu_concurrency(library: BenchLibrary, workers: usize) -> V
         BenchLibrary::WsiRs => json!({
             "client_handles": workers,
             "rayon_threads_process_wide": workers,
-            "jp2k_threads_per_handle": 1,
             "active_jp2k_thread_budget": workers,
             "enforced": true,
-            "method": "RAYON_NUM_THREADS=N process-wide; WSI_RS_SHIM_JP2K_CPU_THREADS=1 per handle",
+            "method": "RAYON_NUM_THREADS=N process-wide JP2K pool shared by N client handles",
         }),
         BenchLibrary::OpenSlide => json!({
             "client_handles": workers,
@@ -174,7 +181,7 @@ pub(super) fn worker_args(
 pub(super) fn prepare_bench(library: BenchLibrary) -> Result<BenchInvocation, String> {
     build_package("wsi-rs-perf")?;
     if matches!(library, BenchLibrary::WsiRs) && std::env::var_os(WSI_RS_LIBRARY_ENV).is_none() {
-        build_package("wsi-rs-openslide-shim")?;
+        build_wsi_rs_shim()?;
     }
     invocation(library, &target_directory()?)
 }
@@ -182,7 +189,7 @@ pub(super) fn prepare_bench(library: BenchLibrary) -> Result<BenchInvocation, St
 pub(super) fn prepare_pair() -> Result<(BenchInvocation, BenchInvocation), String> {
     build_package("wsi-rs-perf")?;
     if std::env::var_os(WSI_RS_LIBRARY_ENV).is_none() {
-        build_package("wsi-rs-openslide-shim")?;
+        build_wsi_rs_shim()?;
     }
     let target_dir = target_directory()?;
     Ok((
@@ -263,6 +270,34 @@ fn build_package(package: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "failed to build {package}: cargo exited with {status}"
+        ))
+    }
+}
+
+fn build_wsi_rs_shim() -> Result<(), String> {
+    let feature = performance_gpu_feature()?;
+    let mut features = vec!["route-telemetry".to_string()];
+    let mut args = vec![
+        "build".to_string(),
+        "--locked".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "wsi-rs-openslide-shim".to_string(),
+    ];
+    if let Some(feature) = feature {
+        features.push(format!("wsi-rs/{feature}"));
+    }
+    args.extend(["--features".to_string(), features.join(",")]);
+    eprintln!("+ cargo {}", args.join(" "));
+    let status = Command::new(cargo())
+        .args(&args)
+        .status()
+        .map_err(|err| format!("failed to build wsi-rs-openslide-shim: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "cargo build for wsi-rs-openslide-shim exited with {status}"
         ))
     }
 }

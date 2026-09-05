@@ -2,11 +2,11 @@ use dicom_core::{Tag, VR};
 use dicom_object::file::ReadPreamble;
 
 use super::*;
+use crate::core::registry::OpenBudget;
+use crate::SlideLimits;
 
 const MAX_FILE_META_BYTES: u32 = 1024 * 1024;
 const MAX_FILE_META_ELEMENTS: usize = 128;
-const MAX_METADATA_ELEMENT_BYTES: u32 = 16 * 1024 * 1024;
-const MAX_METADATA_VALUE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_METADATA_TOKENS: usize = 2_000_000;
 const MAX_METADATA_SEQUENCE_DEPTH: usize = 64;
 const MAX_TRANSFER_SYNTAX_UID_BYTES: u32 = 128;
@@ -28,11 +28,20 @@ pub(super) fn open_metadata_object_until(
     path: &Path,
     stop_tag: Tag,
 ) -> Result<OpenedDicomMetadata, WsiError> {
+    let budget = OpenBudget::new(SlideLimits::default());
+    open_metadata_object_until_with_budget(path, stop_tag, budget.as_ref())
+}
+
+pub(super) fn open_metadata_object_until_with_budget(
+    path: &Path,
+    stop_tag: Tag,
+    budget: &OpenBudget,
+) -> Result<OpenedDicomMetadata, WsiError> {
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
-    let pixel_data = preflight_dicom_metadata(&mut file, path)?;
+    let pixel_data = preflight_dicom_metadata_with_budget(&mut file, path, budget)?;
     let source_identity = FileIdentity::from_open_file(path, &file)?;
     file.seek(SeekFrom::Start(0))
         .map_err(|source| WsiError::IoWithPath {
@@ -51,9 +60,19 @@ pub(super) fn open_metadata_object_until(
     })
 }
 
-fn preflight_dicom_metadata(
+#[cfg(test)]
+pub(super) fn preflight_dicom_metadata(
     file: &mut File,
     path: &Path,
+) -> Result<DicomPixelDataLocation, WsiError> {
+    let budget = OpenBudget::new(SlideLimits::default());
+    preflight_dicom_metadata_with_budget(file, path, budget.as_ref())
+}
+
+fn preflight_dicom_metadata_with_budget(
+    file: &mut File,
+    path: &Path,
+    budget: &OpenBudget,
 ) -> Result<DicomPixelDataLocation, WsiError> {
     let transfer_syntax_uid = preflight_file_meta(file, path)?;
     let transfer_syntax = TransferSyntaxRegistry
@@ -74,7 +93,6 @@ fn preflight_dicom_metadata(
             })?;
         let mut token_count = 0usize;
         let mut sequence_depth = 0usize;
-        let mut declared_value_bytes = 0u64;
         let mut pixel_data = DicomPixelDataLocation::Missing;
 
         while let Some(token) = reader.advance() {
@@ -90,6 +108,28 @@ fn preflight_dicom_metadata(
             })?;
             match token {
                 LazyDataToken::ElementHeader(header) => {
+                    if header.len.0 != u32::MAX && header.len.0 % 2 != 0 {
+                        return Err(invalid_slide(
+                            path,
+                            format!(
+                                "DICOM metadata element {} declares an odd {}-byte value length; encoded value lengths must be even",
+                                header.tag, header.len.0
+                            ),
+                        ));
+                    }
+                    if let Some(width) = fixed_width_vr_bytes(header.vr) {
+                        if header.len.0 == u32::MAX || header.len.0 % width != 0 {
+                            return Err(invalid_slide(
+                                path,
+                                format!(
+                                    "DICOM metadata element {} with fixed-width VR {} declares a {}-byte value length; the length must be a multiple of {width}",
+                                    header.tag,
+                                    header.vr.to_string(),
+                                    header.len.0
+                                ),
+                            ));
+                        }
+                    }
                     if header.tag == tags::PIXEL_DATA {
                         let value = reader
                             .advance()
@@ -120,26 +160,9 @@ fn preflight_dicom_metadata(
                         };
                         break;
                     }
-                    if header.len.0 > MAX_METADATA_ELEMENT_BYTES {
-                        return Err(invalid_slide(
-                            path,
-                            format!(
-                                "DICOM metadata element value limit is {MAX_METADATA_ELEMENT_BYTES} bytes, but {} declares {} bytes",
-                                header.tag, header.len.0
-                            ),
-                        ));
-                    }
-                    declared_value_bytes = declared_value_bytes
-                        .checked_add(u64::from(header.len.0))
-                        .ok_or_else(|| invalid_slide(path, "DICOM metadata byte count overflow"))?;
-                    if declared_value_bytes > MAX_METADATA_VALUE_BYTES {
-                        return Err(invalid_slide(
-                            path,
-                            format!(
-                                "DICOM metadata declares more than the {MAX_METADATA_VALUE_BYTES}-byte cumulative value limit"
-                            ),
-                        ));
-                    }
+                    let value_bytes = u64::from(header.len.0);
+                    budget.check_metadata_value(value_bytes)?;
+                    budget.retain_metadata(value_bytes)?;
                 }
                 LazyDataToken::SequenceStart { tag, .. } => {
                     if tag == tags::PIXEL_DATA {
@@ -206,6 +229,15 @@ fn preflight_dicom_metadata(
         }
     }
     Ok(pixel_data)
+}
+
+fn fixed_width_vr_bytes(vr: VR) -> Option<u32> {
+    match vr {
+        VR::SS | VR::US | VR::OW => Some(2),
+        VR::AT | VR::FL | VR::SL | VR::UL | VR::OF | VR::OL => Some(4),
+        VR::FD | VR::SV | VR::UV | VR::OD | VR::OV => Some(8),
+        _ => None,
+    }
 }
 
 pub(super) fn preflight_file_meta(

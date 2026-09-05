@@ -1,7 +1,9 @@
+mod flights;
+pub(crate) use flights::TileClaim;
+
 use lru::LruCache;
 use std::borrow::Borrow;
 use std::hash::Hash;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use crate::core::environment;
@@ -25,14 +27,12 @@ const TILE_CACHE_BYTES_ENV: &str = "WSI_RS_TILE_CACHE_BYTES";
 /// immediate churn during zoom-out bursts.
 pub(crate) const DEFAULT_DISPLAY_TILE_CACHE_SIZE: u64 = 32 * 1024 * 1024;
 const DISPLAY_TILE_CACHE_BYTES_ENV: &str = "WSI_RS_DISPLAY_TILE_CACHE_BYTES";
-// Count-bounded private LRUs still allocate per-entry bookkeeping. Include a
-// conservative floor so tiny source tiles cannot turn a byte budget into an
-// enormous hash-table capacity at open time.
+// Account for key/value owners and hash/LRU bookkeeping in addition to payload
+// bytes so tiny values cannot retain an unbounded number of entries.
 const PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES: u64 = 256;
-// Private per-format caches supplement the public shared tile cache. Bound
-// their aggregate entry capacity to one quarter of the configured shared
-// cache so opening a slide cannot multiply the caller's byte policy.
-const PRIVATE_CACHE_BUDGET_DIVISOR: u64 = 4;
+// Private/full-decode caches share a 32 MiB default budget. Explicit source
+// cache tuning scales this supplemental budget proportionally.
+const DEFAULT_PRIVATE_CACHE_SIZE: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -60,9 +60,8 @@ impl CacheConfig {
     }
 
     pub(crate) fn shared_tile_budget(self, source_hint: Option<u64>) -> u64 {
-        self.shared_tile_bytes
-            .or(source_hint)
-            .unwrap_or(DEFAULT_TILE_CACHE_SIZE)
+        let _ = source_hint;
+        self.shared_tile_bytes.unwrap_or(DEFAULT_TILE_CACHE_SIZE)
     }
 
     pub(crate) fn display_tile_budget(self) -> u64 {
@@ -78,7 +77,9 @@ impl CacheConfig {
     }
 
     pub(crate) fn private_cache_budget_bytes(self) -> u64 {
-        self.shared_tile_budget(None) / PRIVATE_CACHE_BUDGET_DIVISOR
+        self.shared_tile_bytes
+            .map(|bytes| bytes / 2)
+            .unwrap_or(DEFAULT_PRIVATE_CACHE_SIZE)
     }
 }
 
@@ -88,65 +89,59 @@ impl Default for CacheConfig {
     }
 }
 
-/// One slide's aggregate budget for count-bounded format-private caches.
+/// One slide's aggregate byte budget for format-private caches.
 ///
-/// Allocations are made against estimated retained bytes (including a floor
-/// for LRU bookkeeping). A cache receives zero entries when the remaining
-/// budget cannot account for one entry, avoiding eager hash-table allocation.
+/// Each cache reserves one or more disjoint shares. Actual retained values are then
+/// weighed on insertion, so the sum of cache capacities cannot exceed this
+/// aggregate budget.
 pub(crate) struct PrivateCacheBudget {
     remaining_bytes: u64,
     remaining_caches: usize,
 }
 
 impl PrivateCacheBudget {
-    pub(crate) fn allocate(&mut self, estimated_entry_bytes: u64) -> PrivateCacheCapacity {
+    pub(crate) fn allocate(&mut self, _estimated_entry_bytes: u64) -> PrivateCacheCapacity {
+        self.allocate_shares(1)
+    }
+
+    /// Reserve multiple shares for caches whose source units are larger than
+    /// output tiles. Shares must be nonzero and fit the remaining share count.
+    pub(crate) fn allocate_shares(&mut self, shares: usize) -> PrivateCacheCapacity {
         if self.remaining_caches == 0 {
             return PrivateCacheCapacity::default();
         }
-
-        let cache_count = self.remaining_caches as u64;
-        self.remaining_caches -= 1;
-        let accounted_entry_bytes =
-            estimated_entry_bytes.max(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES);
-        let fair_share = self.remaining_bytes / cache_count;
-        let mut entries = fair_share / accounted_entry_bytes;
-        if entries == 0 && self.remaining_bytes >= accounted_entry_bytes {
-            entries = 1;
-        }
-        entries = entries.min(usize::MAX as u64);
-        let accounted_bytes = entries
-            .checked_mul(accounted_entry_bytes)
-            .unwrap_or(self.remaining_bytes)
-            .min(self.remaining_bytes);
-        self.remaining_bytes -= accounted_bytes;
+        assert!(
+            shares > 0 && shares <= self.remaining_caches,
+            "private cache allocation exceeds remaining shares"
+        );
+        // The quotient cannot exceed remaining_bytes because shares <= count.
+        let fair_share = (u128::from(self.remaining_bytes) * shares as u128
+            / self.remaining_caches as u128) as u64;
+        self.remaining_caches -= shares;
+        self.remaining_bytes -= fair_share;
 
         PrivateCacheCapacity {
-            entries: entries as usize,
-            accounted_bytes,
+            accounted_bytes: fair_share,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PrivateCacheCapacity {
-    entries: usize,
     accounted_bytes: u64,
 }
 
-/// A count-bounded private LRU that can be completely disabled.
-///
-/// `lru::LruCache::new` preallocates for its entry capacity and requires a
-/// non-zero value. Keeping the disabled state as `None` makes a zero-budget
-/// cache allocation-free and causes inserts to be ignored.
+/// A byte-bounded private LRU. Each insertion accounts for the caller-reported
+/// retained payload plus a conservative per-entry bookkeeping allowance.
 #[derive(Debug)]
 pub(crate) struct PrivateCache<K: Hash + Eq, V> {
-    lru: Option<LruCache<K, V>>,
+    lru: WeightedLru<K, V>,
     capacity: PrivateCacheCapacity,
 }
 
 impl<K: Hash + Eq, V> PrivateCache<K, V> {
     pub(crate) fn new(capacity: PrivateCacheCapacity) -> Self {
-        let lru = NonZeroUsize::new(capacity.entries).map(LruCache::new);
+        let lru = WeightedLru::new(capacity.accounted_bytes);
         Self { lru, capacity }
     }
 
@@ -155,17 +150,13 @@ impl<K: Hash + Eq, V> PrivateCache<K, V> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.lru.as_mut()?.get(key)
+        self.lru.get(key)
     }
 
-    pub(crate) fn put(&mut self, key: K, value: V) {
-        if let Some(lru) = &mut self.lru {
-            lru.put(key, value);
-        }
-    }
-
-    pub(crate) fn capacity_entries(&self) -> usize {
-        self.capacity.entries
+    pub(crate) fn put(&mut self, key: K, value: V, retained_payload_bytes: u64) {
+        let retained_bytes =
+            retained_payload_bytes.saturating_add(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES);
+        self.lru.put(key, value, retained_bytes);
     }
 
     #[cfg(test)]
@@ -174,8 +165,17 @@ impl<K: Hash + Eq, V> PrivateCache<K, V> {
     }
 
     #[cfg(test)]
+    pub(crate) fn current_bytes(&self) -> u64 {
+        self.lru.current_bytes()
+    }
+
+    pub(crate) fn capacity_bytes(&self) -> u64 {
+        self.capacity.accounted_bytes
+    }
+
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.lru.as_ref().map_or(0, LruCache::len)
+        self.lru.len()
     }
 }
 
@@ -195,6 +195,7 @@ struct WeightedEntry<V> {
 /// Callers own synchronization and statistics. Replacing a key does not count
 /// as an eviction, and an oversized replacement leaves the existing value
 /// untouched.
+#[derive(Debug)]
 pub(crate) struct WeightedLru<K: Hash + Eq, V> {
     entries: LruCache<K, WeightedEntry<V>>,
     capacity_bytes: u64,
@@ -251,6 +252,11 @@ impl<K: Hash + Eq, V> WeightedLru<K, V> {
 
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lru_key(&self) -> Option<&K> {
+        self.entries.peek_lru().map(|(key, _)| key)
     }
 }
 
@@ -310,6 +316,7 @@ impl CacheKey {
 /// Thread-safe, byte-bounded decoded tile cache that can be shared by slides.
 pub struct TileCache {
     inner: Mutex<TileCacheState>,
+    flights: flights::TileFlights,
 }
 
 /// Snapshot of byte-sized decoded tile cache activity.
@@ -359,6 +366,7 @@ impl TileCache {
     /// Create a thread-safe decoded tile cache with a byte capacity.
     pub fn new(capacity_bytes: u64) -> Self {
         Self {
+            flights: flights::TileFlights::new(capacity_bytes),
             inner: Mutex::new(TileCacheState {
                 lru: WeightedLru::new(capacity_bytes),
                 hits: 0,
@@ -426,8 +434,8 @@ impl TileCache {
         ))
     }
 
-    pub(crate) fn shared_with_config(config: CacheConfig, source_hint: Option<u64>) -> Self {
-        Self::new(config.shared_tile_budget(source_hint))
+    pub(crate) fn shared_with_config(config: CacheConfig) -> Self {
+        Self::new(config.shared_tile_budget(None))
     }
 }
 

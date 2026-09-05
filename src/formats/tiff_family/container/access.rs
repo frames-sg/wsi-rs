@@ -12,6 +12,10 @@ use super::model::{Endian, Ifd, TagValue, TiffContainer, TiffType};
 use super::ndpi_offsets::{fix_offset_ndpi, is_ndpi_data_offset_tag};
 
 impl TiffContainer {
+    pub(crate) fn limits(&self) -> crate::SlideLimits {
+        self.open_budget.limits()
+    }
+
     // ── pread (stateless positional read) ──────────────────────
 
     /// Perform a positional read using the persistent file handle.
@@ -25,8 +29,15 @@ impl TiffContainer {
             return Err(TiffParseError::Bounds { offset, len });
         }
 
-        let len_usize = len as usize;
-        let mut buf = vec![0u8; len_usize];
+        let len_usize = usize::try_from(len).map_err(|_| TiffParseError::Bounds { offset, len })?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(len_usize)
+            .map_err(|_| TiffParseError::ResourceLimit {
+                resource: "TIFF read allocation",
+                requested: len,
+                limit: self.file_len,
+            })?;
+        buf.resize(len_usize, 0);
 
         #[cfg(unix)]
         {
@@ -210,13 +221,24 @@ impl TiffContainer {
             });
         }
         let bytes = self.resolve_tag(ifd_id, tag)?;
+        let checked = |value: f64| {
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(TiffParseError::InvalidTag {
+                    ifd_offset: ifd.offset,
+                    tag,
+                    message: "floating-point value must be finite".to_string(),
+                })
+            }
+        };
         match entry.tiff_type {
             TiffType::Float => {
                 let val = match self.endian {
                     Endian::Little => f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
                     Endian::Big => f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
                 };
-                Ok(val as f64)
+                checked(val as f64)
             }
             TiffType::Double => {
                 let val = match self.endian {
@@ -229,22 +251,30 @@ impl TiffContainer {
                         bytes[7],
                     ]),
                 };
-                Ok(val)
+                checked(val)
             }
             TiffType::Rational => {
                 let (num, den) = self.decode_rational(bytes)?;
                 if den == 0 {
-                    Ok(0.0)
+                    Err(TiffParseError::InvalidTag {
+                        ifd_offset: ifd.offset,
+                        tag,
+                        message: "rational denominator must be nonzero".to_string(),
+                    })
                 } else {
-                    Ok(num as f64 / den as f64)
+                    checked(num as f64 / den as f64)
                 }
             }
             TiffType::SRational => {
                 let (num, den) = self.decode_srational(bytes)?;
                 if den == 0 {
-                    Ok(0.0)
+                    Err(TiffParseError::InvalidTag {
+                        ifd_offset: ifd.offset,
+                        tag,
+                        message: "rational denominator must be nonzero".to_string(),
+                    })
                 } else {
-                    Ok(num as f64 / den as f64)
+                    checked(num as f64 / den as f64)
                 }
             }
             _ => Err(TiffParseError::InvalidTag {

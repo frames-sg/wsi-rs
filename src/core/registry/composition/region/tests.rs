@@ -1,5 +1,29 @@
 use super::*;
-use crate::core::types::{TileEntry, TileLayout};
+use crate::core::types::{Dataset, DatasetId, TileEntry, TileLayout, TileRequest};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+struct StreamingSource {
+    dataset: Dataset,
+    single_reads: AtomicUsize,
+    batch_reads: AtomicUsize,
+}
+
+impl SlideReader for StreamingSource {
+    fn dataset(&self) -> &Dataset {
+        &self.dataset
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.single_reads.fetch_add(1, Ordering::SeqCst);
+        let value = u8::try_from(req.col + 1).unwrap_or(0);
+        CpuTile::from_u8_interleaved(2, 1, 3, ColorSpace::Rgb, vec![value; 2 * 3])
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        self.batch_reads.fetch_add(1, Ordering::SeqCst);
+        reqs.iter().map(|req| self.read_tile_cpu(req)).collect()
+    }
+}
 
 fn hit(dest_x: i64, dest_x_f64: f64) -> TileHit {
     hit_at(dest_x, 0, dest_x_f64, 0.0)
@@ -37,6 +61,37 @@ fn tile_2d(data: CpuTileData, width: u32, height: u32) -> Arc<CpuTile> {
         layout: CpuTileLayout::Interleaved,
         data,
     })
+}
+
+#[test]
+fn streaming_region_resolves_one_source_tile_at_a_time() {
+    let source = StreamingSource {
+        dataset: crate::test_support::regular_rgb_dataset_for_test(
+            DatasetId::new(77),
+            "s0",
+            "ser0",
+            crate::test_support::RegularLevelForTest {
+                dimensions: (4, 1),
+                tile_width: 2,
+                tile_height: 1,
+                tiles_across: 2,
+                tiles_down: 1,
+            },
+        ),
+        single_reads: AtomicUsize::new(0),
+        batch_reads: AtomicUsize::new(0),
+    };
+    let req = RegionRequest::new(0usize, 0usize, 0u32, (0, 0), (4, 1));
+
+    let region =
+        composite_region_from_source_streaming(&source, None, &req, 16).expect("streamed region");
+
+    assert_eq!(
+        region.as_u8().unwrap(),
+        &[1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]
+    );
+    assert_eq!(source.single_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(source.batch_reads.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -157,6 +212,31 @@ fn composition_rejects_planar_and_mixed_sample_tiles() {
     let error = compose_region_tiles(&[hit(0, 0.0), hit(1, 1.0)], &mixed, 2, 1, false)
         .expect_err("mixed sample types must be rejected");
     assert!(error.to_string().contains("sample type mismatch"));
+
+    let channel_mismatch = [
+        tile(CpuTileData::u8(vec![1]), 1),
+        Arc::new(CpuTile {
+            width: 1,
+            height: 1,
+            channels: 2,
+            color_space: ColorSpace::Grayscale,
+            layout: CpuTileLayout::Interleaved,
+            data: CpuTileData::u8(vec![2, 3]),
+        }),
+    ];
+    let error = compose_region_tiles(&[hit(0, 0.0), hit(1, 1.0)], &channel_mismatch, 2, 1, false)
+        .expect_err("mixed channel counts must be rejected");
+    assert!(error.to_string().contains("channel count mismatch"));
+}
+
+#[test]
+fn composition_rejects_truncated_tile_storage_before_blit() {
+    let truncated = tile_2d(CpuTileData::u8(vec![1]), 2, 1);
+
+    let error = compose_region_tiles(&[hit(0, 0.0)], &[truncated], 2, 1, false)
+        .expect_err("truncated decoded tiles must not reach slice indexing");
+
+    assert!(error.to_string().contains("CpuTile invariant violated"));
 }
 
 #[test]
@@ -376,4 +456,34 @@ fn metadata_probe_uses_row_major_order_for_irregular_tiles() {
     };
 
     assert_eq!(metadata_probe_coordinate(&layout), Some((3, 1)));
+}
+
+#[test]
+fn bounded_region_batches_preserve_pixels_and_do_not_load_the_whole_region() {
+    let source = StreamingSource {
+        dataset: crate::test_support::regular_rgb_dataset_for_test(
+            DatasetId::new(78),
+            "s0",
+            "ser0",
+            crate::test_support::RegularLevelForTest {
+                dimensions: (16, 1),
+                tile_width: 2,
+                tile_height: 1,
+                tiles_across: 8,
+                tiles_down: 1,
+            },
+        ),
+        single_reads: AtomicUsize::new(0),
+        batch_reads: AtomicUsize::new(0),
+    };
+    let req = RegionRequest::new(0usize, 0usize, 0u32, (0, 0), (16, 1));
+    let region = composite_region_from_source_in_batches(&source, None, &req, 16, 3).unwrap();
+    let expected: Vec<_> = (1..=8).flat_map(|v| vec![v; 6]).collect();
+    assert_eq!(region.as_u8().unwrap(), expected);
+    assert_eq!(
+        source.batch_reads.load(Ordering::SeqCst),
+        2,
+        "after the first tile, use two three-tile batches and a final single tile"
+    );
+    assert_eq!(source.single_reads.load(Ordering::SeqCst), 8);
 }

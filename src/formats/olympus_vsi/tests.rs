@@ -1,8 +1,18 @@
 use std::fs;
 use std::path::Path;
 
+use super::scene::header::{
+    fourcc_matches, sample_type_from_ets, validate_ets_chunk_table, validate_ets_header_limits,
+    MAX_ETS_DIMENSIONS, MAX_ETS_TILES,
+};
+use super::scene::index::{
+    checked_ets_axis_len, checked_ets_extent, checked_ets_level_count, key_from_coords,
+    MAX_ETS_AXIS_INDEX, MAX_ETS_LEVEL_INDEX,
+};
+use super::scene::EtsScene;
 use super::*;
 use crate::core::registry::Slide;
+use crate::core::types::*;
 
 mod fixtures;
 
@@ -22,11 +32,28 @@ fn expect_wsi_error<T>(result: Result<T, WsiError>, context: &str) -> WsiError {
     }
 }
 
-fn cpu_pixels(tile: TilePixels) -> CpuTile {
-    match tile {
-        TilePixels::Cpu(tile) => tile,
-        TilePixels::Device(_) => panic!("Olympus VSI must return CPU pixels"),
-    }
+#[test]
+fn configured_tile_index_limit_is_enforced_across_ets_scenes() {
+    let fixture = write_vsi_fixture(&[
+        ("first", EtsSpec::default()),
+        ("second", EtsSpec::default()),
+    ]);
+    let limits = crate::SlideLimits::default()
+        .with_tile_index_bytes(1)
+        .expect("nonzero tile-index limit");
+    let config = BackendOpenConfig::new(crate::CacheConfig::deterministic(), limits);
+
+    let error = expect_wsi_error(
+        OlympusVsiBackend.open_with_config(&fixture.path, config),
+        "tiny configured tile-index limit must reject ETS before allocation",
+    );
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -65,6 +92,8 @@ fn probe_requires_case_insensitive_vsi_extension_and_companion_directory() {
 #[cfg(unix)]
 #[test]
 fn ets_discovery_does_not_follow_symlinked_scene_directories() {
+    use super::slide::find_ets_files;
+    use crate::core::registry::OpenBudget;
     use std::os::unix::fs::symlink;
 
     let companion = tempfile::tempdir().expect("companion directory");
@@ -75,8 +104,9 @@ fn ets_discovery_does_not_follow_symlinked_scene_directories() {
     symlink(&outside_scene, companion.path().join("linked-scene"))
         .expect("symlink outside scene into companion");
 
+    let budget = OpenBudget::new(crate::SlideLimits::default());
     assert!(
-        find_ets_files(companion.path())
+        find_ets_files(companion.path(), &budget)
             .expect("scan companion directory")
             .is_empty(),
         "ETS discovery must not escape through a directory symlink"
@@ -139,21 +169,13 @@ fn synthetic_vsi_opens_with_metadata_and_reads_encoded_and_background_tiles() {
     assert_ne!(encoded.as_u8(), background.as_u8());
 
     let batch = reader
-        .read_tiles(
-            &[background_req, encoded_req],
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tiles_cpu(&[background_req, encoded_req])
         .expect("read ordered Olympus batch");
     assert_eq!(batch.len(), 2);
     assert_eq!(
-        cpu_pixels(batch.into_iter().next().unwrap()).as_u8(),
+        batch.into_iter().next().unwrap().as_u8(),
         background.as_u8()
     );
-
-    let error = reader
-        .read_tiles(&[], TileOutputPreference::require_device_auto())
-        .expect_err("Olympus cannot require device output");
-    assert!(matches!(error, WsiError::Unsupported { .. }));
 }
 
 #[test]
@@ -447,10 +469,8 @@ fn opens_olympus_vsi_when_corpus_is_available() {
     assert!(!dataset.scenes.is_empty());
     assert!(dataset.scenes[0].series[0].levels.len() >= 2);
     let tile = slide
-        .read_tile(
-            &TileRequest::new(0, 0, 0, 0, 0),
-            TileOutputPreference::cpu(),
-        )
+        .read_tile(&TileRequest::new(0, 0, 0, 0, 0))
         .expect("read Olympus VSI tile");
-    assert!(matches!(tile, TilePixels::Cpu(_)));
+    assert!(tile.width() > 0);
+    assert!(tile.height() > 0);
 }

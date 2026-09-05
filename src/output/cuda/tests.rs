@@ -3,16 +3,10 @@ use crate::{ColorSpace, CpuTileData, CpuTileLayout};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[test]
-fn backend_sessions_expose_identity_and_both_codec_sessions() {
+fn backend_sessions_expose_identity_and_jp2k_session() {
     let sessions = CudaBackendSessions::default();
 
-    assert_eq!(sessions.device_identity(), "cuda");
-    assert_eq!(
-        sessions
-            .with_jpeg(|session| Ok(session.submissions()))
-            .unwrap(),
-        0
-    );
+    assert_eq!(sessions.device_identity(), "cuda:auto");
     assert_eq!(
         sessions
             .with_j2k(|session| Ok(session.submissions()))
@@ -22,20 +16,37 @@ fn backend_sessions_expose_identity_and_both_codec_sessions() {
 }
 
 #[test]
-fn backend_sessions_report_poisoned_codec_locks() {
-    let jpeg_sessions = CudaBackendSessions::new();
-    let jpeg_poison = jpeg_sessions.clone();
-    assert!(catch_unwind(AssertUnwindSafe(|| {
-        let _ = jpeg_poison.with_jpeg::<()>(|_| panic!("poison JPEG session"));
-    }))
-    .is_err());
-    let jpeg_error = jpeg_sessions
-        .with_jpeg(|_| Ok(()))
-        .expect_err("poisoned JPEG session must be reported");
-    assert!(jpeg_error
-        .to_string()
-        .contains("JPEG session lock is poisoned"));
+fn backend_sessions_preserve_injected_device_ordinal_identity() {
+    let sessions =
+        CudaBackendSessions::from_session_for_device(j2k_cuda::CudaSession::default(), 7);
 
+    assert_eq!(sessions.device_identity(), "cuda:7");
+}
+
+#[test]
+fn system_default_sessions_dynamically_fall_back_without_a_cuda_runtime() {
+    match CudaBackendSessions::system_default() {
+        Ok(sessions) => {
+            let ordinal = sessions
+                .device_identity()
+                .strip_prefix("cuda:")
+                .expect("CUDA identity prefix")
+                .parse::<usize>()
+                .expect("CUDA identity ordinal");
+            assert_eq!(sessions.device_identity(), format!("cuda:{ordinal}"));
+        }
+        Err(WsiError::Unsupported { reason }) => {
+            assert!(
+                reason.contains("CUDA JP2K acceleration unavailable"),
+                "{reason}"
+            );
+        }
+        Err(error) => panic!("unexpected CUDA initialization error: {error}"),
+    }
+}
+
+#[test]
+fn backend_sessions_report_poisoned_jp2k_lock() {
     let j2k_sessions = CudaBackendSessions::new();
     let j2k_poison = j2k_sessions.clone();
     assert!(catch_unwind(AssertUnwindSafe(|| {
@@ -52,9 +63,24 @@ fn backend_sessions_report_poisoned_codec_locks() {
 
 #[test]
 fn tight_download_layout_rejects_dimension_overflow() {
-    let error = tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16)
+    let error = tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16, "CUDA")
         .expect_err("overflowing CUDA host download must fail before allocation");
     assert!(error.to_string().contains("overflow"), "{error}");
+}
+
+#[test]
+fn download_limit_is_128_mib() {
+    enforce_download_limit(128 * 1024 * 1024).expect("limit is inclusive");
+    let error = enforce_download_limit(128 * 1024 * 1024 + 1)
+        .expect_err("oversized CUDA readback must fail before allocation");
+    assert!(matches!(
+        error,
+        WsiError::ResourceLimit {
+            resource: "CUDA host tile download",
+            limit: MAX_DEVICE_DOWNLOAD_BYTES,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -67,9 +93,9 @@ fn downloaded_bytes_convert_all_public_pixel_families() {
         (PixelFormat::Rgb16, 3, ColorSpace::Rgb),
         (PixelFormat::Rgba16, 4, ColorSpace::Rgba),
     ] {
-        let (_, byte_len) = tight_download_layout(2, 1, format).expect("valid layout");
+        let (_, byte_len) = tight_download_layout(2, 1, format, "CUDA").expect("valid layout");
         let bytes = (0..byte_len).map(|value| value as u8).collect();
-        let tile = downloaded_bytes_to_cpu_tile(2, 1, format, bytes)
+        let tile = downloaded_bytes_to_cpu_tile(2, 1, format, bytes, "CUDA")
             .expect("downloaded bytes form a valid CpuTile");
         assert_eq!(tile.channels, channels);
         assert_eq!(tile.color_space, color_space);
@@ -88,7 +114,7 @@ fn downloaded_bytes_convert_all_public_pixel_families() {
 
 #[test]
 fn downloaded_bytes_reject_undersized_output() {
-    let error = downloaded_bytes_to_cpu_tile(2, 2, PixelFormat::Rgb8, vec![0; 11])
+    let error = downloaded_bytes_to_cpu_tile(2, 2, PixelFormat::Rgb8, vec![0; 11], "CUDA")
         .expect_err("undersized CUDA download must fail validation");
     assert!(error.to_string().contains("expected 12 bytes"), "{error}");
 }

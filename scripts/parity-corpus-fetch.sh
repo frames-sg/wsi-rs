@@ -26,6 +26,8 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -38,19 +40,29 @@ except ModuleNotFoundError as exc:
 
 FORMAT_EXTENSIONS = {
     "aperio": "svs",
+    "argos": "avs",
+    "huron": "tif",
     "leica": "scn",
     "ventana": "bif",
     "philips_tiff": "tif",
     "tiff": "tif",
     "ndpi": "ndpi",
     "hamamatsu_vms": "zip",
+    "hamamatsu_vmu": "zip",
     "dicom": "dcm",
     "mirax": "zip",
+    "olympus_vsi": "vsi",
+    "raw_jp2k": "j2k",
+    "svcache": "svcache",
+    "zeiss_zvi": "zvi",
 }
 MAX_ZIP_MEMBERS = 50_000
 MAX_ZIP_MEMBER_BYTES = 2 * 1024**3
 MAX_ZIP_EXPANDED_BYTES = 16 * 1024**3
 MAX_ZIP_COMPRESSION_RATIO = 1_000
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_RETRY_BASE_SECONDS = 2
+DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 120
 
 
 def main() -> int:
@@ -127,11 +139,39 @@ def target_path(entry: dict[str, object], cache_dir: Path) -> Path:
 
 
 def download(url: str, target: Path) -> None:
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            download_once(url, target)
+            return
+        except urllib.error.HTTPError as error:
+            if error.code < 500 or attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            retry_download(url, attempt, error)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            retry_download(url, attempt, error)
+
+
+def retry_download(url: str, attempt: int, error: Exception) -> None:
+    delay = DOWNLOAD_RETRY_BASE_SECONDS * 2 ** (attempt - 1)
+    print(
+        f"[retry] {url}: attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed: "
+        f"{error}; retrying in {delay}s",
+        file=sys.stderr,
+        flush=True,
+    )
+    time.sleep(delay)
+
+
+def download_once(url: str, target: Path) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
-        with urllib.request.urlopen(url) as response, tmp_path.open("wb") as handle:
+        with urllib.request.urlopen(
+            url, timeout=DOWNLOAD_SOCKET_TIMEOUT_SECONDS
+        ) as response, tmp_path.open("wb") as handle:
             shutil.copyfileobj(response, handle)
         tmp_path.replace(target)
     except Exception:

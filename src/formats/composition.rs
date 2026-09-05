@@ -16,7 +16,7 @@ impl FormatRegistry {
     pub fn builtin() -> Self {
         let mut registry = Self::new();
         let svcache = Arc::new(SvcacheBackend);
-        registry.register(svcache.clone(), svcache);
+        registry.register_cache_configured(svcache.clone(), svcache);
         registry.register_native_backends();
         registry
     }
@@ -35,14 +35,14 @@ impl FormatRegistry {
         let vms = Arc::new(HamamatsuVmsBackend::new());
         self.register_cache_configured(vms.clone(), vms);
         let vsi = Arc::new(OlympusVsiBackend);
-        self.register(vsi.clone(), vsi);
+        self.register_cache_configured(vsi.clone(), vsi);
         let raw_jp2k = Arc::new(RawJp2kBackend);
-        self.register(raw_jp2k.clone(), raw_jp2k);
-        let zeiss_zvi = Arc::new(ZeissZviBackend);
-        self.register(zeiss_zvi.clone(), zeiss_zvi);
+        self.register_cache_configured(raw_jp2k.clone(), raw_jp2k);
         let zeiss = Arc::new(ZeissBackend);
         self.register_cache_configured(zeiss.clone(), zeiss);
+        let zeiss_zvi = Arc::new(ZeissZviBackend);
+        self.register_cache_configured(zeiss_zvi.clone(), zeiss_zvi);
         let tiff = Arc::new(TiffFamilyBackend::new());
-        self.register(tiff.clone(), tiff);
+        self.register_cache_configured(tiff.clone(), tiff);
     }
 }

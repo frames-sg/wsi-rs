@@ -241,11 +241,7 @@ fn assert_tile_eq(actual: &CpuTile, expected: &CpuTile) {
 
 fn read_synthetic_ndpi_region(reader: &TiffPixelReader, x: i64, y: i64, w: u32, h: u32) -> CpuTile {
     let req = region_request(0, 0, 1, PlaneSelection::default(), x, y, w, h);
-    let mut ctx = crate::core::registry::SlideReadContext::new(
-        None,
-        TileOutputPreference::cpu(),
-        256 * 1024 * 1024,
-    );
+    let mut ctx = crate::core::registry::SlideReadContext::new(None, 256 * 1024 * 1024);
     reader
         .read_region_fastpath(&mut ctx, &req)
         .expect("synthetic level should have a region fast path")
@@ -524,11 +520,7 @@ fn synthetic_ndpi_region_fastpath_falls_back_when_j2k_scaled_dims_do_not_match()
     );
 
     let req = region_request(0, 0, 1, PlaneSelection::default(), 0, 0, 2, 2);
-    let mut ctx = crate::core::registry::SlideReadContext::new(
-        None,
-        TileOutputPreference::cpu(),
-        256 * 1024 * 1024,
-    );
+    let mut ctx = crate::core::registry::SlideReadContext::new(None, 256 * 1024 * 1024);
     let tile = reader
         .read_region_fastpath(&mut ctx, &req)
         .expect("synthetic fast path should handle whole-level region")

@@ -23,6 +23,8 @@ fn ini_value_parsers_formats_and_key_expansion_are_explicit() {
     group.insert("signed".into(), "-7".into());
     group.insert("unsigned".into(), "42".into());
     group.insert("float".into(), "1.25".into());
+    group.insert("nan".into(), "NaN".into());
+    group.insert("infinite".into(), "inf".into());
 
     assert_eq!(required_ini_string(path, &group, "text").unwrap(), "value");
     assert_eq!(parse_ini_i32(path, &group, "signed").unwrap(), -7);
@@ -51,6 +53,12 @@ fn ini_value_parsers_formats_and_key_expansion_are_explicit() {
         error(parse_ini_f64(path, &group, "bad")),
         WsiError::InvalidSlide { .. }
     ));
+    for key in ["nan", "infinite"] {
+        assert!(matches!(
+            error(parse_ini_f64(path, &group, key)),
+            WsiError::InvalidSlide { .. }
+        ));
+    }
     assert!(matches!(
         error(parse_u32_value(path, "bad", "-1")),
         WsiError::InvalidSlide { .. }
@@ -69,6 +77,20 @@ fn ini_value_parsers_formats_and_key_expansion_are_explicit() {
     assert_eq!(bgr_to_rgb(0x11_22_33), 0x33_22_11);
     assert_eq!(fmt_key("ITEM_%d_VALUE", 3), "ITEM_3_VALUE");
     assert_eq!(fmt_key2("ITEM_%d_%d", 2, 5), "ITEM_2_5");
+}
+
+#[test]
+fn mirax_ini_ignores_entries_with_empty_keys() {
+    let mut source = tempfile::NamedTempFile::new().unwrap();
+    source
+        .write_all(b"[GENERAL]\n=ignored\nVALID=value\n")
+        .unwrap();
+    source.flush().unwrap();
+
+    let parsed = parse_mirax_ini(source.path()).unwrap();
+    let general = &parsed.groups["GENERAL"];
+    assert_eq!(general.get("VALID").map(String::as_str), Some("value"));
+    assert!(!general.contains_key(""));
 }
 
 #[test]

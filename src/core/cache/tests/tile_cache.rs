@@ -62,7 +62,7 @@ fn cache_key_from_tile_request_preserves_every_identity_dimension() {
 }
 
 #[test]
-fn private_cache_budget_bounds_aggregate_capacity_and_disables_excess_caches() {
+fn private_cache_budget_is_byte_weighted_and_bounds_aggregate_capacity() {
     let config = CacheConfig::deterministic().with_shared_tile_bytes(8 * 1024);
     let mut budget = config.private_cache_budget(8);
     let mut caches = (0..8)
@@ -79,24 +79,43 @@ fn private_cache_budget_bounds_aggregate_capacity_and_disables_excess_caches() {
     assert_eq!(
         caches
             .iter()
-            .map(PrivateCache::capacity_entries)
-            .sum::<usize>(),
-        2
-    );
-    assert_eq!(
-        caches
-            .iter()
-            .filter(|cache| cache.capacity_entries() == 0)
-            .count(),
-        6
+            .map(PrivateCache::accounted_capacity_bytes)
+            .sum::<u64>(),
+        config.private_cache_budget_bytes()
     );
 
-    let disabled = caches
-        .iter_mut()
-        .find(|cache| cache.capacity_entries() == 0)
-        .expect("small aggregate budget disables at least one cache");
-    disabled.put(1, 2);
-    assert_eq!(disabled.len(), 0, "disabled caches retain no entries");
+    let cache = &mut caches[0];
+    let capacity = cache.accounted_capacity_bytes();
+    cache.put(
+        1,
+        2,
+        capacity.saturating_sub(PRIVATE_CACHE_ENTRY_ACCOUNTING_FLOOR_BYTES),
+    );
+    cache.put(2, 3, 1);
+    assert!(cache.current_bytes() <= capacity);
+    assert_eq!(cache.len(), 1, "byte overflow evicts the older entry");
+}
+
+#[test]
+fn deterministic_default_cache_split_is_sixty_four_thirty_two_thirty_two_mib() {
+    let config = CacheConfig::deterministic();
+
+    assert_eq!(config.shared_tile_budget(Some(1)), 64 * 1024 * 1024);
+    assert_eq!(config.display_tile_budget(), 32 * 1024 * 1024);
+    assert_eq!(config.private_cache_budget_bytes(), 32 * 1024 * 1024);
+}
+
+#[test]
+fn weighted_private_shares_preserve_odd_and_maximum_budgets() {
+    for bytes in [0, 1, 103, u64::MAX] {
+        let config = CacheConfig::default().with_shared_tile_bytes(bytes);
+        let mut budget = config.private_cache_budget(6);
+        let source = budget.allocate_shares(3).accounted_bytes;
+        assert_eq!(source, config.private_cache_budget_bytes() / 2);
+        let rest: u64 = (0..3).map(|_| budget.allocate(1).accounted_bytes).sum();
+        assert_eq!(source + rest, config.private_cache_budget_bytes());
+        assert_eq!(budget.allocate(1).accounted_bytes, 0);
+    }
 }
 
 #[test]
@@ -207,4 +226,35 @@ fn stats_count_hits_misses_puts_evictions_and_oversize_rejections() {
     assert_eq!(stats.capacity_bytes, 150);
     assert_eq!(stats.current_bytes, 100);
     assert_eq!(stats.entries, 1);
+}
+
+#[test]
+fn cache_configuration_defaults_and_poison_recovery_cover_every_public_operation() {
+    let config = CacheConfig::default().with_display_tile_bytes(321);
+    assert_eq!(config.display_tile_budget(), 321);
+    assert_eq!(
+        TileCache::shared_default_with_hint(123)
+            .stats()
+            .capacity_bytes,
+        123
+    );
+    assert_eq!(
+        TileCache::default().stats().capacity_bytes,
+        DEFAULT_TILE_CACHE_SIZE
+    );
+
+    let cache = Arc::new(TileCache::new(1_024));
+    let poisoner = Arc::clone(&cache);
+    assert!(std::thread::spawn(move || {
+        let _state = poisoner.inner.lock().unwrap();
+        panic!("poison tile cache state");
+    })
+    .join()
+    .is_err());
+
+    assert!(format!("{cache:?}").contains("TileCache"));
+    let key = make_key(7, 0, 0, 0);
+    cache.put(key.clone(), Arc::new(make_sample_buffer(10)));
+    assert!(cache.get(&key).is_some());
+    assert_eq!(cache.stats().entries, 1);
 }

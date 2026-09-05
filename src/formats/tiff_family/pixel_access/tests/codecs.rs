@@ -1,5 +1,40 @@
 use super::*;
 
+#[test]
+fn compressed_tiff_rejects_short_decoded_payloads() {
+    use std::io::Write;
+
+    let pixels = [12, 34, 56];
+    let mut deflate = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    deflate.write_all(&pixels).unwrap();
+    let cases = [
+        (Compression::Deflate, 8, deflate.finish().unwrap()),
+        (
+            Compression::Zstd,
+            50000,
+            zstd::stream::encode_all(pixels.as_slice(), 0).unwrap(),
+        ),
+        (
+            Compression::Lzw,
+            5,
+            weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+                .encode(&pixels)
+                .unwrap(),
+        ),
+    ];
+    for (compression, tag, data) in cases {
+        let reader = build_tiled_encoded_reader(2, 1, 2, 1, &[data], compression, tag, 3, 2);
+        let request = TileRequest::builder(0usize, 0usize, 0u32)
+            .tile(0, 0)
+            .build()
+            .unwrap();
+        assert!(
+            reader.read_tile_cpu(&request).is_err(),
+            "{compression:?} accepted half a tile"
+        );
+    }
+}
+
 fn jpeg_sof(ids: [u8; 3], sampling: [(u8, u8); 3]) -> Vec<u8> {
     let mut jpeg = vec![
         0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
@@ -289,66 +324,23 @@ fn tile_codec_kind_classifies_tiff_jpeg_and_jp2k_sources() {
     assert_eq!(jp2k_reader.tile_codec_kind(&req), TileCodecKind::Jp2k);
 }
 
-#[cfg(any(feature = "metal", feature = "cuda"))]
 #[test]
-fn prefer_device_empty_tiled_jpeg_falls_back_to_cpu_empty_tile() {
-    let tiles = [Vec::new()];
-    let reader = build_tiled_jpeg_reader(8, 8, 8, 8, &tiles);
-    let req = TileRequest {
-        scene: 0usize.into(),
-        series: 0usize.into(),
-        level: 0u32.into(),
-        plane: PlaneSelection::default().into(),
-        col: 0,
-        row: 0,
-    };
-
-    let tiles = reader
-        .read_tiles(&[req], TileOutputPreference::prefer_device_auto())
-        .unwrap();
-
-    assert_eq!(tiles.len(), 1);
-    let TilePixels::Cpu(tile) = &tiles[0] else {
-        panic!("PreferDevice should fall back to CPU for empty tiles");
-    };
-    assert_eq!((tile.width, tile.height), (8, 8));
-    assert_eq!(tile.data.as_u8().unwrap(), &[0u8; 8 * 8 * 3]);
-}
-
-#[cfg(any(feature = "metal", feature = "cuda"))]
-#[test]
-fn jpeg_device_decode_is_opt_in_by_default() {
-    assert!(!jpeg_device_decode_enabled());
-}
-
-#[cfg(any(feature = "metal", feature = "cuda"))]
-#[test]
-fn jp2k_device_decode_is_opt_in_by_default() {
-    assert!(!jp2k_device_decode_enabled());
-}
-
-#[test]
-fn jp2k_tiled_sources_request_larger_shared_cache_budget() {
-    let tiles = [vec![7u8; 4]];
-    let file = build_tiled_associated_tiff(2, 2, 2, 2, &tiles);
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = single_series_layout(
-        DatasetId::new(24),
-        vec![regular_level(2, 2, 2, 2)],
-        HashMap::from([(
-            tile_source_key(0),
-            TileSource::TiledIfd {
-                ifd_id,
-                jpeg_tables: None,
-                compression: Compression::Jp2kRgb,
-            },
-        )]),
-    );
-    let reader = TiffPixelReader::new(container, layout);
-
-    assert_eq!(
-        reader.recommended_shared_cache_bytes(),
-        Some(DEFAULT_JP2K_SHARED_TILE_CACHE_BYTES)
-    );
+fn jpegxr_tiff_reads_exact_pixels_and_crops_edge_tiles() {
+    let encoded = include_bytes!("../../../../../tests/fixtures/jxr/rgb.jxr").to_vec();
+    let expected =
+        image::load_from_memory(include_bytes!("../../../../../tests/fixtures/jxr/rgb.ppm"))
+            .unwrap()
+            .into_rgb8();
+    let file = build_tiled_encoded_tiff(19, 16, 16, 16, &[encoded.clone(), encoded], 22610, 3, 2);
+    let slide = crate::Slide::open(file.path()).unwrap();
+    let requests = [
+        TileRequest::new(0usize, 0usize, 0, 0, 0),
+        TileRequest::new(0usize, 0usize, 0, 1, 0),
+    ];
+    let tiles = slide.read_tiles(&requests).expect("JPEG XR TIFF batch");
+    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles[0].data.as_u8(), Some(expected.as_raw().as_slice()));
+    let edge = image::imageops::crop_imm(&expected, 0, 0, 3, 16).to_image();
+    assert_eq!((tiles[1].width, tiles[1].height), (3, 16));
+    assert_eq!(tiles[1].data.as_u8(), Some(edge.as_raw().as_slice()));
 }

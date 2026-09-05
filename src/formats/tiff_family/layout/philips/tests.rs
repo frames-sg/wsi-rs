@@ -43,6 +43,7 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
             SyntheticTag::short(tags::COMPRESSION, 7),
             SyntheticTag::long(tags::STRIP_OFFSETS, 0),
             SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 0),
+            SyntheticTag::bytes(tags::JPEG_TABLES, vec![0xFF, 0xD8, 0xFF, 0xD9]),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Philips label image"),
         ],
     ]);
@@ -60,6 +61,16 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
     assert_eq!(levels[1].downsample, 2.0);
     assert!(layout.dataset.associated_images.contains_key("label"));
     assert!(layout.associated_sources.contains_key("label"));
+    let TileSource::Stripped { jpeg_tables, .. } = &layout.associated_sources["label"] else {
+        panic!(
+            "Philips label must use stripped storage, got {:?}",
+            layout.associated_sources["label"]
+        );
+    };
+    assert_eq!(
+        jpeg_tables.as_deref(),
+        Some([0xFF, 0xD8, 0xFF, 0xD9].as_slice())
+    );
     assert_eq!(
         layout.dataset.properties.get("openslide.mpp-x"),
         Some("0.226907")
@@ -172,6 +183,30 @@ fn parse_spacing_pair_preserves_distinct_axes() {
         Some((0.000226891, 0.000226907))
     );
     assert_eq!(parse_spacing_pair("0.001"), Some((0.001, 0.001)));
+}
+
+#[test]
+fn interpret_preserves_high_precision_entity_quoted_spacing_in_xy_order() {
+    let description = r#"<DataObject ObjectType="DPUfsImport">
+        <Attribute Name="DICOM_PIXEL_SPACING">&quot;0.000226891234&quot; &quot;0.000226907654&quot;</Attribute>
+    </DataObject>"#;
+    let file = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 1024),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 512),
+        SyntheticTag::long(tags::TILE_WIDTH, 256),
+        SyntheticTag::long(tags::TILE_LENGTH, 256),
+        SyntheticTag::short(tags::COMPRESSION, 7),
+        SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"),
+        SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, description),
+    ]]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = PhilipsInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.properties.mpp(),
+        Some((0.000226907654 * 1000.0, 0.000226891234 * 1000.0))
+    );
 }
 
 #[test]

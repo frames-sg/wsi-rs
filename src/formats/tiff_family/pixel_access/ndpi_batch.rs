@@ -1,78 +1,58 @@
 use super::*;
 
-impl TiffPixelReader {
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(super) fn ndpi_jpeg_batchable(&self, reqs: &[TileRequest]) -> Result<bool, WsiError> {
-        if reqs.is_empty() {
-            return Ok(false);
-        }
-        for req in reqs {
-            if !matches!(self.tile_source_for(req)?, TileSource::NdpiJpeg { .. }) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+/// Batch orchestration is local to the admitted NDPI region path. Other NDPI
+/// callers, including synthetic-level cache loaders, keep their existing policy.
+pub(super) struct NdpiRegionReader<'a>(pub(super) &'a TiffPixelReader);
+
+impl SlideReader for NdpiRegionReader<'_> {
+    fn dataset(&self) -> &Dataset {
+        self.0.dataset()
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(super) fn decode_ndpi_jpeg_pixels(
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.0.read_tile_cpu(req)
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        // Select errors in request order, independent of decode completion order.
+        reqs.par_iter()
+            .map(|req| self.0.read_tile_cpu(req))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
+impl TiffPixelReader {
+    pub(super) fn read_ndpi_region(
         &self,
-        reqs: &[TileRequest],
-        backend: BackendRequest,
-        require_device: bool,
-        metal_sessions: MetalBackendSessionsRef<'_>,
-        cuda_sessions: CudaBackendSessionsRef<'_>,
-    ) -> Result<Vec<TilePixels>, WsiError> {
-        let mut jobs = Vec::with_capacity(reqs.len());
-        for req in reqs {
-            let source = self.tile_source_for(req)?;
-            let TileSource::NdpiJpeg {
-                ifd_id,
-                jpeg_header,
-                mcu_starts_tag,
-                tiles_across,
-                tiles_down,
-                strip_offset,
-                strip_byte_count,
-                ..
-            } = source
-            else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NDPI JPEG device batch received a non-NDPI tile source".into(),
-                });
-            };
-            jobs.push(self.ndpi_jpeg_decode_job(
-                req,
-                *ifd_id,
-                jpeg_header,
-                *mcu_starts_tag,
-                *tiles_across,
-                *tiles_down,
-                *strip_offset,
-                *strip_byte_count,
-            )?);
+        ctx: &mut crate::core::registry::SlideReadContext<'_>,
+        req: &RegionRequest,
+        virtual_tile: (u32, u32),
+    ) -> Option<Result<CpuTile, WsiError>> {
+        // Slide admits max(output RGBA bytes, one source tile) as staging.
+        // Split that existing space among RGB strips; a wide strip runs alone.
+        let tile_pixels = u64::from(virtual_tile.0) * u64::from(virtual_tile.1);
+        if tile_pixels == 0 {
+            return None;
         }
-        decode_batch_jpeg_pixels(
-            &jobs,
-            backend,
-            require_device,
-            metal_sessions,
-            cuda_sessions,
+        let output_pixels = u64::from(req.size_px.0) * u64::from(req.size_px.1);
+        let max_batch = if virtual_tile.0 > NDPI_DISPLAY_WIDE_STRIP_WIDTH {
+            NDPI_DISPLAY_WIDE_STRIP_BATCH
+        } else {
+            NDPI_DISPLAY_NARROW_STRIP_BATCH
+        };
+        let batch_size = (output_pixels / tile_pixels).clamp(1, max_batch as u64) as usize;
+        let batch_size = batch_size.min(rayon::current_num_threads());
+        Some(
+            crate::core::registry::composite_region_from_source_in_batches(
+                &NdpiRegionReader(self),
+                ctx.tile_cache(),
+                req,
+                ctx.max_region_pixels(),
+                batch_size,
+            ),
         )
-        .into_iter()
-        .zip(reqs.iter())
-        .map(|(result, req)| {
-            result.map_err(|err| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: err.to_string(),
-            })
-        })
-        .collect()
     }
 
     /// Read a tile from an NdpiFullDecode source (full JPEG decode fallback).

@@ -10,12 +10,16 @@ pub(crate) use wsi_rs_test_support::corpus::{
 use wsi_rs_test_support::corpus::{load_manifest, resolve_entry_path as resolve_shared_entry};
 
 pub(crate) fn load_public() -> Result<CorpusManifest, String> {
-    let mut manifest = load_manifest(&public_manifest_path())?;
+    let mut manifest = load_public_unfiltered()?;
     apply_alias_filter(
         &mut manifest,
         std::env::var("WSI_RS_PARITY_ALIASES").ok().as_deref(),
     );
     Ok(manifest)
+}
+
+pub(crate) fn load_public_unfiltered() -> Result<CorpusManifest, String> {
+    load_manifest(&public_manifest_path())
 }
 
 pub(crate) fn load_private() -> Result<Option<CorpusManifest>, String> {

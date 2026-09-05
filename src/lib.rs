@@ -32,7 +32,7 @@
 //! exact tile coordinates:
 //!
 //! ```rust,no_run
-//! use wsi_rs::{LevelIdx, SceneId, SeriesId, Slide, TileOutputPreference, TilePixels, TileRequest};
+//! use wsi_rs::{LevelIdx, SceneId, SeriesId, Slide, TileRequest};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let slide = Slide::open("sample.svs")?;
@@ -40,13 +40,8 @@
 //!         .tile(0, 0)
 //!         .build()?;
 //!
-//!     match slide.read_tile(&request, TileOutputPreference::cpu())? {
-//!         TilePixels::Cpu(tile) => {
-//!             println!("{}x{} tile", tile.width(), tile.height());
-//!         }
-//!         TilePixels::Device(_) => unreachable!("CPU output was requested"),
-//!         _ => unreachable!("CPU output was requested"),
-//!     }
+//!     let tile = slide.read_tile(&request)?;
+//!     println!("{}x{} tile", tile.width(), tile.height());
 //!     Ok(())
 //! }
 //! ```
@@ -59,11 +54,15 @@ pub mod error;
 pub(crate) mod formats;
 pub mod output;
 pub mod properties;
+mod slide_candidates;
 #[cfg(test)]
 pub(crate) mod test_support;
 
 pub use core::cache::{CacheConfig, TileCache, TileCacheStats};
-pub use core::decode_runtime::{DecodeExecutionOptions, DecodeRoute, DecodeRouteDecision};
+#[cfg(feature = "route-telemetry")]
+#[doc(hidden)]
+pub use core::decode_runtime::decode_route_telemetry_json;
+pub use core::decode_runtime::{DecodeAcceleration, DecodeExecutionOptions};
 pub use core::read_control::{
     DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadCancellationToken, ReadControl,
     ReadDiagnosticSink,
@@ -74,9 +73,8 @@ pub use formats::svcache::{
     build_svcache_tiles, build_svcache_tiles_replace, cache_dir_svcache_path, default_svcache_path,
     svcache_candidate_paths, svcache_matches_source, SvcachePolicy, SvcacheTileSelection,
 };
-#[cfg(feature = "cuda")]
-pub use output::cuda::CudaDeviceTile;
 pub use properties::Properties;
+pub use slide_candidates::{is_builtin_slide_candidate_path, BUILTIN_SLIDE_CANDIDATE_EXTENSIONS};
 
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
@@ -87,18 +85,17 @@ pub fn fuzz_parse_xml(input: &str) -> Result<(), WsiError> {
 // Multi-dimensional API
 pub use core::registry::{
     DatasetReader, FormatProbe, FormatRegistry, ProbeConfidence, ProbeResult, Slide,
-    SlideOpenOptions, SlideReadContext, SlideReader,
+    SlideLimitError, SlideLimits, SlideOpenOptions, SlideReadContext, SlideReader,
 };
 pub use core::types::{
     AssociatedImage, AxesShape, ChannelInfo, ColorSpace, Compression, CpuTile, CpuTileData,
-    CpuTileLayout, Dataset, DatasetId, DeviceOutputContext, DeviceTile, DisplayWindow,
-    EncodedTilePhotometricInterpretation, IccProfileKey, IccProfileProvenance, Level, LevelIdx,
-    LevelSourceKind, OutputBackendRequest, PixelFormat, PlaneIdx, PlaneSelection,
-    RawCompressedTile, RawCompressedTileBuildError, RawCompressedTileBuilder, RegionRequest,
-    RegionRequestBuilder, RequestBuildError, SampleType, Scene, SceneId, Series, SeriesId,
-    SourceIccProfile, SourceIccProfileConflict, SourceIccProfileKey, TileCodecKind, TileEntry,
-    TileHit, TileLayout, TileOutputPreference, TilePixels, TileRequest, TileRequestBuilder,
-    TileViewRequest, TileViewRequestBuilder,
+    CpuTileLayout, Dataset, DatasetId, DisplayWindow, EncodedTilePhotometricInterpretation,
+    IccProfileKey, IccProfileProvenance, Level, LevelIdx, LevelSourceKind, PixelFormat, PlaneIdx,
+    PlaneSelection, RawCompressedTile, RawCompressedTileBuildError, RawCompressedTileBuilder,
+    RegionRequest, RegionRequestBuilder, RequestBuildError, SampleType, Scene, SceneId, Series,
+    SeriesId, SourceIccProfile, SourceIccProfileConflict, SourceIccProfileKey, TileCodecKind,
+    TileEntry, TileHit, TileLayout, TileRequest, TileRequestBuilder, TileViewRequest,
+    TileViewRequestBuilder,
 };
 
 pub mod prelude {
@@ -107,7 +104,6 @@ pub mod prelude {
     pub use crate::{
         AssociatedImage, CacheConfig, ColorSpace, CpuTile, Dataset, IccProfileKey, Level, LevelIdx,
         PixelFormat, PlaneIdx, PlaneSelection, RegionRequest, RequestBuildError, Scene, SceneId,
-        Series, SeriesId, Slide, SlideOpenOptions, TileOutputPreference, TilePixels, TileRequest,
-        WsiError,
+        Series, SeriesId, Slide, SlideLimits, SlideOpenOptions, TileRequest, WsiError,
     };
 }

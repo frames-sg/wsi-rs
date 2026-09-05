@@ -1,5 +1,25 @@
 use super::*;
 
+const NDPI_MCU_STARTS_LOW: u16 = 65426;
+const NDPI_MCU_STARTS_HIGH: u16 = 65432;
+
+/// Relative offsets already live in the validated TIFF tag allocation. Only
+/// high-word combination or file-absolute normalization needs a separate table.
+#[derive(Debug)]
+pub(super) enum NdpiMcuStarts<'a> {
+    Borrowed(&'a [u64]),
+    Normalized(Arc<Vec<u64>>),
+}
+
+impl NdpiMcuStarts<'_> {
+    pub(super) fn as_slice(&self) -> &[u64] {
+        match self {
+            Self::Borrowed(starts) => starts,
+            Self::Normalized(starts) => starts.as_slice(),
+        }
+    }
+}
+
 impl TiffPixelReader {
     pub(super) fn get_cached_ndpi_strip(&self, strip_key: NdpiStripKey) -> Option<Arc<CpuTile>> {
         self.ndpi_strip_cache.get(&strip_key)
@@ -76,24 +96,70 @@ impl TiffPixelReader {
         mcu_starts_tag: u16,
         strip_offset: u64,
         strip_byte_count: u64,
-    ) -> Result<Arc<Vec<u64>>, WsiError> {
+    ) -> Result<NdpiMcuStarts<'_>, WsiError> {
         let cache_key = (ifd_id, mcu_starts_tag, strip_offset, strip_byte_count);
         if let Some(starts) = self
             .ndpi_mcu_starts_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&cache_key)
-            .cloned()
         {
-            return Ok(starts);
+            return match starts {
+                NdpiMcuStartsEntry::Relative => self
+                    .container
+                    .get_u64_array(ifd_id, mcu_starts_tag)
+                    .map(NdpiMcuStarts::Borrowed)
+                    .map_err(|e| e.into_wsi_error(self.container.path())),
+                NdpiMcuStartsEntry::Normalized(starts) => Ok(NdpiMcuStarts::Normalized(starts)),
+            };
         }
 
-        let mut starts = self
+        let raw_starts = self
             .container
             .get_u64_array(ifd_id, mcu_starts_tag)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?
-            .to_vec();
-        if Self::ndpi_mcu_starts_are_file_absolute(&starts, strip_offset, strip_byte_count) {
+            .map_err(|e| e.into_wsi_error(self.container.path()))?;
+        let has_high_words = mcu_starts_tag == NDPI_MCU_STARTS_LOW
+            && self
+                .container
+                .ifd_by_id(ifd_id)
+                .map_err(|e| e.into_wsi_error(self.container.path()))?
+                .tags
+                .contains_key(&NDPI_MCU_STARTS_HIGH);
+        let file_absolute = !has_high_words
+            && Self::ndpi_mcu_starts_are_file_absolute(raw_starts, strip_offset, strip_byte_count);
+        if !has_high_words && !file_absolute {
+            self.ndpi_mcu_starts_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put_relative(cache_key);
+            return Ok(NdpiMcuStarts::Borrowed(raw_starts));
+        }
+        let mut starts = raw_starts.to_vec();
+        if has_high_words {
+            let high = self
+                .container
+                .get_u64_array(ifd_id, NDPI_MCU_STARTS_HIGH)
+                .map_err(|e| e.into_wsi_error(self.container.path()))?;
+            if high.len() != starts.len() {
+                return Err(WsiError::UnsupportedFormat(format!(
+                    "NDPI high MCU-start count {} does not match low MCU-start count {}",
+                    high.len(),
+                    starts.len()
+                )));
+            }
+            for (low, &high) in starts.iter_mut().zip(high) {
+                if *low > u64::from(u32::MAX) || high > u64::from(u32::MAX) {
+                    return Err(WsiError::UnsupportedFormat(
+                        "NDPI MCU-start words must fit in 32 bits".into(),
+                    ));
+                }
+                *low |= high << 32;
+            }
+        }
+        if file_absolute
+            || (has_high_words
+                && Self::ndpi_mcu_starts_are_file_absolute(&starts, strip_offset, strip_byte_count))
+        {
             for start in &mut starts {
                 *start = start.saturating_sub(strip_offset);
             }
@@ -102,8 +168,8 @@ impl TiffPixelReader {
         self.ndpi_mcu_starts_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(cache_key, starts.clone());
-        Ok(starts)
+            .put(cache_key, starts.clone());
+        Ok(NdpiMcuStarts::Normalized(starts))
     }
 
     pub(super) fn decode_ndpi_full_image(
@@ -432,6 +498,7 @@ impl TiffPixelReader {
 
         let mcu_starts =
             self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
+        let mcu_starts = mcu_starts.as_slice();
 
         let idx =
             (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
@@ -570,71 +637,6 @@ impl TiffPixelReader {
         let decoded = cpu_tile_from_rgb_pixels(decoded.width, decoded.height, decoded.pixels)?;
 
         Ok(Arc::new(decoded))
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn ndpi_jpeg_decode_job<'a>(
-        &'a self,
-        req: &TileRequest,
-        ifd_id: IfdId,
-        jpeg_header: &[u8],
-        mcu_starts_tag: u16,
-        tiles_across: u32,
-        tiles_down: u32,
-        strip_offset: u64,
-        strip_byte_count: u64,
-    ) -> Result<JpegDecodeJob<'a>, WsiError> {
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
-        let (level_w, level_h) = level.dimensions;
-        let (vtw, vth) = match &level.tile_layout {
-            TileLayout::WholeLevel {
-                virtual_tile_width,
-                virtual_tile_height,
-                ..
-            } => (*virtual_tile_width, *virtual_tile_height),
-            _ => {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NdpiJpeg device decode expects WholeLevel tile layout".into(),
-                });
-            }
-        };
-        let (col, row) = validate_tile_coords(req.col, req.row, req.level.get())?;
-        let payload = self.ndpi_jpeg_tile_payload(
-            req,
-            ifd_id,
-            jpeg_header,
-            mcu_starts_tag,
-            tiles_across,
-            tiles_down,
-            strip_offset,
-            strip_byte_count,
-            NdpiStripKey {
-                ifd_id,
-                col,
-                native_row: row,
-            },
-            vtw,
-            vth,
-            level_w as u32,
-            level_h as u32,
-        )?;
-        let color_transform = self
-            .tiff_jpeg_decode_options_for_data(ifd_id, false, &payload.jpeg, None)
-            .color_transform;
-        Ok(JpegDecodeJob {
-            data: Cow::Owned(payload.jpeg),
-            tables: None,
-            expected_width: payload.width,
-            expected_height: payload.height,
-            color_transform,
-            force_dimensions: true,
-            requested_size: None,
-        })
     }
 
     #[allow(clippy::too_many_arguments)]

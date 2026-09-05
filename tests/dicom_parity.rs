@@ -2,6 +2,8 @@
 
 mod support;
 
+#[cfg(feature = "parity-openslide")]
+use support::corpus::CorpusEntry;
 use support::corpus::{load_public, resolve_entry_path};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
@@ -52,10 +54,26 @@ fn dicom_public_corpus_decodes_with_wsi_rs() {
                 continue;
             }
         };
-        for level in 0..slide.level_count.min(3) {
-            if !entry.must_decode_level(level) {
+        if entry
+            .codecs
+            .iter()
+            .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
+            && !entry.openslide_required
+            && entry.oracle_divergences.is_empty()
+        {
+            failures.push(format!(
+                "{}: missing intentional OpenSlide color-divergence record",
+                entry.alias
+            ));
+        }
+        let required_levels = match entry.required_level_indices(slide.level_count) {
+            Ok(levels) => levels,
+            Err(error) => {
+                failures.push(error);
                 continue;
             }
+        };
+        for level in required_levels {
             let Some(probe) = top_left_probe(&slide, level) else {
                 failures.push(format!("{} level={level}: no readable probe", entry.alias));
                 continue;
@@ -87,7 +105,7 @@ fn dicom_public_corpus_decodes_with_wsi_rs() {
 #[test]
 #[ignore = "requires public parity corpus and libopenslide"]
 fn dicom_public_corpus_matches_openslide_within_tolerance() {
-    use support::compare::{compare_rgba, tolerance_failure, Tolerance};
+    use support::compare::{compare_rgba, tolerance_failure};
     use support::oracles::OpenSlideOracle;
 
     let lib = support::openslide_shim::try_load()
@@ -132,10 +150,23 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
                 continue;
             }
         };
-        for level in 0..ours.level_count.min(theirs.level_count).min(3) {
-            if !entry.must_decode_level(level) {
+        if ours.level_count != theirs.level_count
+            || ours.level_dimensions != theirs.level_dimensions
+        {
+            failures.push(format!(
+                "{}: exact geometry mismatch wsi_rs={:?} OpenSlide={:?}",
+                entry.alias, ours.level_dimensions, theirs.level_dimensions
+            ));
+            continue;
+        }
+        let required_levels = match entry.required_level_indices(ours.level_count) {
+            Ok(levels) => levels,
+            Err(error) => {
+                failures.push(error);
                 continue;
             }
+        };
+        for level in required_levels {
             let Some(probe) = top_left_probe(&ours, level) else {
                 failures.push(format!("{} level={level}: no readable probe", entry.alias));
                 continue;
@@ -157,10 +188,21 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
                     continue;
                 }
             };
+            if (ours_buf.width, ours_buf.height) != (theirs_buf.width, theirs_buf.height) {
+                failures.push(format!(
+                    "{} level={level}: exact probe geometry mismatch wsi_rs={}x{} OpenSlide={}x{}",
+                    entry.alias,
+                    ours_buf.width,
+                    ours_buf.height,
+                    theirs_buf.width,
+                    theirs_buf.height
+                ));
+                continue;
+            }
             let report = compare_rgba(
                 &ours_buf.pixels_rgba,
                 &theirs_buf.pixels_rgba,
-                Tolerance::TOLERANT,
+                tolerance_for_entry(entry),
             );
             eprintln!(
                 "[dicom-parity] {} level={level}: max_abs={} mean_abs={:.4} passed={}",
@@ -184,4 +226,19 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
 
 fn strict_corpus_required() -> bool {
     true
+}
+
+#[cfg(feature = "parity-openslide")]
+fn tolerance_for_entry(entry: &CorpusEntry) -> support::compare::Tolerance {
+    if entry.lossless {
+        support::compare::Tolerance::EXACT
+    } else if entry
+        .codecs
+        .iter()
+        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
+    {
+        support::compare::Tolerance::TOLERANT
+    } else {
+        support::compare::Tolerance::JPEG_TIGHT
+    }
 }

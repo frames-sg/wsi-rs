@@ -8,6 +8,35 @@ fn probe_jpeg_geometry_via_j2k_matches_synthetic_header() {
     assert_eq!(probe.restart_interval, 10);
     assert_eq!(probe.mcu_w, 16);
     assert_eq!(probe.mcu_h, 16);
+    assert_eq!(probe.dimensions, (256, 128));
+}
+
+#[test]
+fn highly_downsampled_full_jpeg_dimensions_override_stale_tiff_dimensions() {
+    let mut header = synthetic_dri_420_jpeg_header();
+    header[6..8].copy_from_slice(&0u16.to_be_bytes());
+    let sof = header
+        .windows(2)
+        .position(|bytes| bytes == [0xFF, 0xC0])
+        .unwrap();
+    header[sof + 5..sof + 7].copy_from_slice(&55u16.to_be_bytes());
+    header[sof + 7..sof + 9].copy_from_slice(&74u16.to_be_bytes());
+    let probe = probe_jpeg_geometry_bytes_via_j2k(header).unwrap();
+
+    assert_eq!(
+        reconcile_ndpi_dimensions((51_200, 38_144), (200, 149), &probe).unwrap(),
+        (74, 55)
+    );
+    assert_eq!(
+        reconcile_ndpi_dimensions((1024, 768), (512, 384), &probe).unwrap(),
+        (512, 384),
+        "ordinary reduced levels retain authoritative TIFF dimensions"
+    );
+
+    let tiled_probe = probe_jpeg_geometry_bytes_via_j2k(synthetic_dri_420_jpeg_header()).unwrap();
+    let error = reconcile_ndpi_dimensions((51_200, 38_144), (200, 149), &tiled_probe)
+        .expect_err("tiled JPEG dimension mismatch must fail closed");
+    assert!(error.to_string().contains("dimension mismatch"));
 }
 
 #[test]

@@ -13,7 +13,7 @@ pub(crate) fn effective_output_colorspace(
     header: &Jp2kCodestreamInfo,
     requested_colorspace: Jp2kColorSpace,
 ) -> Jp2kColorSpace {
-    if header.coding_style.multiple_component_transform {
+    if header.multiple_component_transform {
         Jp2kColorSpace::Rgb
     } else {
         requested_colorspace

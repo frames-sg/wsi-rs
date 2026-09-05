@@ -1,8 +1,14 @@
-use super::preflight::preflight_czi_file;
-use super::tiles::bitmap_to_sample_buffer;
+use super::preflight::{preflight_czi_file_with_limits, preflight_czi_subblock_with_limits};
+use super::raster::{bitmap_to_sample_buffer, blit_tile};
+use super::subblock::bitmap_from_raw_subblock;
 use super::*;
 
 const ASSOCIATED_JPEG_PROBE_BYTES: u64 = 256 << 10;
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static EMBEDDED_COMPOSED_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 pub(super) fn associated_name(name: &str) -> Option<&'static str> {
     match name {
@@ -13,10 +19,26 @@ pub(super) fn associated_name(name: &str) -> Option<&'static str> {
     }
 }
 
+fn check_attachment_size(
+    attachment: &czi_rs::AttachmentInfo,
+    limits: crate::SlideLimits,
+) -> Result<(), WsiError> {
+    if attachment.data_size > limits.encoded_unit_bytes() {
+        return Err(WsiError::ResourceLimit {
+            resource: "CZI attachment",
+            requested: attachment.data_size,
+            limit: limits.encoded_unit_bytes(),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn decode_associated_attachment(
     czi: &mut CziFile,
     attachment: &czi_rs::AttachmentInfo,
+    limits: crate::SlideLimits,
 ) -> Result<Option<(AssociatedImage, CpuTile)>, WsiError> {
+    check_attachment_size(attachment, limits)?;
     let blob: AttachmentBlob = czi
         .read_attachment(attachment.index)
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
@@ -39,70 +61,182 @@ pub(super) fn decode_associated_attachment(
                 dimensions: (buffer.width, buffer.height),
                 sample_type: SampleType::Uint8,
                 channels: 3,
+                icc_profile: Vec::new(),
             },
             buffer,
         )));
     }
 
     if attachment.content_file_type.eq_ignore_ascii_case("CZI") {
-        return with_temporary_czi_blob(&blob.data, |temp_path| {
-            preflight_czi_file(temp_path)?;
-            let mut embedded = CziFile::open(temp_path)
-                .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-            ensure_uncompressed_embedded_czi(
-                embedded.subblocks().iter().map(|info| info.compression),
-            )?;
-            let plane_rect = embedded
-                .statistics()
-                .bounding_box_layer0
-                .or(embedded.statistics().bounding_box)
-                .ok_or_else(|| {
-                    WsiError::DisplayConversion("embedded CZI has no plane bounding box".into())
-                })?;
-            let max_bytes_per_pixel = embedded
-                .subblocks()
-                .iter()
-                .filter(|info| info.is_layer0())
-                .map(|info| info.pixel_type.bytes_per_pixel())
-                .max()
-                .unwrap_or(1);
-            ensure_embedded_czi_plane_budget((plane_rect.w, plane_rect.h), max_bytes_per_pixel)?;
-            let bitmap = embedded
-                .read_frame_2d(0, 0, 0, 0)
-                .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-            let buffer = bitmap_to_sample_buffer(bitmap)?;
-            Ok::<_, WsiError>((
-                AssociatedImage {
-                    dimensions: (buffer.width, buffer.height),
-                    sample_type: buffer.data.sample_type(),
-                    channels: buffer.channels,
-                },
-                buffer,
+        return read_embedded_czi_blob(&blob.data, limits, true).map(|(metadata, tile)| {
+            Some((
+                metadata,
+                tile.expect("composed embedded CZI returns pixels"),
             ))
-        })
-        .map(Some);
+        });
     }
 
     Ok(None)
 }
 
-fn ensure_uncompressed_embedded_czi(
+fn read_embedded_czi_blob(
+    data: &[u8],
+    limits: crate::SlideLimits,
+    compose: bool,
+) -> Result<(AssociatedImage, Option<CpuTile>), WsiError> {
+    with_temporary_czi_blob(data, |temp_path| {
+        preflight_czi_file_with_limits(temp_path, limits)?;
+        let mut embedded = CziFile::open(temp_path)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        ensure_supported_embedded_czi(embedded.subblocks().iter().map(|info| info.compression))?;
+        let plane_rect = embedded
+            .statistics()
+            .bounding_box_layer0
+            .or(embedded.statistics().bounding_box)
+            .ok_or_else(|| {
+                WsiError::DisplayConversion("embedded CZI has no plane bounding box".into())
+            })?;
+        let max_bytes_per_pixel = embedded
+            .subblocks()
+            .iter()
+            .filter(|info| info.is_layer0())
+            .map(|info| info.pixel_type.bytes_per_pixel())
+            .max()
+            .unwrap_or(1);
+        ensure_embedded_czi_plane_budget_with_limit(
+            (plane_rect.w, plane_rect.h),
+            max_bytes_per_pixel,
+            limits.decoded_output_bytes(),
+        )?;
+        read_embedded_czi_plane(&mut embedded, plane_rect, temp_path, limits, compose)
+    })
+}
+
+fn ensure_supported_embedded_czi(
     compressions: impl IntoIterator<Item = CziCompressionMode>,
 ) -> Result<(), WsiError> {
-    if let Some(compression) = compressions
-        .into_iter()
-        .find(|compression| *compression != CziCompressionMode::UnCompressed)
-    {
+    if let Some(compression) = compressions.into_iter().find(|compression| {
+        !matches!(
+            compression,
+            CziCompressionMode::UnCompressed | CziCompressionMode::Jpg | CziCompressionMode::JpgXr
+        )
+    }) {
         return Err(WsiError::UnsupportedFormat(format!(
-            "compressed embedded CZI associated images are not supported safely ({compression})"
+            "embedded CZI associated-image compression is not supported safely ({compression})"
         )));
     }
     Ok(())
 }
 
+fn read_embedded_czi_plane(
+    embedded: &mut CziFile,
+    plane_rect: IntRect,
+    path: &Path,
+    limits: crate::SlideLimits,
+    compose: bool,
+) -> Result<(AssociatedImage, Option<CpuTile>), WsiError> {
+    let statistics = embedded.statistics();
+    let mut matching: Vec<_> = embedded
+        .subblocks()
+        .iter()
+        .filter(|subblock| {
+            subblock.is_layer0()
+                && CziDimension::FRAME_ORDER.iter().all(|&dimension| {
+                    let Some(interval) = statistics.dim_bounds.get(dimension) else {
+                        return true;
+                    };
+                    match subblock.coordinate.get(dimension) {
+                        Some(value) => value == interval.start,
+                        None => interval.size <= 1,
+                    }
+                })
+        })
+        .cloned()
+        .collect();
+    if matching.is_empty() {
+        return Err(WsiError::DisplayConversion(
+            "embedded CZI has no layer-0 subblocks for its default plane".into(),
+        ));
+    }
+    matching.sort_by_key(|subblock| (subblock.m_index.unwrap_or(i32::MIN), subblock.file_position));
+
+    let pixel_type = matching[0].pixel_type;
+    if matching
+        .iter()
+        .any(|subblock| subblock.pixel_type != pixel_type)
+    {
+        return Err(WsiError::DisplayConversion(
+            "embedded CZI default plane contains mixed pixel types".into(),
+        ));
+    }
+    let width = u32::try_from(plane_rect.w)
+        .map_err(|_| WsiError::DisplayConversion("embedded CZI plane width is invalid".into()))?;
+    let height = u32::try_from(plane_rect.h)
+        .map_err(|_| WsiError::DisplayConversion("embedded CZI plane height is invalid".into()))?;
+    let mut bitmap = if compose {
+        #[cfg(test)]
+        EMBEDDED_COMPOSED_PIXELS.with(|count| {
+            count.set(count.get() + u64::from(width) * u64::from(height));
+        });
+        Some(
+            czi_rs::Bitmap::zeros(pixel_type, width, height)
+                .map_err(|source| WsiError::DisplayConversion(source.to_string()))?,
+        )
+    } else {
+        None
+    };
+    for info in matching {
+        preflight_czi_subblock_with_limits(path, info.file_position, limits)?;
+        let raw = embedded
+            .read_subblock(info.index)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        let tile = bitmap_from_raw_subblock(&raw, limits)?;
+        if let Some(bitmap) = bitmap.as_mut() {
+            blit_tile(
+                bitmap,
+                &tile,
+                info.rect.x - plane_rect.x,
+                info.rect.y - plane_rect.y,
+            )?;
+        }
+    }
+    // Probing still validates and decodes every selected source subblock, so
+    // malformed attachments keep their open-time errors. Only canvas assembly
+    // and output sample conversion are omitted when the caller needs metadata.
+    let sample_type = match pixel_type {
+        CziPixelType::Bgr24 | CziPixelType::Bgra32 => SampleType::Uint8,
+        CziPixelType::Bgr48 => SampleType::Uint16,
+        other => {
+            return Err(WsiError::DisplayConversion(format!(
+                "unsupported Zeiss pixel type {other:?}"
+            )))
+        }
+    };
+    let metadata = AssociatedImage {
+        dimensions: (width, height),
+        sample_type,
+        channels: 3,
+        icc_profile: Vec::new(),
+    };
+    Ok((metadata, bitmap.map(bitmap_to_sample_buffer).transpose()?))
+}
+
+#[cfg(test)]
 fn ensure_embedded_czi_plane_budget(
     dimensions: (i32, i32),
     bytes_per_pixel: usize,
+) -> Result<(), WsiError> {
+    ensure_embedded_czi_plane_budget_with_limit(
+        dimensions,
+        bytes_per_pixel,
+        MAX_DECODED_IMAGE_BYTES,
+    )
+}
+
+fn ensure_embedded_czi_plane_budget_with_limit(
+    dimensions: (i32, i32),
+    bytes_per_pixel: usize,
+    limit: u64,
 ) -> Result<(), WsiError> {
     let width = u64::try_from(dimensions.0).map_err(|_| {
         WsiError::DisplayConversion("embedded CZI plane has a non-positive width".into())
@@ -121,7 +255,7 @@ fn ensure_embedded_czi_plane_budget(
             height,
             u64::try_from(bytes_per_pixel).unwrap_or(u64::MAX),
         ],
-        MAX_DECODED_IMAGE_BYTES,
+        limit.min(MAX_DECODED_IMAGE_BYTES),
         "embedded CZI plane",
     )
     .map(|_| ())
@@ -132,7 +266,9 @@ pub(super) fn probe_associated_attachment(
     path: &Path,
     czi: &mut CziFile,
     attachment: &czi_rs::AttachmentInfo,
+    limits: crate::SlideLimits,
 ) -> Result<Option<AssociatedImage>, WsiError> {
+    check_attachment_size(attachment, limits)?;
     if attachment.content_file_type.eq_ignore_ascii_case("JPG") {
         if let Ok(bytes) = read_attachment_prefix(path, attachment, ASSOCIATED_JPEG_PROBE_BYTES) {
             if let Ok((width, height)) = crate::decode::jpeg::jpeg_dimensions(&bytes) {
@@ -140,12 +276,21 @@ pub(super) fn probe_associated_attachment(
                     dimensions: (width, height),
                     sample_type: SampleType::Uint8,
                     channels: 3,
+                    icc_profile: Vec::new(),
                 }));
             }
         }
     }
 
-    Ok(decode_associated_attachment(czi, attachment)?.map(|(metadata, _buffer)| metadata))
+    if attachment.content_file_type.eq_ignore_ascii_case("CZI") {
+        let blob = czi
+            .read_attachment(attachment.index)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        return read_embedded_czi_blob(&blob.data, limits, false)
+            .map(|(metadata, _)| Some(metadata));
+    }
+
+    Ok(decode_associated_attachment(czi, attachment, limits)?.map(|(metadata, _buffer)| metadata))
 }
 
 fn read_attachment_prefix(

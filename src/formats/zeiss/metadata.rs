@@ -91,10 +91,19 @@ pub(super) fn scene_slot_for_subblock(
 }
 
 pub(super) fn subblock_matches_default_plane(
-    _subblock: &czi_rs::DirectorySubBlockInfo,
-    _statistics: &czi_rs::SubBlockStatistics,
+    subblock: &czi_rs::DirectorySubBlockInfo,
+    statistics: &czi_rs::SubBlockStatistics,
 ) -> bool {
-    true
+    CziDimension::FRAME_ORDER
+        .into_iter()
+        .filter(|&d| d != CziDimension::S)
+        .all(|dimension| {
+            let first = statistics
+                .dim_bounds
+                .get(dimension)
+                .map_or(0, |range| range.start);
+            subblock.coordinate.get(dimension).unwrap_or(first) == first
+        })
 }
 
 pub(super) fn canvas_dimensions(
@@ -221,11 +230,28 @@ pub(super) fn common_level_ratios(
     Ok(ratios.into_iter().collect())
 }
 
+#[cfg(test)]
 pub(super) fn build_canvas_level_tile_subblocks(
     subblocks: &[czi_rs::DirectorySubBlockInfo],
     canvas_level_subblocks: &[Vec<usize>],
     levels: &[Level],
     subblock_origin: (i32, i32),
+) -> Result<Vec<CanvasTileSubblockMap>, WsiError> {
+    build_canvas_level_tile_subblocks_with_budget(
+        subblocks,
+        canvas_level_subblocks,
+        levels,
+        subblock_origin,
+        &crate::core::registry::OpenBudget::new(crate::SlideLimits::default()),
+    )
+}
+
+pub(super) fn build_canvas_level_tile_subblocks_with_budget(
+    subblocks: &[czi_rs::DirectorySubBlockInfo],
+    canvas_level_subblocks: &[Vec<usize>],
+    levels: &[Level],
+    subblock_origin: (i32, i32),
+    budget: &crate::core::registry::OpenBudget,
 ) -> Result<Vec<CanvasTileSubblockMap>, WsiError> {
     let mut out = vec![StdHashMap::<(i64, i64), Vec<usize>>::new(); levels.len()];
     let mut association_count = 0usize;
@@ -282,6 +308,7 @@ pub(super) fn build_canvas_level_tile_subblocks(
                     "CZI tile index exceeds the {MAX_CZI_TILE_ASSOCIATIONS}-association safety limit"
                 )));
             }
+            budget.retain_index((additions as u64).saturating_mul(128))?;
             let map = &mut out[level_idx];
             for col in start_col..=end_col {
                 for row in start_row..=end_row {

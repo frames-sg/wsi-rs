@@ -14,6 +14,9 @@ fuzz_target!(|data: &[u8]| {
     };
     let path = dir.path().join("input.dcm");
     if std::fs::write(&path, data).is_ok() {
-        let _ = Slide::open(path);
+        let midpoint = data.len() / 2;
+        let _ = std::fs::write(dir.path().join("sibling.dcm"), &data[midpoint..]);
+        let _ = Slide::open(&path);
+        let _ = Slide::open(dir.path());
     }
 });

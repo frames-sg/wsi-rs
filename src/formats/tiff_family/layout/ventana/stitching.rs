@@ -2,6 +2,31 @@ use super::*;
 
 const MAX_VENTANA_TILES_PER_LEVEL: u64 = 1_000_000;
 
+fn finite_xml_f64(
+    node: &xml::XmlNode,
+    attribute: &str,
+    default: f64,
+) -> Result<f64, TiffParseError> {
+    let Some(raw) = node.attr(attribute) else {
+        return Ok(default);
+    };
+    raw.parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            TiffParseError::Structure(format!("Ventana BIF: {attribute} must be a finite number"))
+        })
+}
+
+fn finite_f64_to_i64(value: f64, attribute: &str) -> Result<i64, TiffParseError> {
+    if value < i64::MIN as f64 || value >= i64::MAX as f64 {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: {attribute} is outside the supported integer coordinate range"
+        )));
+    }
+    Ok(value as i64)
+}
+
 // ── Level 0 XML parsing ────────────────────────────────────────────
 
 /// Parsed BIF area of interest.
@@ -95,14 +120,10 @@ pub(super) fn parse_level0_xml(
                 "Ventana BIF: tile grid declares {total_tile_count} tiles, exceeding the {MAX_VENTANA_TILES_PER_LEVEL}-tile safety limit"
             )));
         }
-        let pos_x: f64 = info
-            .attr("Pos-X")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        let pos_y: f64 = info
-            .attr("Pos-Y")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
+        let pos_x = finite_xml_f64(info, "Pos-X", 0.0)?;
+        let pos_y = finite_xml_f64(info, "Pos-Y", 0.0)?;
+        let area_x = finite_f64_to_i64(pos_x, "Pos-X")?;
+        let area_y = finite_f64_to_i64(pos_y, "Pos-Y")?;
         let image_width: i64 = info.attr("Width").and_then(|s| s.parse().ok()).unwrap_or(0);
         let image_height: i64 = info
             .attr("Height")
@@ -133,32 +154,51 @@ pub(super) fn parse_level0_xml(
 
         // Accumulate joint offsets for tile advance computation.
         for joint_info in info.find_all("TileJointInfo") {
-            let overlap_x: f64 = joint_info
-                .attr("OverlapX")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
-            let overlap_y: f64 = joint_info
-                .attr("OverlapY")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
+            let overlap_x = finite_xml_f64(joint_info, "OverlapX", 0.0)?;
+            let overlap_y = finite_xml_f64(joint_info, "OverlapY", 0.0)?;
             let confidence: i64 = joint_info
                 .attr("Confidence")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
+            if confidence < 0 {
+                return Err(TiffParseError::Structure(
+                    "Ventana BIF: Confidence must be non-negative".into(),
+                ));
+            }
             let direction = joint_info.attr("Direction").unwrap_or("");
 
             if direction == "UP" {
-                total_offset_y += confidence as f64 * (-overlap_y);
-                total_y_weight += confidence;
+                let weighted = confidence as f64 * (-overlap_y);
+                total_offset_y += weighted;
+                if !weighted.is_finite() || !total_offset_y.is_finite() {
+                    return Err(TiffParseError::Structure(
+                        "Ventana BIF: Confidence-weighted Y overlap is out of range".into(),
+                    ));
+                }
+                total_y_weight = total_y_weight.checked_add(confidence).ok_or_else(|| {
+                    TiffParseError::Structure(
+                        "Ventana BIF: aggregate Y Confidence overflows".into(),
+                    )
+                })?;
             } else {
-                total_offset_x += confidence as f64 * (-overlap_x);
-                total_x_weight += confidence;
+                let weighted = confidence as f64 * (-overlap_x);
+                total_offset_x += weighted;
+                if !weighted.is_finite() || !total_offset_x.is_finite() {
+                    return Err(TiffParseError::Structure(
+                        "Ventana BIF: Confidence-weighted X overlap is out of range".into(),
+                    ));
+                }
+                total_x_weight = total_x_weight.checked_add(confidence).ok_or_else(|| {
+                    TiffParseError::Structure(
+                        "Ventana BIF: aggregate X Confidence overflows".into(),
+                    )
+                })?;
             }
         }
 
         areas.push(BifArea {
-            x: pos_x as i64,
-            y: pos_y as i64,
+            x: area_x,
+            y: area_y,
             start_col,
             start_row,
             tiles_across: num_cols,
@@ -212,19 +252,36 @@ pub(super) fn parse_level0_xml(
     } else {
         tile_height as f64
     };
+    if !tile_advance_x.is_finite()
+        || !tile_advance_y.is_finite()
+        || tile_advance_x <= 0.0
+        || tile_advance_y <= 0.0
+    {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: tile advances must be finite and greater than zero (got {tile_advance_x}x{tile_advance_y})"
+        )));
+    }
 
     let mut top = 0i64;
     let heights = areas
         .iter()
-        .map(|area| {
-            let height =
-                ((area.tiles_down - 1) as f64 * tile_advance_y + tile_height as f64).round() as i64;
-            top = top.max(area.y + height);
-            height
+        .map(|area| -> Result<i64, TiffParseError> {
+            let height = (area.tiles_down - 1) as f64 * tile_advance_y + tile_height as f64;
+            let height = finite_f64_to_i64(height.round(), "stitched area height")?;
+            let bottom = area.y.checked_add(height).ok_or_else(|| {
+                TiffParseError::Structure("Ventana BIF: stitched area bottom overflows".into())
+            })?;
+            top = top.max(bottom);
+            Ok(height)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     for (area, height) in areas.iter_mut().zip(heights) {
-        area.y = top - area.y - height;
+        area.y = top
+            .checked_sub(area.y)
+            .and_then(|value| value.checked_sub(height))
+            .ok_or_else(|| {
+                TiffParseError::Structure("Ventana BIF: normalized area Y overflows".into())
+            })?;
     }
 
     Ok(BifInfo {
@@ -287,10 +344,12 @@ fn parse_area_tile_positions(
         let overlap_x = joint_info
             .attr("OverlapX")
             .and_then(|s| s.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
             .unwrap_or(0.0);
         let overlap_y = joint_info
             .attr("OverlapY")
             .and_then(|s| s.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
             .unwrap_or(0.0);
         let Some((dx, dy)) = joint_delta(
             joint_info.attr("Direction").unwrap_or(""),
@@ -357,6 +416,12 @@ pub(super) fn joint_delta(
     overlap_x: f64,
     overlap_y: f64,
 ) -> Option<(f64, f64)> {
+    if ![tile_width, tile_height, overlap_x, overlap_y]
+        .into_iter()
+        .all(f64::is_finite)
+    {
+        return None;
+    }
     match direction {
         "RIGHT" => Some((tile_width - overlap_x, overlap_y)),
         "LEFT" => Some((-(tile_width - overlap_x), overlap_y)),

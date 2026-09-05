@@ -13,7 +13,7 @@ struct MiraxIniPreflight {
     slidedat: ParsedIni,
     slide_id: String,
     images: (u32, u32),
-    objective_magnification: i32,
+    objective_magnification: Option<i32>,
     image_divisions: u32,
     index_path: PathBuf,
     zoom_sections: Vec<String>,
@@ -43,9 +43,20 @@ impl MiraxSlide {
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Self, WsiError> {
+        Self::parse_with_config(
+            path,
+            BackendOpenConfig::new(cache_config, crate::SlideLimits::default()),
+        )
+    }
+
+    pub(in crate::formats::mirax) fn parse_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Self, WsiError> {
+        let budget = OpenBudget::new(config.limits);
         let slide_dir = slide_dir_from_entry(path)?;
         let slidedat_path = slide_dir.join(SLIDEDAT_INI);
-        let slidedat = parse_mirax_ini(&slidedat_path)?;
+        let slidedat = parse_mirax_ini_with_budget(&slidedat_path, budget.as_ref())?;
 
         let general = slidedat
             .groups
@@ -63,7 +74,8 @@ impl MiraxSlide {
         let slide_id = required_ini_string(path, general, KEY_SLIDE_ID)?;
         let images_x = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_X)?;
         let images_y = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_Y)?;
-        let objective_magnification = parse_ini_i32(path, general, KEY_OBJECTIVE_MAGNIFICATION)?;
+        let objective_magnification =
+            parse_optional_objective_magnification(path, general, KEY_OBJECTIVE_MAGNIFICATION)?;
         let image_divisions = general
             .get(KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE)
             .map(|value| parse_u32_value(path, KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE, value))
@@ -151,11 +163,12 @@ impl MiraxSlide {
             datafile_paths,
         };
         let (hierarchy, quickhash) = build_hierarchy_geometry(path, ini)?;
-        let mut sources = load_data_index_sources(path, hierarchy, quickhash)?;
+        let mut sources = load_data_index_sources(path, hierarchy, quickhash, budget.as_ref())?;
         let (properties, associated_metadata) =
             build_associated_images_and_properties(path, &mut sources)?;
         Ok(assemble_dataset_and_caches(
-            cache_config,
+            config.cache_config,
+            config.limits.encoded_unit_bytes(),
             sources,
             properties,
             associated_metadata,
@@ -373,6 +386,7 @@ fn load_data_index_sources(
     path: &Path,
     mut hierarchy: MiraxHierarchyGeometry,
     mut quickhash: Quickhash1,
+    open_budget: &OpenBudget,
 ) -> Result<MiraxIndexSources, WsiError> {
     let ini = &hierarchy.ini;
     let mut index_file = File::open(&ini.index_path).map_err(|source| WsiError::IoWithPath {
@@ -431,6 +445,7 @@ fn load_data_index_sources(
         slide_positions: &slide_positions,
         quickhash: &mut quickhash,
         quickhash_files: &mut quickhash_files,
+        open_budget,
     })?;
 
     let quickhash = quickhash
@@ -454,10 +469,12 @@ fn build_associated_images_and_properties(
     let mut properties = Properties::new();
     properties.insert("openslide.vendor", "mirax");
     properties.insert("openslide.quickhash-1", sources.quickhash.clone());
-    properties.insert(
-        "openslide.objective-power",
-        sources.hierarchy.ini.objective_magnification.to_string(),
-    );
+    if let Some(objective_magnification) = sources.hierarchy.ini.objective_magnification {
+        properties.insert(
+            "openslide.objective-power",
+            objective_magnification.to_string(),
+        );
+    }
     properties.insert("openslide.mpp-x", format!("{}", level0.mpp_x));
     properties.insert("openslide.mpp-y", format!("{}", level0.mpp_y));
     properties.insert(
@@ -490,6 +507,7 @@ fn build_associated_images_and_properties(
                 dimensions,
                 sample_type: SampleType::Uint8,
                 channels: 3,
+                icc_profile: Vec::new(),
             },
         );
     }
@@ -549,6 +567,7 @@ fn occupied_level_bounds(
 
 fn assemble_dataset_and_caches(
     cache_config: CacheConfig,
+    encoded_unit_bytes: u64,
     sources: MiraxIndexSources,
     properties: Properties,
     associated_metadata: HashMap<String, AssociatedImage>,
@@ -620,5 +639,6 @@ fn assemble_dataset_and_caches(
         decoded_images: Mutex::new(decoded_cache),
         associated_cache: Mutex::new(associated_cache),
         open_files: Mutex::new(sources.quickhash_files),
+        encoded_unit_bytes,
     }
 }

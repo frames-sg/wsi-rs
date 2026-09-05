@@ -290,6 +290,78 @@ fn interpret_thumbnail_at_index_1() {
 }
 
 #[test]
+fn thumbnail_inherits_main_icc_when_profile_names_match() {
+    let icc = vec![1, 2, 3, 5, 8, 13];
+    let file = build_aperio_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 4096),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 3072),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(
+                tags::IMAGE_DESCRIPTION,
+                "Aperio Image Library v1.0|ICC Profile = Display P3",
+            ),
+            SyntheticTag::bytes(tags::ICC_PROFILE, icc.clone()),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 400),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 300),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 100),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 5000),
+            SyntheticTag::ascii(
+                tags::IMAGE_DESCRIPTION,
+                "thumbnail|ICC Profile = Display P3",
+            ),
+        ],
+    ]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.associated_images["thumbnail"].icc_profile(),
+        Some(icc.as_slice())
+    );
+}
+
+#[test]
+fn thumbnail_does_not_inherit_main_icc_when_profile_names_differ() {
+    let file = build_aperio_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 4096),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 3072),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(
+                tags::IMAGE_DESCRIPTION,
+                "Aperio Image Library v1.0|ICC Profile = Main",
+            ),
+            SyntheticTag::bytes(tags::ICC_PROFILE, vec![1, 2, 3]),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 400),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 300),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 100),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 5000),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "thumbnail|ICC Profile = Thumbnail"),
+        ],
+    ]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.associated_images["thumbnail"].icc_profile(),
+        None
+    );
+}
+
+#[test]
 fn interpret_label_and_macro_by_description() {
     let file = build_aperio_tiff(&[
         // IFD 0: tiled pyramid
@@ -344,6 +416,60 @@ fn interpret_label_and_macro_by_description() {
         layout.dataset.associated_images["macro"].dimensions,
         (800, 600)
     );
+}
+
+#[test]
+fn interpret_newer_label_and_macro_by_subfile_type() {
+    let file = build_aperio_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 4096),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 3072),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Aperio Image Library v1.0"),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 400),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 300),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 100),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 5000),
+        ],
+        vec![
+            SyntheticTag::long(254, 1),
+            SyntheticTag::long(tags::IMAGE_WIDTH, 200),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 100),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 200),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 2000),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "unclassified image"),
+        ],
+        vec![
+            SyntheticTag::long(254, 9),
+            SyntheticTag::long(tags::IMAGE_WIDTH, 800),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 600),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 300),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 10000),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "unclassified image"),
+        ],
+    ]);
+
+    let layout = AperioInterpreter
+        .interpret(&TiffContainer::open(file.path()).unwrap())
+        .unwrap();
+
+    assert_eq!(
+        layout.dataset.associated_images["label"].dimensions,
+        (200, 100)
+    );
+    assert_eq!(
+        layout.dataset.associated_images["macro"].dimensions,
+        (800, 600)
+    );
+    assert!(!layout.dataset.associated_images.contains_key("image_2"));
+    assert!(!layout.dataset.associated_images.contains_key("image_3"));
 }
 
 #[test]

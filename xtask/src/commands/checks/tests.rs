@@ -52,11 +52,11 @@ fn semver_check_uses_checksum_pinned_published_baseline() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
     )
     .expect("read semver script");
-    assert!(script.contains("BASELINE_VERSION=\"0.5.2\""));
+    assert!(script.contains("BASELINE_VERSION=\"0.6.0\""));
     assert!(script.contains(
-        "BASELINE_SHA256=\"0118b54cd6fe19b48d9170c1a54a089599e61442f076eff6a6da05d0f3891a98\""
+        "BASELINE_SHA256=\"c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75\""
     ));
-    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.6.0"));
+    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.7.0"));
     assert!(script.contains("--baseline-rustdoc"));
     assert!(script.contains("cargo +nightly-2026-04-17 rustdoc"));
     assert!(!script.contains("cargo +nightly rustdoc"));
@@ -118,4 +118,36 @@ fn public_api_snapshot_update_creates_parent_and_trailing_newline() {
         fs::read_to_string(snapshot).unwrap(),
         "pub struct Updated;\n"
     );
+}
+
+#[test]
+fn public_api_snapshot_update_reports_directory_and_write_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent_file = directory.path().join("parent-file");
+    fs::write(&parent_file, b"not a directory").unwrap();
+    let nested = parent_file.join("api.txt");
+    assert!(check_public_api_snapshot_with_update("api", &nested, true)
+        .unwrap_err()
+        .contains("failed to create"));
+
+    assert!(
+        check_public_api_snapshot_with_update("api", directory.path(), true)
+            .unwrap_err()
+            .contains("failed to write")
+    );
+}
+
+#[test]
+fn fuzz_gate_covers_every_declared_fuzz_binary() {
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fuzz/Cargo.toml"))
+            .expect("read fuzz manifest");
+
+    for target in FUZZ_TARGETS {
+        assert!(
+            manifest.contains(&format!("name = \"{target}\"")),
+            "fuzz target {target} is not declared"
+        );
+    }
+    assert_eq!(manifest.matches("[[bin]]").count(), FUZZ_TARGETS.len());
 }

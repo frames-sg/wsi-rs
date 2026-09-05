@@ -95,6 +95,37 @@ fn get_f64_from_float() {
 }
 
 #[test]
+fn get_f64_rejects_non_finite_values_and_zero_denominators() {
+    let cases = [
+        SyntheticEntry {
+            tag: 500,
+            tiff_type: 12, // DOUBLE
+            count: 1,
+            inline_data: None,
+            out_of_line_data: Some(f64::NAN.to_le_bytes().to_vec()),
+        },
+        SyntheticEntry {
+            tag: 501,
+            tiff_type: 5, // RATIONAL
+            count: 1,
+            inline_data: None,
+            out_of_line_data: Some([1u32.to_le_bytes(), 0u32.to_le_bytes()].concat()),
+        },
+    ];
+    let data = make_classic_tiff_single(Endian::Little, &cases);
+    let tmp = write_tiff_tempfile(&data);
+    let container = TiffContainer::open(tmp.path()).unwrap();
+    let ifd_id = container.top_ifds()[0];
+
+    for tag in [500, 501] {
+        assert!(matches!(
+            container.get_f64(ifd_id, tag),
+            Err(TiffParseError::InvalidTag { .. })
+        ));
+    }
+}
+
+#[test]
 fn get_string_ascii() {
     let text = b"Hello\0";
     let entries = vec![SyntheticEntry {

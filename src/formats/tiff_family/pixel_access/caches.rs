@@ -3,8 +3,8 @@ use std::hash::Hash;
 
 // ── FullDecodeCache ───────────────────────────────────────────────
 
-/// Default maximum cache size: 128 MB.
-pub(super) const DEFAULT_FULL_DECODE_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+/// Default full-level decode share of the 32 MiB TIFF-private cache budget.
+pub(super) const DEFAULT_FULL_DECODE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const FULL_DECODE_CACHE_BYTES_ENV: &str = "WSI_RS_FULL_DECODE_CACHE_BYTES";
 /// Default maximum cache size for decoded NDPI strips: 1 MB.
 ///
@@ -13,34 +13,77 @@ pub(super) const FULL_DECODE_CACHE_BYTES_ENV: &str = "WSI_RS_FULL_DECODE_CACHE_B
 /// for repeated-region workloads that benefit from a larger working set.
 pub(super) const DEFAULT_NDPI_STRIP_CACHE_BYTES: u64 = 1024 * 1024;
 pub(super) const NDPI_STRIP_CACHE_BYTES_ENV: &str = "WSI_RS_NDPI_STRIP_CACHE_BYTES";
-/// Default maximum cache size for synthetic NDPI tail levels: 16 MB.
-pub(super) const DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+/// Default retained MCU-offset cache share.
+pub(super) const DEFAULT_NDPI_MCU_STARTS_CACHE_BYTES: u64 = 1024 * 1024;
+/// Per-cache share for the synthetic level and region caches. Together with
+/// full-decode, NDPI-strip, and MCU-offset caches, defaults total 32 MiB.
+pub(super) const DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES: u64 = 7 * 1024 * 1024;
 pub(super) const SYNTHETIC_LEVEL_CACHE_BYTES_ENV: &str = "WSI_RS_SYNTHETIC_LEVEL_CACHE_BYTES";
-pub(super) const DEFAULT_JP2K_SHARED_TILE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_BATCH: usize = 4;
 pub(super) const NDPI_DISPLAY_NARROW_STRIP_BATCH: usize = 8;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) const JPEG_DEVICE_DECODE_ENV: &str = "WSI_RS_JPEG_DEVICE_DECODE";
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) const JP2K_DEVICE_DECODE_ENV: &str = "WSI_RS_JP2K_DEVICE_DECODE";
 
-pub(super) type NdpiMcuStartsCache = HashMap<(IfdId, u16, u64, u64), Arc<Vec<u64>>>;
+type NdpiMcuStartsKey = (IfdId, u16, u64, u64);
+
+#[derive(Clone)]
+pub(super) enum NdpiMcuStartsEntry {
+    Relative,
+    Normalized(Arc<Vec<u64>>),
+}
+
+pub(super) struct NdpiMcuStartsCache {
+    entries: WeightedLru<NdpiMcuStartsKey, NdpiMcuStartsEntry>,
+}
+
+impl NdpiMcuStartsCache {
+    pub(super) fn new(max_bytes: u64) -> Self {
+        Self {
+            entries: WeightedLru::new(max_bytes),
+        }
+    }
+
+    pub(super) fn get(&mut self, key: &NdpiMcuStartsKey) -> Option<NdpiMcuStartsEntry> {
+        self.entries.get(key).cloned()
+    }
+
+    pub(super) fn put(&mut self, key: NdpiMcuStartsKey, value: Arc<Vec<u64>>) {
+        let retained_bytes = u64::try_from(value.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<u64>() as u64)
+            .saturating_add(64);
+        self.entries
+            .put(key, NdpiMcuStartsEntry::Normalized(value), retained_bytes);
+    }
+
+    pub(super) fn put_relative(&mut self, key: NdpiMcuStartsKey) {
+        // Charge the key, value, and LRU bookkeeping even without an offset payload.
+        self.entries.put(key, NdpiMcuStartsEntry::Relative, 128);
+    }
+
+    #[cfg(test)]
+    pub(super) fn current_bytes(&self) -> u64 {
+        self.entries.current_bytes()
+    }
+
+    #[cfg(test)]
+    pub(super) fn max_bytes(&self) -> u64 {
+        self.entries.capacity_bytes()
+    }
+
+    #[cfg(test)]
+    pub(super) fn first_value(&mut self) -> Option<Arc<Vec<u64>>> {
+        let key = *self.entries.lru_key()?;
+        match self.get(&key)? {
+            NdpiMcuStartsEntry::Relative => None,
+            NdpiMcuStartsEntry::Normalized(starts) => Some(starts),
+        }
+    }
+}
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_WIDTH: u32 = 1024;
 
 pub(super) struct NdpiJpegTilePayload {
     pub(super) jpeg: Vec<u8>,
     pub(super) width: u32,
     pub(super) height: u32,
-}
-
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) fn jpeg_device_decode_enabled() -> bool {
-    crate::core::environment::flag(JPEG_DEVICE_DECODE_ENV)
-}
-
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(super) fn jp2k_device_decode_enabled() -> bool {
-    crate::core::environment::flag(JP2K_DEVICE_DECODE_ENV)
 }
 
 pub(super) struct ByteSizedTileCache<K: Eq + Hash> {

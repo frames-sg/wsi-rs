@@ -154,10 +154,20 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         J2kDecodeOptions::default().with_color_transform(color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
     let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let (pixels, outcome) = decoder
-        .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
+        .decode_request(J2kJpegDecodeRequest::full(if grayscale {
+            J2kPixelFormat::Gray8
+        } else {
+            J2kPixelFormat::Rgb8
+        }))
         .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let pixels = if grayscale {
+        expand_grayscale_to_rgb(pixels)?
+    } else {
+        pixels
+    };
     crop_jpeg_rgb_to_expected(
         DecodedJpegRgb {
             width: outcome.decoded.w,
@@ -219,11 +229,17 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         J2kDecodeOptions::default().with_color_transform(req.color_transform),
     )
     .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
     let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-    let decode_result = if scale == J2kDownscale::None {
-        decoder.decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
+    let pixel_format = if grayscale {
+        J2kPixelFormat::Gray8
     } else {
-        decoder.decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
+        J2kPixelFormat::Rgb8
+    };
+    let decode_result = if scale == J2kDownscale::None {
+        decoder.decode_request(J2kJpegDecodeRequest::full(pixel_format))
+    } else {
+        decoder.decode_request(J2kJpegDecodeRequest::scaled(pixel_format, scale))
     };
     let (pixels, outcome) = match decode_result {
         Ok(decoded) => decoded,
@@ -234,6 +250,11 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
             },
         ) => return Ok(None),
         Err(err) => return Err(WsiError::Jpeg(err.to_string())),
+    };
+    let pixels = if grayscale {
+        expand_grayscale_to_rgb(pixels)?
+    } else {
+        pixels
     };
     let decoded = if scale == J2kDownscale::None {
         DecodedJpegRgb {
@@ -253,6 +274,29 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         req.requested_width,
         req.requested_height,
     )?))
+}
+
+pub(super) fn expand_grayscale_to_rgb(gray: Vec<u8>) -> Result<Vec<u8>, WsiError> {
+    let output_len = gray
+        .len()
+        .checked_mul(3)
+        .ok_or_else(|| WsiError::Jpeg("grayscale JPEG RGB expansion overflow".into()))?;
+    if output_len as u64 > MAX_JPEG_DECODE_BYTES {
+        return Err(WsiError::Jpeg(format!(
+            "grayscale JPEG RGB expansion requires {output_len} bytes, exceeding {MAX_JPEG_DECODE_BYTES}"
+        )));
+    }
+    let mut rgb = Vec::new();
+    rgb.try_reserve_exact(output_len)
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "grayscale JPEG RGB expansion",
+            requested: output_len as u64,
+            limit: MAX_JPEG_DECODE_BYTES,
+        })?;
+    for sample in gray {
+        rgb.extend_from_slice(&[sample, sample, sample]);
+    }
+    Ok(rgb)
 }
 
 pub(crate) fn jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), WsiError> {

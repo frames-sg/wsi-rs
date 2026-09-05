@@ -202,6 +202,14 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 continue;
             }
             let name = format!("image_{}", i);
+            let jpeg_tables = if sifd.compression == Compression::Jpeg {
+                container
+                    .get_bytes(sifd.ifd_id, tags::JPEG_TABLES)
+                    .ok()
+                    .map(<[u8]>::to_vec)
+            } else {
+                None
+            };
             associated_images.insert(
                 name.clone(),
                 AssociatedImage {
@@ -211,13 +219,14 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                     ),
                     sample_type: SampleType::Uint8,
                     channels: 3,
+                    icc_profile: Vec::new(),
                 },
             );
             associated_sources.insert(
                 name,
                 TileSource::Stripped {
                     ifd_id: sifd.ifd_id,
-                    jpeg_tables: None,
+                    jpeg_tables,
                     compression: sifd.compression,
                     strip_offsets: sifd.strip_offsets.clone(),
                     strip_byte_counts: sifd.strip_byte_counts.clone(),

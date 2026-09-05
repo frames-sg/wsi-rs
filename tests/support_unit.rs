@@ -15,6 +15,7 @@ use support::oracles::{
     top_left_probe, J2kOracle, OpenedSlide, Oracle, ProbeKind, ProbeRequest, ReferenceOracle,
     ReferenceTileError, TileBuffer,
 };
+use wsi_rs_test_support::corpus::validate_release_coverage;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -41,7 +42,6 @@ fn public_prelude_exports_common_reader_types() {
         LevelIdx as PreludeLevelIdx, PlaneIdx as PreludePlaneIdx,
         PlaneSelection as PreludePlaneSelection, RegionRequest as PreludeRegionRequest,
         SceneId as PreludeSceneId, SeriesId as PreludeSeriesId, Slide as PreludeSlide,
-        TileOutputPreference as PreludeTileOutputPreference, TilePixels as PreludeTilePixels,
         TileRequest as PreludeTileRequest, WsiError as PreludeWsiError,
     };
 
@@ -58,9 +58,7 @@ fn public_prelude_exports_common_reader_types() {
 
     assert_eq!(region.size_px, (16, 16));
     assert_eq!(tile.col, 0);
-    let _preference = PreludeTileOutputPreference::cpu();
     let _ = std::any::type_name::<PreludeSlide>();
-    let _ = std::any::type_name::<PreludeTilePixels>();
     let _ = std::any::type_name::<PreludeWsiError>();
 }
 
@@ -101,6 +99,32 @@ fn compare_off_by_two_fails_jpeg_tight_passes_tolerant() {
 }
 
 #[test]
+fn jpeg_decoder_compat_accepts_cross_platform_huron_mean_variance() {
+    let expected = [0, 0, 0, 255].repeat(8);
+    let mut actual = expected.clone();
+    actual[..3].fill(1);
+
+    let report = compare_rgba(&actual, &expected, Tolerance::JPEG_DECODER_COMPAT);
+
+    assert_eq!(report.max_abs, 1);
+    assert_eq!(report.mean_abs, 0.125);
+    assert!(report.passed);
+}
+
+#[test]
+fn compare_requires_exact_alpha_and_excludes_it_from_rgb_mean() {
+    let actual = vec![10u8, 20, 30, 0];
+    let expected = vec![10u8, 20, 30, 255];
+
+    let report = compare_rgba(&actual, &expected, Tolerance::TOLERANT);
+
+    assert!(!report.passed);
+    assert!(!report.alpha_exact);
+    assert_eq!(report.max_abs, 0);
+    assert_eq!(report.mean_abs, 0.0);
+}
+
+#[test]
 fn compare_tolerance_failure_formats_failed_report() {
     let a = vec![10u8, 20, 30, 255, 40, 50, 60, 255];
     let b = vec![12u8, 20, 30, 255, 40, 50, 60, 255];
@@ -130,6 +154,8 @@ fn corpus_parses_minimal_manifest() {
 fn corpus_unknown_format_extension_returns_none() {
     assert!(format_default_extension("nonsense").is_none());
     assert_eq!(format_default_extension("aperio"), Some("svs"));
+    assert_eq!(format_default_extension("argos"), Some("avs"));
+    assert_eq!(format_default_extension("huron"), Some("tif"));
 }
 
 #[test]
@@ -167,6 +193,34 @@ fn corpus_public_manifest_parses() {
         .expect("public DICOM JP2K corpus entry");
     assert!(dicom_jp2k.must_decode_level(0));
     assert!(!dicom_jp2k.openslide_must_decode_level(0));
+
+    let svs_jp2k = manifest
+        .slides
+        .iter()
+        .find(|slide| slide.alias == "svs-jp2k-001")
+        .expect("public SVS JP2K corpus entry");
+    assert!(svs_jp2k.openslide_required);
+
+    for alias in [
+        "argos-001",
+        "argos-stacked-001",
+        "huron-jpeg-001",
+        "huron-uncompressed-001",
+    ] {
+        let entry = manifest
+            .slides
+            .iter()
+            .find(|slide| slide.alias == alias)
+            .unwrap_or_else(|| panic!("public {alias} corpus entry"));
+        assert!(
+            !entry.openslide_required,
+            "{alias} must not use OpenSlide's flattened pyramid as its compatibility contract"
+        );
+        assert!(
+            !entry.oracle_divergences.is_empty(),
+            "{alias} must document its OpenSlide compatibility boundary"
+        );
+    }
 }
 
 #[test]
@@ -195,18 +249,43 @@ fn corpus_can_require_wsi_decode_without_requiring_openslide() {
 }
 
 #[test]
-fn corpus_expected_failure_matches_pair_and_level_aliases() {
-    let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let entry = manifest.slides.first_mut().expect("slide");
-    entry.expected_failures = vec![
-        "j2k-vs-reference:base".into(),
-        "reference-vs-openslide:level2".into(),
-    ];
+fn corpus_rejects_expected_failure_waivers() {
+    let manifest = format!("{SAMPLE_MANIFEST}\nexpected_failures = ['j2k-vs-reference:base']\n");
 
-    assert!(entry.expected_failure("j2k-vs-reference", 0));
-    assert!(entry.expected_failure("reference-vs-openslide", 2));
-    assert!(!entry.expected_failure("j2k-vs-reference", 1));
-    assert!(!entry.expected_failure("j2k-vs-openslide", 0));
+    let error = parse_manifest(&manifest).expect_err("release corpus must reject waivers");
+
+    assert!(error.contains("unknown field `expected_failures`"));
+}
+
+#[test]
+fn corpus_rejects_unknown_fields_and_accepts_notes() {
+    let with_notes = format!("{SAMPLE_MANIFEST}\nnotes = 'documented provenance'\n");
+    parse_manifest(&with_notes).expect("notes are part of the corpus schema");
+
+    let with_unknown =
+        format!("{SAMPLE_MANIFEST}\nunsupported_properties = ['openslide.vendor']\n");
+    let error = parse_manifest(&with_unknown).expect_err("unknown corpus fields must fail closed");
+    assert!(error.contains("unknown field `unsupported_properties`"));
+}
+
+#[test]
+fn corpus_required_levels_include_base_reduced_and_highest() {
+    let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+    let entry = manifest.slides.first().expect("slide");
+
+    assert_eq!(entry.required_level_indices(5).unwrap(), vec![0, 1, 2, 4]);
+}
+
+#[test]
+fn corpus_release_coverage_reports_all_missing_evidence() {
+    let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+
+    let error = validate_release_coverage(&manifest).expect_err("one row is not release evidence");
+
+    assert!(error.contains("olympus_vsi"));
+    assert!(error.contains("lossless JP2K"));
+    assert!(error.contains("DICOM JP2K YBR_ICT"));
+    assert!(error.contains("SOF2 progressive-JPEG DICOM"));
 }
 
 #[test]
@@ -292,6 +371,31 @@ fn oracle_top_left_probe_falls_back_to_region_for_irregular_layout() {
     assert_eq!((probe.width, probe.height), (123, 45));
     let tile = read_probe(&slide, probe).expect("read probe");
     assert_eq!((tile.width, tile.height), (123, 45));
+}
+
+#[test]
+fn oracle_top_left_probe_clips_virtual_tiles_to_logical_level_geometry() {
+    let slide = OpenedSlide {
+        path: PathBuf::from("fixture.bif"),
+        oracle_name: "fixture",
+        level_count: 1,
+        level_dimensions: vec![(225, 150)],
+        tile_sizes: vec![Some((1024, 1360))],
+        probe_regions: vec![None],
+        reader: Box::new(|_, _, _, _, _| Err("tile reader should not be used".into())),
+        region_reader: Box::new(|_, _, _, width, height| {
+            Ok(TileBuffer {
+                pixels_rgba: vec![0; width as usize * height as usize * 4],
+                width,
+                height,
+            })
+        }),
+    };
+
+    let probe = top_left_probe(&slide, 0).expect("probe");
+
+    assert_eq!(probe.kind, ProbeKind::Region);
+    assert_eq!((probe.width, probe.height), (225, 150));
 }
 
 #[test]

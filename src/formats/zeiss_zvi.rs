@@ -21,7 +21,9 @@ use image::ImageFormat;
 
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
-    DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReader,
+    BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader,
+    DatasetReader, FormatProbe, ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult,
+    SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
@@ -68,9 +70,27 @@ impl FormatProbe for ZeissZviBackend {
     }
 }
 
+impl ConfiguredFormatProbe for ZeissZviBackend {}
+
 impl DatasetReader for ZeissZviBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        let slide = Arc::new(ZviSlide::parse(path)?);
-        Ok(Box::new(ZviReader { slide }))
+        let reader = self.open_with_config(path, BackendOpenConfig::deterministic())?;
+        Ok(reader)
+    }
+}
+
+impl ConfiguredDatasetReader for ZeissZviBackend {
+    fn open_with_config(
+        &self,
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
+        let encoded_unit_bytes = config.limits.encoded_unit_bytes();
+        let slide = Arc::new(ZviSlide::parse_with_config(path, config)?);
+        let reader: Box<dyn SlideReader> = Box::new(ZviReader { slide });
+        Ok(Box::new(ConservativeManagedReader::new(
+            reader,
+            encoded_unit_bytes,
+        )))
     }
 }

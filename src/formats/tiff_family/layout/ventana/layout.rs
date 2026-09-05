@@ -89,6 +89,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
                         ),
                         sample_type: SampleType::Uint8,
                         channels: 3,
+                        icc_profile: Vec::new(),
                     },
                 );
                 associated_sources.insert(name, source);
@@ -131,8 +132,8 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
         }
 
         pyramid_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
+            let area_a = u128::from(a.width) * u128::from(a.height);
+            let area_b = u128::from(b.width) * u128::from(b.height);
             area_b.cmp(&area_a)
         });
 
@@ -190,8 +191,17 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
         for area in &bif.areas {
             let offset_x = area.x as f64 - area.start_col as f64 * bif.tile_advance_x;
             let offset_y = area.y as f64 - area.start_row as f64 * bif.tile_advance_y;
-            for row in area.start_row..area.start_row + area.tiles_down {
-                for col in area.start_col..area.start_col + area.tiles_across {
+            let end_row = area.start_row.checked_add(area.tiles_down).ok_or_else(|| {
+                TiffParseError::Structure("Ventana BIF: tile row range overflows".into())
+            })?;
+            let end_col = area
+                .start_col
+                .checked_add(area.tiles_across)
+                .ok_or_else(|| {
+                    TiffParseError::Structure("Ventana BIF: tile column range overflows".into())
+                })?;
+            for row in area.start_row..end_row {
+                for col in area.start_col..end_col {
                     level0_tiles.insert(
                         (col, row),
                         TileEntry {
@@ -234,12 +244,20 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
         );
 
         for (level_idx, info) in pyramid_ifds.iter().enumerate().skip(1) {
-            let dims = ventana_public_level_dimensions(level0_dims, level_idx as u32);
+            let level_idx = u32::try_from(level_idx).map_err(|_| {
+                TiffParseError::Structure("Ventana BIF: level index overflows u32".into())
+            })?;
+            let dims = ventana_public_level_dimensions(level0_dims, level_idx)?;
+            let downsample = 1u64.checked_shl(level_idx).ok_or_else(|| {
+                TiffParseError::Structure(format!(
+                    "Ventana BIF: level {level_idx} downsample overflows"
+                ))
+            })?;
             let tiles_across = info.width.div_ceil(info.tile_width as u64);
             let tiles_down = info.height.div_ceil(info.tile_height as u64);
             levels.push(Level {
                 dimensions: dims,
-                downsample: (1u64 << level_idx) as f64,
+                downsample: downsample as f64,
                 tile_layout: TileLayout::Regular {
                     tile_width: info.tile_width,
                     tile_height: info.tile_height,
@@ -251,7 +269,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
                 TileSourceKey {
                     scene: 0usize,
                     series: 0usize,
-                    level: level_idx as u32,
+                    level: level_idx,
                     z: 0,
                     c: 0,
                     t: 0,

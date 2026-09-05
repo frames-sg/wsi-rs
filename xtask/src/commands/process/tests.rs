@@ -23,6 +23,11 @@ fn clean_worktree_check_distinguishes_clean_dirty_and_non_repository_paths() {
     assert!(ensure_clean_worktree_at(non_repository.path())
         .unwrap_err()
         .contains("git status --porcelain"));
+    assert!(
+        ensure_clean_worktree_at(&non_repository.path().join("missing"))
+            .unwrap_err()
+            .contains("failed to start")
+    );
 }
 
 #[test]

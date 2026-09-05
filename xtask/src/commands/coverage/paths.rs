@@ -24,7 +24,14 @@ pub(super) fn path_matches_root(path: &Path, root: &str) -> bool {
 }
 
 pub(super) fn is_production_coverage_path(path: &Path) -> bool {
-    const PORTABLE_EXCLUSIONS: &[&str] = &["src/output/cuda", "src/output/metal"];
+    const PORTABLE_EXCLUSIONS: &[&str] = &[
+        "src/decode/jp2k/cuda",
+        "src/decode/jp2k/device",
+        "src/decode/jp2k/metal",
+        "src/formats/dicom/reader/device",
+        "src/output/cuda",
+        "src/output/metal",
+    ];
 
     is_workspace_coverage_path(path)
         && !PORTABLE_EXCLUSIONS
@@ -56,6 +63,7 @@ pub(super) fn is_coverage_candidate(path: &Path) -> bool {
             .any(|component| component.as_os_str() == "tests")
         && !path.starts_with("tests")
         && !path.starts_with("benches")
+        && !path.starts_with("fuzz")
 }
 
 #[cfg(test)]

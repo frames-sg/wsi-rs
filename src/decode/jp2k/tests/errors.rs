@@ -33,3 +33,17 @@ fn dimensions_from_bounds_respects_origin_offsets() {
     assert_eq!(dimensions_from_bounds(10, 18, 20, 32), Some((8, 12)));
     assert_eq!(dimensions_from_bounds(5, 4, 0, 1), None);
 }
+
+#[test]
+fn rgb_output_rejects_dimension_arithmetic_overflow() {
+    let error = super::super::output::sample_buffer_from_rgb8_bytes(
+        Vec::new(),
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+        Jp2kColorSpace::Rgb,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("size overflow"));
+}

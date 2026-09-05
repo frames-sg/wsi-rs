@@ -20,6 +20,15 @@ fn rejects_absolute_and_parent_paths() {
     }
 }
 
+#[test]
+fn rejects_an_unresolvable_slide_root_with_context() {
+    let root = tempfile::tempdir().expect("root");
+    let missing_root = root.path().join("missing-root");
+    let error = resolve_companion_file(&root.path().join("slide.ini"), &missing_root, "tile.jpg")
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot resolve slide root"));
+}
+
 #[cfg(unix)]
 #[test]
 fn rejects_symlink_escape() {

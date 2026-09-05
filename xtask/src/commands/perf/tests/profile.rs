@@ -17,10 +17,6 @@ fn profile_recipes_include_cpu_commands_for_the_real_worker() {
         .iter()
         .any(|arg| arg.starts_with("RAYON_NUM_THREADS=")));
     assert!(recipes
-        .cpu_samply
-        .iter()
-        .any(|arg| arg == "WSI_RS_SHIM_JP2K_CPU_THREADS=1"));
-    assert!(recipes
         .cpu_time_profiler
         .join(" ")
         .contains("Time Profiler"));
@@ -38,10 +34,6 @@ fn profile_recipes_include_cpu_commands_for_the_real_worker() {
         .cpu_samply
         .iter()
         .any(|arg| arg.ends_with("wsi-rs-perf")));
-    assert!(recipes
-        .cpu_time_profiler
-        .iter()
-        .any(|arg| arg == "WSI_RS_SHIM_JP2K_CPU_THREADS=1"));
     let rayon_threads = recipes
         .cpu_samply
         .iter()

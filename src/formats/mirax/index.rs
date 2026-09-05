@@ -2,20 +2,31 @@ use super::helpers::*;
 use super::*;
 use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
 use crate::formats::geometry::irregular_extra_tiles;
+#[cfg(test)]
 use crate::formats::ini::parse_ini_file;
+use crate::formats::ini::parse_ini_file_with_budget;
 
 const MAX_MIRAX_INDEX_PAGES: usize = 1_000_000;
 const MAX_MIRAX_RECORDS: usize = 16 * 1024 * 1024;
 const MAX_MIRAX_RECORDS_PER_PAGE: usize = 1024 * 1024;
 
-#[derive(Default)]
-struct MiraxIndexBudget {
+struct MiraxIndexBudget<'a> {
+    open_budget: &'a OpenBudget,
     visited_pages: std::collections::HashSet<u64>,
     total_pages: usize,
     total_records: usize,
 }
 
-impl MiraxIndexBudget {
+impl<'a> MiraxIndexBudget<'a> {
+    fn new(open_budget: &'a OpenBudget) -> Self {
+        Self {
+            open_budget,
+            visited_pages: std::collections::HashSet::new(),
+            total_pages: 0,
+            total_records: 0,
+        }
+    }
+
     fn record_page(&mut self, path: &Path, offset: u64, records: i32) -> Result<usize, WsiError> {
         if !self.visited_pages.insert(offset) {
             return Err(invalid_slide(path, "MIRAX index page cycle detected"));
@@ -42,22 +53,49 @@ impl MiraxIndexBudget {
         if self.total_records > MAX_MIRAX_RECORDS {
             return Err(invalid_slide(path, "MIRAX index has too many records"));
         }
+        let retained = u64::try_from(records)
+            .map_err(|_| invalid_slide(path, "MIRAX index record count is not addressable"))?
+            .checked_mul(64)
+            .ok_or_else(|| invalid_slide(path, "MIRAX index byte count overflow"))?;
+        self.open_budget.retain_index(retained)?;
         Ok(records)
     }
 }
 
+#[cfg(test)]
 pub(super) fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
-    parse_ini_file(
+    let mut parsed = parse_ini_file(
         path,
         SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE),
         |path| invalid_slide(path, "MIRAX key file too large"),
         true,
-    )
+    )?;
+    for group in parsed.groups.values_mut() {
+        group.remove("");
+    }
+    Ok(parsed)
 }
 
-pub(super) struct MiraxIndexBuildContext<'a> {
+pub(super) fn parse_mirax_ini_with_budget(
+    path: &Path,
+    budget: &OpenBudget,
+) -> Result<ParsedIni, WsiError> {
+    let mut parsed = parse_ini_file_with_budget(
+        path,
+        SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE),
+        |path| invalid_slide(path, "MIRAX key file too large"),
+        true,
+        budget,
+    )?;
+    for group in parsed.groups.values_mut() {
+        group.remove("");
+    }
+    Ok(parsed)
+}
+
+pub(super) struct MiraxIndexBuildContext<'a, R> {
     pub(super) path: &'a Path,
-    pub(super) index_file: &'a mut File,
+    pub(super) index_file: &'a mut R,
     pub(super) index_path: &'a Path,
     pub(super) seek_location: u64,
     pub(super) datafile_paths: &'a [PathBuf],
@@ -68,10 +106,11 @@ pub(super) struct MiraxIndexBuildContext<'a> {
     pub(super) slide_positions: &'a [i32],
     pub(super) quickhash: &'a mut Quickhash1,
     pub(super) quickhash_files: &'a mut HashMap<PathBuf, File>,
+    pub(super) open_budget: &'a OpenBudget,
 }
 
-pub(super) fn process_hier_data_pages_from_indexfile(
-    context: MiraxIndexBuildContext<'_>,
+pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
+    context: MiraxIndexBuildContext<'_, R>,
 ) -> Result<(), WsiError> {
     let MiraxIndexBuildContext {
         path,
@@ -86,15 +125,22 @@ pub(super) fn process_hier_data_pages_from_indexfile(
         slide_positions,
         quickhash,
         quickhash_files,
+        open_budget,
     } = context;
+    // Records are four adjacent i32 fields. Bound read-ahead while avoiding a
+    // file read for every field; BufReader also handles absolute page seeks.
+    let mut buffered_index = std::io::BufReader::with_capacity(8 * 1024, index_file);
+    let index_file = &mut buffered_index;
     let mut image_number = 0u32;
     let positions_x = images_x / image_divisions;
     let positions_y = images_y / image_divisions;
-    let mut active_positions = vec![false; positions_x.saturating_mul(positions_y) as usize];
+    let position_count = u64::from(positions_x).saturating_mul(u64::from(positions_y));
+    open_budget.retain_index(position_count)?;
+    let mut active_positions = vec![false; position_count as usize];
     let levels_len = levels.len();
     let level0_raw_image_width = levels[0].raw_image_width;
     let level0_raw_image_height = levels[0].raw_image_height;
-    let mut budget = MiraxIndexBudget::default();
+    let mut budget = MiraxIndexBudget::new(open_budget);
 
     for zoom_level in 0..levels.len() {
         let level = &mut levels[zoom_level];
@@ -694,3 +740,7 @@ pub(super) fn get_nonhier_name_offset_helper(
 #[cfg(test)]
 #[path = "index/tests/budget.rs"]
 mod budget_tests;
+
+#[cfg(test)]
+#[path = "index/tests/io.rs"]
+mod io_tests;

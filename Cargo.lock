@@ -622,18 +622,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "j2k-cuda-jpeg-engine"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec7ef351df3354a532dd6967b9d4dcfddfa931c6dd74487dceeeaca63f9e4f82"
-dependencies = [
- "j2k-codec-math",
- "j2k-core",
- "j2k-cuda-build-support",
- "j2k-cuda-runtime",
-]
-
-[[package]]
 name = "j2k-cuda-runtime"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,35 +646,6 @@ dependencies = [
  "j2k-profile",
  "memchr",
  "rayon",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "j2k-jpeg-cuda"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ada57391f8490e445218ff4640a228c03259697343c8b04614b712ab0686df1f"
-dependencies = [
- "j2k-core",
- "j2k-cuda-jpeg-engine",
- "j2k-cuda-runtime",
- "j2k-jpeg",
- "j2k-profile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "j2k-jpeg-metal"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2cb81efb8b259855fa4d8342672f635d88a72f1bb5ae34ae63756c6bd4e3e2b"
-dependencies = [
- "j2k-core",
- "j2k-jpeg",
- "j2k-metal-support",
- "j2k-profile",
- "objc2",
- "objc2-metal",
  "thiserror 2.0.18",
 ]
 
@@ -798,6 +757,45 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jxr"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cade3c06c3826b2e36cdc9917d608df4f404e52f079ae0f7639221dff6774dd1"
+dependencies = [
+ "jxr-core",
+ "jxr-native",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jxr-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e02946278023d39d36532b427ea5041f33ff4b44fe44a374b70b105efc959474"
+dependencies = [
+ "j2k-core",
+]
+
+[[package]]
+name = "jxr-math"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6506b3ec14544413cf741ae3ce3b3079e6cff860bc7060fa8ae311157f7b4752"
+
+[[package]]
+name = "jxr-native"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91ec846e231900a12a82914144c0db07d35389008322d773dbb46349df7f474f"
+dependencies = [
+ "fearless_simd",
+ "jxr-core",
+ "jxr-math",
+ "rayon",
 ]
 
 [[package]]
@@ -1135,6 +1133,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+ "sha2-asm",
+]
+
+[[package]]
+name = "sha2-asm"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1492,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "wsi-rs"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "byteorder",
@@ -1508,15 +1516,15 @@ dependencies = [
  "j2k",
  "j2k-core",
  "j2k-cuda",
+ "j2k-cuda-runtime",
  "j2k-jpeg",
- "j2k-jpeg-cuda",
- "j2k-jpeg-metal",
  "j2k-metal",
  "j2k-metal-support",
  "j2k-native",
  "j2k-tilecodec",
  "jpeg-decoder",
  "jpeg-encoder",
+ "jxr",
  "lru",
  "memchr",
  "objc2",
@@ -1531,13 +1539,14 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "weezl",
  "wsi-rs-test-support",
  "zstd",
 ]
 
 [[package]]
 name = "wsi-rs-openslide-shim"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libloading 0.8.9",
  "tempfile",

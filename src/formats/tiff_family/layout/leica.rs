@@ -140,6 +140,7 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
                     ),
                     sample_type: sample_type_for_ifd(container, ifd_id),
                     channels: associated_channel_count(container, ifd_id),
+                    icc_profile: Vec::new(),
                 },
             );
             associated_sources.insert(name, self.associated_source_for_ifd(container, ifd_id)?);
@@ -560,7 +561,8 @@ impl LeicaInterpreter {
                 .ok()
                 .and_then(|bytes| String::from_utf8(bytes).ok())
                 .unwrap_or_else(|| barcode.clone());
-            properties.insert("leica.barcode", decoded);
+            properties.insert("leica.barcode", decoded.clone());
+            properties.insert("openslide.barcode", decoded);
         }
         if let Some(value) = representative.creation_date.as_deref() {
             properties.insert("leica.creation-date", value);

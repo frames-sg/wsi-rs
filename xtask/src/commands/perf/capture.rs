@@ -14,7 +14,7 @@ use super::worker::{
     cache_bytes, prepare_bench, prepare_pair, result_dir, run_bench, BenchInvocation, BenchLibrary,
 };
 
-const DEFAULT_REPEAT_COUNT: u32 = 3;
+const DEFAULT_REPEAT_COUNT: u32 = 5;
 const SLIDES_ENV: &str = "WSI_RS_PERF_SLIDES";
 const REPEATS_ENV: &str = "WSI_RS_PERF_REPEATS";
 const WORKERS_ENV: &str = "WSI_RS_PERF_WORKERS";

@@ -16,9 +16,7 @@ use j2k_jpeg::{
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
     JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
 };
-use j2k_tilecodec::{
-    DeflateCodec, DeflatePool, LzwCodec, LzwPool, TileDecompress, ZstdCodec, ZstdPool,
-};
+use j2k_tilecodec::{DeflateCodec, DeflatePool, TileDecompress, ZstdCodec, ZstdPool};
 use rayon::prelude::*;
 
 use crate::core::cache::{CacheKey, WeightedLru};
@@ -31,11 +29,7 @@ use crate::core::registry::{
     SlideReader, DEFAULT_MAX_REGION_PIXELS,
 };
 use crate::core::types::*;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use crate::decode::jp2k::decode_batch_jp2k_pixels;
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kColorSpace, Jp2kDecodeJob};
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use crate::decode::jpeg::decode_batch_jpeg_pixels;
 use crate::decode::jpeg::{decode_batch_jpeg, decode_jpeg_rgb_with_size_override, JpegDecodeJob};
 use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
@@ -49,6 +43,7 @@ mod decode_batch;
 mod dispatch;
 mod image_ops;
 mod jpeg_frame;
+mod jpegxr;
 mod ndpi_batch;
 mod ndpi_core;
 mod ndpi_retile;
@@ -65,9 +60,6 @@ use image_ops::*;
 use jpeg_frame::*;
 use ndpi_retile::*;
 pub(crate) use reader::TiffPixelReader;
-
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use crate::output::{CudaBackendSessionsRef, MetalBackendSessionsRef};
 
 #[cfg(test)]
 mod tests;

@@ -36,7 +36,9 @@ pub(super) use raw_little_endian::scan_encapsulated_frames_raw_little_endian;
 pub(super) use raw_little_endian::scan_raw_encapsulated_pixel_sequence_with_reader_controlled;
 #[cfg(test)]
 pub(super) use validation::preflight_compressed_frame;
-pub(super) use validation::preflight_compressed_lengths;
+pub(super) use validation::{
+    preflight_compressed_frame_with_limit, preflight_compressed_lengths_with_limit,
+};
 
 pub(super) fn reopen_dicom_object(path: &Path) -> Result<DefaultDicomObject, WsiError> {
     dicom_object::open_file(path).map_err(|source| WsiError::InvalidSlide {

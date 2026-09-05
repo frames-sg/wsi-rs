@@ -1,6 +1,6 @@
 use super::fixtures::*;
 use crate::core::registry::{DatasetReader, FormatProbe, ProbeConfidence, SlideReader};
-use crate::core::types::{RegionRequest, TileOutputPreference, TileRequest, TileViewRequest};
+use crate::core::types::{RegionRequest, TileRequest, TileViewRequest};
 use crate::formats::zeiss::slide::{ZeissReader, ZeissSlide};
 use crate::formats::zeiss::{ZeissBackend, FILE_MAGIC};
 use crate::WsiError;
@@ -134,16 +134,9 @@ fn generated_czi_reads_tiles_batches_levels_and_cache_hits() {
     );
 
     let batch = reader
-        .read_tiles(
-            &[level_zero.clone(), level_one],
-            TileOutputPreference::cpu_only(),
-        )
+        .read_tiles_cpu(&[level_zero.clone(), level_one])
         .expect("read mixed-level batch");
     assert_eq!(batch.len(), 2);
-    let error = reader
-        .read_tiles(&[level_zero], TileOutputPreference::require_device_auto())
-        .expect_err("Zeiss cannot return device-resident tiles");
-    assert!(error.to_string().contains("RequireDevice"));
 
     let poisoned_slide =
         Arc::new(ZeissSlide::parse(fixture.path()).expect("parse CZI for poisoned-cache recovery"));
@@ -199,9 +192,12 @@ fn generated_czi_reads_tiles_batches_levels_and_cache_hits() {
 }
 
 #[test]
-fn generated_czi_public_region_display_and_associated_reads_are_deterministic() {
+fn generated_czi_internal_reader_region_display_and_associated_reads_are_deterministic() {
     let fixture = main_fixture();
-    let slide = crate::Slide::open(fixture.path()).expect("open public CZI slide");
+    let source = ZeissBackend
+        .open(fixture.path())
+        .expect("open generated CZI with the internal reader");
+    let slide = crate::Slide::from_source(source, Arc::new(crate::TileCache::new(1024 * 1024)));
     let region = slide
         .read_region(&RegionRequest::new(0usize, 0usize, 0u32, (1, 0), (3, 2)))
         .expect("read generated CZI region");
@@ -290,4 +286,64 @@ fn generated_czi_reports_index_bounds_and_corrupt_input_context() {
         Err(error) => error,
     };
     assert!(error.to_string().contains("magic"));
+}
+
+#[test]
+fn public_czi_reader_obeys_metadata_and_index_limits() {
+    let fixture = main_fixture();
+    for limits in [
+        crate::SlideLimits::default()
+            .with_metadata_value_bytes(32)
+            .unwrap(),
+        crate::SlideLimits::default()
+            .with_tile_index_bytes(32)
+            .unwrap(),
+        crate::SlideLimits::default()
+            .with_encoded_unit_bytes(1)
+            .unwrap(),
+    ] {
+        let result = crate::Slide::open_with_options(
+            fixture.path(),
+            crate::SlideOpenOptions::default().with_limits(limits),
+        );
+        assert!(
+            matches!(result, Err(WsiError::ResourceLimit { .. })),
+            "expected configured CZI resource limit: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn public_czi_reader_does_not_overlay_multiple_planes() {
+    let fixture = write_fixture(
+        &[SubblockSpec::bgr24(0, 0, 1, 1, vec![1, 2, 3])],
+        &[],
+        &metadata_xml(1, 1).replace("<SizeS>1</SizeS>", "<SizeS>1</SizeS><SizeZ>2</SizeZ>"),
+    );
+    let error = crate::Slide::open(fixture.path()).unwrap_err();
+    assert!(error.to_string().contains("single-plane"), "{error}");
+}
+
+#[test]
+fn jpeg_attachment_probe_obeys_the_encoded_unit_limit() {
+    let fixture = write_fixture(
+        &[SubblockSpec::bgr24(0, 0, 1, 1, vec![1, 2, 3])],
+        &[AttachmentSpec {
+            name: "Label",
+            file_type: "JPG",
+            data: jpeg_rgb(1, 1, &[10, 20, 30]),
+        }],
+        &metadata_xml(1, 1),
+    );
+    let limits = crate::SlideLimits::default()
+        .with_encoded_unit_bytes(100)
+        .unwrap();
+    let result = crate::Slide::open_with_options(
+        fixture.path(),
+        crate::SlideOpenOptions::default().with_limits(limits),
+    );
+    assert!(
+        matches!(result, Err(WsiError::ResourceLimit { .. })),
+        "{result:?}"
+    );
 }

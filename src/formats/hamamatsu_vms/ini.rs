@@ -1,7 +1,9 @@
 use super::jpeg::read_vms_jpeg_header;
 use super::model::invalid_slide;
 use super::*;
-use crate::formats::ini::{parse_ini_file, ParsedIni};
+#[cfg(test)]
+use crate::formats::ini::parse_ini_file;
+use crate::formats::ini::{parse_ini_file_with_budget, ParsedIni};
 
 pub(super) const GROUP_VMS: &str = "Virtual Microscope Specimen";
 pub(super) const KEY_MAP_FILE: &str = "MapFile";
@@ -15,12 +17,26 @@ pub(super) const KEY_PHYSICAL_HEIGHT: &str = "PhysicalHeight";
 pub(super) const KEY_SOURCE_LENS: &str = "SourceLens";
 const KEY_FILE_MAX_SIZE: u64 = 64 << 10;
 
+#[cfg(test)]
 pub(super) fn parse_vms_ini(path: &Path) -> Result<ParsedIni, WsiError> {
     parse_ini_file(
         path,
         KEY_FILE_MAX_SIZE,
         |path| invalid_slide(path, "VMS key file too large"),
         false,
+    )
+}
+
+pub(super) fn parse_vms_ini_with_budget(
+    path: &Path,
+    budget: &OpenBudget,
+) -> Result<ParsedIni, WsiError> {
+    parse_ini_file_with_budget(
+        path,
+        KEY_FILE_MAX_SIZE,
+        |path| invalid_slide(path, "VMS key file too large"),
+        false,
+        budget,
     )
 }
 

@@ -63,6 +63,105 @@ impl TiffPixelReader {
         Ok(data)
     }
 
+    pub(super) fn read_stripped_compressed_data(
+        &self,
+        name: &str,
+        ifd_id: IfdId,
+        compression: Compression,
+        dimensions: (u32, u32),
+        strip_offsets: &[u64],
+        strip_byte_counts: &[u64],
+    ) -> Result<Vec<u8>, WsiError> {
+        if strip_offsets.len() != strip_byte_counts.len() {
+            return Err(WsiError::UnsupportedFormat(format!(
+                "associated image '{}' has mismatched strip metadata ({} offsets vs {} byte counts)",
+                name,
+                strip_offsets.len(),
+                strip_byte_counts.len()
+            )));
+        }
+        let (width, height) = dimensions;
+        let rows_per_strip = self
+            .container
+            .get_u32(ifd_id, tags::ROWS_PER_STRIP)
+            .unwrap_or(height)
+            .max(1);
+        let strip_count = height.div_ceil(rows_per_strip) as usize;
+        if strip_offsets.len() < strip_count {
+            return Err(WsiError::UnsupportedFormat(format!(
+                "associated image '{}' expected at least {} strips, found {}",
+                name,
+                strip_count,
+                strip_offsets.len()
+            )));
+        }
+        strip_byte_counts[..strip_count]
+            .iter()
+            .try_fold(0u64, |total, count| total.checked_add(*count))
+            .filter(|total| *total <= MAX_COMPRESSED_INPUT_BYTES)
+            .ok_or_else(|| {
+                WsiError::UnsupportedFormat(format!(
+                    "associated image '{}' compressed strips exceed the {} byte safety limit",
+                    name, MAX_COMPRESSED_INPUT_BYTES
+                ))
+            })?;
+        let expected_total = self.expected_uncompressed_tile_bytes(ifd_id, width, height)?;
+        let mut decoded = Vec::with_capacity(expected_total);
+
+        for (strip_idx, (&offset, &byte_count)) in strip_offsets[..strip_count]
+            .iter()
+            .zip(&strip_byte_counts[..strip_count])
+            .enumerate()
+        {
+            let strip_y = rows_per_strip.saturating_mul(strip_idx as u32);
+            let strip_height = rows_per_strip.min(height - strip_y);
+            let expected_strip =
+                self.expected_uncompressed_tile_bytes(ifd_id, width, strip_height)?;
+            if byte_count == 0 {
+                let new_len = decoded.len().checked_add(expected_strip).ok_or_else(|| {
+                    WsiError::UnsupportedFormat(format!(
+                        "associated image '{}' decoded length overflow",
+                        name
+                    ))
+                })?;
+                decoded.resize(new_len, 0);
+                continue;
+            }
+            let input = self
+                .container
+                .pread(offset, byte_count)
+                .map_err(|error| error.into_wsi_error(self.container.path()))?;
+            let strip = self.decompress_tiff_payload(
+                ifd_id,
+                compression,
+                &input,
+                expected_strip,
+                width,
+                strip_height,
+            )?;
+            if strip.len() != expected_strip {
+                return Err(WsiError::UnsupportedFormat(format!(
+                    "associated image '{}' strip {} produced {} bytes, expected {}",
+                    name,
+                    strip_idx,
+                    strip.len(),
+                    expected_strip
+                )));
+            }
+            decoded.extend_from_slice(&strip);
+        }
+
+        if decoded.len() != expected_total {
+            return Err(WsiError::UnsupportedFormat(format!(
+                "associated image '{}' produced {} bytes, expected {}",
+                name,
+                decoded.len(),
+                expected_total
+            )));
+        }
+        Ok(decoded)
+    }
+
     pub(super) fn read_stripped_jpeg_image(
         &self,
         name: &str,

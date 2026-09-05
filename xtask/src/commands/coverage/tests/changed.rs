@@ -97,6 +97,42 @@ fn declaration_only_sources_have_no_changed_coverage_candidates() {
 }
 
 #[test]
+fn module_wiring_changes_are_declaration_only_even_when_the_file_has_functions() {
+    let source = "//! Public docs.\n#[cfg(feature = \"gpu\")]\n#[doc(hidden)]\npub use candidate::{\n    DeviceTile,\n    DeviceContext,\n};\nmod candidate;\nfn fuzz_only() {}\n";
+
+    assert!(changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([1, 2, 3, 4, 5, 6, 7, 8]),
+    ));
+    assert!(!changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([9]),
+    ));
+}
+
+#[test]
+fn portable_changed_coverage_candidates_match_the_lcov_surface() {
+    assert!(is_production_coverage_path(Path::new(
+        "src/decode/jp2k/cpu.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "test-support/src/corpus.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/device.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/cuda.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/decode/jp2k/metal.rs"
+    )));
+    assert!(!is_production_coverage_path(Path::new(
+        "src/formats/dicom/reader/device.rs"
+    )));
+}
+
+#[test]
 fn repository_relative_changed_files_are_read_from_the_git_root() {
     let root = tempfile::tempdir().unwrap();
     let relative = PathBuf::from("src/lib.rs");
@@ -129,6 +165,9 @@ fn coverage_candidates_skip_test_harness_paths() {
     )));
     assert!(!is_coverage_candidate(Path::new("tests/integration.rs")));
     assert!(!is_coverage_candidate(Path::new("benches/read_paths.rs")));
+    assert!(!is_coverage_candidate(Path::new(
+        "fuzz/fuzz_targets/open_wsi_bytes.rs"
+    )));
     assert!(is_coverage_candidate(Path::new(
         "xtask/src/commands/perf.rs"
     )));
@@ -199,4 +238,10 @@ fn repository_collection_helpers_report_real_and_invalid_git_inputs() {
     let mut lines = HashMap::new();
     add_file_lines(&mut lines, source.path()).unwrap();
     assert_eq!(lines[source.path()], BTreeSet::from([1, 2, 3]));
+
+    let missing_root = root.join("definitely-missing-directory");
+    let mut changed = HashMap::new();
+    assert!(collect_git_diff_lines(&mut changed, &missing_root, &["diff", "--name-only"]).is_err());
+    assert!(untracked_rust_paths(&missing_root).is_err());
+    assert!(add_repo_file_lines(&mut changed, root.as_path(), Path::new("missing.rs")).is_err());
 }

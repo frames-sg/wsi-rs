@@ -18,13 +18,19 @@ impl VmsJpeg {
         cache_config: CacheConfig,
     ) -> Result<Self, WsiError> {
         let mut private_cache_budget = cache_config.private_cache_budget(1);
-        Self::parse_with_private_cache_budget(path, row_starts, &mut private_cache_budget)
+        Self::parse_with_private_cache_budget(
+            path,
+            row_starts,
+            &mut private_cache_budget,
+            MAX_COMPRESSED_INPUT_BYTES,
+        )
     }
 
     pub(super) fn parse_with_private_cache_budget(
         path: &Path,
         row_starts: Vec<Option<u64>>,
         private_cache_budget: &mut PrivateCacheBudget,
+        encoded_unit_bytes: u64,
     ) -> Result<Self, WsiError> {
         let header = read_vms_jpeg_header(path).map_err(|err| {
             invalid_slide(
@@ -90,6 +96,7 @@ impl VmsJpeg {
                 ),
             )),
             comment: header.comment,
+            encoded_unit_bytes,
         })
     }
 
@@ -154,14 +161,15 @@ impl VmsJpeg {
             layout: CpuTileLayout::Interleaved,
             data: CpuTileData::u8(pixels),
         };
+        let retained_bytes = u64::try_from(tile.data.byte_size()).unwrap_or(u64::MAX);
         self.decoded_tile_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(cache_key, Arc::new(tile.clone()));
+            .put(cache_key, Arc::new(tile.clone()), retained_bytes);
         Ok(tile)
     }
 
-    fn tile_jpeg_bytes(
+    pub(super) fn tile_jpeg_bytes(
         &self,
         tile_index: usize,
         width: u32,
@@ -176,14 +184,18 @@ impl VmsJpeg {
                 self.path.display()
             )));
         }
-        let data_len = checked_vms_entropy_len(stop - start, self.header.len())?;
+        let data_len = checked_vms_entropy_len_with_limit(
+            stop - start,
+            self.header.len(),
+            self.encoded_unit_bytes,
+        )?;
         let mut entropy = Vec::new();
         entropy
             .try_reserve_exact(data_len)
             .map_err(|_| WsiError::ResourceLimit {
                 resource: "VMS JPEG tile",
                 requested: data_len as u64,
-                limit: MAX_COMPRESSED_INPUT_BYTES,
+                limit: self.encoded_unit_bytes,
             })?;
         entropy.resize(data_len, 0);
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
@@ -213,7 +225,7 @@ impl VmsJpeg {
             .map_err(|_| WsiError::ResourceLimit {
                 resource: "VMS JPEG tile",
                 requested: header.len() as u64 + entropy.len() as u64,
-                limit: MAX_COMPRESSED_INPUT_BYTES,
+                limit: self.encoded_unit_bytes,
             })?;
         header.extend_from_slice(&entropy);
         Ok(header)
@@ -354,17 +366,26 @@ fn checked_vms_tile_count(
     Ok(tile_count as usize)
 }
 
+#[cfg(test)]
 fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize, WsiError> {
+    checked_vms_entropy_len_with_limit(segment_len, header_len, MAX_COMPRESSED_INPUT_BYTES)
+}
+
+fn checked_vms_entropy_len_with_limit(
+    segment_len: u64,
+    header_len: usize,
+    limit: u64,
+) -> Result<usize, WsiError> {
     // Rust's supported address spaces are no wider than u64.
     let header_len = header_len as u64;
     let total_len = segment_len
         .checked_add(header_len)
         .ok_or_else(|| WsiError::Jpeg("VMS JPEG tile length overflow".into()))?;
-    if total_len > MAX_COMPRESSED_INPUT_BYTES {
+    if total_len > limit {
         return Err(WsiError::ResourceLimit {
             resource: "VMS JPEG tile",
             requested: total_len,
-            limit: MAX_COMPRESSED_INPUT_BYTES,
+            limit,
         });
     }
     // The compressed-input budget above is below the 32-bit address-space limit.

@@ -19,6 +19,18 @@ fn mpp_parsing() {
 }
 
 #[test]
+fn physical_metadata_rejects_non_positive_and_non_finite_values() {
+    for invalid in ["0", "-1", "NaN", "inf"] {
+        let mut props = Properties::new();
+        props.insert("openslide.mpp-x", invalid);
+        props.insert("openslide.mpp-y", "0.25");
+        props.insert("openslide.objective-power", invalid);
+        assert_eq!(props.mpp(), None, "mpp value {invalid}");
+        assert_eq!(props.objective_power(), None, "objective value {invalid}");
+    }
+}
+
+#[test]
 fn background_color_default_white() {
     let props = Properties::new();
     assert_eq!(props.background_color(), [255, 255, 255]);

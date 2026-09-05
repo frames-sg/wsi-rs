@@ -6,17 +6,19 @@ use j2k_core::BackendRequest;
 
 use crate::core::cache::{PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
+use crate::core::registry::OpenBudget;
 use crate::core::types::{CpuTile, RawCompressedTile};
 use crate::error::WsiError;
 
-use super::backend::is_encapsulated_transfer_syntax;
+use super::backend::{is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax};
 use super::decode::{
     black_sample_buffer, checked_dicom_tile_coordinates, crop_or_keep_sample_buffer_rgb,
     dicom_actual_tile_dimensions, raw_compression_for_transfer_syntax,
     raw_photometric_interpretation, trim_encapsulated_frame_padding,
+    validate_jpeg_transfer_syntax_frame,
 };
 use super::frame_index::DicomEncapsulatedFrames;
-use super::metadata::{invalid_slide, parse_sparse_tile_map, ParsedDicomMetadata};
+use super::metadata::{invalid_slide, parse_sparse_tile_map_with_budget, ParsedDicomMetadata};
 use super::preflight::DicomPixelDataLocation;
 
 mod frame_decode;
@@ -42,6 +44,7 @@ pub(super) struct DicomImage {
     pub(super) grid: DicomGrid,
     pub(super) pixel_spacing: Option<(f64, f64)>,
     pub(super) objective_lens_power: Option<f64>,
+    pub(super) icc_profile: Vec<u8>,
     pub(super) frame_store: DicomFrameStore,
     pub(super) decoded_frame_cache: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
 }
@@ -49,6 +52,7 @@ pub(super) struct DicomImage {
 #[derive(Debug)]
 pub(super) struct DicomFrameStore {
     pub(super) path: PathBuf,
+    pub(super) encoded_unit_bytes: u64,
     pub(super) native_pixel_data: Option<NativePixelData>,
     pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
     pub(super) compressed_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
@@ -71,15 +75,31 @@ impl DicomImage {
     pub(super) fn from_metadata_with_private_cache_budget(
         meta: ParsedDicomMetadata,
         private_cache_budget: &mut PrivateCacheBudget,
+        open_budget: &OpenBudget,
     ) -> Result<Self, WsiError> {
+        // OpenSlide's DICOM contract uses the first optical path profile for
+        // both main and associated images. Preserve the bytes before the
+        // parsed metadata is consumed by the frame-store construction.
+        let icc_profile = meta
+            .source_icc_profiles
+            .first()
+            .map(|profile| profile.bytes.clone())
+            .unwrap_or_default();
         let width = meta.total_pixel_matrix_columns.unwrap_or(meta.columns);
         let height = meta.total_pixel_matrix_rows.unwrap_or(meta.rows);
         let tile_width = meta.columns;
         let tile_height = meta.rows;
         let tiles_across = width.div_ceil(tile_width);
         let tiles_down = height.div_ceil(tile_height);
+        let frame_index_bytes = u64::from(meta.number_of_frames).saturating_mul(64);
+        open_budget.retain_index(frame_index_bytes)?;
         let grid = if meta.dimension_organization_type.as_deref() == Some("TILED_SPARSE") {
-            DicomGrid::Sparse(parse_sparse_tile_map(&meta.obj, tile_width, tile_height)?)
+            DicomGrid::Sparse(parse_sparse_tile_map_with_budget(
+                &meta.obj,
+                tile_width,
+                tile_height,
+                open_budget,
+            )?)
         } else {
             DicomGrid::Full
         };
@@ -130,8 +150,10 @@ impl DicomImage {
             grid,
             pixel_spacing: meta.pixel_spacing,
             objective_lens_power: meta.objective_lens_power,
+            icc_profile,
             frame_store: DicomFrameStore {
                 path: meta.path,
+                encoded_unit_bytes: open_budget.limits().encoded_unit_bytes(),
                 native_pixel_data,
                 encapsulated_frames: Mutex::new(None),
                 compressed_frame_cache: Mutex::new(encapsulated_frame_cache),
@@ -191,6 +213,9 @@ impl DicomImage {
         let bytes = self.extract_encapsulated_frame(frame_index, level, col, row, true)?;
         let mut data = bytes.as_ref().clone();
         trim_encapsulated_frame_padding(&mut data);
+        if is_jpeg_transfer_syntax(&self.transfer_syntax_uid) {
+            validate_jpeg_transfer_syntax_frame(&self.transfer_syntax_uid, &data)?;
+        }
 
         Ok(RawCompressedTile::builder(compression)
             .dimensions(self.tile_width, self.tile_height)
@@ -244,19 +269,28 @@ impl DicomImage {
     }
 
     pub(super) fn cache_decoded_frame(&self, frame_index: u32, tile: Arc<CpuTile>) {
+        let retained_bytes = u64::try_from(tile.data.byte_size()).unwrap_or(u64::MAX);
         self.decoded_frame_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(frame_index, tile);
+            .put(frame_index, tile, retained_bytes);
     }
 
     pub(super) fn should_cache_decoded_frames_for_batch(&self, batch_len: usize) -> bool {
-        batch_len
+        let entry_bytes = dicom_frame_cache_entry_bytes(
+            self.tile_width,
+            self.tile_height,
+            self.samples_per_pixel,
+        )
+        .saturating_add(256);
+        u64::try_from(batch_len)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(entry_bytes)
             <= self
                 .decoded_frame_cache
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .capacity_entries()
+                .capacity_bytes()
     }
 }
 

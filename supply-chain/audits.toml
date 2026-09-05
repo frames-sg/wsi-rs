@@ -1,4 +1,32 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.jxr]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed facade ownership, strict device selection and CPU fallback boundaries. Optional accelerator implementations remain separate dependencies. CPU decode and CZI/TIFF JPEG XR integration tests exercise this pinned facade."
+
+[[audits.jxr-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed request limits, checked geometry, output-layout validation, owned/borrowed surface contracts and typed errors. This package provides contracts over j2k-core and has no build script."
+
+[[audits.jxr-math]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed checked integer arithmetic, transform/overlap/color operations and generated reconstruction ABI. The build script reads packaged data/reconstruction.abi, validates the permutation, and writes only reconstruction_tables.rs under Cargo OUT_DIR."
+
+[[audits.jxr-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed bounded header and packet bit readers, Annex-A ranges, request preparation and limits, reconstruction contracts and output plane/crop validation. Parsing and CPU decoding consume caller-provided bytes; SIMD is delegated through the safe fearless_simd API. Typed failures precede output use. This is a source review, not a claim of exhaustive conformance or formal verification."
+
+[[audits.sha2-asm]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.6.4"
+notes = "Reviewed the published MIT package manifest, build.rs, Rust facade, and macOS/aarch64 assembly selected by its build script for this project's target-restricted use. The build script reads Cargo target architecture/vendor and invokes the existing cc dependency on packaged assembly; no runtime filesystem, network or subprocess access is present. The selected assembly reads a fixed 32-byte state and 64-byte input block, uses a bounded 64-byte stack frame, preserves the required callee-saved registers, and writes only the state. wsi-rs does not call this facade directly: enabling sha2 0.10.9's asm feature on macOS/aarch64 selects sha2's own CPU-feature-guarded ARM intrinsics with its software fallback. Independent hash vectors across padding/file boundaries pass in accelerated and forced-software configurations. Other target configurations retain the previous sha2 feature set. This acceptance is for the reviewed integration, not a claim of formal cryptographic verification or testing every assembly target."
