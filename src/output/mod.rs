@@ -1,4 +1,4 @@
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(test, feature = "cuda", feature = "metal"))]
 mod download;
 
 #[cfg(feature = "cuda")]

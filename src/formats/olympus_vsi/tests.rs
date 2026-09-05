@@ -10,9 +10,8 @@ use super::scene::index::{
     MAX_ETS_AXIS_INDEX, MAX_ETS_LEVEL_INDEX,
 };
 use super::scene::EtsScene;
-use super::slide::find_ets_files;
 use super::*;
-use crate::core::registry::{OpenBudget, Slide};
+use crate::core::registry::Slide;
 use crate::core::types::*;
 
 mod fixtures;
@@ -93,6 +92,8 @@ fn probe_requires_case_insensitive_vsi_extension_and_companion_directory() {
 #[cfg(unix)]
 #[test]
 fn ets_discovery_does_not_follow_symlinked_scene_directories() {
+    use super::slide::find_ets_files;
+    use crate::core::registry::OpenBudget;
     use std::os::unix::fs::symlink;
 
     let companion = tempfile::tempdir().expect("companion directory");

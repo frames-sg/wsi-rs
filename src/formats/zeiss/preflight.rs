@@ -1,6 +1,8 @@
 use super::*;
 use std::io::{Read, Seek, SeekFrom};
 
+mod directory;
+
 const SEGMENT_HEADER_BYTES: u64 = 32;
 const FILE_HEADER_DATA_BYTES: u64 = 512;
 const DIRECTORY_FIXED_BYTES: u64 = 128;
@@ -168,7 +170,12 @@ fn preflight_directory(
             "CZI subblock directory is too short for {entry_count} entries"
         )));
     }
-    Ok(())
+    let start = checked_add(
+        checked_add(offset, SEGMENT_HEADER_BYTES, "directory header")?,
+        DIRECTORY_FIXED_BYTES,
+        "directory entries",
+    )?;
+    directory::validate_entries(reader, file_len, start, payload_bytes, entry_count)
 }
 
 fn preflight_metadata(

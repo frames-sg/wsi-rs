@@ -298,7 +298,7 @@ pub(super) fn read_exact_string(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-pub(super) fn read_i32_le(file: &mut File, path: &Path) -> Result<i32, WsiError> {
+pub(super) fn read_i32_le(file: &mut impl Read, path: &Path) -> Result<i32, WsiError> {
     let mut buf = [0u8; 4];
     file.read_exact(&mut buf)
         .map_err(|source| WsiError::IoWithPath {
@@ -308,7 +308,7 @@ pub(super) fn read_i32_le(file: &mut File, path: &Path) -> Result<i32, WsiError>
     Ok(i32::from_le_bytes(buf))
 }
 
-pub(super) fn read_u32_le(file: &mut File, path: &Path) -> Result<u32, WsiError> {
+pub(super) fn read_u32_le(file: &mut impl Read, path: &Path) -> Result<u32, WsiError> {
     let value = read_i32_le(file, path)?;
     if value < 0 {
         return Err(invalid_slide(

@@ -62,6 +62,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn byte_readback_retains_interleaved_pixels_and_checks_total_extent() {
+        let bytes = vec![1, 2, 3, 4, 5, 6];
+        let tile = downloaded_bytes_to_cpu_tile(2, 1, PixelFormat::Rgb8, bytes.clone(), "CUDA")
+            .expect("valid RGB8 readback");
+        let CpuTileData::U8(actual) = tile.data else {
+            panic!("RGB8 readback must retain byte storage");
+        };
+        assert_eq!(&*actual, &bytes);
+        assert!(tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16, "Metal").is_err());
+    }
+
+    #[test]
     fn typed_readback_preserves_samples_for_both_backend_labels() {
         for backend in ["CUDA", "Metal"] {
             let samples = [0x1234_u16, 0xabcd, 0, u16::MAX, 1, 256];

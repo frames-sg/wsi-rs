@@ -1,4 +1,26 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.jxr]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed facade ownership, strict device selection and CPU fallback boundaries. Optional accelerator implementations remain separate dependencies. CPU decode and CZI/TIFF JPEG XR integration tests exercise this pinned facade."
+
+[[audits.jxr-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed request limits, checked geometry, output-layout validation, owned/borrowed surface contracts and typed errors. This package provides contracts over j2k-core and has no build script."
+
+[[audits.jxr-math]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed checked integer arithmetic, transform/overlap/color operations and generated reconstruction ABI. The build script reads packaged data/reconstruction.abi, validates the permutation, and writes only reconstruction_tables.rs under Cargo OUT_DIR."
+
+[[audits.jxr-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed bounded header and packet bit readers, Annex-A ranges, request preparation and limits, reconstruction contracts and output plane/crop validation. Parsing and CPU decoding consume caller-provided bytes; SIMD is delegated through the safe fearless_simd API. Typed failures precede output use. This is a source review, not a claim of exhaustive conformance or formal verification."

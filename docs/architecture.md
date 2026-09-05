@@ -117,7 +117,6 @@ classification; they repeat the unchanged classification scan. No cache budget,
 source identity check, payload validation, decode algorithm, or thread policy is
 changed. See `docs/audits/panning-performance-2026-09-04.md` for measurements.
 
-
 ## Bounded region concurrency
 
 NDPI integral region reads batch small restart strips inside the existing region
