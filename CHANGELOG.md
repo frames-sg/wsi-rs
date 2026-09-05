@@ -2,6 +2,21 @@
 
 # Changelog
 
+## Unreleased
+
+- Reuse decoded CZI JPEG/JPEG XR source blocks across output tiles within the
+  existing private-cache budget, compose RGB directly, and reuse the subblock
+  preflight file handle while preserving source checks.
+- Add single-plane brightfield CZI reading and JPEG XR CZI/TIFF tile decoding
+  through the published JXR crate, including 16-bit JPEG XR preview attachments.
+- Reject short TIFF decoded payloads and malformed CZI raw payload lengths.
+- Honor CZI metadata/index/input limits, keep planes separate, and use consistent
+  mosaic overlap ordering. Missing native levels return errors.
+- Delegate JPEG 2000 header/coding validation to J2K, including codec-supported
+  multi-tile/multi-part streams. Keep WSI output limits and pixel contracts.
+- Separate CZI composition/codec/raster responsibilities and adaptive reader
+  execution from runtime state. See the 2026-09-04 architecture audit.
+
 ## [Unreleased]
 
 ## [0.7.0] - 2026-09-05
