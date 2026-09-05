@@ -114,8 +114,8 @@ cargo build --locked --release -p wsi-rs-perf -p wsi-rs-openslide-shim
 RAYON_NUM_THREADS=1 WSI_RS_SHIM_JP2K_CPU_THREADS=1 \
 /usr/bin/time -l target/release/wsi-rs-perf \
   --engine wsi_rs \
-  --library /Users/user/Bench/frames/wsi-rs/target/release/libwsi_rs_openslide_shim.dylib \
-  --slide /Users/user/.cache/slideviewer/parity-corpus/mirax-001.d/CMU-1.mrxs \
+  --library "$PWD/target/release/libwsi_rs_openslide_shim.dylib" \
+  --slide "${WSI_RS_CORPUS_ROOT:?Set the local corpus directory}/mirax-001.d/CMU-1.mrxs" \
   --workers 1 --cache-bytes 67108864 --repeat-index 0
 ```
 
