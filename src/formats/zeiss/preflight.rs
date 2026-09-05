@@ -16,37 +16,79 @@ const METADATA_MAGIC: &[u8; 16] = b"ZISRAWMETADATA\0\0";
 const ATTACHMENT_DIRECTORY_MAGIC: &[u8; 16] = b"ZISRAWATTDIR\0\0\0\0";
 const SUBBLOCK_MAGIC: &[u8; 16] = b"ZISRAWSUBBLOCK\0\0";
 
+#[cfg(test)]
 pub(super) fn preflight_czi_file(path: &Path) -> Result<FileIdentity, WsiError> {
+    preflight_czi_file_with_limits(path, crate::SlideLimits::default())
+}
+
+pub(super) fn preflight_czi_file_with_limits(
+    path: &Path,
+    limits: crate::SlideLimits,
+) -> Result<FileIdentity, WsiError> {
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
     let identity = FileIdentity::from_open_file(path, &file)?;
     let file_len = file.metadata()?.len();
-    preflight_czi_reader(&mut file, file_len).map_err(|error| WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: error.to_string(),
+    preflight_czi_reader_with_limits(&mut file, file_len, limits).map_err(|error| match error {
+        WsiError::ResourceLimit { .. } => error,
+        error => WsiError::InvalidSlide {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        },
     })?;
     Ok(identity)
 }
 
+#[cfg(test)]
 pub(super) fn preflight_czi_subblock(path: &Path, offset: u64) -> Result<FileIdentity, WsiError> {
+    preflight_czi_subblock_with_limits(path, offset, crate::SlideLimits::default())
+}
+
+pub(super) fn preflight_czi_subblock_with_limits(
+    path: &Path,
+    offset: u64,
+    limits: crate::SlideLimits,
+) -> Result<FileIdentity, WsiError> {
     let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
-    let identity = FileIdentity::from_open_file(path, &file)?;
+    preflight_czi_open_subblock_with_limits(path, &mut file, offset, limits)
+}
+
+pub(super) fn preflight_czi_open_subblock_with_limits(
+    path: &Path,
+    file: &mut File,
+    offset: u64,
+    limits: crate::SlideLimits,
+) -> Result<FileIdentity, WsiError> {
+    let identity = FileIdentity::from_open_file(path, file)?;
     let file_len = file.metadata()?.len();
-    preflight_czi_subblock_reader(&mut file, file_len, offset).map_err(|error| {
-        WsiError::InvalidSlide {
-            path: path.to_path_buf(),
-            message: error.to_string(),
+    preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(|error| {
+        match error {
+            WsiError::ResourceLimit { .. } => error,
+            error => WsiError::InvalidSlide {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
         }
     })?;
     Ok(identity)
 }
 
+#[cfg(test)]
 fn preflight_czi_reader(reader: &mut (impl Read + Seek), file_len: u64) -> Result<(), WsiError> {
+    preflight_czi_reader_with_limits(reader, file_len, crate::SlideLimits::default())
+}
+
+fn preflight_czi_reader_with_limits(
+    reader: &mut (impl Read + Seek),
+    file_len: u64,
+    limits: crate::SlideLimits,
+) -> Result<(), WsiError> {
+    let budget = crate::core::registry::OpenBudget::new(limits);
     let file_header_size = read_segment_header(
         reader,
         file_len,
@@ -69,9 +111,9 @@ fn preflight_czi_reader(reader: &mut (impl Read + Seek), file_len: u64) -> Resul
     let metadata_offset = read_u64(&file_header, 60, "metadata offset")?;
     let attachment_directory_offset = read_u64(&file_header, 72, "attachment directory offset")?;
 
-    preflight_directory(reader, file_len, directory_offset)?;
+    preflight_directory(reader, file_len, directory_offset, &budget)?;
     if metadata_offset != 0 {
-        preflight_metadata(reader, file_len, metadata_offset)?;
+        preflight_metadata(reader, file_len, metadata_offset, &budget)?;
     }
     if attachment_directory_offset != 0 {
         preflight_attachment_directory(reader, file_len, attachment_directory_offset)?;
@@ -83,6 +125,7 @@ fn preflight_directory(
     reader: &mut (impl Read + Seek),
     file_len: u64,
     offset: u64,
+    budget: &crate::core::registry::OpenBudget,
 ) -> Result<(), WsiError> {
     let effective_size = read_segment_header(
         reader,
@@ -115,6 +158,7 @@ fn preflight_directory(
             "CZI subblock count {entry_count} exceeds the {MAX_CZI_SUBBLOCKS}-entry safety limit"
         )));
     }
+    budget.retain_index(payload_bytes.saturating_add((entry_count as u64).saturating_mul(512)))?;
     let minimum_payload = u64::try_from(entry_count)
         .ok()
         .and_then(|count| count.checked_mul(MIN_DIRECTORY_ENTRY_BYTES))
@@ -131,6 +175,7 @@ fn preflight_metadata(
     reader: &mut (impl Read + Seek),
     file_len: u64,
     offset: u64,
+    budget: &crate::core::registry::OpenBudget,
 ) -> Result<(), WsiError> {
     let effective_size = read_segment_header(
         reader,
@@ -148,6 +193,7 @@ fn preflight_metadata(
         "metadata header",
     )?;
     let xml_bytes = u64::from(read_u32(&fixed, 0, "metadata length")?);
+    budget.retain_metadata(xml_bytes)?;
     if xml_bytes > MAX_CZI_METADATA_BYTES {
         return Err(preflight_error(format!(
             "CZI metadata declares {xml_bytes} bytes, exceeding the {MAX_CZI_METADATA_BYTES}-byte safety limit"
@@ -203,10 +249,25 @@ fn preflight_attachment_directory(
     Ok(())
 }
 
+#[cfg(test)]
 fn preflight_czi_subblock_reader(
     reader: &mut (impl Read + Seek),
     file_len: u64,
     offset: u64,
+) -> Result<(), WsiError> {
+    preflight_czi_subblock_reader_with_limits(
+        reader,
+        file_len,
+        offset,
+        crate::SlideLimits::default(),
+    )
+}
+
+fn preflight_czi_subblock_reader_with_limits(
+    reader: &mut (impl Read + Seek),
+    file_len: u64,
+    offset: u64,
+    limits: crate::SlideLimits,
 ) -> Result<(), WsiError> {
     let effective_size = read_segment_header(
         reader,
@@ -226,6 +287,27 @@ fn preflight_czi_subblock_reader(
     let metadata_bytes = u64::from(read_u32(&fixed, 0, "subblock metadata length")?);
     let attachment_bytes = u64::from(read_u32(&fixed, 4, "subblock attachment length")?);
     let data_bytes = read_u64(&fixed, 8, "subblock data length")?;
+    for (resource, requested, limit) in [
+        (
+            "CZI subblock metadata",
+            metadata_bytes,
+            limits.metadata_value_bytes(),
+        ),
+        (
+            "CZI subblock attachment",
+            attachment_bytes,
+            limits.metadata_value_bytes(),
+        ),
+        ("CZI subblock data", data_bytes, limits.encoded_unit_bytes()),
+    ] {
+        if requested > limit {
+            return Err(WsiError::ResourceLimit {
+                resource,
+                requested,
+                limit,
+            });
+        }
+    }
     if metadata_bytes > SUBBLOCK_METADATA_BYTES {
         return Err(preflight_error(format!(
             "CZI subblock metadata declares {metadata_bytes} bytes, exceeding the {SUBBLOCK_METADATA_BYTES}-byte safety limit"

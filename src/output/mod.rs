@@ -1,3 +1,6 @@
+#[cfg(any(feature = "cuda", feature = "metal"))]
+mod download;
+
 #[cfg(feature = "cuda")]
 pub mod cuda;
 

@@ -44,6 +44,7 @@ fn compression_from_tag(val: u32) -> Compression {
         8 | 32946 => Compression::Deflate,
         6 | 7 => Compression::Jpeg,
         50000 => Compression::Zstd,
+        22610 => Compression::JpegXr,
         33003 | 33005 => Compression::Jp2kYcbcr,
         33004 => Compression::Jp2kRgb,
         _ => Compression::Other(val as u16),

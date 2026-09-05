@@ -197,3 +197,68 @@ fn ndpi_display_tile_composites_across_multiple_strip_rows_and_columns() {
     assert_eq!(pixel(50, 20), [0, 17, 7]);
     assert_eq!(pixel(200, 20), [50, 17, 7]);
 }
+
+#[test]
+fn ndpi_region_fastpath_matches_clipped_sequential_composition() {
+    let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+    for budget in [0, 1, 1024 * 1024] {
+        let cache = crate::TileCache::new(budget);
+        for (origin, size) in [
+            ((0, 0), (128, 16)),
+            ((-7, -2), (77, 19)),
+            ((120, 8), (23, 13)),
+        ] {
+            let req = RegionRequest::new(0usize, 0usize, 0u32, origin, size);
+            let expected = composite_region_from_source(&reader, None, &req, 8192).unwrap();
+            let mut ctx = crate::core::registry::SlideReadContext::new(Some(&cache), 8192);
+            let actual = reader
+                .read_region_fastpath(&mut ctx, &req)
+                .expect("restart strips should use bounded region batches")
+                .unwrap();
+            assert_eq!((actual.width(), actual.height()), size);
+            assert_eq!(actual.as_u8(), expected.as_u8());
+        }
+    }
+}
+
+#[test]
+fn ndpi_batch_preserves_duplicates_and_first_error_order() {
+    let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+    let reqs =
+        [(1, 1), (0, 0), (1, 0), (1, 1)].map(|(x, y)| TileRequest::new(0usize, 0usize, 0u32, x, y));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let region_reader = super::super::super::ndpi_batch::NdpiRegionReader(&reader);
+    let actual = pool
+        .install(|| region_reader.read_tiles_cpu(&reqs))
+        .unwrap();
+    for (req, tile) in reqs.iter().zip(actual) {
+        assert_eq!(tile.as_u8(), reader.read_tile_cpu(req).unwrap().as_u8());
+    }
+    let bad = [
+        TileRequest::new(0usize, 0usize, 0u32, 9, 0),
+        TileRequest::new(0usize, 0usize, 0u32, -1, 0),
+    ];
+    let error = pool
+        .install(|| region_reader.read_tiles_cpu(&bad))
+        .unwrap_err();
+    assert!(matches!(error, WsiError::TileRead { col: 9, .. }));
+}
+
+#[test]
+fn cancelled_ndpi_batch_does_not_start_source_decodes() {
+    let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+    let token = crate::ReadCancellationToken::new();
+    token.cancel();
+    let reqs = [
+        TileRequest::new(0usize, 0usize, 0u32, 0, 0),
+        TileRequest::new(0usize, 0usize, 0u32, 1, 0),
+    ];
+    assert!(matches!(
+        reader.read_tiles_cpu_controlled(&reqs, &crate::ReadControl::new(token)),
+        Err(WsiError::Cancelled)
+    ));
+    assert_eq!(reader.ndpi_strip_cache.current_bytes(), 0);
+}

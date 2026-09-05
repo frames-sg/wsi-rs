@@ -20,3 +20,13 @@ another explicit review.
 | Dependency | Surface and control | Owner | Review or expiry |
 | --- | --- | --- | --- |
 | `encoding 0.2.33` | Unmaintained transitive dependency of `dicom-encoding 0.9.1`. DICOM text parsing remains bounded by the format parsers and all known RustSec vulnerabilities are denied. | wsi-rs maintainers | 2026-10-01 or the next dicom-rs release, whichever is first |
+
+## JPEG XR release gate
+
+The reader now resolves `jxr 0.1.1`, `jxr-core 0.1.0`, `jxr-native 0.1.0`, and
+`jxr-math 0.1.0` from crates.io. The source repository is
+https://github.com/frames-sg/jxr. They pass the current advisory, license, and
+source checks, but have no `safe-to-deploy` Cargo Vet attestations in this
+repository. No exemptions were added for this change. `cargo xtask deps` must
+remain failing at Cargo Vet until the required review is recorded; the reader
+changes are not release-ready until that gate is satisfied.

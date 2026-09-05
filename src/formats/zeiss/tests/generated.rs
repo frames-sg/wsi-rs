@@ -287,3 +287,63 @@ fn generated_czi_reports_index_bounds_and_corrupt_input_context() {
     };
     assert!(error.to_string().contains("magic"));
 }
+
+#[test]
+fn public_czi_reader_obeys_metadata_and_index_limits() {
+    let fixture = main_fixture();
+    for limits in [
+        crate::SlideLimits::default()
+            .with_metadata_value_bytes(32)
+            .unwrap(),
+        crate::SlideLimits::default()
+            .with_tile_index_bytes(32)
+            .unwrap(),
+        crate::SlideLimits::default()
+            .with_encoded_unit_bytes(1)
+            .unwrap(),
+    ] {
+        let result = crate::Slide::open_with_options(
+            fixture.path(),
+            crate::SlideOpenOptions::default().with_limits(limits),
+        );
+        assert!(
+            matches!(result, Err(WsiError::ResourceLimit { .. })),
+            "expected configured CZI resource limit: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn public_czi_reader_does_not_overlay_multiple_planes() {
+    let fixture = write_fixture(
+        &[SubblockSpec::bgr24(0, 0, 1, 1, vec![1, 2, 3])],
+        &[],
+        &metadata_xml(1, 1).replace("<SizeS>1</SizeS>", "<SizeS>1</SizeS><SizeZ>2</SizeZ>"),
+    );
+    let error = crate::Slide::open(fixture.path()).unwrap_err();
+    assert!(error.to_string().contains("single-plane"), "{error}");
+}
+
+#[test]
+fn jpeg_attachment_probe_obeys_the_encoded_unit_limit() {
+    let fixture = write_fixture(
+        &[SubblockSpec::bgr24(0, 0, 1, 1, vec![1, 2, 3])],
+        &[AttachmentSpec {
+            name: "Label",
+            file_type: "JPG",
+            data: jpeg_rgb(1, 1, &[10, 20, 30]),
+        }],
+        &metadata_xml(1, 1),
+    );
+    let limits = crate::SlideLimits::default()
+        .with_encoded_unit_bytes(100)
+        .unwrap();
+    let result = crate::Slide::open_with_options(
+        fixture.path(),
+        crate::SlideOpenOptions::default().with_limits(limits),
+    );
+    assert!(
+        matches!(result, Err(WsiError::ResourceLimit { .. })),
+        "{result:?}"
+    );
+}

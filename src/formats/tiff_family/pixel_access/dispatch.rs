@@ -395,6 +395,17 @@ impl SlideReader for TiffPixelReader {
             t: plane.t,
         })?;
         match source {
+            TileSource::NdpiJpeg { .. } => {
+                let TileLayout::WholeLevel {
+                    virtual_tile_width,
+                    virtual_tile_height,
+                    ..
+                } = level.tile_layout
+                else {
+                    return None;
+                };
+                self.read_ndpi_region(ctx, req, (virtual_tile_width, virtual_tile_height))
+            }
             TileSource::SyntheticDownsample { base_level, factor } => {
                 Some(self.read_full_synthetic_region_fastpath(
                     cache,

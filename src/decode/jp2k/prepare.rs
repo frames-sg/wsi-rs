@@ -3,7 +3,7 @@ use j2k_core::{BackendRequest, PixelFormat};
 use crate::decode::jp2k::{Jp2kColorSpace, Jp2kDecodeJob};
 use crate::decode::jp2k_backend::effective_output_colorspace;
 use crate::decode::jp2k_codestream::{
-    parse_codestream_header, validate_narrow_subset, Jp2kCodestreamInfo,
+    parse_codestream_header, validate_pixel_contract, Jp2kCodestreamInfo,
 };
 use crate::error::WsiError;
 
@@ -73,7 +73,7 @@ pub(super) fn validate_jp2k_decode_request(
     }
 
     let header = parse_codestream_header(data)?;
-    validate_narrow_subset(&header)?;
+    validate_pixel_contract(&header)?;
     if header.image_width < expected_width || header.image_height < expected_height {
         return Err(WsiError::Jp2k(format!(
             "dimension mismatch: expected at least {}x{}, got {}x{}",

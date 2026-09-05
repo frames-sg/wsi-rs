@@ -1,7 +1,12 @@
 mod attachments;
+mod composition;
+mod level;
 mod metadata;
 mod preflight;
+mod raster;
 mod slide;
+mod source;
+mod subblock;
 mod tiles;
 
 #[cfg(test)]
@@ -21,7 +26,7 @@ use czi_rs::{
     AttachmentBlob, CompressionMode as CziCompressionMode, CziFile, Dimension as CziDimension,
     IntRect, PixelType as CziPixelType,
 };
-use image::imageops::{self, FilterType};
+
 use j2k_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
@@ -74,6 +79,7 @@ impl ConfiguredFormatProbe for ZeissBackend {}
 impl DatasetReader for ZeissBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
         let slide = Arc::new(ZeissSlide::parse(path)?);
+        slide.validate_wsi_pixels()?;
         Ok(Box::new(ZeissReader { slide }))
     }
 }
@@ -85,10 +91,8 @@ impl ConfiguredDatasetReader for ZeissBackend {
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
         let encoded_unit_bytes = config.limits.encoded_unit_bytes();
-        let slide = Arc::new(ZeissSlide::parse_with_cache_config(
-            path,
-            config.cache_config,
-        )?);
+        let slide = Arc::new(ZeissSlide::parse_with_config(path, config)?);
+        slide.validate_wsi_pixels()?;
         let reader: Box<dyn SlideReader> = Box::new(ZeissReader { slide });
         Ok(Box::new(ConservativeManagedReader::new(
             reader,

@@ -305,7 +305,11 @@ impl TiffPixelReader {
                 rgb_color_space: false,
                 backend,
             }),
-            Compression::None | Compression::Lzw | Compression::Deflate | Compression::Zstd => {
+            Compression::None
+            | Compression::Lzw
+            | Compression::Deflate
+            | Compression::Zstd
+            | Compression::JpegXr => {
                 let physical_width = self
                     .container
                     .get_u32(ifd_id, tags::TILE_WIDTH)
@@ -314,7 +318,9 @@ impl TiffPixelReader {
                     .container
                     .get_u32(ifd_id, tags::TILE_LENGTH)
                     .unwrap_or(height);
-                let physical = if compression == Compression::None {
+                let physical = if compression == Compression::JpegXr {
+                    self.decode_jpegxr_tile(ifd_id, &tile_data, physical_width, physical_height)?
+                } else if compression == Compression::None {
                     self.decode_uncompressed_tile(
                         ifd_id,
                         &tile_data,

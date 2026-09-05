@@ -760,6 +760,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxr"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cade3c06c3826b2e36cdc9917d608df4f404e52f079ae0f7639221dff6774dd1"
+dependencies = [
+ "jxr-core",
+ "jxr-native",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jxr-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e02946278023d39d36532b427ea5041f33ff4b44fe44a374b70b105efc959474"
+dependencies = [
+ "j2k-core",
+]
+
+[[package]]
+name = "jxr-math"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6506b3ec14544413cf741ae3ce3b3079e6cff860bc7060fa8ae311157f7b4752"
+
+[[package]]
+name = "jxr-native"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91ec846e231900a12a82914144c0db07d35389008322d773dbb46349df7f474f"
+dependencies = [
+ "fearless_simd",
+ "jxr-core",
+ "jxr-math",
+ "rayon",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1475,6 +1514,7 @@ dependencies = [
  "j2k-tilecodec",
  "jpeg-decoder",
  "jpeg-encoder",
+ "jxr",
  "lru",
  "memchr",
  "objc2",

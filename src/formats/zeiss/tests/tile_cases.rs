@@ -84,15 +84,15 @@ fn bitmap_conversion_normalizes_bgr_bgra_and_u16_channels() {
 }
 
 #[test]
-fn raw_uncompressed_bitmap_normalizes_short_and_long_payloads() {
+fn raw_uncompressed_bitmap_rejects_short_and_long_payloads() {
     let short = raw(
         PixelType::Bgr24,
         CompressionMode::UnCompressed,
         (2, 1),
         vec![1, 2, 3],
     );
-    let bitmap = bitmap_from_raw_uncompressed_subblock(&short).expect("pad short bitmap");
-    assert_eq!(bitmap.data, vec![1, 2, 3, 0, 0, 0]);
+    let error = bitmap_from_raw_uncompressed_subblock(&short).expect_err("short payload");
+    assert!(error.to_string().contains("payload length"));
 
     let long = raw(
         PixelType::Bgr24,
@@ -100,8 +100,8 @@ fn raw_uncompressed_bitmap_normalizes_short_and_long_payloads() {
         (1, 1),
         vec![1, 2, 3, 4, 5, 6],
     );
-    let bitmap = bitmap_from_raw_uncompressed_subblock(&long).expect("truncate long bitmap");
-    assert_eq!(bitmap.data, vec![1, 2, 3]);
+    let error = bitmap_from_raw_uncompressed_subblock(&long).expect_err("long payload");
+    assert!(error.to_string().contains("payload length"));
 
     let compressed = raw(
         PixelType::Bgr24,
@@ -297,16 +297,15 @@ fn parsed_slide_reports_corrupt_candidate_indices_with_context() {
 }
 
 #[test]
-fn missing_reduced_subblocks_fall_back_to_resizing_the_base_level() {
+fn missing_reduced_subblocks_are_reported_without_synthesizing_pixels() {
     let fixture = main_fixture();
     let mut slide = ZeissSlide::parse(fixture.path()).expect("parse generated CZI");
     slide.canvas_level_subblocks[1].clear();
     slide.canvas_level_tile_subblocks[1].clear();
-    let reduced = slide
+    let error = slide
         .scene_level_image(0, 1)
-        .expect("resize base level for missing reduced subblocks");
-    assert_eq!((reduced.width, reduced.height), (2, 1));
-    assert_eq!(reduced.channels, 3);
+        .expect_err("missing reduced source must fail");
+    assert!(error.to_string().contains("direct subblock composition"));
 }
 
 #[test]
@@ -465,7 +464,7 @@ fn typed_level_composition_rejects_oversized_destination_before_allocation() {
     let error = slide
         .scene_level_image(0, 0)
         .expect_err("oversized typed composition must fail before allocation");
-    assert!(error.to_string().contains("bitmap allocation"));
+    assert!(error.to_string().contains("Zeiss composed level"));
 }
 
 #[cfg(unix)]
@@ -525,4 +524,40 @@ fn tile_reads_reject_a_replaced_czi_source_path() {
         error.to_string().contains("source identity"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn jpegxr_czi_subblock_preserves_rgb_pixels() {
+    let mut block = SubblockSpec::bgr24(
+        0,
+        0,
+        16,
+        16,
+        include_bytes!("../../../../tests/fixtures/jxr/rgb.jxr").to_vec(),
+    );
+    block.compression = 4;
+    let fixture = write_fixture(&[block], &[], &metadata_xml(16, 16));
+    let slide = ZeissSlide::parse(fixture.path()).unwrap();
+    let actual = slide
+        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .expect("JPEG XR CZI tile");
+    let expected =
+        image::load_from_memory(include_bytes!("../../../../tests/fixtures/jxr/rgb.ppm"))
+            .unwrap()
+            .into_rgb8();
+    assert_eq!(actual.data.as_u8(), Some(expected.as_raw().as_slice()));
+}
+
+#[test]
+fn overlapping_subblocks_use_the_same_order_for_tiles_and_levels() {
+    let mut high = SubblockSpec::bgr24(0, 0, 1, 1, vec![30, 20, 10]);
+    high.m_index = Some(2);
+    let mut low = SubblockSpec::bgr24(0, 0, 1, 1, vec![3, 2, 1]);
+    low.m_index = Some(1);
+    let fixture = write_fixture(&[high, low], &[], &metadata_xml(1, 1));
+    let slide = ZeissSlide::parse(fixture.path()).unwrap();
+    let tile = slide.read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu).unwrap();
+    let level = slide.scene_level_image(0, 0).unwrap();
+    assert_eq!(tile.data.as_u8(), Some([10, 20, 30].as_slice()));
+    assert_eq!(tile.data.as_u8(), level.data.as_u8());
 }

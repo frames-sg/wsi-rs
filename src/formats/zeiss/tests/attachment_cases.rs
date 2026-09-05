@@ -41,9 +41,11 @@ fn unknown_attachments_are_ignored_and_jpeg_probe_falls_back_to_decode() {
         .find(|attachment| attachment.name == "Ignored")
         .expect("unknown attachment")
         .clone();
-    assert!(decode_associated_attachment(&mut czi, &unknown)
-        .expect("ignore unknown attachment")
-        .is_none());
+    assert!(
+        decode_associated_attachment(&mut czi, &unknown, crate::SlideLimits::default())
+            .expect("ignore unknown attachment")
+            .is_none()
+    );
 
     let label = czi
         .attachments()
@@ -51,10 +53,14 @@ fn unknown_attachments_are_ignored_and_jpeg_probe_falls_back_to_decode() {
         .find(|attachment| attachment.name == "Label")
         .expect("label attachment")
         .clone();
-    let metadata =
-        probe_associated_attachment(std::path::Path::new("missing-source.czi"), &mut czi, &label)
-            .expect("fallback label decode")
-            .expect("supported label metadata");
+    let metadata = probe_associated_attachment(
+        std::path::Path::new("missing-source.czi"),
+        &mut czi,
+        &label,
+        crate::SlideLimits::default(),
+    )
+    .expect("fallback label decode")
+    .expect("supported label metadata");
     assert_eq!(metadata.dimensions, (2, 1));
     assert_eq!(metadata.channels, 3);
 }

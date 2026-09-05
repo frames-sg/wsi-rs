@@ -1,10 +1,11 @@
 use super::super::attachments::{associated_name, probe_associated_attachment};
 use super::super::metadata::*;
-use super::super::preflight::preflight_czi_file;
+use super::super::preflight::preflight_czi_file_with_limits;
 use super::super::*;
 
 struct ValidatedCzi {
     czi: CziFile,
+    preflight_file: File,
     source_identity: FileIdentity,
     header: czi_rs::FileHeaderInfo,
     xml: String,
@@ -16,6 +17,7 @@ struct ValidatedCzi {
 
 struct CziDatasetParts {
     czi: CziFile,
+    preflight_file: File,
     source_identity: FileIdentity,
     attachments: Vec<czi_rs::AttachmentInfo>,
     dataset_id: DatasetId,
@@ -36,15 +38,41 @@ impl ZeissSlide {
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Self, WsiError> {
-        let validated = open_and_validate_czi(path)?;
-        let mut parts = build_dataset_parts(path, validated)?;
-        let associated = probe_associated_images(path, &mut parts.czi, &parts.attachments)?;
-        Ok(assemble_slide(path, cache_config, parts, associated))
+        Self::parse_with_config(
+            path,
+            BackendOpenConfig::new(cache_config, crate::SlideLimits::default()),
+        )
+    }
+
+    pub(in crate::formats::zeiss) fn parse_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+    ) -> Result<Self, WsiError> {
+        let validated = open_and_validate_czi(path, config.limits)?;
+        let mut parts = build_dataset_parts(path, validated, config.limits)?;
+        let associated =
+            probe_associated_images(path, &mut parts.czi, &parts.attachments, config.limits)?;
+        let mut slide = assemble_slide(path, config.cache_config, parts, associated);
+        slide.limits = config.limits;
+        Ok(slide)
     }
 }
 
-fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
-    let source_identity = preflight_czi_file(path)?;
+fn open_and_validate_czi(
+    path: &Path,
+    limits: crate::SlideLimits,
+) -> Result<ValidatedCzi, WsiError> {
+    let source_identity = preflight_czi_file_with_limits(path, limits)?;
+    let mut preflight_file = File::open(path).map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(source),
+        path: path.to_path_buf(),
+    })?;
+    if FileIdentity::from_open_file(path, &preflight_file)? != source_identity {
+        return Err(invalid_slide(
+            path,
+            "CZI source identity changed before subblock preflight",
+        ));
+    }
     let mut czi =
         CziFile::open(path).map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
     if FileIdentity::from_path(path)? != source_identity {
@@ -79,7 +107,7 @@ fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
                 u64::from(subblock.stored_size.h),
                 u64::try_from(subblock.pixel_type.bytes_per_pixel()).unwrap_or(u64::MAX),
             ],
-            MAX_DECODED_IMAGE_BYTES,
+            MAX_DECODED_IMAGE_BYTES.min(limits.decoded_output_bytes()),
             "CZI decoded subblock",
         )
         .map_err(|message| invalid_slide(path, message))?;
@@ -118,6 +146,17 @@ fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
         }
     }
 
+    for subblock in czi.subblocks() {
+        super::super::preflight::preflight_czi_open_subblock_with_limits(
+            path,
+            &mut preflight_file,
+            subblock.file_position,
+            limits,
+        )?;
+        if subblock.file_part != 0 {
+            return Err(invalid_slide(path, "multipart CZI is unsupported"));
+        }
+    }
     let header = czi.file_header().clone();
     let xml = czi
         .metadata_xml()
@@ -137,6 +176,26 @@ fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?
         .clone();
 
+    for dimension in CziDimension::FRAME_ORDER
+        .into_iter()
+        .filter(|&d| d != CziDimension::S)
+    {
+        if summary
+            .image
+            .sizes
+            .get(&dimension)
+            .is_some_and(|&size| size > 1)
+            || czi
+                .statistics()
+                .dim_bounds
+                .get(dimension)
+                .is_some_and(|range| range.size > 1)
+        {
+            return Err(WsiError::UnsupportedFormat(
+                "CZI WSI reads currently require single-plane images".into(),
+            ));
+        }
+    }
     Ok(ValidatedCzi {
         header,
         xml,
@@ -145,11 +204,16 @@ fn open_and_validate_czi(path: &Path) -> Result<ValidatedCzi, WsiError> {
         attachments: czi.attachments().to_vec(),
         subblocks: czi.subblocks().to_vec(),
         source_identity,
+        preflight_file,
         czi,
     })
 }
 
-fn build_dataset_parts(path: &Path, mut input: ValidatedCzi) -> Result<CziDatasetParts, WsiError> {
+fn build_dataset_parts(
+    path: &Path,
+    mut input: ValidatedCzi,
+    limits: crate::SlideLimits,
+) -> Result<CziDatasetParts, WsiError> {
     let scene_indices = scene_indices(&input.statistics, &input.summary)?;
     if scene_indices.is_empty() {
         return Err(invalid_slide(path, "Zeiss slide has no scenes"));
@@ -195,11 +259,14 @@ fn build_dataset_parts(path: &Path, mut input: ValidatedCzi) -> Result<CziDatase
         };
         canvas_level_subblocks[level_slot].push(subblock.index);
     }
-    let canvas_level_tile_subblocks = build_canvas_level_tile_subblocks(
+    let budget = crate::core::registry::OpenBudget::new(limits);
+    budget.retain_index((input.subblocks.len() as u64).saturating_mul(512))?;
+    let canvas_level_tile_subblocks = build_canvas_level_tile_subblocks_with_budget(
         &input.subblocks,
         &canvas_level_subblocks,
         &levels,
         subblock_origin,
+        &budget,
     )?;
     let scenes = vec![Scene {
         id: "scene_0".to_string(),
@@ -226,6 +293,7 @@ fn build_dataset_parts(path: &Path, mut input: ValidatedCzi) -> Result<CziDatase
 
     Ok(CziDatasetParts {
         czi: input.czi,
+        preflight_file: input.preflight_file,
         source_identity: input.source_identity,
         attachments: input.attachments,
         dataset_id,
@@ -314,6 +382,7 @@ fn probe_associated_images(
     path: &Path,
     czi: &mut CziFile,
     attachments: &[czi_rs::AttachmentInfo],
+    limits: crate::SlideLimits,
 ) -> Result<CziAssociatedImages, WsiError> {
     let mut associated_images = HashMap::new();
     let mut associated_sources = HashMap::new();
@@ -321,7 +390,7 @@ fn probe_associated_images(
         let Some(name) = associated_name(&attachment.name) else {
             continue;
         };
-        if let Some(metadata) = probe_associated_attachment(path, czi, attachment)? {
+        if let Some(metadata) = probe_associated_attachment(path, czi, attachment, limits)? {
             associated_images.insert(name.to_string(), metadata);
             associated_sources.insert(name.to_string(), attachment.clone());
         }
@@ -395,18 +464,26 @@ fn assemble_slide(
         .max()
         .unwrap_or(1);
 
-    let mut private_cache_budget = cache_config.private_cache_budget(3);
+    // Full-resolution Zeiss blocks can be ~14.5 MiB. Reserve half of the same
+    // aggregate budget for source reuse, rather than raising the memory cap.
+    let mut private_cache_budget = cache_config.private_cache_budget(6);
+    let subblock_cache = PrivateCache::new(private_cache_budget.allocate_shares(3));
     let level_cache = PrivateCache::new(private_cache_budget.allocate(level_entry_bytes));
     let tile_cache = PrivateCache::new(private_cache_budget.allocate(tile_entry_bytes));
     let associated_cache = PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
 
     ZeissSlide {
+        #[cfg(test)]
+        subblock_decodes: AtomicU64::new(0),
+        limits: crate::SlideLimits::default(),
         source_path: path.to_path_buf(),
         source_identity: parts.source_identity,
         dataset,
         czi: Mutex::new(parts.czi),
+        preflight_file: Mutex::new(parts.preflight_file),
         level_cache: Mutex::new(level_cache),
         tile_cache: Mutex::new(tile_cache),
+        subblock_cache: Mutex::new(subblock_cache),
         associated_cache: Mutex::new(associated_cache),
         associated_sources: associated.sources,
         subblock_origin: parts.subblock_origin,

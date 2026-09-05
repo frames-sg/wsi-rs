@@ -8,11 +8,11 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-orange.svg)](#license)
 
 `wsi-rs` is a Rust whole-slide image reader. It opens TIFF-family WSI,
-including ARGOS and Huron, DICOM VL WSI, Zeiss ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
+including ARGOS and Huron, DICOM VL WSI, Zeiss CZI/ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
 JPEG 2000 codestream fixtures, and `.svcache` containers. JPEG, JPEG 2000,
 and HTJ2K decode is delegated to the
 [J2K pure-Rust JPEG 2000 codec](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/)
-crates.
+crates. JPEG XR decoding uses the separate [JXR codec](https://github.com/frames-sg/jxr).
 
 The main crate denies `unsafe` code by default, with a narrowly scoped,
 audited exception for Metal interoperability.
@@ -140,17 +140,23 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 | --- | --- |
 | TIFF-family WSI (including ARGOS and Huron) and uncompressed RGB TIFF | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif`, `.avs` |
 | DICOM VL WSI | `.dcm` files or a DICOM series directory |
-| Zeiss ZVI | `.zvi` |
+| Zeiss CZI (single-plane brightfield) and ZVI | `.czi`, `.zvi` |
 | MIRAX | `.mrxs` plus sibling data files |
 | Hamamatsu VMS/VMU | `.vms`, `.vmu` plus sibling image files |
 | Olympus VSI | `.vsi` plus matching ETS companion data |
 | Raw JPEG 2000 codestream | `.j2k`, `.j2c` |
 | `.svcache` | `.svcache` |
 
-CZI and Sakura are explicitly unsupported in 0.7. CZI is not registered for
-default detection because the available corpus does not justify a production
-claim beyond uncompressed inputs. Sakura remains excluded until a
-redistributable real sample is available.
+CZI supports single-plane Bgr24 whole-slide images with uncompressed, JPEG,
+or JPEG XR subblocks. Scenes share a canvas and expose common native pyramid
+resolutions. JPEG XR Bgr48 preview attachments retain 16-bit samples. Other CZI
+pixel types, multi-plane datasets, and unsupported compression return errors.
+Sakura remains excluded until a redistributable real sample is available.
+
+JPEG XR TIFF support covers tiled, contiguous unsigned 8-bit grayscale/RGB
+images with top-left orientation, no predictor, and no alpha. Physical edge
+tiles are decoded before cropping. Compressed generic TIFF strips are not
+newly supported.
 
 Generic strip-based TIFF support is intentionally limited to one top-level,
 uncompressed 8-bit RGB image with top-left orientation, no predictor, and

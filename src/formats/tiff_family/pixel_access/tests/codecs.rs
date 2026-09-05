@@ -1,5 +1,40 @@
 use super::*;
 
+#[test]
+fn compressed_tiff_rejects_short_decoded_payloads() {
+    use std::io::Write;
+
+    let pixels = [12, 34, 56];
+    let mut deflate = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    deflate.write_all(&pixels).unwrap();
+    let cases = [
+        (Compression::Deflate, 8, deflate.finish().unwrap()),
+        (
+            Compression::Zstd,
+            50000,
+            zstd::stream::encode_all(pixels.as_slice(), 0).unwrap(),
+        ),
+        (
+            Compression::Lzw,
+            5,
+            weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+                .encode(&pixels)
+                .unwrap(),
+        ),
+    ];
+    for (compression, tag, data) in cases {
+        let reader = build_tiled_encoded_reader(2, 1, 2, 1, &[data], compression, tag, 3, 2);
+        let request = TileRequest::builder(0usize, 0usize, 0u32)
+            .tile(0, 0)
+            .build()
+            .unwrap();
+        assert!(
+            reader.read_tile_cpu(&request).is_err(),
+            "{compression:?} accepted half a tile"
+        );
+    }
+}
+
 fn jpeg_sof(ids: [u8; 3], sampling: [(u8, u8); 3]) -> Vec<u8> {
     let mut jpeg = vec![
         0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
@@ -287,4 +322,25 @@ fn tile_codec_kind_classifies_tiff_jpeg_and_jp2k_sources() {
         2,
     );
     assert_eq!(jp2k_reader.tile_codec_kind(&req), TileCodecKind::Jp2k);
+}
+
+#[test]
+fn jpegxr_tiff_reads_exact_pixels_and_crops_edge_tiles() {
+    let encoded = include_bytes!("../../../../../tests/fixtures/jxr/rgb.jxr").to_vec();
+    let expected =
+        image::load_from_memory(include_bytes!("../../../../../tests/fixtures/jxr/rgb.ppm"))
+            .unwrap()
+            .into_rgb8();
+    let file = build_tiled_encoded_tiff(19, 16, 16, 16, &[encoded.clone(), encoded], 22610, 3, 2);
+    let slide = crate::Slide::open(file.path()).unwrap();
+    let requests = [
+        TileRequest::new(0usize, 0usize, 0, 0, 0),
+        TileRequest::new(0usize, 0usize, 0, 1, 0),
+    ];
+    let tiles = slide.read_tiles(&requests).expect("JPEG XR TIFF batch");
+    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles[0].data.as_u8(), Some(expected.as_raw().as_slice()));
+    let edge = image::imageops::crop_imm(&expected, 0, 0, 3, 16).to_image();
+    assert_eq!((tiles[1].width, tiles[1].height), (3, 16));
+    assert_eq!(tiles[1].data.as_u8(), Some(edge.as_raw().as_slice()));
 }

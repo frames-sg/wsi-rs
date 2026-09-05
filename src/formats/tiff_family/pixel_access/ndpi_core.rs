@@ -3,6 +3,23 @@ use super::*;
 const NDPI_MCU_STARTS_LOW: u16 = 65426;
 const NDPI_MCU_STARTS_HIGH: u16 = 65432;
 
+/// Relative offsets already live in the validated TIFF tag allocation. Only
+/// high-word combination or file-absolute normalization needs a separate table.
+#[derive(Debug)]
+pub(super) enum NdpiMcuStarts<'a> {
+    Borrowed(&'a [u64]),
+    Normalized(Arc<Vec<u64>>),
+}
+
+impl NdpiMcuStarts<'_> {
+    pub(super) fn as_slice(&self) -> &[u64] {
+        match self {
+            Self::Borrowed(starts) => starts,
+            Self::Normalized(starts) => starts.as_slice(),
+        }
+    }
+}
+
 impl TiffPixelReader {
     pub(super) fn get_cached_ndpi_strip(&self, strip_key: NdpiStripKey) -> Option<Arc<CpuTile>> {
         self.ndpi_strip_cache.get(&strip_key)
@@ -79,7 +96,7 @@ impl TiffPixelReader {
         mcu_starts_tag: u16,
         strip_offset: u64,
         strip_byte_count: u64,
-    ) -> Result<Arc<Vec<u64>>, WsiError> {
+    ) -> Result<NdpiMcuStarts<'_>, WsiError> {
         let cache_key = (ifd_id, mcu_starts_tag, strip_offset, strip_byte_count);
         if let Some(starts) = self
             .ndpi_mcu_starts_cache
@@ -87,22 +104,38 @@ impl TiffPixelReader {
             .unwrap_or_else(|e| e.into_inner())
             .get(&cache_key)
         {
-            return Ok(starts);
+            return match starts {
+                NdpiMcuStartsEntry::Relative => self
+                    .container
+                    .get_u64_array(ifd_id, mcu_starts_tag)
+                    .map(NdpiMcuStarts::Borrowed)
+                    .map_err(|e| e.into_wsi_error(self.container.path())),
+                NdpiMcuStartsEntry::Normalized(starts) => Ok(NdpiMcuStarts::Normalized(starts)),
+            };
         }
 
-        let mut starts = self
+        let raw_starts = self
             .container
             .get_u64_array(ifd_id, mcu_starts_tag)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?
-            .to_vec();
-        if mcu_starts_tag == NDPI_MCU_STARTS_LOW
+            .map_err(|e| e.into_wsi_error(self.container.path()))?;
+        let has_high_words = mcu_starts_tag == NDPI_MCU_STARTS_LOW
             && self
                 .container
                 .ifd_by_id(ifd_id)
                 .map_err(|e| e.into_wsi_error(self.container.path()))?
                 .tags
-                .contains_key(&NDPI_MCU_STARTS_HIGH)
-        {
+                .contains_key(&NDPI_MCU_STARTS_HIGH);
+        let file_absolute = !has_high_words
+            && Self::ndpi_mcu_starts_are_file_absolute(raw_starts, strip_offset, strip_byte_count);
+        if !has_high_words && !file_absolute {
+            self.ndpi_mcu_starts_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put_relative(cache_key);
+            return Ok(NdpiMcuStarts::Borrowed(raw_starts));
+        }
+        let mut starts = raw_starts.to_vec();
+        if has_high_words {
             let high = self
                 .container
                 .get_u64_array(ifd_id, NDPI_MCU_STARTS_HIGH)
@@ -123,7 +156,10 @@ impl TiffPixelReader {
                 *low |= high << 32;
             }
         }
-        if Self::ndpi_mcu_starts_are_file_absolute(&starts, strip_offset, strip_byte_count) {
+        if file_absolute
+            || (has_high_words
+                && Self::ndpi_mcu_starts_are_file_absolute(&starts, strip_offset, strip_byte_count))
+        {
             for start in &mut starts {
                 *start = start.saturating_sub(strip_offset);
             }
@@ -133,7 +169,7 @@ impl TiffPixelReader {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .put(cache_key, starts.clone());
-        Ok(starts)
+        Ok(NdpiMcuStarts::Normalized(starts))
     }
 
     pub(super) fn decode_ndpi_full_image(
@@ -462,6 +498,7 @@ impl TiffPixelReader {
 
         let mcu_starts =
             self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
+        let mcu_starts = mcu_starts.as_slice();
 
         let idx =
             (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;

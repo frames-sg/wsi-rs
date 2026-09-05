@@ -17,7 +17,7 @@ use crate::core::types::{
     SampleType, Scene, Series, TileCodecKind, TileLayout, TileRequest, TileViewRequest,
 };
 use crate::decode::jp2k::{decode_jp2k_to_sample_buffer, Jp2kColorSpace};
-use crate::decode::jp2k_codestream::{parse_codestream_header, validate_narrow_subset};
+use crate::decode::jp2k_codestream::{parse_codestream_header, validate_pixel_contract};
 use crate::error::WsiError;
 use crate::properties::Properties;
 
@@ -91,7 +91,7 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
             }
         })?;
         let header = parse_codestream_header(&data)?;
-        validate_narrow_subset(&header)?;
+        validate_pixel_contract(&header)?;
         let reader = RawJp2kReader {
             dataset: dataset_for_codestream(path, &data, header.image_width, header.image_height)?,
             data,

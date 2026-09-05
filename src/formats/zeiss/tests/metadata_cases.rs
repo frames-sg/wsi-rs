@@ -303,3 +303,19 @@ fn common_ratios_fall_back_to_base_for_empty_or_disjoint_scene_sets() {
         BTreeSet::from([1])
     );
 }
+
+#[test]
+fn default_plane_filter_excludes_other_z_c_t_coordinates() {
+    let mut info = subblock(0, Some(0), IntRect::new(0, 0, 1, 1), IntSize { w: 1, h: 1 });
+    let mut stats = SubBlockStatistics::default();
+    for dim in [Dimension::Z, Dimension::C, Dimension::T] {
+        stats
+            .dim_bounds
+            .set(dim, czi_rs::Interval { start: 4, size: 2 });
+        info.coordinate.set(dim, 4);
+        assert!(subblock_matches_default_plane(&info, &stats));
+        info.coordinate.set(dim, 5);
+        assert!(!subblock_matches_default_plane(&info, &stats));
+        info.coordinate.set(dim, 4);
+    }
+}

@@ -36,6 +36,37 @@ def ascii_value(value: str) -> bytes:
     return value.encode("utf-8") + b"\0"
 
 
+def czi_jpegxr() -> bytes:
+    """One valid RGB8 CZI subblock using the original lossless JXR fixture."""
+    image = (ROOT / "tests/fixtures/jxr/rgb.jxr").read_bytes()
+    xml = b"<ImageDocument><Metadata><Information><Image><PixelType>Bgr24</PixelType><SizeX>16</SizeX><SizeY>16</SizeY><SizeS>1</SizeS></Image></Information></Metadata></ImageDocument>"
+
+    def segment(magic: bytes, data: bytes) -> bytes:
+        return magic.ljust(16, b"\0") + struct.pack("<QQ", len(data), len(data)) + data
+
+    directory_offset = 544
+    metadata_offset = directory_offset + 32 + 128 + 92
+    subblock_offset = metadata_offset + 32 + 256 + len(xml)
+    entry = bytearray(92)
+    entry[:2] = b"DV"
+    struct.pack_into("<iQ", entry, 2, 3, subblock_offset)
+    struct.pack_into("<i", entry, 18, 4)
+    struct.pack_into("<i", entry, 28, 3)
+    for index, (code, size) in enumerate([(b"X", 16), (b"Y", 16), (b"S", 1)]):
+        struct.pack_into("<4siifi", entry, 32 + index * 20, code, 0, size, 0.0, size)
+    header = bytearray(512)
+    struct.pack_into("<i", header, 0, 1)
+    struct.pack_into("<QQ", header, 52, directory_offset, metadata_offset)
+    metadata = long(len(xml)) + bytes(252) + xml
+    subblock = bytearray(256)
+    struct.pack_into("<Q", subblock, 8, len(image))
+    subblock[16:108] = entry
+    return (segment(b"ZISRAWFILE", header)
+            + segment(b"ZISRAWDIRECTORY", long(1) + bytes(124) + entry)
+            + segment(b"ZISRAWMETADATA", metadata)
+            + segment(b"ZISRAWSUBBLOCK", subblock + image))
+
+
 def classic_tiled_rgb(
     *,
     width: int = 17,
@@ -121,7 +152,7 @@ def classic_tiled_rgb(
 
 def selector(index: int, payload: bytes) -> bytes:
     # open_wsi_bytes maps selector modulo 13 onto its extension table.
-    assert 0 <= index < 13
+    assert 0 <= index < 14
     return bytes([index]) + payload
 
 
@@ -342,6 +373,10 @@ def main() -> None:
     write("open_vms_bundle_bytes", "vms-key.ini", vms_ini)
     write("open_mirax_bundle_bytes", "mirax-slidedat.ini", mirax_ini)
     write("open_zvi_bytes", "empty-cfb.zvi", zvi)
+
+    czi = czi_jpegxr()
+    (ROOT / "tests/fixtures/jxr/rgb.czi").write_bytes(czi)
+    write("open_wsi_bytes", "czi-jpegxr.czi", selector(13, czi))
 
     # TIFF interpreter and extension routing through open_wsi_bytes.
     write("open_wsi_bytes", "generic-partial-edge.tif", selector(4, partial_edge))
