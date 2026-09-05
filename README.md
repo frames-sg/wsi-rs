@@ -196,10 +196,19 @@ cargo xtask fuzz-check
 ```
 
 `cargo xtask validate` runs the default local gate.
-`cargo xtask rc-preflight` runs API checks, supply-chain checks, fuzz target
-checks, feature-combination checks, validation, and package dry-run checks. CI
-also executes bounded fuzz campaigns from the tracked seed corpus. Temporary
-dependency exceptions and their expiry dates are recorded in
+`cargo xtask rc-preflight` runs API and supply-chain checks, fuzz builds and
+five-minute campaigns for each target, feature-combination checks, validation,
+release and corpus tests, coverage, performance acceptance, and package dry-run
+checks. The four-platform RC workflow also verifies the C artifacts.
+
+Performance acceptance requires reviewed capture JSON files in
+`WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE`, and
+`WSI_RS_RC_CURRENT_CAPTURE`. Collect the OpenSlide/current pair with
+`cargo xtask perf-capture-pair <label>` using the default five alternating
+repetitions and worker matrix; collect the previous-release capture with the
+same corpus, workloads, cache budget, and thread limits. Missing captures or
+failed comparisons block preflight. Temporary dependency exceptions and their
+expiry dates are recorded in
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
 Releases that include the `cuda` feature also require the fail-closed
 `CUDA validation` workflow on the self-hosted CUDA runner.

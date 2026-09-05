@@ -142,13 +142,14 @@ jobs:
             --output-dir "${RUNNER_TEMP}/wsi-rs-artifact"
       - name: Verify architecture, identity, dependencies, exports, and C ABI
         working-directory: wsi-rs
-        shell: bash
+        # Git Bash puts its link.exe ahead of the MSVC linker on Windows.
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
         run: >-
           cargo xtask artifact-smoke
-          "${RUNNER_TEMP}/wsi-rs-artifact/${{ matrix.artifact }}"
-          "${RUNNER_TEMP}/openslide-4.0.1"
+          "${{ runner.temp }}/wsi-rs-artifact/${{ matrix.artifact }}"
+          "${{ runner.temp }}/openslide-4.0.1"
           '${{ matrix.architecture }}'
-          "${RUNNER_TEMP}/wsi-rs-artifact/artifact-metadata.json"
+          "${{ runner.temp }}/wsi-rs-artifact/artifact-metadata.json"
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: ${{ runner.temp }}/wsi-rs-artifact/*
