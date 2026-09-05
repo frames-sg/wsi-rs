@@ -14,7 +14,6 @@
 # sha256           = ""
 # citation         = ""
 # phi_reviewed     = true
-# tolerant_regions = []
 
 # [[slide]]
 # name             = "dicom_wsi_brightfield_he_typical"
