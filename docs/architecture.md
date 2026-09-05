@@ -115,7 +115,7 @@ array path. Cache keys still include the IFD, tag, strip offset, and strip lengt
 Disabled and undersized caches borrow relative offsets without retaining the
 classification; they repeat the unchanged classification scan. No cache budget,
 source identity check, payload validation, decode algorithm, or thread policy is
-changed. See `docs/audits/panning-performance-2026-09-04.md` for measurements.
+changed.
 
 ## Bounded region concurrency
 
@@ -138,5 +138,3 @@ release ownership; callers retry failed shared work through their own source
 path to preserve typed errors. Disabled/tiny caches bypass coordination. Rayon
 workers and reentrant owners also bypass waiting, preventing pool starvation.
 Explicit controlled tile APIs retain their existing cancellation boundaries.
-
-Measurements and limitations are in `docs/audits/panning-concurrency-2026-09-04.md`.

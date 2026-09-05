@@ -1,7 +1,23 @@
 use super::support::*;
 use std::fs;
 use std::io::Write;
+use std::process::Command;
 use wsi_rs::FormatRegistry;
+
+#[test]
+fn session_audit_reports_are_not_tracked() {
+    let output = Command::new("git")
+        .current_dir(crate_root())
+        .args(["ls-files", "--", "docs/audit", "docs/audits"])
+        .output()
+        .expect("list tracked audit reports");
+    assert!(output.status.success(), "git ls-files must succeed");
+    assert!(
+        output.stdout.is_empty(),
+        "session audit reports belong in ignored .local-docs/, not Git:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
 
 #[test]
 fn publish_workflow_runs_the_supply_chain_gate() {
