@@ -63,7 +63,7 @@ fn backend_sessions_report_poisoned_jp2k_lock() {
 
 #[test]
 fn tight_download_layout_rejects_dimension_overflow() {
-    let error = tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16)
+    let error = tight_download_layout(u32::MAX, u32::MAX, PixelFormat::Rgba16, "CUDA")
         .expect_err("overflowing CUDA host download must fail before allocation");
     assert!(error.to_string().contains("overflow"), "{error}");
 }
@@ -93,9 +93,9 @@ fn downloaded_bytes_convert_all_public_pixel_families() {
         (PixelFormat::Rgb16, 3, ColorSpace::Rgb),
         (PixelFormat::Rgba16, 4, ColorSpace::Rgba),
     ] {
-        let (_, byte_len) = tight_download_layout(2, 1, format).expect("valid layout");
+        let (_, byte_len) = tight_download_layout(2, 1, format, "CUDA").expect("valid layout");
         let bytes = (0..byte_len).map(|value| value as u8).collect();
-        let tile = downloaded_bytes_to_cpu_tile(2, 1, format, bytes)
+        let tile = downloaded_bytes_to_cpu_tile(2, 1, format, bytes, "CUDA")
             .expect("downloaded bytes form a valid CpuTile");
         assert_eq!(tile.channels, channels);
         assert_eq!(tile.color_space, color_space);
@@ -114,7 +114,7 @@ fn downloaded_bytes_convert_all_public_pixel_families() {
 
 #[test]
 fn downloaded_bytes_reject_undersized_output() {
-    let error = downloaded_bytes_to_cpu_tile(2, 2, PixelFormat::Rgb8, vec![0; 11])
+    let error = downloaded_bytes_to_cpu_tile(2, 2, PixelFormat::Rgb8, vec![0; 11], "CUDA")
         .expect_err("undersized CUDA download must fail validation");
     assert!(error.to_string().contains("expected 12 bytes"), "{error}");
 }

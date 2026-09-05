@@ -43,6 +43,7 @@ mod decode_batch;
 mod dispatch;
 mod image_ops;
 mod jpeg_frame;
+mod jpegxr;
 mod ndpi_batch;
 mod ndpi_core;
 mod ndpi_retile;

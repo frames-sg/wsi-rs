@@ -3,4 +3,5 @@ pub(crate) mod jp2k_backend;
 pub(crate) mod jp2k_codestream;
 pub(crate) mod jp2k_raster;
 pub(crate) mod jpeg;
+pub(crate) mod jpegxr;
 pub(crate) mod xml;

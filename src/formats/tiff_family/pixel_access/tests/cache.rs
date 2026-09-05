@@ -113,3 +113,21 @@ fn ndpi_mcu_starts_cache_evicts_by_retained_bytes() {
     assert!(cache.get(&first_key).is_none());
     assert!(cache.get(&second_key).is_some());
 }
+
+#[test]
+fn ndpi_relative_index_markers_share_the_existing_byte_bound_and_evict() {
+    let relative = (IfdId(1), 65426, 8, 100);
+    let normalized = (IfdId(2), 65426, 108, 100);
+    for budget in [0, 1, 127, 128, 200] {
+        let mut cache = NdpiMcuStartsCache::new(budget);
+        cache.put_relative(relative);
+        assert_eq!(cache.get(&relative).is_some(), budget >= 128);
+        cache.put(normalized, Arc::new(vec![1, 2, 3]));
+        assert!(cache.current_bytes() <= budget);
+        assert!(cache.get(&relative).is_none(), "disabled or evicted marker");
+        assert_eq!(cache.get(&normalized).is_some(), budget >= 88);
+        cache.put_relative(relative);
+        assert_eq!(cache.get(&relative).is_some(), budget >= 128);
+        assert!(cache.current_bytes() <= budget);
+    }
+}

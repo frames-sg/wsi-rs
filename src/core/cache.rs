@@ -1,3 +1,6 @@
+mod flights;
+pub(crate) use flights::TileClaim;
+
 use lru::LruCache;
 use std::borrow::Borrow;
 use std::hash::Hash;
@@ -88,7 +91,7 @@ impl Default for CacheConfig {
 
 /// One slide's aggregate byte budget for format-private caches.
 ///
-/// Each cache receives a disjoint fair share. Actual retained values are then
+/// Each cache reserves one or more disjoint shares. Actual retained values are then
 /// weighed on insertion, so the sum of cache capacities cannot exceed this
 /// aggregate budget.
 pub(crate) struct PrivateCacheBudget {
@@ -98,13 +101,23 @@ pub(crate) struct PrivateCacheBudget {
 
 impl PrivateCacheBudget {
     pub(crate) fn allocate(&mut self, _estimated_entry_bytes: u64) -> PrivateCacheCapacity {
+        self.allocate_shares(1)
+    }
+
+    /// Reserve multiple shares for caches whose source units are larger than
+    /// output tiles. Shares must be nonzero and fit the remaining share count.
+    pub(crate) fn allocate_shares(&mut self, shares: usize) -> PrivateCacheCapacity {
         if self.remaining_caches == 0 {
             return PrivateCacheCapacity::default();
         }
-
-        let cache_count = self.remaining_caches as u64;
-        self.remaining_caches -= 1;
-        let fair_share = self.remaining_bytes / cache_count;
+        assert!(
+            shares > 0 && shares <= self.remaining_caches,
+            "private cache allocation exceeds remaining shares"
+        );
+        // The quotient cannot exceed remaining_bytes because shares <= count.
+        let fair_share = (u128::from(self.remaining_bytes) * shares as u128
+            / self.remaining_caches as u128) as u64;
+        self.remaining_caches -= shares;
         self.remaining_bytes -= fair_share;
 
         PrivateCacheCapacity {
@@ -303,6 +316,7 @@ impl CacheKey {
 /// Thread-safe, byte-bounded decoded tile cache that can be shared by slides.
 pub struct TileCache {
     inner: Mutex<TileCacheState>,
+    flights: flights::TileFlights,
 }
 
 /// Snapshot of byte-sized decoded tile cache activity.
@@ -352,6 +366,7 @@ impl TileCache {
     /// Create a thread-safe decoded tile cache with a byte capacity.
     pub fn new(capacity_bytes: u64) -> Self {
         Self {
+            flights: flights::TileFlights::new(capacity_bytes),
             inner: Mutex::new(TileCacheState {
                 lru: WeightedLru::new(capacity_bytes),
                 hits: 0,

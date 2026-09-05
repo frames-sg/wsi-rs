@@ -10,6 +10,7 @@ mod error_cases;
 mod fixtures;
 mod generated;
 mod metadata_cases;
+mod subblock_cache;
 mod tile_cases;
 
 static ZEISS_TEST_GUARD: Mutex<()> = Mutex::new(());

@@ -93,9 +93,9 @@ pub(super) fn parse_mirax_ini_with_budget(
     Ok(parsed)
 }
 
-pub(super) struct MiraxIndexBuildContext<'a> {
+pub(super) struct MiraxIndexBuildContext<'a, R> {
     pub(super) path: &'a Path,
-    pub(super) index_file: &'a mut File,
+    pub(super) index_file: &'a mut R,
     pub(super) index_path: &'a Path,
     pub(super) seek_location: u64,
     pub(super) datafile_paths: &'a [PathBuf],
@@ -109,8 +109,8 @@ pub(super) struct MiraxIndexBuildContext<'a> {
     pub(super) open_budget: &'a OpenBudget,
 }
 
-pub(super) fn process_hier_data_pages_from_indexfile(
-    context: MiraxIndexBuildContext<'_>,
+pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
+    context: MiraxIndexBuildContext<'_, R>,
 ) -> Result<(), WsiError> {
     let MiraxIndexBuildContext {
         path,
@@ -127,6 +127,10 @@ pub(super) fn process_hier_data_pages_from_indexfile(
         quickhash_files,
         open_budget,
     } = context;
+    // Records are four adjacent i32 fields. Bound read-ahead while avoiding a
+    // file read for every field; BufReader also handles absolute page seeks.
+    let mut buffered_index = std::io::BufReader::with_capacity(8 * 1024, index_file);
+    let index_file = &mut buffered_index;
     let mut image_number = 0u32;
     let positions_x = images_x / image_divisions;
     let positions_y = images_y / image_divisions;
@@ -736,3 +740,7 @@ pub(super) fn get_nonhier_name_offset_helper(
 #[cfg(test)]
 #[path = "index/tests/budget.rs"]
 mod budget_tests;
+
+#[cfg(test)]
+#[path = "index/tests/io.rs"]
+mod io_tests;

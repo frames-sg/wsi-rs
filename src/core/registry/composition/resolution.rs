@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::cache::{CacheKey, TileCache};
+use crate::core::cache::{CacheKey, TileCache, TileClaim};
 use crate::core::registry::SlideReader;
 use crate::core::types::{
     CpuTile, Dataset, Level, RegionRequest, Scene, Series, TileHit, TileRequest,
@@ -100,9 +100,27 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
             return Ok(cached);
         }
 
+        let claim = self
+            .cache
+            .map(|cache| cache.claim_miss(&key))
+            .unwrap_or(TileClaim::Uncoalesced);
+        let producer = match claim {
+            TileClaim::Ready(tile) => return Ok(tile),
+            TileClaim::Waiter(flight) => {
+                if let Some(tile) = flight.wait() {
+                    return Ok(tile);
+                }
+                None
+            }
+            TileClaim::Producer(producer) => Some(producer),
+            TileClaim::Uncoalesced => None,
+        };
         let tile = Arc::new(self.source.read_tile_cpu(&self.tile_request(col, row))?);
         if let Some(cache) = self.cache {
             cache.put(key, tile.clone());
+        }
+        if let Some(producer) = producer {
+            producer.complete(tile.clone());
         }
         Ok(tile)
     }
@@ -112,6 +130,8 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
         let mut missed_slots = Vec::new();
         let mut missed_keys = Vec::new();
         let mut missed_reqs = Vec::new();
+        let mut producers = Vec::new();
+        let mut pending = Vec::new();
         let mut cache_hits = 0usize;
         let mut cache_misses = 0usize;
 
@@ -125,11 +145,28 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
                 }
                 cache_misses += 1;
             }
-            missed_slots.push(slot);
-            missed_keys.push(key);
-            missed_reqs.push(self.tile_request(hit.col, hit.row));
+            let req = self.tile_request(hit.col, hit.row);
+            match self
+                .cache
+                .map(|cache| cache.claim_miss(&key))
+                .unwrap_or(TileClaim::Uncoalesced)
+            {
+                TileClaim::Ready(tile) => tiles[slot] = Some(tile),
+                TileClaim::Waiter(flight) => pending.push((slot, req, flight)),
+                claim => {
+                    producers.push(match claim {
+                        TileClaim::Producer(p) => Some(p),
+                        _ => None,
+                    });
+                    missed_slots.push(slot);
+                    missed_keys.push(key);
+                    missed_reqs.push(req);
+                }
+            }
         }
 
+        // Publish all work owned by this batch before waiting on other batches.
+        // Otherwise intersecting requests with different key orders could deadlock.
         let missed_tile_count = missed_reqs.len();
         let batched_miss_read = missed_tile_count > 1;
         if !missed_reqs.is_empty() {
@@ -151,13 +188,28 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
                 });
             }
 
-            for ((slot, key), tile) in missed_slots.into_iter().zip(missed_keys).zip(decoded) {
+            for (((slot, key), tile), producer) in missed_slots
+                .into_iter()
+                .zip(missed_keys)
+                .zip(decoded)
+                .zip(producers)
+            {
                 let arc_tile = Arc::new(tile);
                 if let Some(cache) = self.cache {
                     cache.put(key, arc_tile.clone());
                 }
+                if let Some(producer) = producer {
+                    producer.complete(arc_tile.clone());
+                }
                 tiles[slot] = Some(arc_tile);
             }
+        }
+
+        for (slot, req, flight) in pending {
+            tiles[slot] = Some(match flight.wait() {
+                Some(tile) => tile,
+                None => self.resolve_one(req.col, req.row)?,
+            });
         }
 
         if let Some(cache) = self

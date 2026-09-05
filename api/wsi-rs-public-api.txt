@@ -365,6 +365,7 @@ pub wsi_rs::Compression::Jp2kRgb
 pub wsi_rs::Compression::Jp2kYcbcr
 pub wsi_rs::Compression::Jpeg
 pub wsi_rs::Compression::JpegLs
+pub wsi_rs::Compression::JpegXr
 pub wsi_rs::Compression::Lzw
 pub wsi_rs::Compression::None
 pub wsi_rs::Compression::Other(u16)

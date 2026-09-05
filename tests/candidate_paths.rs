@@ -3,8 +3,8 @@ use std::path::Path;
 use wsi_rs::{is_builtin_slide_candidate_path, BUILTIN_SLIDE_CANDIDATE_EXTENSIONS};
 
 const EXPECTED_EXTENSIONS: &[&str] = &[
-    "svs", "avs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "zvi", "mrxs", "vms", "vmu", "vsi",
-    "j2k", "j2c", "svcache",
+    "svs", "avs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "czi", "zvi", "mrxs", "vms", "vmu",
+    "vsi", "j2k", "j2c", "svcache",
 ];
 
 #[test]
@@ -31,7 +31,7 @@ fn builtin_slide_candidate_path_matches_extensions_case_insensitively() {
 
 #[test]
 fn builtin_slide_candidate_path_rejects_missing_or_unknown_extensions() {
-    for path in ["slide", ".svs", "slide.png", "slide.czi", "slide.svs.tmp"] {
+    for path in ["slide", ".svs", "slide.png", "slide.svs.tmp"] {
         assert!(!is_builtin_slide_candidate_path(Path::new(path)), "{path}");
     }
 }

@@ -40,7 +40,20 @@ pub(crate) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
     max_region_pixels: u64,
 ) -> Result<CpuTile, WsiError> {
     let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan)
+    compose_resolved_region_streaming(source, cache, req, plan, 1)
+}
+
+/// Compose small source units in bounded batches. The caller must fit every
+/// batch's source buffers within its admitted region staging reservation.
+pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    max_region_pixels: u64,
+    batch_size: usize,
+) -> Result<CpuTile, WsiError> {
+    let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
+    compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1))
 }
 
 pub(crate) fn composite_fractional_region_from_source_streaming<T: SlideReader + ?Sized>(
@@ -51,7 +64,7 @@ pub(crate) fn composite_fractional_region_from_source_streaming<T: SlideReader +
     max_region_pixels: u64,
 ) -> Result<CpuTile, WsiError> {
     let plan = RegionReadPlan::fractional(source.dataset(), req, origin_px, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan)
+    compose_resolved_region_streaming(source, cache, req, plan, 1)
 }
 
 fn compose_resolved_region<T: SlideReader + ?Sized>(
@@ -92,6 +105,7 @@ fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
     cache: Option<&TileCache>,
     req: &RegionRequest,
     plan: RegionReadPlan<'_>,
+    batch_size: usize,
 ) -> Result<CpuTile, WsiError> {
     let resolver = RegionTileResolver::new(source, cache, req);
     if plan.hits.is_empty() {
@@ -128,9 +142,17 @@ fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
         &plan.hits,
     )?;
     composer.blit(&plan.hits[0], first.as_ref())?;
-    for hit in &plan.hits[1..] {
-        let tile = resolver.resolve_one(hit.col, hit.row)?;
-        composer.blit(hit, tile.as_ref())?;
+    drop(first);
+    for batch in plan.hits[1..].chunks(batch_size) {
+        if batch.len() == 1 {
+            let tile = resolver.resolve_one(batch[0].col, batch[0].row)?;
+            composer.blit(&batch[0], tile.as_ref())?;
+        } else {
+            let tiles = resolver.resolve_hits(batch)?;
+            for (hit, tile) in batch.iter().zip(&tiles) {
+                composer.blit(hit, tile.as_ref())?;
+            }
+        }
     }
     composer.finish()
 }
@@ -423,3 +445,7 @@ use crate::core::cache::TileCache;
 use crate::core::registry::SlideReader;
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout, RegionRequest, TileHit};
 use crate::error::WsiError;
+
+#[cfg(test)]
+#[path = "region/tests/coalescing.rs"]
+mod coalescing_tests;

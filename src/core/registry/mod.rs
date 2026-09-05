@@ -23,8 +23,8 @@ pub use crate::core::limits::{SlideLimitError, SlideLimits};
 pub(crate) use composition::{
     check_region_pixel_limit, composite_fractional_region_from_source,
     composite_fractional_region_from_source_streaming, composite_region_from_source,
-    composite_region_from_source_streaming, crop_rgb_interleaved_u8_buffer,
-    read_display_tile_from_source,
+    composite_region_from_source_in_batches, composite_region_from_source_streaming,
+    crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
 };
 pub(crate) use open_config::{BackendOpenConfig, OpenBudget};
 pub use open_options::SlideOpenOptions;

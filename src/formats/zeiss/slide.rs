@@ -124,12 +124,17 @@ impl ZeissReader {
 }
 
 pub(super) struct ZeissSlide {
+    #[cfg(test)]
+    pub(super) subblock_decodes: AtomicU64,
+    pub(super) limits: crate::SlideLimits,
     pub(super) source_path: PathBuf,
     pub(super) source_identity: FileIdentity,
     pub(super) dataset: Dataset,
     pub(super) czi: Mutex<CziFile>,
+    pub(super) preflight_file: Mutex<File>,
     pub(super) level_cache: LevelImageCache,
     pub(super) tile_cache: LocalTileCache,
+    pub(super) subblock_cache: Mutex<PrivateCache<u64, Arc<CpuTile>>>,
     pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     pub(super) associated_sources: HashMap<String, czi_rs::AttachmentInfo>,
     pub(super) subblock_origin: (i32, i32),
@@ -138,6 +143,22 @@ pub(super) struct ZeissSlide {
 }
 
 impl ZeissSlide {
+    pub(super) fn validate_wsi_pixels(&self) -> Result<(), WsiError> {
+        let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
+        if czi.subblocks().iter().any(|info| {
+            info.pixel_type != CziPixelType::Bgr24
+                || !matches!(
+                    info.compression,
+                    CziCompressionMode::UnCompressed
+                        | CziCompressionMode::Jpg
+                        | CziCompressionMode::JpgXr
+                )
+        }) {
+            return Err(WsiError::UnsupportedFormat("CZI WSI reads currently require Bgr24 with uncompressed, JPEG, or JPEG XR subblocks".into()));
+        }
+        Ok(())
+    }
+
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
         Self::parse_with_cache_config(path, CacheConfig::deterministic())
     }
@@ -157,9 +178,15 @@ impl ZeissSlide {
             .associated_sources
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
+        if FileIdentity::from_path(&self.source_path)? != self.source_identity {
+            return Err(WsiError::InvalidSlide {
+                path: self.source_path.clone(),
+                message: "CZI source identity changed before associated-image read".into(),
+            });
+        }
         let buffer = {
             let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let (_, buffer) = decode_associated_attachment(&mut czi, attachment)?
+            let (_, buffer) = decode_associated_attachment(&mut czi, attachment, self.limits)?
                 .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
             buffer
         };

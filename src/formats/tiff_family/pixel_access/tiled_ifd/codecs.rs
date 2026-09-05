@@ -381,7 +381,7 @@ impl TiffPixelReader {
                 )));
             }
         };
-        if written > expected_bytes {
+        if written != expected_bytes {
             return Err(WsiError::UnsupportedFormat(format!(
                 "decoded TIFF payload produced {written} bytes for a {expected_bytes}-byte tile"
             )));

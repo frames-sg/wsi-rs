@@ -12,6 +12,10 @@ use super::model::{Endian, Ifd, TagValue, TiffContainer, TiffType};
 use super::ndpi_offsets::{fix_offset_ndpi, is_ndpi_data_offset_tag};
 
 impl TiffContainer {
+    pub(crate) fn limits(&self) -> crate::SlideLimits {
+        self.open_budget.limits()
+    }
+
     // ── pread (stateless positional read) ──────────────────────
 
     /// Perform a positional read using the persistent file handle.

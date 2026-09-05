@@ -457,3 +457,33 @@ fn metadata_probe_uses_row_major_order_for_irregular_tiles() {
 
     assert_eq!(metadata_probe_coordinate(&layout), Some((3, 1)));
 }
+
+#[test]
+fn bounded_region_batches_preserve_pixels_and_do_not_load_the_whole_region() {
+    let source = StreamingSource {
+        dataset: crate::test_support::regular_rgb_dataset_for_test(
+            DatasetId::new(78),
+            "s0",
+            "ser0",
+            crate::test_support::RegularLevelForTest {
+                dimensions: (16, 1),
+                tile_width: 2,
+                tile_height: 1,
+                tiles_across: 8,
+                tiles_down: 1,
+            },
+        ),
+        single_reads: AtomicUsize::new(0),
+        batch_reads: AtomicUsize::new(0),
+    };
+    let req = RegionRequest::new(0usize, 0usize, 0u32, (0, 0), (16, 1));
+    let region = composite_region_from_source_in_batches(&source, None, &req, 16, 3).unwrap();
+    let expected: Vec<_> = (1..=8).flat_map(|v| vec![v; 6]).collect();
+    assert_eq!(region.as_u8().unwrap(), expected);
+    assert_eq!(
+        source.batch_reads.load(Ordering::SeqCst),
+        2,
+        "after the first tile, use two three-tile batches and a final single tile"
+    );
+    assert_eq!(source.single_reads.load(Ordering::SeqCst), 8);
+}

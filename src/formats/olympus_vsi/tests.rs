@@ -1,8 +1,18 @@
 use std::fs;
 use std::path::Path;
 
+use super::scene::header::{
+    fourcc_matches, sample_type_from_ets, validate_ets_chunk_table, validate_ets_header_limits,
+    MAX_ETS_DIMENSIONS, MAX_ETS_TILES,
+};
+use super::scene::index::{
+    checked_ets_axis_len, checked_ets_extent, checked_ets_level_count, key_from_coords,
+    MAX_ETS_AXIS_INDEX, MAX_ETS_LEVEL_INDEX,
+};
+use super::scene::EtsScene;
 use super::*;
 use crate::core::registry::Slide;
+use crate::core::types::*;
 
 mod fixtures;
 
@@ -82,6 +92,8 @@ fn probe_requires_case_insensitive_vsi_extension_and_companion_directory() {
 #[cfg(unix)]
 #[test]
 fn ets_discovery_does_not_follow_symlinked_scene_directories() {
+    use super::slide::find_ets_files;
+    use crate::core::registry::OpenBudget;
     use std::os::unix::fs::symlink;
 
     let companion = tempfile::tempdir().expect("companion directory");

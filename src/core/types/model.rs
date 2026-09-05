@@ -528,6 +528,7 @@ pub enum Compression {
     Jp2kYcbcr,
     Jp2kRgb,
     JpegLs,
+    JpegXr,
     Other(u16),
 }
 

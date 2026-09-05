@@ -1,4 +1,5 @@
-use crate::{error::WsiError, CpuTile, CpuTileData, CpuTileLayout, PixelFormat};
+use crate::output::download::{downloaded_bytes_to_cpu_tile, tight_download_layout};
+use crate::{error::WsiError, CpuTile, PixelFormat};
 use j2k_core::{BackendKind, DeviceSurface};
 use std::sync::{Arc, Mutex};
 
@@ -108,7 +109,8 @@ impl CudaDeviceTile {
     /// returned tile is validated, interleaved, and contains no row padding.
     pub fn download_cpu(&self) -> Result<CpuTile, WsiError> {
         self.validate_surface_metadata()?;
-        let (row_bytes, byte_len) = tight_download_layout(self.width, self.height, self.format)?;
+        let (row_bytes, byte_len) =
+            tight_download_layout(self.width, self.height, self.format, "CUDA")?;
         enforce_download_limit(byte_len)?;
         let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
         let surface = &self.storage.surface;
@@ -124,7 +126,7 @@ impl CudaDeviceTile {
         } else {
             download_cropped_surface(surface, self.height, row_bytes)?
         };
-        downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes)
+        downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes, "CUDA")
     }
 
     fn validate_surface_metadata(&self) -> Result<(), WsiError> {
@@ -151,7 +153,7 @@ impl CudaDeviceTile {
                 ),
             });
         }
-        let (row_bytes, _) = tight_download_layout(self.width, self.height, self.format)?;
+        let (row_bytes, _) = tight_download_layout(self.width, self.height, self.format, "CUDA")?;
         if self.pitch_bytes < row_bytes {
             return Err(WsiError::Unsupported {
                 reason: format!(
@@ -227,8 +229,12 @@ fn download_cropped_surface(
     logical_row_bytes: usize,
 ) -> Result<Vec<u8>, WsiError> {
     let format = PixelFormat::try_from(surface.pixel_format())?;
-    let (physical_row_bytes, physical_len) =
-        tight_download_layout(surface.dimensions().0, surface.dimensions().1, format)?;
+    let (physical_row_bytes, physical_len) = tight_download_layout(
+        surface.dimensions().0,
+        surface.dimensions().1,
+        format,
+        "CUDA",
+    )?;
     enforce_download_limit(physical_len)?;
     let mut physical = try_download_buffer(
         physical_len,
@@ -268,57 +274,6 @@ fn enforce_download_limit(byte_len: usize) -> Result<(), WsiError> {
         });
     }
     Ok(())
-}
-
-fn tight_download_layout(
-    width: u32,
-    height: u32,
-    format: PixelFormat,
-) -> Result<(usize, usize), WsiError> {
-    let row_bytes = usize::try_from(width)
-        .ok()
-        .and_then(|width| width.checked_mul(format.bytes_per_pixel()))
-        .ok_or_else(|| {
-            WsiError::DisplayConversion("CUDA host download row size overflow".into())
-        })?;
-    let byte_len = usize::try_from(height)
-        .ok()
-        .and_then(|height| height.checked_mul(row_bytes))
-        .ok_or_else(|| WsiError::DisplayConversion("CUDA host download size overflow".into()))?;
-    Ok((row_bytes, byte_len))
-}
-
-fn downloaded_bytes_to_cpu_tile(
-    width: u32,
-    height: u32,
-    format: PixelFormat,
-    bytes: Vec<u8>,
-) -> Result<CpuTile, WsiError> {
-    let (_, expected) = tight_download_layout(width, height, format)?;
-    if bytes.len() != expected {
-        return Err(WsiError::DisplayConversion(format!(
-            "CUDA host download expected {expected} bytes, received {}",
-            bytes.len()
-        )));
-    }
-    let data = match format {
-        PixelFormat::Rgb8 | PixelFormat::Rgba8 | PixelFormat::Gray8 => CpuTileData::u8(bytes),
-        PixelFormat::Rgb16 | PixelFormat::Rgba16 | PixelFormat::Gray16 => {
-            let samples = bytes
-                .chunks_exact(2)
-                .map(|sample| u16::from_ne_bytes([sample[0], sample[1]]))
-                .collect();
-            CpuTileData::u16(samples)
-        }
-    };
-    CpuTile::new(
-        width,
-        height,
-        format.channels() as u16,
-        format.color_space(),
-        CpuTileLayout::Interleaved,
-        data,
-    )
 }
 
 #[cfg(test)]

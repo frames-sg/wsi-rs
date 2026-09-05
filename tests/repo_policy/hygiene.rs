@@ -180,13 +180,10 @@ fn zeiss_magic_fixture(suffix: &str) -> tempfile::NamedTempFile {
 }
 
 #[test]
-fn builtin_registry_does_not_claim_czi_support() {
+fn builtin_registry_recognizes_czi_magic() {
     let file = zeiss_magic_fixture(".czi");
     let detected = FormatRegistry::builtin()
         .detect_vendor(file.path())
         .expect("probe CZI fixture");
-    assert!(
-        detected.is_none(),
-        "CZI must remain outside the 0.7 production registry"
-    );
+    assert_eq!(detected.map(|probe| probe.vendor), Some("zeiss".into()));
 }

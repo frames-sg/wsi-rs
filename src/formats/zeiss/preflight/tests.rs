@@ -4,6 +4,68 @@ use std::io::Cursor;
 const FILE_HEADER_BYTES: usize = 32 + 512;
 const DIRECTORY_OFFSET: usize = FILE_HEADER_BYTES;
 
+#[test]
+fn directory_coordinate_bounds_preserve_signed_origins_and_checked_extents() {
+    use super::directory::checked_dimension_bounds;
+
+    assert_eq!(checked_dimension_bounds(-12, 16).unwrap(), (-12, 4));
+    assert_eq!(checked_dimension_bounds(12, 0).unwrap(), (12, 12));
+    assert!(checked_dimension_bounds(0, -1).is_err());
+    assert!(checked_dimension_bounds(i32::MAX, 1).is_err());
+}
+
+#[test]
+fn directory_entries_validate_geometry_and_declared_record_boundaries() {
+    use super::directory::validate_entries;
+
+    let mut record = vec![0_u8; 32];
+    record[..2].copy_from_slice(b"DV");
+    write_u32(&mut record, 28, 3);
+    for (code, start, size) in [
+        (b" X \0", -4_i32, 16_i32),
+        (b"Y\0\0\0", 8, 16),
+        (b"S\0\0\0", 0, 1),
+    ] {
+        record.extend_from_slice(code);
+        record.extend_from_slice(&start.to_le_bytes());
+        record.extend_from_slice(&size.to_le_bytes());
+        record.extend_from_slice(&[0; 8]);
+    }
+    let validate = |bytes: &[u8], declared: u64| {
+        validate_entries(&mut Cursor::new(bytes), bytes.len() as u64, 0, declared, 1)
+    };
+    validate(&record, record.len() as u64).expect("signed origins and trimmed axis names");
+    assert!(validate(&record, 31).is_err());
+    assert!(validate(&record, 51).is_err());
+    let mut unsupported = record.clone();
+    unsupported[..2].copy_from_slice(b"DE");
+    assert!(validate(&unsupported, unsupported.len() as u64).is_err());
+    let mut dimensions = record.clone();
+    write_u32(&mut dimensions, 28, 1025);
+    assert!(validate(&dimensions, dimensions.len() as u64).is_err());
+
+    let mut combined = record.clone();
+    let mut distant = record.clone();
+    distant[36..40].copy_from_slice(&i32::MIN.to_le_bytes());
+    combined.extend_from_slice(&distant);
+    assert!(validate_entries(
+        &mut Cursor::new(&combined),
+        combined.len() as u64,
+        0,
+        combined.len() as u64,
+        2,
+    )
+    .is_err());
+    assert!(validate_entries(
+        &mut Cursor::new(&record),
+        record.len() as u64,
+        u64::MAX,
+        1,
+        1
+    )
+    .is_err());
+}
+
 fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }

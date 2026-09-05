@@ -106,6 +106,19 @@ fn deterministic_default_cache_split_is_sixty_four_thirty_two_thirty_two_mib() {
 }
 
 #[test]
+fn weighted_private_shares_preserve_odd_and_maximum_budgets() {
+    for bytes in [0, 1, 103, u64::MAX] {
+        let config = CacheConfig::default().with_shared_tile_bytes(bytes);
+        let mut budget = config.private_cache_budget(6);
+        let source = budget.allocate_shares(3).accounted_bytes;
+        assert_eq!(source, config.private_cache_budget_bytes() / 2);
+        let rest: u64 = (0..3).map(|_| budget.allocate(1).accounted_bytes).sum();
+        assert_eq!(source + rest, config.private_cache_budget_bytes());
+        assert_eq!(budget.allocate(1).accounted_bytes, 0);
+    }
+}
+
+#[test]
 fn put_and_get() {
     let cache = TileCache::new(1024 * 1024);
     let buf = Arc::new(make_sample_buffer(100));

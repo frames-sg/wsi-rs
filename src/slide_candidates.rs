@@ -6,8 +6,8 @@ use std::path::Path;
 /// [`is_builtin_slide_candidate_path`] when matching a path so extension case
 /// is handled consistently.
 pub const BUILTIN_SLIDE_CANDIDATE_EXTENSIONS: &[&str] = &[
-    "svs", "avs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "zvi", "mrxs", "vms", "vmu", "vsi",
-    "j2k", "j2c", "svcache",
+    "svs", "avs", "tif", "tiff", "ndpi", "scn", "bif", "dcm", "czi", "zvi", "mrxs", "vms", "vmu",
+    "vsi", "j2k", "j2c", "svcache",
 ];
 
 /// Returns whether `path` has an extension handled by a built-in slide reader.

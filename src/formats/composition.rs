@@ -8,6 +8,7 @@ use crate::formats::olympus_vsi::OlympusVsiBackend;
 use crate::formats::raw_jp2k::RawJp2kBackend;
 use crate::formats::svcache::SvcacheBackend;
 use crate::formats::tiff_family::TiffFamilyBackend;
+use crate::formats::zeiss::ZeissBackend;
 use crate::formats::zeiss_zvi::ZeissZviBackend;
 
 impl FormatRegistry {
@@ -37,6 +38,8 @@ impl FormatRegistry {
         self.register_cache_configured(vsi.clone(), vsi);
         let raw_jp2k = Arc::new(RawJp2kBackend);
         self.register_cache_configured(raw_jp2k.clone(), raw_jp2k);
+        let zeiss = Arc::new(ZeissBackend);
+        self.register_cache_configured(zeiss.clone(), zeiss);
         let zeiss_zvi = Arc::new(ZeissZviBackend);
         self.register_cache_configured(zeiss_zvi.clone(), zeiss_zvi);
         let tiff = Arc::new(TiffFamilyBackend::new());

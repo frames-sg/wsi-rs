@@ -24,8 +24,14 @@ pub(super) const NDPI_DISPLAY_NARROW_STRIP_BATCH: usize = 8;
 
 type NdpiMcuStartsKey = (IfdId, u16, u64, u64);
 
+#[derive(Clone)]
+pub(super) enum NdpiMcuStartsEntry {
+    Relative,
+    Normalized(Arc<Vec<u64>>),
+}
+
 pub(super) struct NdpiMcuStartsCache {
-    entries: WeightedLru<NdpiMcuStartsKey, Arc<Vec<u64>>>,
+    entries: WeightedLru<NdpiMcuStartsKey, NdpiMcuStartsEntry>,
 }
 
 impl NdpiMcuStartsCache {
@@ -35,7 +41,7 @@ impl NdpiMcuStartsCache {
         }
     }
 
-    pub(super) fn get(&mut self, key: &NdpiMcuStartsKey) -> Option<Arc<Vec<u64>>> {
+    pub(super) fn get(&mut self, key: &NdpiMcuStartsKey) -> Option<NdpiMcuStartsEntry> {
         self.entries.get(key).cloned()
     }
 
@@ -44,7 +50,13 @@ impl NdpiMcuStartsCache {
             .unwrap_or(u64::MAX)
             .saturating_mul(std::mem::size_of::<u64>() as u64)
             .saturating_add(64);
-        self.entries.put(key, value, retained_bytes);
+        self.entries
+            .put(key, NdpiMcuStartsEntry::Normalized(value), retained_bytes);
+    }
+
+    pub(super) fn put_relative(&mut self, key: NdpiMcuStartsKey) {
+        // Charge the key, value, and LRU bookkeeping even without an offset payload.
+        self.entries.put(key, NdpiMcuStartsEntry::Relative, 128);
     }
 
     #[cfg(test)]
@@ -60,7 +72,10 @@ impl NdpiMcuStartsCache {
     #[cfg(test)]
     pub(super) fn first_value(&mut self) -> Option<Arc<Vec<u64>>> {
         let key = *self.entries.lru_key()?;
-        self.get(&key)
+        match self.get(&key)? {
+            NdpiMcuStartsEntry::Relative => None,
+            NdpiMcuStartsEntry::Normalized(starts) => Some(starts),
+        }
     }
 }
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_WIDTH: u32 = 1024;
