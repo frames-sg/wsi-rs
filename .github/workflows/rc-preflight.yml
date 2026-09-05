@@ -143,7 +143,7 @@ jobs:
       - name: Verify architecture, identity, dependencies, exports, and C ABI
         working-directory: wsi-rs
         # Git Bash puts its link.exe ahead of the MSVC linker on Windows.
-        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
         run: >-
           cargo xtask artifact-smoke
           "${{ runner.temp }}/wsi-rs-artifact/${{ matrix.artifact }}"
