@@ -310,6 +310,9 @@ fn validate_windows_output(
     )?;
     for dependency in dependencies
         .lines()
+        // The unindented dump header names the inspected DLL, not an import.
+        // Filter before trimming so indented import names still get checked.
+        .filter(|line| !line.starts_with("Dump of file "))
         .map(str::trim)
         .filter(|line| line.to_ascii_lowercase().ends_with(".dll"))
     {

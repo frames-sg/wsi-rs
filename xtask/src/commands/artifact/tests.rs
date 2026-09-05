@@ -152,6 +152,30 @@ fn artifact_text_parsers_and_architecture_checks_fail_closed() {
 }
 
 #[test]
+fn windows_artifact_dependency_check_distinguishes_the_dump_header_from_imports() {
+    let exports = OFFICIAL_EXPORTS
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| format!("{} 00000000 00000000 {name}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let header = "Microsoft (R) COFF/PE Dumper\r\n\r\nDump of file D:\\build output\\libopenslide-1.dll\r\n\r\nFile Type: DLL\r\n\r\n  Image has the following dependencies:\r\n\r\n";
+    let dependencies = format!("{header}    KERNEL32.dll\r\n    VCRUNTIME140.dll\r\n");
+    validate_windows_output("machine (x64)", &dependencies, &exports, "x86_64").unwrap();
+
+    for import in [
+        "C:\\runtime\\codec.dll",
+        "../runtime/codec.dll",
+        "Dump of file C:\\runtime\\codec.dll",
+    ] {
+        let dependencies = format!("{header}    {import}\r\n");
+        let error = validate_windows_output("machine (x64)", &dependencies, &exports, "x86_64")
+            .unwrap_err();
+        assert!(error.contains("path instead of an import name"), "{error}");
+    }
+}
+
+#[test]
 fn artifact_platform_output_validation_covers_portable_and_rejected_paths() {
     let nm_exports = OFFICIAL_EXPORTS
         .into_iter()
