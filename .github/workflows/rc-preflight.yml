@@ -142,8 +142,7 @@ jobs:
             --output-dir "${RUNNER_TEMP}/wsi-rs-artifact"
       - name: Verify architecture, identity, dependencies, exports, and C ABI
         working-directory: wsi-rs
-        # Git Bash puts its link.exe ahead of the MSVC linker on Windows.
-        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+        # Use the platform default shell: Git Bash shadows MSVC link.exe on Windows.
         run: >-
           cargo xtask artifact-smoke
           "${{ runner.temp }}/wsi-rs-artifact/${{ matrix.artifact }}"
