@@ -378,3 +378,26 @@ fn tiled_ifd_irregular_layout_uses_tiff_grid_metadata_for_missing_tile_index() {
         .to_string()
         .contains("irregular tile row/col out of range for TIFF tile grid"));
 }
+
+#[test]
+fn sparse_philips_and_generic_tiles_preserve_transparency_in_single_and_batch_reads() {
+    for vendor in ["philips", "generic-tiff", "aperio"] {
+        let mut reader = build_tiled_jpeg_reader(8, 8, 8, 8, &[Vec::new()]);
+        reader
+            .layout
+            .dataset
+            .properties
+            .insert("openslide.vendor", vendor);
+        let request = TileRequest::new(0, 0, 0, 0, 0);
+        let single = reader.read_tile_cpu(&request).unwrap();
+        let batch = reader.read_tiles_cpu(&[request]).unwrap();
+        let channels = if vendor == "aperio" { 3 } else { 4 };
+        for tile in std::iter::once(&single).chain(&batch) {
+            assert_eq!(tile.channels, channels, "sparse {vendor} channel contract");
+            assert_eq!(
+                tile.data.as_u8().unwrap(),
+                vec![0; 8 * 8 * channels as usize]
+            );
+        }
+    }
+}

@@ -367,7 +367,7 @@ pub fn resolve_candidate(entry: &CorpusEntry, candidate: &Path) -> Option<PathBu
     if candidate.is_file() {
         if matches!(
             entry.format.as_str(),
-            "hamamatsu_vms" | "hamamatsu_vmu" | "mirax"
+            "hamamatsu_vms" | "hamamatsu_vmu" | "mirax" | "trestle" | "olympus_vsi"
         ) && candidate
             .extension()
             .and_then(|extension| extension.to_str())
@@ -381,6 +381,8 @@ pub fn resolve_candidate(entry: &CorpusEntry, candidate: &Path) -> Option<PathBu
         "hamamatsu_vms" => "vms",
         "hamamatsu_vmu" => "vmu",
         "mirax" => "mrxs",
+        "trestle" => "tif",
+        "olympus_vsi" => "vsi",
         "dicom" => "dcm",
         _ => return None,
     };
@@ -518,14 +520,29 @@ mod tests {
             .unwrap_err()
             .contains("manifest parse"));
 
-        let archive = directory.join("mirax.zip");
-        std::fs::write(&archive, b"archive").unwrap();
-        let entry = CorpusEntry {
-            alias: "mirax".into(),
-            format: "mirax".into(),
-            ..CorpusEntry::default()
-        };
-        assert_eq!(resolve_candidate(&entry, &archive), None);
+        for (format, extension) in [
+            ("mirax", "mrxs"),
+            ("trestle", "tif"),
+            ("olympus_vsi", "vsi"),
+        ] {
+            let archive = directory.join(format!("{format}.zip"));
+            std::fs::write(&archive, b"archive").unwrap();
+            let extracted = directory.join(format);
+            std::fs::create_dir_all(&extracted).unwrap();
+            let slide = extracted.join(format!("slide.{extension}"));
+            std::fs::write(&slide, b"fixture").unwrap();
+            let entry = CorpusEntry {
+                alias: format.into(),
+                format: format.into(),
+                ..CorpusEntry::default()
+            };
+            assert_eq!(
+                resolve_candidate(&entry, &archive),
+                None,
+                "archive is not a slide"
+            );
+            assert_eq!(resolve_candidate(&entry, &extracted), Some(slide));
+        }
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

@@ -268,3 +268,54 @@ sha256           = "b2985306397cb664ff89bd0c6e51c64c328ab6ba04773db8182172f5537a
 citation         = "Generated reversible-RCT JP2K fixture with a retained decoded PPM oracle."
 phi_reviewed     = true
 url              = ""
+
+[[slide]]
+name = "trestle_001"
+alias = "trestle-001"
+path = ""
+format = "trestle"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "d52070d474de8cdaf3a6e2934dff077b0aee6e957c7883b101388770b6910b39"
+citation = "OpenSlide public testdata: Trestle/CMU-1.zip"
+phi_reviewed = true
+notes = "Public CMU-1 sample; metadata and macro image reviewed. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Trestle/CMU-1.zip"
+
+[[slide]]
+name = "philips_001"
+alias = "philips-001"
+path = ""
+format = "philips_tiff"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "6a743d3bbf721a63f1fc2920f41ddcca43571346665114c6827e63efe034a0b0"
+citation = "OpenSlide public testdata: Philips-TIFF/Philips-4.tiff"
+phi_reviewed = true
+notes = "CAMELYON17 public sample with barcode removed by the source; metadata and macro reviewed. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Philips-TIFF/Philips-4.tiff"
+
+[[slide]]
+name = "generic_tiff_001"
+alias = "generic-tiff-001"
+path = ""
+format = "tiff"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "73a7e89bc15576587c3d68e55d9bf92f09690280166240b48ff4b48230b13bcd"
+citation = "OpenSlide public testdata: Generic-TIFF/CMU-1.tiff"
+phi_reviewed = true
+notes = "Public CMU-1 conversion; metadata reviewed, no associated images. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Generic-TIFF/CMU-1.tiff"

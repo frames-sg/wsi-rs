@@ -127,7 +127,7 @@ impl TiffPixelReader {
 
                 let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
                 if span.byte_count == 0 {
-                    return Self::empty_rgb_tile(span.width, span.height);
+                    return self.empty_tiled_ifd_tile(span.width, span.height);
                 }
 
                 let tile_data = self.read_tiled_ifd_tile_span(span)?;

@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Sparse Philips and generic TIFF tiles preserve transparent holes in both single and batched JPEG reads.
+
 - MIRAX concurrent reads use positional source access instead of cloned file
   cursors, preventing reads from interfering with one another.
 - Metal YCbCr conversion uses the canonical CPU lookup tables, correcting
