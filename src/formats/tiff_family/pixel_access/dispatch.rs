@@ -481,18 +481,33 @@ impl SlideReader for TiffPixelReader {
                 BackendRequest::Auto,
             ),
             TileSource::SyntheticDownsample { base_level, factor } => {
-                if req.col != 0 || req.row != 0 {
-                    return Err(WsiError::TileRead {
+                validate_tile_coords(req.col, req.row, req.level.get())?;
+                let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()]
+                    .levels[req.level.get() as usize];
+                let TileLayout::WholeLevel {
+                    virtual_tile_width,
+                    virtual_tile_height,
+                    ..
+                } = level.tile_layout
+                else {
+                    return Err(WsiError::UnsupportedFormat(
+                        "synthetic NDPI requires a virtual tile grid".into(),
+                    ));
+                };
+                self.read_synthetic_display_tile(
+                    &TileViewRequest {
+                        scene: req.scene,
+                        series: req.series,
+                        level: req.level,
+                        plane: req.plane,
                         col: req.col,
                         row: req.row,
-                        level: req.level.get(),
-                        reason: "synthetic NDPI whole-level tiles only support tile (0,0)".into(),
-                    });
-                }
-                Ok(self
-                    .get_or_decode_synthetic_level(req, *base_level, *factor)?
-                    .as_ref()
-                    .clone())
+                        tile_width: virtual_tile_width,
+                        tile_height: virtual_tile_height,
+                    },
+                    *base_level,
+                    *factor,
+                )
             }
             TileSource::StrippedLevel {
                 ifd_id,

@@ -466,3 +466,14 @@ fn metadata_identity_helpers_cover_equality_and_missing_path_fallback() {
     let mismatch = ensure_same_sop(path, "1.2.4", "1.2.3").unwrap_err();
     assert!(mismatch.to_string().contains("1.2.4 vs. 1.2.3"));
 }
+
+#[test]
+fn public_progressive_fixture_metadata_parses() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/public_dicom/progressive-sof2.dcm");
+    let metadata = parse_metadata_object_full(&path).expect("parse real progressive metadata");
+    assert_eq!(
+        metadata.transfer_syntax_uid,
+        JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX
+    );
+}

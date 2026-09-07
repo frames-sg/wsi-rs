@@ -319,3 +319,81 @@ citation = "OpenSlide public testdata: Generic-TIFF/CMU-1.tiff"
 phi_reviewed = true
 notes = "Public CMU-1 conversion; metadata reviewed, no associated images. OpenSlide comparison passed."
 url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Generic-TIFF/CMU-1.tiff"
+
+[[slide]]
+name = "public_dicom_progressive_sof2"
+alias = "dicom-fixture-progressive-sof2"
+path = "tests/fixtures/public_dicom/progressive-sof2.dcm"
+format = "dicom"
+codecs = ["jpeg-progressive"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = false
+color_paths = []
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "518c7e0bc594abd9b75314e98495786ce3579ccc0d492b71d314c47317711d74"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "public_dicom_ybr_rct"
+alias = "dicom-fixture-ybr-rct"
+path = "tests/fixtures/public_dicom/ybr-rct.dcm"
+format = "dicom"
+codecs = ["j2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+color_paths = ["YBR_RCT"]
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "a68b4ca457800abc3b4f165d645bd1cf34e804e431b19c219b50de7f14ae6f1b"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "public_dicom_ybr_ict"
+alias = "dicom-fixture-ybr-ict"
+path = "tests/fixtures/public_dicom/ybr-ict.dcm"
+format = "dicom"
+codecs = ["j2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = false
+color_paths = ["YBR_ICT"]
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "bfb33e21d93cabf814fa66abd1a4f192cad3e44ce68c7253446af1eb61a73ce4"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "independent_openjph_rgb8_lossless"
+alias = "raw-htj2k-lossless-001"
+path = "tests/fixtures/jp2k/openjph_rgb_u8_53.j2k"
+format = "raw_jp2k"
+codecs = ["htj2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+openslide_required = false
+source = "OpenJPH 0.27.0 fixture from frames-sg/j2k v0.11.0"
+license = "MIT"
+redistributable = true
+phi_reviewed = true
+sha256 = "7beb2be356b59d8c9e5cc3bbe6bb730e19917eef27150ef237d9f5585527e4df"
+citation = "tests/fixtures/jp2k/README.md; upstream OpenJPH fixture generator and source pixels"
+url = ""

@@ -8,6 +8,39 @@ use support::corpus::{load_public, resolve_entry_path};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
 #[test]
+fn public_dicom_frames_match_independent_decoder_pixels() {
+    use support::compare::{compare_rgba, tolerance_failure, Tolerance};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/public_dicom");
+    for (name, tolerance) in [
+        ("progressive-sof2", Tolerance::JPEG_DECODER_COMPAT),
+        ("ybr-rct", Tolerance::EXACT),
+        ("ybr-ict", Tolerance::TOLERANT),
+    ] {
+        let expected = image::open(root.join(format!("{name}.ppm")))
+            .expect("independent reference pixels")
+            .to_rgba8();
+        let slide = wsi_rs::Slide::open(root.join(format!("{name}.dcm")))
+            .expect("public single-frame DICOM fixture");
+        let actual = slide
+            .read_region_rgba(&wsi_rs::RegionRequest::new(
+                0,
+                0,
+                0,
+                (0, 0),
+                expected.dimensions(),
+            ))
+            .expect("decode real encoded frame through DICOM reader");
+        assert_eq!(actual.dimensions(), expected.dimensions());
+        let report = compare_rgba(actual.as_raw(), expected.as_raw(), tolerance);
+        assert!(
+            report.passed,
+            "{}",
+            tolerance_failure(name, &report).unwrap()
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
 fn dicom_public_corpus_decodes_with_wsi_rs() {
     let strict_corpus = strict_corpus_required();

@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- Progressive JPEG DICOM metadata accepts the supported retired spectral-selection and full-progression transfer syntaxes, retaining frame process validation.
+
+- Generated NDPI pyramid levels expose bounded virtual tiles and crop native reads to that grid, allowing zoom and fractional-region reads without materializing an entire generated level.
+
 - Sparse Philips and generic TIFF tiles preserve transparent holes in both single and batched JPEG reads.
 
 - MIRAX concurrent reads use positional source access instead of cloned file

@@ -207,6 +207,8 @@ The parent owns reusable runtime/pool state and routing configuration.
 
 ## NDPI offset reuse
 
+Generated NDPI levels use virtual tiles no larger than 256 by 256 pixels. Native tile reads use the existing cropped synthetic-level path; this keeps generic and fractional region planning from treating a whole generated level as one decoded tile. Physical level geometry and image coordinates remain unchanged.
+
 NDPI borrows relative MCU offsets from TIFF's already validated immutable tag
 allocation. The existing byte-bounded MCU cache retains a 128-byte classification
 entry instead of a second copy of the offset array. High-word combination and

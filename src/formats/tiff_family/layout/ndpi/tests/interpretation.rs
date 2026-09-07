@@ -302,6 +302,18 @@ fn interpret_adds_synthetic_power_of_two_levels_between_sparse_physical_ifds() {
     let interpreter = NdpiInterpreter;
     let layout = interpreter.interpret(&container).unwrap();
 
+    assert!(
+        matches!(
+            layout.dataset.scenes[0].series[0].levels[1].tile_layout,
+            TileLayout::WholeLevel {
+                virtual_tile_width: 256,
+                virtual_tile_height: 256,
+                ..
+            }
+        ),
+        "synthetic source tiles must remain bounded independently of level size"
+    );
+
     match layout
         .tile_sources
         .get(&TileSourceKey {
