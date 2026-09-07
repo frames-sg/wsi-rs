@@ -397,3 +397,22 @@ phi_reviewed = true
 sha256 = "7beb2be356b59d8c9e5cc3bbe6bb730e19917eef27150ef237d9f5585527e4df"
 citation = "tests/fixtures/jp2k/README.md; upstream OpenJPH fixture generator and source pixels"
 url = ""
+
+[[slide]]
+name = "public_dicom_lossless_complete_cache"
+alias = "svcache-lossless-001"
+path = "tests/fixtures/public_dicom/ybr-rct.svcache"
+format = "svcache"
+codecs = ["zstd"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+openslide_required = false
+oracle_divergences = ["Complete WSI cache of the deidentified YBR_RCT fixture. The ordinary DICOM reference integration test compares every pixel exactly with OpenJPEG output after the temporary cache source has been removed."]
+source = "Derived public DICOM fixture; workspace wsi-rs 0.7.0 candidate cache writer"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "312c20a2d2a2e75c314bcd6fb13ccbe26ccd1347d6ee54de2da16f5b5c8c2990"
+citation = "tests/fixtures/public_dicom/README.md; OpenSlide CMU-1-JP2K-RCT-v2 source"
+url = ""

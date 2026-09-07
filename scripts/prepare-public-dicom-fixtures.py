@@ -3,11 +3,12 @@
 
 Run with uv run --with pydicom==3.0.2 --with pillow==12.1.1
 scripts/prepare-public-dicom-fixtures.py. Requires opj_decompress 2.5.4.
-The source ZIPs belong in ~/.cache/slideviewer/parity-corpus. No compressed
-frame is re-encoded. Only synthetic container metadata is written; in particular,
+The source ZIPs belong in ~/.cache/slideviewer/parity-corpus. DICOM compressed
+frames are not re-encoded. Their metadata is synthetic; in particular,
 the 3DHISTECH source's incorrect baseline transfer syntax is corrected to JPEG
 Full Progression. Reference pixels come from libjpeg/Pillow or OpenJPEG, never
-from J2K or wsi-rs. Sources are CC0 OpenSlide testdata.
+from J2K or wsi-rs. A complete SVCACHE is also built with Cargo from the
+deidentified RCT fixture. Sources are CC0 OpenSlide testdata.
 """
 
 import argparse
@@ -15,6 +16,7 @@ import hashlib
 import io
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import uuid
 import zipfile
@@ -135,6 +137,17 @@ def main():
             reference.save(args.output / (name + ".ppm"))
         make_fixture(name, header, frame, transfer_syntax, args.output)
         print(f"{name}: source={archive_name}/{member}, frame={frame_index}, bytes={len(frame)}")
+
+    # A complete cache must remain readable after its source is gone. Use a
+    # temporary, deidentified source; retained source identity is diagnostic
+    # metadata, not a runtime dependency of this complete container.
+    with tempfile.TemporaryDirectory(prefix="wsi-public-fixture-", dir="/tmp" if Path("/tmp").is_dir() else None) as temporary:
+        source = Path(temporary) / "ybr-rct.dcm"
+        shutil.copyfile(args.output / "ybr-rct.dcm", source)
+        subprocess.run([
+            "cargo", "run", "--locked", "--bin", "svcache", "--", "build", str(source),
+            "--out", str((args.output / "ybr-rct.svcache").resolve()),
+        ], cwd=Path(__file__).resolve().parents[1], check=True)
 
 
 if __name__ == "__main__":

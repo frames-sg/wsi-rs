@@ -28,3 +28,12 @@ The `.ppm` files are independent decoded references. The ordinary
 all pixels: lossless YBR_RCT is byte-exact, while progressive JPEG and irreversible
 YBR_ICT use the established decoder tolerances. These small codec fixtures do not
 replace full-slide geometry, pyramid, or performance coverage.
+
+`ybr-rct.svcache` is a complete schema-4 cache made by the workspace's 0.7.0
+candidate writer from a temporary copy of the deidentified RCT fixture. Its
+source is removed before pixel validation, demonstrating that the complete
+cache is independently readable. The same integration test compares all cache
+pixels with the OpenJPEG PPM exactly. The cache retains its temporary source
+path and modification time as diagnostic identity, so rebuilding changes the
+container bytes and requires updating the corpus manifest digest; expected
+image samples remain identical. The generator requires Cargo for this step.
