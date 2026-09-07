@@ -10,6 +10,10 @@ pub(crate) fn decode_batch_jp2k_metal(
     if jobs.is_empty() {
         return Vec::new();
     }
+    #[cfg(target_os = "macos")]
+    if jobs.len() > 1 {
+        return super::metal_batch::decode_jobs(jobs, sessions);
+    }
     jobs.iter()
         .map(|job| {
             prepare_jp2k_job(job)

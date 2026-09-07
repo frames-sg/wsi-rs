@@ -14,6 +14,17 @@ impl ZeissSlide {
         origin: (i32, i32),
         ratio: i32,
     ) -> Result<CpuTile, WsiError> {
+        self.compose_subblocks_with_sources(subblocks, size, origin, ratio, None)
+    }
+
+    pub(super) fn compose_subblocks_with_sources(
+        &self,
+        subblocks: &[czi_rs::DirectorySubBlockInfo],
+        size: (u32, u32),
+        origin: (i32, i32),
+        ratio: i32,
+        sources: Option<&super::batch::PreparedSubblocks>,
+    ) -> Result<CpuTile, WsiError> {
         let first = subblocks.first().ok_or_else(|| {
             WsiError::DisplayConversion("CZI composition has no source subblocks".into())
         })?;
@@ -66,11 +77,18 @@ impl ZeissSlide {
                 self.subblock_decodes.fetch_add(1, Ordering::Relaxed);
                 let bitmap = bitmap_from_raw_subblock(&raw, self.limits)?;
                 blit_tile(destination, &bitmap, x, y)?;
+            } else if let Some(super::batch::PreparedSubblock::Raw(raw)) =
+                sources.and_then(|sources| sources.get(&info.file_position))
+            {
+                blit_raw_uncompressed_rgb_subblock(&mut rgb, size.0, size.1, raw, x, y)?;
             } else if info.compression == CziCompressionMode::UnCompressed {
                 let raw = self.read_source_subblock(info)?;
                 blit_raw_uncompressed_rgb_subblock(&mut rgb, size.0, size.1, &raw, x, y)?;
             } else {
-                let tile = self.decoded_subblock(info)?;
+                let tile = match sources.and_then(|sources| sources.get(&info.file_position)) {
+                    Some(super::batch::PreparedSubblock::Decoded(tile)) => tile.clone(),
+                    _ => self.decoded_subblock(info)?,
+                };
                 let data = tile.data.as_u8().ok_or_else(|| {
                     WsiError::DisplayConversion("CZI RGB composition requires 8-bit samples".into())
                 })?;

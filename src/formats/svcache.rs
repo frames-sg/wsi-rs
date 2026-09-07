@@ -14,11 +14,11 @@ pub(crate) use paths::resolve_open_path_with_policy;
 pub use paths::{cache_dir_svcache_path, default_svcache_path, svcache_candidate_paths};
 pub use storage::svcache_matches_source;
 
+use crate::core::positioned_file::PositionedFile;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
@@ -209,7 +209,7 @@ enum ColorSpaceMeta {
 pub(crate) struct SvcacheBackend;
 
 pub(crate) struct SvcacheReader {
-    file: Mutex<File>,
+    file: PositionedFile,
     payload_start: u64,
     metadata: SvcacheMetadata,
     dataset: Dataset,

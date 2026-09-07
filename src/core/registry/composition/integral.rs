@@ -162,68 +162,83 @@ pub(super) fn compose_dense_integral_u8_rows(
     shape: CompositionShape,
     total_samples: usize,
 ) -> Result<Option<Vec<u8>>, WsiError> {
-    let out_width_i64 = shape.width as i64;
-    let mut out = Vec::with_capacity(total_samples);
-    for dst_y in 0..shape.height {
-        let dst_y_i64 = dst_y as i64;
-        let mut cursor = 0usize;
-        for entry in dense_hits {
-            let Some(src_bottom) = entry.hit.dest_y.checked_add(entry.height) else {
-                return Err(WsiError::DisplayConversion(
-                    "tile destination y overflow".into(),
-                ));
-            };
-            if dst_y_i64 < entry.hit.dest_y || dst_y_i64 >= src_bottom {
-                continue;
-            }
-
-            let dst_start_i64 = entry.hit.dest_x.max(0);
-            let dst_end_i64 = entry
-                .hit
-                .dest_x
-                .checked_add(entry.width)
-                .ok_or_else(|| WsiError::DisplayConversion("tile destination x overflow".into()))?
-                .min(out_width_i64);
-            if dst_end_i64 <= dst_start_i64 {
-                continue;
-            }
-            // Both coordinates are nonnegative and capped by a width that
-            // originated as usize, so these conversions are lossless.
-            let dst_start = dst_start_i64 as usize;
-            let dst_end = dst_end_i64 as usize;
-            if dst_start != cursor {
-                return Ok(None);
-            }
-
-            // The row intersection checks above prove these source coordinates
-            // are nonnegative and within the u32-sized decoded tile.
-            let src_y = (dst_y_i64 - entry.hit.dest_y) as usize;
-            let src_x = 0i64.max(-entry.hit.dest_x) as usize;
-            let src_x_samples = src_x.checked_mul(shape.channels).ok_or_else(|| {
+    struct Span<'a> {
+        data: &'a [u8],
+        top: i64,
+        bottom: i64,
+        source_y: i64,
+        start: usize,
+        end: usize,
+        source_x: usize,
+        row_stride: usize,
+        len: usize,
+    }
+    let mut spans = Vec::with_capacity(dense_hits.len());
+    for entry in dense_hits {
+        let bottom = entry
+            .hit
+            .dest_y
+            .checked_add(entry.height)
+            .ok_or_else(|| WsiError::DisplayConversion("tile destination y overflow".into()))?;
+        if bottom <= 0 || entry.hit.dest_y >= shape.height as i64 {
+            continue;
+        }
+        let start = entry.hit.dest_x.max(0);
+        let end = entry
+            .hit
+            .dest_x
+            .checked_add(entry.width)
+            .ok_or_else(|| WsiError::DisplayConversion("tile destination x overflow".into()))?
+            .min(shape.width as i64);
+        if end <= start {
+            continue;
+        }
+        let source_x = (0i64.max(-entry.hit.dest_x) as usize)
+            .checked_mul(shape.channels)
+            .ok_or_else(|| {
                 WsiError::DisplayConversion("tile source x byte offset overflow".into())
             })?;
-            let src_start = src_y
-                .checked_mul(entry.row_stride)
-                .and_then(|row| row.checked_add(src_x_samples))
+        let len = ((end - start) as usize)
+            .checked_mul(shape.channels)
+            .ok_or_else(|| WsiError::DisplayConversion("tile copy length overflow".into()))?;
+        spans.push(Span {
+            data: entry.data,
+            top: entry.hit.dest_y.max(0),
+            bottom: bottom.min(shape.height as i64),
+            source_y: entry.hit.dest_y,
+            start: start as usize,
+            end: end as usize,
+            source_x,
+            row_stride: entry.row_stride,
+            len,
+        });
+    }
+    let mut out = Vec::with_capacity(total_samples);
+    for y in 0..shape.height as i64 {
+        let mut cursor = 0;
+        for span in &spans {
+            if y < span.top || y >= span.bottom {
+                continue;
+            }
+            if span.start != cursor {
+                return Ok(None);
+            }
+            let start = ((y - span.source_y) as usize)
+                .checked_mul(span.row_stride)
+                .and_then(|offset| offset.checked_add(span.source_x))
                 .ok_or_else(|| WsiError::DisplayConversion("tile source offset overflow".into()))?;
-            let len = dst_end
-                .checked_sub(dst_start)
-                .and_then(|pixels| pixels.checked_mul(shape.channels))
-                .ok_or_else(|| WsiError::DisplayConversion("tile copy length overflow".into()))?;
-            let src_end = src_start
-                .checked_add(len)
+            let end = start
+                .checked_add(span.len)
                 .ok_or_else(|| WsiError::DisplayConversion("tile source end overflow".into()))?;
-            let row = entry.data.get(src_start..src_end).ok_or_else(|| {
+            out.extend_from_slice(span.data.get(start..end).ok_or_else(|| {
                 WsiError::DisplayConversion("tile source row exceeds decoded buffer".into())
-            })?;
-            out.extend_from_slice(row);
-            cursor = dst_end;
+            })?);
+            cursor = span.end;
         }
         if cursor != shape.width {
             return Ok(None);
         }
     }
-
     if out.len() != total_samples {
         return Err(WsiError::DisplayConversion(format!(
             "dense compositor produced {} samples, expected {}",
@@ -231,6 +246,9 @@ pub(super) fn compose_dense_integral_u8_rows(
             total_samples
         )));
     }
-
     Ok(Some(out))
 }
+
+#[cfg(test)]
+#[path = "integral/tests/reference.rs"]
+pub(super) mod reference;

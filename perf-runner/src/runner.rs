@@ -229,6 +229,8 @@ struct ReadSample {
 struct WorkerReads {
     samples: Vec<ReadSample>,
     elapsed_us: u64,
+    reader_active_us: u64,
+    verification_us: u64,
 }
 
 fn run_read_workload(
@@ -283,6 +285,14 @@ fn run_read_workload(
         .map(|worker| worker.elapsed_us)
         .max()
         .unwrap_or(0);
+    let total_bytes = worker_results
+        .iter()
+        .flat_map(|worker| &worker.samples)
+        .fold(0u64, |total, sample| {
+            total.saturating_add(sample.bytes_read)
+        });
+    let mut timing_diagnostics = None;
+    append_reader_timing(&mut timing_diagnostics, &worker_results, total_bytes);
     let mut read_samples = worker_results
         .into_iter()
         .flat_map(|worker| worker.samples)
@@ -303,7 +313,10 @@ fn run_read_workload(
         .map(read_route_telemetry)
         .transpose()?
         .flatten();
-    let diagnostics = route_diagnostics(route_before, route_after)?;
+    let mut diagnostics =
+        route_diagnostics(route_before, route_after)?.unwrap_or_else(|| json!({}));
+    diagnostics["reader_timing"] =
+        timing_diagnostics.expect("reader timing is always populated")["reader_timing"].take();
     finish_workload(
         workload.name,
         samples,
@@ -311,8 +324,39 @@ fn run_read_workload(
         worker_count,
         effective_elapsed_us,
         checksum,
-        diagnostics,
+        Some(diagnostics),
     )
+}
+
+fn append_reader_timing(diagnostics: &mut Option<Value>, workers: &[WorkerReads], bytes: u64) {
+    let active = workers
+        .iter()
+        .map(|worker| worker.reader_active_us)
+        .max()
+        .unwrap_or(0);
+    let verification = workers.iter().fold(0u64, |sum, worker| {
+        sum.saturating_add(worker.verification_us)
+    });
+    let other = workers.iter().fold(0u64, |sum, worker| {
+        sum.saturating_add(
+            worker
+                .elapsed_us
+                .saturating_sub(worker.reader_active_us)
+                .saturating_sub(worker.verification_us),
+        )
+    });
+    let rate = if active == 0 {
+        0
+    } else {
+        u64::try_from(u128::from(bytes) * 1_000_000 / u128::from(active)).unwrap_or(u64::MAX)
+    };
+    // This measures active service time, not elapsed concurrent workload throughput.
+    diagnostics.get_or_insert_with(|| json!({}))["reader_timing"] = json!({
+        "active_elapsed_us": active,
+        "active_bytes_per_second": rate,
+        "summed_verification_us": verification,
+        "summed_other_us": other,
+    });
 }
 
 fn run_read_worker(
@@ -356,6 +400,8 @@ fn run_read_worker(
     barrier.wait();
     let worker_started = Instant::now();
     let mut samples = Vec::with_capacity(reads.len());
+    let mut reader_active = std::time::Duration::ZERO;
+    let mut verification = std::time::Duration::ZERO;
     for (index, spec) in reads {
         prepare_buffer(spec, &mut buffer)?;
         let started = Instant::now();
@@ -367,19 +413,26 @@ fn run_read_worker(
             spec.height,
             &mut buffer,
         )?;
-        let elapsed_us = elapsed_micros(started);
+        let elapsed = started.elapsed();
+        let elapsed_us = u64::try_from(elapsed.as_nanos().div_ceil(1_000)).unwrap_or(u64::MAX);
+        reader_active += elapsed;
         let bytes_read = (buffer.len() as u64).saturating_mul(4);
+        let verification_started = Instant::now();
+        let digest = read_digest(spec, &buffer);
+        verification += verification_started.elapsed();
         samples.push(ReadSample {
             index,
             elapsed_us,
             bytes_read,
-            digest: read_digest(spec, &buffer),
+            digest,
         });
         black_box(buffer.as_ptr());
     }
     Ok(WorkerReads {
         samples,
         elapsed_us: elapsed_micros(worker_started),
+        reader_active_us: u64::try_from(reader_active.as_micros()).unwrap_or(u64::MAX),
+        verification_us: u64::try_from(verification.as_micros()).unwrap_or(u64::MAX),
     })
 }
 

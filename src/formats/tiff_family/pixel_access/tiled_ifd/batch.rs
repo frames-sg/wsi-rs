@@ -181,13 +181,17 @@ impl TiffPixelReader {
     }
 
     #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn collect_tiled_ifd_jp2k_jobs(
+    pub(in super::super) fn collect_tiled_ifd_jp2k_jobs(
         &self,
         reqs: &[TileRequest],
         backend: BackendRequest,
+        control: Option<&crate::ReadControl>,
     ) -> Result<Vec<Jp2kDecodeJob<'static>>, WsiError> {
         let mut jobs = Vec::with_capacity(reqs.len());
         for req in reqs {
+            if let Some(control) = control {
+                control.check_cancelled()?;
+            }
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
                 ifd_id,
@@ -238,7 +242,7 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         sessions: &crate::output::metal::MetalBackendSessions,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Metal)?;
+        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Metal, None)?;
         crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
@@ -259,7 +263,7 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         sessions: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Cuda)?;
+        let jobs = self.collect_tiled_ifd_jp2k_jobs(reqs, BackendRequest::Cuda, None)?;
         crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())

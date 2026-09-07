@@ -3,6 +3,104 @@ use super::fixtures::MiraxFixture;
 use crate::core::registry::Slide;
 
 #[test]
+fn concurrent_mirax_batches_share_one_source_miss() {
+    let fixture = MiraxFixture::complete();
+    let mut slide = MiraxSlide::parse(&fixture.path).unwrap();
+    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+        slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    }
+    let reader = MiraxReader {
+        slide: Arc::new(slide),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 1, 0, 0),
+        TileRequest::new(0, 0, 1, 1, 0),
+    ];
+    std::thread::scope(|scope| {
+        let a = scope.spawn(|| reader.read_tiles_cpu(&reqs).unwrap());
+        let b = scope.spawn(|| reader.read_tiles_cpu(&reqs).unwrap());
+        for (a, b) in a.join().unwrap().into_iter().zip(b.join().unwrap()) {
+            assert_eq!(a.as_u8(), b.as_u8());
+        }
+    });
+    assert_eq!(reader.slide.source_decodes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn concurrent_mirax_neighbors_share_one_source_miss() {
+    let fixture = MiraxFixture::complete();
+    let mut slide = MiraxSlide::parse(&fixture.path).unwrap();
+    let reference = MiraxSlide::parse(&fixture.path).unwrap();
+    let reference = MiraxReader {
+        slide: Arc::new(reference),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 1, 0, 0),
+        TileRequest::new(0, 0, 1, 1, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reference.read_tile_cpu(req).unwrap())
+        .collect();
+    slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    let reader = MiraxReader {
+        slide: Arc::new(slide),
+    };
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = reqs
+            .iter()
+            .map(|req| scope.spawn(|| reader.read_tile_cpu(req).unwrap()))
+            .collect();
+        for (handle, expected) in handles.into_iter().zip(&expected) {
+            assert_eq!(handle.join().unwrap().as_u8(), expected.as_u8());
+        }
+    });
+    assert_eq!(reader.slide.source_decodes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn mirax_batch_decodes_each_source_once_without_persistent_cache() {
+    let fixture = MiraxFixture::complete();
+    let reader = MiraxReader {
+        slide: Arc::new(
+            MiraxSlide::parse_with_cache_config(
+                &fixture.path,
+                CacheConfig::default().with_shared_tile_bytes(0),
+            )
+            .unwrap(),
+        ),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 1, 1, 0),
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 1, 0, 0),
+        TileRequest::new(0, 0, 1, 1, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reader.read_tile_cpu(req).unwrap())
+        .collect();
+    let before = reader.slide.source_decodes.load(Ordering::Relaxed);
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    assert_eq!(
+        reader.slide.source_decodes.load(Ordering::Relaxed) - before,
+        2
+    );
+    assert_eq!(
+        reader.slide.decoded_images.lock().unwrap().current_bytes(),
+        0
+    );
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(&expected) {
+        assert_eq!(
+            (actual.width(), actual.height()),
+            (expected.width(), expected.height())
+        );
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+}
+
+#[test]
 fn synthetic_mirax_probes_opens_and_exposes_metadata() {
     let fixture = MiraxFixture::complete();
     let backend = MiraxBackend::new();
@@ -359,4 +457,37 @@ fn associated_record_open_errors_retain_the_missing_path() {
         slide.read_associated("broken"),
         Err(WsiError::IoWithPath { path, .. }) if path == missing
     ));
+}
+
+#[test]
+fn mirax_batch_bounds_live_decoded_sources_independently_of_encoded_allowance() {
+    let fixture = MiraxFixture::complete();
+    let reader = MiraxReader {
+        slide: Arc::new(
+            MiraxSlide::parse_with_cache_config(
+                &fixture.path,
+                CacheConfig::default().with_shared_tile_bytes(0),
+            )
+            .unwrap(),
+        ),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 1, 0, 0),
+        TileRequest::new(0, 0, 1, 2, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reader.read_tile_cpu(req).unwrap())
+        .collect();
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    for (actual, expected) in actual.iter().zip(&expected) {
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+    assert!(
+        reader
+            .slide
+            .prepared_source_peak_bytes
+            .load(Ordering::Relaxed)
+            <= 16 * 16 * 3
+    );
 }

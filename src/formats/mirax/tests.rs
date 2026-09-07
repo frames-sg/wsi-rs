@@ -9,6 +9,39 @@ mod parser;
 
 static MIRAX_ASSOCIATED_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(unix)]
+#[test]
+fn record_read_does_not_move_another_readers_shared_file_position() {
+    let fixture = fixtures::MiraxFixture::complete();
+    let mut file = File::open(&fixture.data_path).unwrap();
+    let mut other = file.try_clone().unwrap();
+    let expected = std::fs::read(&fixture.data_path).unwrap();
+    let ready = std::sync::Barrier::new(2);
+    let finished = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            other.seek(SeekFrom::Start(0)).unwrap();
+            ready.wait();
+            finished.wait();
+            let mut actual = [0; 16];
+            other.read_exact(&mut actual).unwrap();
+            actual
+        });
+        ready.wait();
+        let actual = helpers::read_record_bytes_from_file_with_limit(
+            &mut file,
+            &fixture.data_path,
+            128,
+            16,
+            1024,
+        )
+        .unwrap();
+        finished.wait();
+        assert_eq!(actual, expected[128..144]);
+        assert_eq!(reader.join().unwrap(), expected[..16]);
+    });
+}
+
 fn mirax_sentinel_path() -> PathBuf {
     let cache = std::env::var_os("WSI_RS_PARITY_CORPUS_CACHE")
         .map(PathBuf::from)

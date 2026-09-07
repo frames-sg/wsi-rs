@@ -1,4 +1,5 @@
 mod attachments;
+mod batch;
 mod composition;
 mod level;
 mod metadata;
@@ -35,7 +36,7 @@ use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader,
+    crop_rgb_interleaved_u8_buffer, BackendOpenConfig, ConfiguredDatasetReader,
     ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader, FormatProbe,
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };

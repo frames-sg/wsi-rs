@@ -173,6 +173,18 @@ impl ZeissSlide {
         row: i64,
         _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
+        self.read_tile_with_sources(scene, series, level, col, row, None)
+    }
+
+    pub(super) fn read_tile_with_sources(
+        &self,
+        scene: usize,
+        series: usize,
+        level: u32,
+        col: i64,
+        row: i64,
+        sources: Option<&super::batch::PreparedSubblocks>,
+    ) -> Result<CpuTile, WsiError> {
         let series_ref = self
             .dataset
             .scenes
@@ -220,29 +232,29 @@ impl ZeissSlide {
             .get(&key)
             .cloned()
         {
-            return Ok(cached.as_ref().clone());
+            return Ok(cached);
         }
 
-        let buffer =
-            if let Some(buffer) = self.scene_tile_image_local(scene, level as usize, col, row)? {
-                #[cfg(test)]
-                ZEISS_LOCAL_TILE_HITS.fetch_add(1, Ordering::Relaxed);
-                buffer
-            } else {
-                let level_img = self.scene_level_image(scene, level as usize)?;
-                let x = (col as u32).saturating_mul(tile_width);
-                let y = (row as u32).saturating_mul(tile_height);
-                let w = tile_width.min(level_img.width.saturating_sub(x));
-                let h = tile_height.min(level_img.height.saturating_sub(y));
-                crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
-            };
-        let arc = Arc::new(buffer);
-        let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
+        let buffer = if let Some(buffer) =
+            self.scene_tile_image_local(scene, level as usize, col, row, sources)?
+        {
+            #[cfg(test)]
+            ZEISS_LOCAL_TILE_HITS.fetch_add(1, Ordering::Relaxed);
+            buffer
+        } else {
+            let level_img = self.scene_level_image(scene, level as usize)?;
+            let x = (col as u32).saturating_mul(tile_width);
+            let y = (row as u32).saturating_mul(tile_height);
+            let w = tile_width.min(level_img.width.saturating_sub(x));
+            let h = tile_height.min(level_img.height.saturating_sub(y));
+            crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
+        };
+        let retained_bytes = u64::try_from(buffer.data.byte_size()).unwrap_or(u64::MAX);
         self.tile_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .put(key, arc.clone(), retained_bytes);
-        Ok(arc.as_ref().clone())
+            .put(key, buffer.clone(), retained_bytes);
+        Ok(buffer)
     }
 
     fn scene_tile_image_local(
@@ -251,6 +263,7 @@ impl ZeissSlide {
         level: usize,
         col: i64,
         row: i64,
+        sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<Option<CpuTile>, WsiError> {
         let (_tile_width, _tile_height, tile_x, tile_y, tile_w, tile_h) = {
             let series = &self.dataset.scenes[scene].series[0];
@@ -364,11 +377,12 @@ impl ZeissSlide {
                 .map(Some);
         }
 
-        let tile = self.compose_subblocks(
+        let tile = self.compose_subblocks_with_sources(
             &subblocks,
             (tile_w, tile_h),
             (tile_origin_x, tile_origin_y),
             _level_ratio,
+            sources,
         )?;
         if tile.data.as_u8().is_none() {
             return Err(WsiError::DisplayConversion(

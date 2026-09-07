@@ -15,13 +15,17 @@ use crate::formats::dicom::decode::jp2k_photometric_is_ycbcr;
 use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
 
 impl DicomReader {
-    fn strict_jp2k_frames(&self, reqs: &[TileRequest]) -> Result<Vec<DicomFrameBytes>, WsiError> {
+    pub(super) fn strict_jp2k_frames(
+        &self,
+        reqs: &[TileRequest],
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Vec<DicomFrameBytes>, WsiError> {
         if reqs.is_empty() {
             return Ok(Vec::new());
         }
         let planner = DicomBatchPlanner::new(
             &self.slide,
-            None,
+            control,
             DicomBatchPlanMode::Device {
                 requires_device: true,
             },
@@ -48,7 +52,7 @@ impl DicomReader {
             }
         }
         let frames =
-            attach_encapsulated_frame_bytes(frames, true, None, DicomFrameBatchKind::Device)?;
+            attach_encapsulated_frame_bytes(frames, true, control, DicomFrameBatchKind::Device)?;
         crate::core::batch::expect_exact_count(frames, reqs.len(), "DICOM device frame batch")
     }
 
@@ -58,7 +62,36 @@ impl DicomReader {
         reqs: &[TileRequest],
         sessions: &crate::output::metal::MetalBackendSessions,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        let frames = self.strict_jp2k_frames(reqs)?;
+        let frames = self.strict_jp2k_frames(reqs, None)?;
+        self.decode_metal_frames(reqs, &frames, sessions, true)
+    }
+
+    #[cfg(feature = "metal")]
+    pub(super) fn read_metal_admitted(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+        context: &crate::core::limits::ReadExecutionContext<'_>,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        // The ordinary reservation already covers these retained frame inputs.
+        // Charge native ownership from their actual sizes, not the conservative
+        // encoded-unit ceiling used before the lazy frame index was available.
+        let frames = self.strict_jp2k_frames(reqs, context.control)?;
+        let copy_bytes = frames.iter().fold(0_u64, |sum, (_, bytes)| {
+            sum.saturating_add(bytes.len() as u64)
+        });
+        let extra = context.try_extra(copy_bytes)?;
+        self.decode_metal_frames(reqs, &frames, sessions, extra.is_some())
+    }
+
+    #[cfg(feature = "metal")]
+    fn decode_metal_frames(
+        &self,
+        reqs: &[TileRequest],
+        frames: &[DicomFrameBytes],
+        sessions: &crate::output::metal::MetalBackendSessions,
+        grouped: bool,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
         let jobs = frames
             .iter()
             .map(|(frame, bytes)| Jp2kDecodeJob {
@@ -71,7 +104,19 @@ impl DicomReader {
                 backend: BackendRequest::Metal,
             })
             .collect::<Vec<_>>();
-        crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
+        let results = if grouped {
+            crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
+        } else {
+            jobs.iter()
+                .flat_map(|job| {
+                    crate::decode::jp2k::decode_batch_jp2k_metal(
+                        std::slice::from_ref(job),
+                        sessions,
+                    )
+                })
+                .collect()
+        };
+        results
             .into_iter()
             .zip(reqs)
             .map(|(result, request)| {
@@ -94,7 +139,7 @@ impl DicomReader {
         reqs: &[TileRequest],
         sessions: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        let frames = self.strict_jp2k_frames(reqs)?;
+        let frames = self.strict_jp2k_frames(reqs, None)?;
         let jobs = frames
             .iter()
             .map(|(frame, bytes)| Jp2kDecodeJob {

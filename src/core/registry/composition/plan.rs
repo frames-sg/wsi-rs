@@ -2,16 +2,16 @@ use crate::core::registry::composition::resolution::validate_region_request;
 use crate::core::types::{Dataset, RegionRequest, Series, TileHit};
 use crate::error::WsiError;
 
-pub(super) struct RegionReadPlan<'a> {
-    pub(super) series: &'a Series,
-    pub(super) hits: Vec<TileHit>,
-    pub(super) output_width: u32,
-    pub(super) output_height: u32,
-    pub(super) preserve_alpha: bool,
+pub(in crate::core::registry) struct RegionReadPlan<'a> {
+    pub(in crate::core::registry) series: &'a Series,
+    pub(in crate::core::registry) hits: Vec<TileHit>,
+    pub(in crate::core::registry) output_width: u32,
+    pub(in crate::core::registry) output_height: u32,
+    pub(in crate::core::registry) preserve_alpha: bool,
 }
 
 impl<'a> RegionReadPlan<'a> {
-    pub(super) fn integral(
+    pub(in crate::core::registry) fn integral(
         dataset: &'a Dataset,
         request: &RegionRequest,
         max_region_pixels: u64,
@@ -34,7 +34,7 @@ impl<'a> RegionReadPlan<'a> {
         })
     }
 
-    pub(super) fn fractional(
+    pub(in crate::core::registry) fn fractional(
         dataset: &'a Dataset,
         request: &RegionRequest,
         origin_px: (f64, f64),

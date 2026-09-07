@@ -23,14 +23,16 @@ impl AdaptiveDecodeReader {
         &self,
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
+        context: Option<&crate::core::limits::ReadExecutionContext<'_>>,
     ) -> Result<Vec<CpuTile>, WsiError> {
         Self::check_control(control)?;
+        let _ = context;
         if reqs.is_empty() || self.runtime.options.acceleration == DecodeAcceleration::CpuOnly {
             return self.read_inner_cpu(reqs, control);
         }
         #[cfg(any(feature = "metal", feature = "cuda"))]
         {
-            self.read_tiles_adaptive_device(reqs, control)
+            self.read_tiles_adaptive_device(reqs, control, context)
         }
         #[cfg(not(any(feature = "metal", feature = "cuda")))]
         {
@@ -38,138 +40,11 @@ impl AdaptiveDecodeReader {
         }
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn read_tiles_adaptive_device(
-        &self,
-        reqs: &[TileRequest],
-        control: Option<&crate::ReadControl>,
-    ) -> Result<Vec<CpuTile>, WsiError> {
-        let Some(device) = self.preferred_device() else {
-            let tiles = self.read_inner_cpu(reqs, control)?;
-            if let Some(device) = self.configured_device() {
-                record_unavailable_fallback(device, jp2k_tile_count(self.inner.as_ref(), reqs));
-            }
-            return Ok(tiles);
-        };
-        let device_identity = self.device_identity(device)?;
-        let Some(key) = route_key_for_batch(self.inner.as_ref(), reqs, &device_identity) else {
-            return self.read_inner_cpu(reqs, control);
-        };
-
-        if let Some(decision) = self.runtime.cached_route(&key) {
-            tracing::debug!(
-                route = ?decision.winner,
-                cpu_elapsed_ms = decision.cpu_elapsed.as_secs_f64() * 1000.0,
-                device_elapsed_ms = decision.device_elapsed.as_secs_f64() * 1000.0,
-                route_cache_hit = true,
-                "wsi adaptive JP2K route"
-            );
-            return match decision.winner {
-                DecodeRoute::Cpu => {
-                    let tiles = self.read_inner_cpu(reqs, control)?;
-                    if decision.device_failure {
-                        record_device_failure_fallback(device, tiles.len());
-                    } else {
-                        record_adaptive_cpu_route(device, tiles.len());
-                    }
-                    Ok(tiles)
-                }
-                DecodeRoute::Device => match self.read_device_host(reqs, device, control) {
-                    Ok(tiles) => {
-                        record_device_route(device, reqs.len());
-                        Ok(tiles)
-                    }
-                    Err(error) => {
-                        tracing::debug!(error = %error, "cached JP2K device route fell back to CPU");
-                        self.runtime.store_route(
-                            key,
-                            DecodeRouteDecision::device_failure(),
-                            control,
-                        )?;
-                        let tiles = self.read_inner_cpu(reqs, control)?;
-                        record_device_failure_fallback(device, tiles.len());
-                        Ok(tiles)
-                    }
-                },
-            };
-        }
-
-        let sample_len = reqs.len().min(ROUTE_SAMPLE_SIZE);
-        let sample = &reqs[..sample_len];
-        let device_started = Instant::now();
-        let device_sample = match self.read_device_host(sample, device, control) {
-            Ok(tiles) => tiles,
-            Err(error) => {
-                tracing::debug!(error = %error, "JP2K device route unavailable; using CPU");
-                let cpu_tiles = self.read_inner_cpu(reqs, control)?;
-                self.runtime
-                    .store_route(key, DecodeRouteDecision::device_failure(), control)?;
-                record_device_failure_fallback(device, cpu_tiles.len());
-                return Ok(cpu_tiles);
-            }
-        };
-        let device_elapsed = device_started.elapsed();
-
-        let cpu_started = Instant::now();
-        let cpu_sample = self.read_inner_cpu(sample, control)?;
-        let cpu_elapsed = cpu_started.elapsed();
-        let decision = DecodeRouteDecision::measured(cpu_elapsed, device_elapsed);
-        let winner = decision.winner;
-        let mut measured_cpu_sample = Some(cpu_sample);
-        let mut tiles = match winner {
-            DecodeRoute::Cpu => measured_cpu_sample
-                .take()
-                .expect("the measured CPU sample is present"),
-            DecodeRoute::Device => device_sample,
-        };
-        if sample_len < reqs.len() {
-            let remainder = match winner {
-                DecodeRoute::Cpu => self.read_inner_cpu(&reqs[sample_len..], control),
-                DecodeRoute::Device => self.read_device_host(&reqs[sample_len..], device, control),
-            };
-            match remainder {
-                Ok(mut remainder) => tiles.append(&mut remainder),
-                Err(error) if winner == DecodeRoute::Device => {
-                    tracing::debug!(
-                        error = %error,
-                        "selected JP2K device route failed; completing the batch on CPU"
-                    );
-                    self.runtime.store_route(
-                        key,
-                        DecodeRouteDecision::device_failure(),
-                        control,
-                    )?;
-                    let mut cpu_tiles = measured_cpu_sample
-                        .take()
-                        .expect("the measured CPU sample remains available for device fallback");
-                    cpu_tiles.extend(self.read_inner_cpu(&reqs[sample_len..], control)?);
-                    record_device_failure_fallback(device, cpu_tiles.len());
-                    return Ok(cpu_tiles);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        tracing::debug!(
-            route = ?winner,
-            sample_tile_count = sample_len,
-            cpu_elapsed_ms = cpu_elapsed.as_secs_f64() * 1000.0,
-            device_elapsed_ms = device_elapsed.as_secs_f64() * 1000.0,
-            route_cache_hit = false,
-            "wsi adaptive JP2K route"
-        );
-        self.runtime.store_route(key, decision, control)?;
-        match winner {
-            DecodeRoute::Cpu => record_adaptive_cpu_route(device, reqs.len()),
-            DecodeRoute::Device => record_device_route(device, reqs.len()),
-        }
-        Ok(tiles)
-    }
-
-    fn check_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
+    pub(super) fn check_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
         control.map_or(Ok(()), crate::ReadControl::check_cancelled)
     }
 
-    fn read_inner_cpu(
+    pub(super) fn read_inner_cpu(
         &self,
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
@@ -180,7 +55,9 @@ impl AdaptiveDecodeReader {
             None => self.inner.read_tiles_cpu(reqs),
         };
         let result = if batch_uses_jp2k(self.inner.as_ref(), reqs) {
-            self.runtime.install_jp2k_cpu(operation)
+            self.inner
+                .read_tiles_cpu_fastpath(reqs, control)
+                .unwrap_or_else(|| self.runtime.install_jp2k_cpu(operation))
         } else {
             operation()
         };
@@ -188,77 +65,6 @@ impl AdaptiveDecodeReader {
         result.and_then(|tiles| {
             crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive CPU tile batch")
         })
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn preferred_device(&self) -> Option<DeviceKind> {
-        #[cfg(all(feature = "metal", target_os = "macos"))]
-        if self.runtime.metal_sessions().is_ok() {
-            return Some(DeviceKind::Metal);
-        }
-        #[cfg(feature = "cuda")]
-        {
-            if self.runtime.cuda_sessions().is_ok() {
-                return Some(DeviceKind::Cuda);
-            }
-        }
-        #[allow(unreachable_code)]
-        None
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn configured_device(&self) -> Option<DeviceKind> {
-        #[cfg(all(feature = "metal", target_os = "macos"))]
-        {
-            Some(DeviceKind::Metal)
-        }
-        #[cfg(all(feature = "cuda", not(all(feature = "metal", target_os = "macos"))))]
-        {
-            Some(DeviceKind::Cuda)
-        }
-        #[cfg(not(any(all(feature = "metal", target_os = "macos"), feature = "cuda")))]
-        {
-            None
-        }
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn device_identity(&self, device: DeviceKind) -> Result<String, WsiError> {
-        match device {
-            #[cfg(feature = "metal")]
-            DeviceKind::Metal => Ok(self.runtime.metal_sessions()?.device_identity()),
-            #[cfg(feature = "cuda")]
-            DeviceKind::Cuda => Ok(self.runtime.cuda_sessions()?.device_identity().to_owned()),
-        }
-    }
-
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn read_device_host(
-        &self,
-        reqs: &[TileRequest],
-        device: DeviceKind,
-        control: Option<&crate::ReadControl>,
-    ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
-        record_device_attempt(device, reqs.len());
-        let tiles = match device {
-            #[cfg(feature = "metal")]
-            DeviceKind::Metal => self
-                .inner
-                .read_tiles_metal(reqs, self.runtime.metal_sessions()?)?
-                .iter()
-                .map(crate::output::metal::MetalDeviceTile::download_cpu)
-                .collect::<Result<Vec<_>, _>>()?,
-            #[cfg(feature = "cuda")]
-            DeviceKind::Cuda => self
-                .inner
-                .read_tiles_cuda(reqs, self.runtime.cuda_sessions()?)?
-                .iter()
-                .map(crate::output::cuda::CudaDeviceTile::download_cpu)
-                .collect::<Result<Vec<_>, _>>()?,
-        };
-        Self::check_control(control)?;
-        crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive device tile batch")
     }
 }
 
@@ -293,13 +99,13 @@ impl SlideReader for AdaptiveDecodeReader {
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         crate::core::batch::exactly_one(
-            self.read_tiles_adaptive(std::slice::from_ref(req), None)?,
+            self.read_tiles_adaptive(std::slice::from_ref(req), None, None)?,
             "adaptive single tile read",
         )
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_adaptive(reqs, None)
+        self.read_tiles_adaptive(reqs, None, None)
     }
 
     fn read_tiles_cpu_controlled(
@@ -307,7 +113,7 @@ impl SlideReader for AdaptiveDecodeReader {
         reqs: &[TileRequest],
         control: &crate::ReadControl,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_adaptive(reqs, Some(control))
+        self.read_tiles_adaptive(reqs, Some(control), None)
     }
 
     #[cfg(feature = "metal")]
@@ -351,8 +157,7 @@ impl SlideReader for AdaptiveDecodeReader {
         ctx: &mut crate::core::registry::SlideReadContext<'_>,
         req: &crate::core::types::RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
-        self.runtime
-            .install_jp2k_cpu(|| self.inner.read_region_fastpath(ctx, req))
+        self.inner.read_region_fastpath(ctx, req)
     }
 
     fn read_region(&self, req: &crate::core::types::RegionRequest) -> Result<CpuTile, WsiError> {
@@ -374,6 +179,24 @@ impl SlideReader for AdaptiveDecodeReader {
 }
 
 impl ManagedSlideReader for AdaptiveDecodeReader {
+    #[cfg(feature = "metal")]
+    fn read_metal_with_context(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::metal::MetalBackendSessions,
+        context: &crate::core::limits::ReadExecutionContext<'_>,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        self.inner.read_metal_with_context(reqs, session, context)
+    }
+
+    fn read_tiles_with_context(
+        &self,
+        reqs: &[TileRequest],
+        context: &crate::core::limits::ReadExecutionContext<'_>,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        self.read_tiles_adaptive(reqs, context.control, Some(context))
+    }
+
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
         self.inner.tile_encoded_upper_bound(req)
     }
@@ -444,16 +267,11 @@ pub(super) fn route_key_for_batch(
         first.series.get(),
         first.level.get(),
     )?;
-    let sample_len = reqs.len().min(ROUTE_SAMPLE_SIZE);
-    let mut dimensions = [(0, 0); ROUTE_SAMPLE_SIZE];
-    for (slot, request) in dimensions.iter_mut().zip(&reqs[..sample_len]) {
-        *slot = logical_tile_dimensions(level, request)?;
-    }
-    dimensions[..sample_len].sort_unstable();
-    let sample_geometry = RouteSampleGeometry {
-        tiles: dimensions.map(|(width, height)| RouteTileGeometry { width, height }),
-        len: sample_len as u8,
-    };
+    let dimensions = reqs
+        .iter()
+        .map(|request| logical_tile_dimensions(level, request))
+        .collect::<Option<Vec<_>>>()?;
+    let sample_geometry = RouteSampleGeometry::from_dimensions(dimensions);
     Some(DecodeRouteKey {
         dataset_id: reader.dataset().id.0,
         scene: first.scene.get(),
@@ -462,7 +280,8 @@ pub(super) fn route_key_for_batch(
         sample_geometry,
         codec_kind,
         device_identity: device_identity.to_owned(),
-        sample_tile_count: reqs.len().min(ROUTE_SAMPLE_SIZE),
+        sample_tile_count: reqs.len(),
+        cpu_workers: DecodeRuntime::default_arc().cpu_worker_count(),
     })
 }
 

@@ -1,6 +1,142 @@
 use super::fixtures::*;
 use super::*;
 
+#[test]
+fn czi_large_source_groups_fit_decoded_staging() {
+    let blocks: Vec<_> = [0, 1024]
+        .into_iter()
+        .map(|x| {
+            let mut block = SubblockSpec::bgr24(
+                x,
+                0,
+                1024,
+                1024,
+                jpeg_rgb(1024, 1024, &vec![100; 1024 * 1024 * 3]),
+            );
+            block.compression = 1;
+            block
+        })
+        .collect();
+    let fixture = write_fixture(&blocks, &[], &metadata_xml(2048, 1024));
+    let reader = ZeissReader {
+        slide: Arc::new(
+            ZeissSlide::parse_with_cache_config(
+                fixture.path(),
+                CacheConfig::default().with_shared_tile_bytes(0),
+            )
+            .unwrap(),
+        ),
+    };
+    let reqs: Vec<_> = [0, 4, 0, 4]
+        .into_iter()
+        .map(|col| TileRequest::new(0, 0, 0, col, 0))
+        .collect();
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    assert_eq!(actual.len(), 4);
+    assert!(actual
+        .iter()
+        .all(|tile| (tile.width(), tile.height()) == (256, 256)));
+    assert_eq!(
+        reader
+            .slide
+            .prepared_source_peak_bytes
+            .load(Ordering::Relaxed),
+        1024 * 1024 * 3,
+        "the logical batch is smaller than a source block, so stage only one source at a time"
+    );
+}
+
+#[test]
+fn concurrent_czi_batches_share_one_source_miss() {
+    let fixture = jpeg_fixture();
+    let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
+    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+        slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    }
+    let reader = ZeissReader {
+        slide: Arc::new(slide),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    std::thread::scope(|scope| {
+        let a = scope.spawn(|| reader.read_tiles_cpu(&reqs).unwrap());
+        let b = scope.spawn(|| reader.read_tiles_cpu(&reqs).unwrap());
+        for (a, b) in a.join().unwrap().into_iter().zip(b.join().unwrap()) {
+            assert_eq!(a.as_u8(), b.as_u8());
+        }
+    });
+    assert_eq!(reader.slide.subblock_decodes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn concurrent_czi_neighbors_share_one_source_miss() {
+    let fixture = jpeg_fixture();
+    let reference = ZeissReader {
+        slide: Arc::new(ZeissSlide::parse(fixture.path()).unwrap()),
+    };
+    let reqs = [
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reference.read_tile_cpu(req).unwrap())
+        .collect();
+    let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
+    slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    let reader = ZeissReader {
+        slide: Arc::new(slide),
+    };
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = reqs
+            .iter()
+            .map(|req| scope.spawn(|| reader.read_tile_cpu(req).unwrap()))
+            .collect();
+        for (handle, expected) in handles.into_iter().zip(&expected) {
+            assert_eq!(handle.join().unwrap().as_u8(), expected.as_u8());
+        }
+    });
+    assert_eq!(reader.slide.subblock_decodes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn czi_batch_decodes_each_source_once_without_persistent_cache() {
+    let fixture = jpeg_fixture();
+    let reader = ZeissReader {
+        slide: Arc::new(
+            ZeissSlide::parse_with_cache_config(
+                fixture.path(),
+                CacheConfig::default().with_shared_tile_bytes(0),
+            )
+            .unwrap(),
+        ),
+    };
+    let reqs: Vec<_> = [1, 0, 1]
+        .into_iter()
+        .map(|col| TileRequest::new(0, 0, 0, col, 0))
+        .collect();
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reader.read_tile_cpu(req).unwrap())
+        .collect();
+    let before = reader.slide.subblock_decodes.load(Ordering::Relaxed);
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    assert_eq!(
+        reader.slide.subblock_decodes.load(Ordering::Relaxed) - before,
+        1
+    );
+    assert_eq!(
+        reader.slide.subblock_cache.lock().unwrap().current_bytes(),
+        0
+    );
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(&expected) {
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+}
+
 fn jpeg_fixture() -> tempfile::NamedTempFile {
     let rgb: Vec<_> = (0..512 * 8)
         .flat_map(|i| [(i % 251) as u8, 70, 150])
@@ -8,6 +144,49 @@ fn jpeg_fixture() -> tempfile::NamedTempFile {
     let mut block = SubblockSpec::bgr24(0, 0, 512, 8, jpeg_rgb(512, 8, &rgb));
     block.compression = 1;
     write_fixture(&[block], &[], &metadata_xml(512, 8))
+}
+
+#[test]
+#[ignore = "exports a synthetic corpus using existing CZI fixture facilities for native performance comparisons"]
+fn export_czi_batch_performance_fixture() {
+    let output = std::env::var_os("WSI_RS_CZI_PERF_FIXTURE").expect("fixture output path");
+    let blocks: Vec<_> = (0..4)
+        .map(|index| {
+            let rgb: Vec<_> = (0..1024 * 1024)
+                .flat_map(|pixel| {
+                    let x = pixel % 1024;
+                    let y = pixel / 1024;
+                    [
+                        ((x / 7 + y / 11 + index * 41) % 251) as u8,
+                        ((x / 13 + y / 3 + 63) % 251) as u8,
+                        ((x / 5 + y / 17 + 113) % 251) as u8,
+                    ]
+                })
+                .collect();
+            let mut block = SubblockSpec::bgr24(
+                index % 2 * 1024,
+                index / 2 * 1024,
+                1024,
+                1024,
+                jpeg_rgb(1024, 1024, &rgb),
+            );
+            block.compression = 1;
+            block
+        })
+        .collect();
+    let fixture = write_fixture(&blocks, &[], &metadata_xml(2048, 2048));
+    let reader = ZeissReader {
+        slide: Arc::new(ZeissSlide::parse(fixture.path()).unwrap()),
+    };
+    let reqs: Vec<_> = (0..8)
+        .flat_map(|row| (0..8).map(move |col| TileRequest::new(0, 0, 0, col, row)))
+        .collect();
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    assert_eq!(actual.len(), 64);
+    assert!(actual
+        .iter()
+        .all(|tile| (tile.width(), tile.height()) == (256, 256)));
+    std::fs::copy(fixture.path(), output).unwrap();
 }
 
 #[test]

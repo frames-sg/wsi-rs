@@ -6,6 +6,7 @@ use crate::SlideLimits;
 const MAX_DICOM_DIRECTORY_FILES: usize = 1_024;
 
 pub(super) struct DicomSlide {
+    pub(super) encoded_unit_bytes: u64,
     pub(super) dataset: Dataset,
     pub(super) levels: Vec<DicomLevel>,
     pub(super) associated: HashMap<String, Arc<DicomImage>>,
@@ -194,6 +195,7 @@ impl DicomSlide {
         }
 
         Ok(Self {
+            encoded_unit_bytes: config.limits.encoded_unit_bytes(),
             dataset,
             levels,
             associated,

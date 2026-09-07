@@ -475,6 +475,10 @@ fn assemble_slide(
     ZeissSlide {
         #[cfg(test)]
         subblock_decodes: AtomicU64::new(0),
+        #[cfg(test)]
+        source_miss_barrier: None,
+        #[cfg(test)]
+        prepared_source_peak_bytes: AtomicU64::new(0),
         limits: crate::SlideLimits::default(),
         source_path: path.to_path_buf(),
         source_identity: parts.source_identity,
@@ -483,6 +487,7 @@ fn assemble_slide(
         preflight_file: Mutex::new(parts.preflight_file),
         level_cache: Mutex::new(level_cache),
         tile_cache: Mutex::new(tile_cache),
+        source_flights: crate::core::cache::TileFlights::new(subblock_cache.capacity_bytes()),
         subblock_cache: Mutex::new(subblock_cache),
         associated_cache: Mutex::new(associated_cache),
         associated_sources: associated.sources,

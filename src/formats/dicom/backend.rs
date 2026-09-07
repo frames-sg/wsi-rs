@@ -38,7 +38,7 @@ impl DicomBackend {
         &self,
         path: &Path,
         config: BackendOpenConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
+    ) -> Result<Box<DicomReader>, WsiError> {
         let key = FileIdentity::from_path(path)?;
         let slide = match self.probe_cache.take(&key, config) {
             Some(slide) => slide,
@@ -94,7 +94,7 @@ impl ConfiguredFormatProbe for DicomBackend {
 
 impl DatasetReader for DicomBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_cached_or_parse(path, BackendOpenConfig::deterministic())
+        Ok(self.open_cached_or_parse(path, BackendOpenConfig::deterministic())?)
     }
 }
 
@@ -104,9 +104,6 @@ impl ConfiguredDatasetReader for DicomBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        Ok(Box::new(ConservativeManagedReader::new(
-            self.open_cached_or_parse(path, config)?,
-            config.limits.encoded_unit_bytes(),
-        )))
+        Ok(self.open_cached_or_parse(path, config)?)
     }
 }

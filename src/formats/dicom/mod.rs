@@ -21,8 +21,8 @@ use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     crop_rgb_interleaved_u8_buffer, BackendOpenConfig, ConfiguredDatasetReader,
-    ConfiguredFormatProbe, ConfiguredProbeCache, ConservativeManagedReader, DatasetReader,
-    FormatProbe, ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
+    ConfiguredFormatProbe, ConfiguredProbeCache, DatasetReader, FormatProbe, ManagedSlideReader,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::error::WsiError;

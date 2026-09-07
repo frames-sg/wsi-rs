@@ -105,7 +105,7 @@ fn shared_cache_reuses_tile_across_handles() {
 }
 
 #[test]
-fn read_region_batches_uncached_tiles_and_preserves_cache() {
+fn read_region_bounds_unknown_inputs_and_preserves_cache() {
     let tile_reads = Arc::new(AtomicUsize::new(0));
     let batch_reads = Arc::new(AtomicUsize::new(0));
     let batch_tile_count = Arc::new(AtomicUsize::new(0));
@@ -121,12 +121,14 @@ fn read_region_batches_uncached_tiles_and_preserves_cache() {
 
     let req = region_request(0, 0, 0, PlaneSelection::default(), 0, 0, 512, 256);
 
+    // Public readers only promise one encoded-unit ceiling. Their concurrent
+    // inputs cannot be proven to fit, so these two misses execute separately.
     let first = handle.read_region(&req).unwrap();
     let pixels = first.data.as_u8().unwrap();
     assert_eq!(&pixels[..3], &[255, 0, 0]);
     assert_eq!(&pixels[(256 * 3)..(257 * 3)], &[0, 255, 0]);
     assert_eq!(tile_reads.load(Ordering::SeqCst), 0);
-    assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(batch_reads.load(Ordering::SeqCst), 2);
     assert_eq!(batch_tile_count.load(Ordering::SeqCst), 2);
 
     let second = handle.read_region(&req).unwrap();
@@ -134,13 +136,13 @@ fn read_region_batches_uncached_tiles_and_preserves_cache() {
     assert_eq!(tile_reads.load(Ordering::SeqCst), 0);
     assert_eq!(
         batch_reads.load(Ordering::SeqCst),
-        1,
+        2,
         "second read should be fully satisfied from cache"
     );
 }
 
 #[test]
-fn read_region_batch_cache_behavior_is_observable_in_internal_stats() {
+fn read_region_bounded_cache_behavior_is_observable_in_internal_stats() {
     let tile_reads = Arc::new(AtomicUsize::new(0));
     let batch_reads = Arc::new(AtomicUsize::new(0));
     let batch_tile_count = Arc::new(AtomicUsize::new(0));
@@ -162,14 +164,14 @@ fn read_region_batch_cache_behavior_is_observable_in_internal_stats() {
 
     let _ = handle.read_region(&req).unwrap();
     let cold = cache.stats();
-    assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(batch_reads.load(Ordering::SeqCst), 2);
     assert_eq!(cold.hits, 0);
     assert_eq!(cold.misses, 2);
     assert_eq!(cold.puts, 2);
 
     let _ = handle.read_region(&req).unwrap();
     let warm = cache.stats();
-    assert_eq!(batch_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(batch_reads.load(Ordering::SeqCst), 2);
     assert_eq!(warm.hits, 2);
     assert_eq!(warm.misses, 2);
     assert_eq!(warm.puts, 2);

@@ -1,7 +1,7 @@
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::decode::jp2k::Jp2kColorSpace;
 use crate::decode::jp2k_backend::DecodedInterleavedImage;
-use crate::decode::jp2k_raster::{crop_sample_buffer, interleaved_image_to_sample_buffer};
+use crate::decode::jp2k_raster::interleaved_image_to_cropped_sample_buffer;
 use crate::error::WsiError;
 
 pub(super) fn sample_buffer_from_rgb8_bytes(
@@ -33,13 +33,13 @@ pub(super) fn sample_buffer_from_rgb8_bytes(
             data: CpuTileData::u8(bytes),
         });
     }
-    crop_sample_buffer(
-        interleaved_image_to_sample_buffer(DecodedInterleavedImage {
+    interleaved_image_to_cropped_sample_buffer(
+        DecodedInterleavedImage {
             width: width as usize,
             height: height as usize,
             colorspace,
             pixels: bytes,
-        })?,
+        },
         expected_width,
         expected_height,
     )

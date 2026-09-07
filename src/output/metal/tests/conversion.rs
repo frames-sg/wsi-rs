@@ -5,6 +5,75 @@ use objc2_metal::MTLDevice;
 use super::*;
 
 #[test]
+fn non_neutral_ycbcr_matches_cpu_rounding_and_clipping() {
+    let Some(device) = test_device() else {
+        eprintln!("skipping Metal color parity test: no Metal device");
+        return;
+    };
+    let sessions = MetalBackendSessions::new(device.clone());
+    let pixels = vec![128, 128, 130, 0, 0, 255, 255, 255, 0, 17, 129, 127];
+    let expected = crate::decode::jp2k_raster::interleaved_image_to_sample_buffer(
+        crate::decode::jp2k_backend::DecodedInterleavedImage {
+            width: 4,
+            height: 1,
+            colorspace: crate::decode::jp2k::Jp2kColorSpace::YCbCr,
+            pixels: pixels.clone(),
+        },
+    )
+    .unwrap();
+    let input =
+        MetalDeviceTile::from_resident(resident_test_image(&device, &pixels, (4, 1), 12)).unwrap();
+    let converted = sessions.ycbcr8_tiles_to_rgb8(&[input]).unwrap();
+    assert_eq!(
+        converted[0].download_cpu().unwrap().as_u8(),
+        expected.as_u8()
+    );
+    assert_eq!(&expected.as_u8().unwrap()[..3], &[131, 127, 128]);
+}
+
+#[test]
+#[ignore = "exhaustive 256^3 color parity on both Metal addressing kernels"]
+fn all_ycbcr8_values_match_cpu_on_both_addressing_kernels() {
+    let device = test_device().expect("exhaustive parity requires Metal");
+    let sessions = MetalBackendSessions::new(device.clone());
+    let pixels: Vec<u8> = (0..=u8::MAX)
+        .flat_map(|y| {
+            (0..=u8::MAX).flat_map(move |cb| (0..=u8::MAX).flat_map(move |cr| [y, cb, cr]))
+        })
+        .collect();
+    let input = MetalDeviceTile::from_resident(resident_test_image(
+        &device,
+        &pixels,
+        (4096, 4096),
+        4096 * 3,
+    ))
+    .unwrap();
+    let expected = crate::decode::jp2k_raster::interleaved_image_to_sample_buffer(
+        crate::decode::jp2k_backend::DecodedInterleavedImage {
+            width: 4096,
+            height: 4096,
+            colorspace: crate::decode::jp2k::Jp2kColorSpace::YCbCr,
+            pixels,
+        },
+    )
+    .unwrap();
+    let converter = sessions.ycbcr_to_rgb8_converter().unwrap();
+    for wide in [false, true] {
+        let tiles = if wide {
+            converter.convert_tiles_u64(std::slice::from_ref(&input))
+        } else {
+            converter.convert_tiles(std::slice::from_ref(&input))
+        }
+        .unwrap();
+        assert_eq!(
+            tiles[0].download_cpu().unwrap().as_u8(),
+            expected.as_u8(),
+            "u64={wide}"
+        );
+    }
+}
+
+#[test]
 fn ycbcr_to_rgb8_converter_is_cached_per_backend_sessions() {
     let Some(device) = test_device() else {
         eprintln!("skipping Metal converter cache test: no Metal device");
@@ -28,7 +97,7 @@ fn backend_sessions_identify_the_device_and_keep_converter_debug_opaque() {
         eprintln!("skipping Metal session identity test: no Metal device");
         return;
     };
-    let expected_identity = device.name().to_string();
+    let expected_identity = format!("metal:{}:{}", device.registryID(), device.name());
     let sessions = MetalBackendSessions::new(device);
 
     assert_eq!(sessions.device_identity(), expected_identity);

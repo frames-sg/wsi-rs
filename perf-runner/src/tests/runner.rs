@@ -1,6 +1,69 @@
 use super::*;
 use crate::Engine;
 
+#[test]
+fn reader_active_diagnostics_exclude_verification_and_keep_routes() {
+    let workers = vec![
+        WorkerReads {
+            samples: vec![],
+            elapsed_us: 200,
+            reader_active_us: 100,
+            verification_us: 60,
+        },
+        WorkerReads {
+            samples: vec![],
+            elapsed_us: 300,
+            reader_active_us: 150,
+            verification_us: 90,
+        },
+    ];
+    let mut diagnostics = Some(json!({"decode_route": {"feature": "metal"}}));
+    append_reader_timing(&mut diagnostics, &workers, 3000);
+    let diagnostics = diagnostics.unwrap();
+    assert_eq!(diagnostics["decode_route"]["feature"], "metal");
+    assert_eq!(diagnostics["reader_timing"]["active_elapsed_us"], 150);
+    assert_eq!(
+        diagnostics["reader_timing"]["active_bytes_per_second"],
+        20_000_000
+    );
+    assert_eq!(diagnostics["reader_timing"]["summed_verification_us"], 150);
+    assert_eq!(diagnostics["reader_timing"]["summed_other_us"], 100);
+
+    let mut empty = None;
+    append_reader_timing(&mut empty, &[], 0);
+    let empty = empty.unwrap();
+    assert_eq!(empty["reader_timing"]["active_elapsed_us"], 0);
+    assert_eq!(empty["reader_timing"]["active_bytes_per_second"], 0);
+}
+
+#[test]
+fn capture_bounds_checksum_preserves_signed_coordinates_and_dimensions() {
+    let bounds = full_level0_bounds(&[LevelInfo {
+        width: 4096,
+        height: 2048,
+        downsample: 1.0,
+    }]);
+    assert_eq!(
+        (bounds.x, bounds.y, bounds.width, bounds.height),
+        (0, 0, 4096, 2048)
+    );
+    let bounds = Level0Bounds {
+        x: -7,
+        y: 11,
+        ..bounds
+    };
+    let mut actual = Sha256::new();
+    hash_bounds(&mut actual, bounds);
+    let bytes: Vec<_> = [-7_i64, 11, 4096, 2048]
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .collect();
+    assert_eq!(
+        actual.finalize().as_slice(),
+        Sha256::digest(bytes).as_slice()
+    );
+}
+
 fn manifest_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
 }

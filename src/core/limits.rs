@@ -307,6 +307,11 @@ impl Drop for TransientReservation {
     }
 }
 
+mod execution;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(crate) use execution::OptionalWork;
+pub(crate) use execution::ReadExecutionContext;
+
 pub(crate) fn checked_product_to_usize(
     factors: &[u64],
     max: u64,

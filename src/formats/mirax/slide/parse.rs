@@ -168,7 +168,7 @@ impl MiraxSlide {
             build_associated_images_and_properties(path, &mut sources)?;
         Ok(assemble_dataset_and_caches(
             config.cache_config,
-            config.limits.encoded_unit_bytes(),
+            config.limits,
             sources,
             properties,
             associated_metadata,
@@ -567,7 +567,7 @@ fn occupied_level_bounds(
 
 fn assemble_dataset_and_caches(
     cache_config: CacheConfig,
-    encoded_unit_bytes: u64,
+    limits: crate::SlideLimits,
     sources: MiraxIndexSources,
     properties: Properties,
     associated_metadata: HashMap<String, AssociatedImage>,
@@ -633,12 +633,31 @@ fn assemble_dataset_and_caches(
     };
 
     MiraxSlide {
+        #[cfg(test)]
+        source_decodes: AtomicU64::new(0),
+        #[cfg(test)]
+        prepared_source_peak_bytes: AtomicU64::new(0),
+        #[cfg(test)]
+        source_miss_barrier: None,
+        limits,
         dataset,
         levels,
         associated: sources.associated,
+        source_flights: crate::core::cache::TileFlights::new(decoded_cache.capacity_bytes()),
         decoded_images: Mutex::new(decoded_cache),
         associated_cache: Mutex::new(associated_cache),
-        open_files: Mutex::new(sources.quickhash_files),
-        encoded_unit_bytes,
+        open_files: Mutex::new(
+            sources
+                .quickhash_files
+                .into_iter()
+                .map(|(path, file)| {
+                    (
+                        path,
+                        Arc::new(crate::core::positioned_file::PositionedFile::new(file)),
+                    )
+                })
+                .collect(),
+        ),
+        encoded_unit_bytes: limits.encoded_unit_bytes(),
     }
 }

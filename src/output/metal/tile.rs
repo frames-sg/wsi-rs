@@ -2,6 +2,7 @@ use crate::output::download::{downloaded_bytes_to_cpu_tile, tight_download_layou
 use crate::{error::WsiError, CpuTile, PixelFormat};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
+use std::sync::{Arc, OnceLock};
 
 use super::{interop, YcbcrToRgb8Converter};
 
@@ -18,6 +19,7 @@ pub struct MetalDeviceTile {
     /// Compatibility mirror of the resident image pixel format.
     pub format: PixelFormat,
     pub storage: MetalDeviceStorage,
+    pub(super) readback_queue: OnceLock<Arc<interop::ReadbackQueueCache>>,
 }
 
 /// Concrete Metal storage backing a [`MetalDeviceTile`].
@@ -38,6 +40,7 @@ impl MetalDeviceTile {
             pitch_bytes: image.pitch_bytes(),
             format: PixelFormat::try_from(image.pixel_format())?,
             storage: MetalDeviceStorage::Resident { image },
+            readback_queue: OnceLock::new(),
         })
     }
 
@@ -74,7 +77,9 @@ impl MetalDeviceTile {
         let cropped = image
             .view(layout)
             .map_err(|source| interop::support_error("metal-tile-crop-view", source))?;
-        Self::from_resident(cropped)
+        let mut tile = Self::from_resident(cropped)?;
+        tile.readback_queue = self.readback_queue.clone();
+        Ok(tile)
     }
 
     pub(crate) fn ycbcr8_to_rgb8(
@@ -101,7 +106,8 @@ impl MetalDeviceTile {
                 ),
             });
         }
-        let bytes = interop::download_resident_rows(image, row_bytes, byte_len)?;
+        let bytes =
+            interop::download_resident_rows(image, row_bytes, byte_len, &self.readback_queue)?;
         downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes, "Metal")
     }
 

@@ -10,16 +10,19 @@ impl SlideReader for NdpiRegionReader<'_> {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.0.read_tile_cpu(req)
+        crate::core::decode_runtime::DecodeRuntime::default_arc()
+            .install_jp2k_cpu(|| self.0.read_tile_cpu(req))
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         // Select errors in request order, independent of decode completion order.
-        reqs.par_iter()
-            .map(|req| self.0.read_tile_cpu(req))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect()
+        crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+            reqs.par_iter()
+                .map(|req| self.0.read_tile_cpu(req))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .collect()
+        })
     }
 }
 
@@ -43,7 +46,8 @@ impl TiffPixelReader {
             NDPI_DISPLAY_NARROW_STRIP_BATCH
         };
         let batch_size = (output_pixels / tile_pixels).clamp(1, max_batch as u64) as usize;
-        let batch_size = batch_size.min(rayon::current_num_threads());
+        let batch_size = batch_size
+            .min(crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count());
         Some(
             crate::core::registry::composite_region_from_source_in_batches(
                 &NdpiRegionReader(self),

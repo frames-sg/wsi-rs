@@ -404,17 +404,21 @@ impl SlideReader for TiffPixelReader {
                 else {
                     return None;
                 };
+                // Resolve cached strips on the caller; the region reader enters
+                // the existing pool only for actual source reads.
                 self.read_ndpi_region(ctx, req, (virtual_tile_width, virtual_tile_height))
             }
-            TileSource::SyntheticDownsample { base_level, factor } => {
-                Some(self.read_full_synthetic_region_fastpath(
-                    cache,
-                    req,
-                    *base_level,
-                    *factor,
-                    ctx.max_region_pixels(),
-                ))
-            }
+            TileSource::SyntheticDownsample { base_level, factor } => Some(
+                crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+                    self.read_full_synthetic_region_fastpath(
+                        cache,
+                        req,
+                        *base_level,
+                        *factor,
+                        ctx.max_region_pixels(),
+                    )
+                }),
+            ),
             _ => None,
         }
     }

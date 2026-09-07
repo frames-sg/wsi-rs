@@ -290,6 +290,35 @@ impl SlideReader for RawJp2kReader {
 }
 
 impl ManagedSlideReader for RawJp2kReader {
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn prepare_adaptive_jp2k(
+        &self,
+        reqs: &[TileRequest],
+        workers: usize,
+        control: Option<&crate::ReadControl>,
+    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
+        Some((|| {
+            let jobs = reqs
+                .iter()
+                .map(|req| {
+                    if let Some(control) = control {
+                        control.check_cancelled()?;
+                    }
+                    self.validate_request(req)?;
+                    Ok(crate::decode::jp2k::Jp2kDecodeJob {
+                        data: Cow::Borrowed(self.data.as_slice()),
+                        expected_width: self.width,
+                        expected_height: self.height,
+                        rgb_color_space: true,
+                        backend: j2k_core::BackendRequest::Cpu,
+                    })
+                })
+                .collect::<Result<Vec<_>, WsiError>>()?;
+            crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
+                .map(|prepared| prepared.with_sequential_cpu_images())
+        })())
+    }
+
     fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
         Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
     }

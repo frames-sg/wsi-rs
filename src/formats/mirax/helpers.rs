@@ -78,6 +78,7 @@ pub(super) fn read_record_bytes_from_file_with_limit(
     len: u64,
     limit: u64,
 ) -> Result<Vec<u8>, WsiError> {
+    #[cfg(not(unix))]
     file.seek(SeekFrom::Start(offset))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
@@ -86,11 +87,17 @@ pub(super) fn read_record_bytes_from_file_with_limit(
     let len = checked_product_to_usize(&[len], limit, "MIRAX record")
         .map_err(|message| invalid_slide(path, message))?;
     let mut buf = vec![0u8; len];
-    file.read_exact(&mut buf)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+    #[cfg(unix)]
+    let result = {
+        use std::os::unix::fs::FileExt;
+        file.read_exact_at(&mut buf, offset)
+    };
+    #[cfg(not(unix))]
+    let result = file.read_exact(&mut buf);
+    result.map_err(|source| WsiError::IoWithPath {
+        source: Arc::new(source),
+        path: path.to_path_buf(),
+    })?;
     Ok(buf)
 }
 

@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use crate::error::WsiError;
 use objc2_metal::MTLDevice;
 
-#[cfg(test)]
 use super::MetalDeviceTile;
 use super::{MetalDevice, YcbcrToRgb8Converter};
 
@@ -12,6 +11,7 @@ use super::{MetalDevice, YcbcrToRgb8Converter};
 pub struct MetalBackendSessions {
     pub(crate) j2k: Arc<j2k_metal::MetalBackendSession>,
     ycbcr_to_rgb8: Arc<Mutex<Option<Arc<YcbcrToRgb8Converter>>>>,
+    readback_queue: Arc<super::interop::ReadbackQueueCache>,
 }
 
 impl MetalBackendSessions {
@@ -30,6 +30,7 @@ impl MetalBackendSessions {
         Self {
             j2k: Arc::new(j2k),
             ycbcr_to_rgb8: Arc::new(Mutex::new(None)),
+            readback_queue: Arc::new(super::interop::ReadbackQueueCache::default()),
         }
     }
 
@@ -40,7 +41,11 @@ impl MetalBackendSessions {
     pub(crate) fn device_identity(&self) -> String {
         #[cfg(target_os = "macos")]
         {
-            self.j2k.device().name().to_string()
+            format!(
+                "metal:{}:{}",
+                self.j2k.device().registryID(),
+                self.j2k.device().name()
+            )
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -64,11 +69,47 @@ impl MetalBackendSessions {
         Ok(converter)
     }
 
-    #[cfg(test)]
     pub(crate) fn ycbcr8_tiles_to_rgb8(
         &self,
         tiles: &[MetalDeviceTile],
     ) -> Result<Vec<MetalDeviceTile>, WsiError> {
         self.ycbcr_to_rgb8_converter()?.convert_tiles(tiles)
+    }
+
+    pub(crate) fn retain_readback_queue(
+        &self,
+        mut tile: MetalDeviceTile,
+    ) -> Result<MetalDeviceTile, WsiError> {
+        tile.resident_image_for_device(self.j2k().device())?;
+        tile.readback_queue = std::sync::OnceLock::from(self.readback_queue.clone());
+        Ok(tile)
+    }
+
+    pub(crate) fn download_cpu_batch(
+        &self,
+        tiles: &[MetalDeviceTile],
+    ) -> Result<Vec<crate::CpuTile>, WsiError> {
+        use crate::output::download::{downloaded_bytes_to_cpu_tile, tight_download_layout};
+        let rows = tiles
+            .iter()
+            .map(|tile| {
+                let image = tile.resident_image_for_device(self.j2k().device())?;
+                let (row_bytes, byte_len) =
+                    tight_download_layout(tile.width, tile.height, tile.format, "Metal")?;
+                super::tile::enforce_download_limit(byte_len)?;
+                Ok(super::interop::ReadbackRows {
+                    image,
+                    row_bytes,
+                    byte_len,
+                })
+            })
+            .collect::<Result<Vec<_>, WsiError>>()?;
+        super::interop::download_resident_batch(&rows, &self.readback_queue)?
+            .into_iter()
+            .zip(tiles)
+            .map(|(bytes, tile)| {
+                downloaded_bytes_to_cpu_tile(tile.width, tile.height, tile.format, bytes, "Metal")
+            })
+            .collect()
     }
 }

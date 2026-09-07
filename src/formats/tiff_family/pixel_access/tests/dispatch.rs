@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn tiled_input_bounds_account_for_every_encoded_payload_and_duplicate() {
+    use crate::core::registry::ManagedSlideReader;
+    let tiles = [
+        encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),
+        encode_solid_rgb_jpeg(8, 8, [10, 200, 10]),
+    ];
+    let reader = build_tiled_jpeg_reader(16, 8, 8, 8, &tiles);
+    let a = TileRequest::new(0, 0, 0, 0, 0);
+    let b = TileRequest::new(0, 0, 0, 1, 0);
+    assert_eq!(
+        reader.tile_encoded_upper_bound(&a).unwrap(),
+        tiles[0].len() as u64 * 2
+    );
+    assert_eq!(
+        reader
+            .tile_batch_encoded_upper_bound(&[b, a.clone(), a])
+            .unwrap(),
+        2 * (tiles[1].len() + 2 * tiles[0].len()) as u64
+    );
+    assert_eq!(reader.tile_batch_encoded_upper_bound(&[]).unwrap(), 0);
+    assert!(reader
+        .tile_encoded_upper_bound(&TileRequest::new(0, 0, 0, 2, 0))
+        .is_err());
+}
+
+#[test]
 fn read_tiles_classifies_distinct_jpeg_tiled_ifd_requests_as_batchable() {
     let tiles = [
         encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),

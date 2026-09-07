@@ -14,6 +14,7 @@ pub(crate) struct YcbcrToRgb8Converter {
     pipeline_u32: Pipeline,
     pipeline_u64: OnceLock<Result<Pipeline, String>>,
     queue: CommandQueue,
+    tables: Buffer,
 }
 
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -37,11 +38,17 @@ impl YcbcrToRgb8Converter {
             .map_err(|source| interop::support_error("metal-ycbcr-u32-pipeline", source))?;
         let queue = j2k_metal_support::checked_command_queue(session.device())
             .map_err(|source| interop::support_error("metal-ycbcr-command-queue", source))?;
+        let tables = j2k_metal_support::checked_shared_buffer_with_slice(
+            session.device(),
+            &crate::decode::jp2k_raster::ycbcr_shader_tables(),
+        )
+        .map_err(|source| interop::support_error("metal-ycbcr-tables", source))?;
         Ok(Self {
             loader,
             pipeline_u32,
             pipeline_u64: OnceLock::new(),
             queue,
+            tables,
         })
     }
 
@@ -64,6 +71,29 @@ impl YcbcrToRgb8Converter {
             .iter()
             .map(|tile| self.prepare_job(tile))
             .collect::<Result<Vec<_>, _>>()?;
+        self.convert_jobs(jobs)
+    }
+
+    #[cfg(test)]
+    pub(super) fn convert_tiles_u64(
+        &self,
+        tiles: &[MetalDeviceTile],
+    ) -> Result<Vec<MetalDeviceTile>, WsiError> {
+        let jobs = tiles
+            .iter()
+            .map(|tile| {
+                let mut job = self.prepare_job(tile)?;
+                job.address_width = YcbcrAddressWidth::U64;
+                Ok(job)
+            })
+            .collect::<Result<Vec<_>, WsiError>>()?;
+        self.convert_jobs(jobs)
+    }
+
+    fn convert_jobs(&self, jobs: Vec<YcbcrToRgb8Job>) -> Result<Vec<MetalDeviceTile>, WsiError> {
+        use crate::core::execution_telemetry::{record, Event};
+        record(Event::ColorSubmissions, 1);
+        record(Event::ColorTiles, jobs.len());
         let command_buffer = j2k_metal_support::checked_command_buffer(&self.queue)
             .map_err(|source| interop::support_error("metal-ycbcr-command-buffer", source))?;
         for job in &jobs {
@@ -76,6 +106,7 @@ impl YcbcrToRgb8Converter {
             .collect();
         let device = self.queue.device();
         let submitted = interop::submit_ycbcr_images(&device, command_buffer, outputs, inputs)?;
+        record(Event::MetalCompletionWaits, 1);
         submitted
             .wait()
             .map_err(|source| interop::support_error("metal-ycbcr-completion", source))?
@@ -143,6 +174,7 @@ impl YcbcrToRgb8Converter {
         interop::bind_resident_compute_input(&encoder, 0, &job.input);
         interop::bind_compute_buffer(&encoder, 1, &job.dst_buffer);
         interop::bind_ycbcr_params(&encoder, 2, &job.params);
+        interop::bind_compute_buffer(&encoder, 3, &self.tables);
         j2k_metal_support::dispatch_2d_pipeline(
             &encoder,
             pipeline,

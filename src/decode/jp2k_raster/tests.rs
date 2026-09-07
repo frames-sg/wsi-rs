@@ -2,6 +2,54 @@ use super::*;
 use crate::decode::jp2k_backend::DecodedInterleavedImage;
 
 #[test]
+fn owned_ycbcr_conversion_reuses_its_input_allocation() {
+    let pixels = vec![100, 128, 130, 5, 0, 0];
+    let allocation = pixels.as_ptr();
+    let tile = interleaved_image_to_sample_buffer(DecodedInterleavedImage {
+        width: 2,
+        height: 1,
+        colorspace: Jp2kColorSpace::YCbCr,
+        pixels,
+    })
+    .unwrap();
+    assert_eq!(tile.as_u8().unwrap(), &[103, 99, 100, 0, 140, 0]);
+    assert_eq!(
+        tile.as_u8().unwrap().as_ptr(),
+        allocation,
+        "owned pointwise conversion must not allocate a second full image"
+    );
+}
+
+#[test]
+fn fused_conversion_and_crop_matches_full_conversion_then_crop() {
+    for colorspace in [Jp2kColorSpace::Rgb, Jp2kColorSpace::YCbCr] {
+        let image = DecodedInterleavedImage {
+            width: 7,
+            height: 5,
+            colorspace,
+            pixels: (0..105).map(|i| ((i * 71 + 13) % 256) as u8).collect(),
+        };
+        for (width, height) in [(1, 1), (3, 4), (7, 2), (7, 5)] {
+            let expected = crop_sample_buffer(
+                interleaved_image_to_sample_buffer(image.clone()).unwrap(),
+                width,
+                height,
+            )
+            .unwrap();
+            let actual =
+                interleaved_image_to_cropped_sample_buffer(image.clone(), width, height).unwrap();
+            assert_eq!(actual.as_u8(), expected.as_u8());
+            assert_eq!((actual.width(), actual.height()), (width, height));
+        }
+        for (width, height) in [(0, 1), (1, 0), (8, 1), (1, 6)] {
+            assert!(
+                interleaved_image_to_cropped_sample_buffer(image.clone(), width, height).is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn crop_sample_buffer_trims_to_requested_bounds() {
     let buffer = CpuTile {
         width: 4,

@@ -262,3 +262,27 @@ fn cancelled_ndpi_batch_does_not_start_source_decodes() {
     ));
     assert_eq!(reader.ndpi_strip_cache.current_bytes(), 0);
 }
+
+#[test]
+fn cached_ndpi_region_avoids_decoder_worker_dispatch() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+    let cache = crate::TileCache::new(1024 * 1024);
+    let request = RegionRequest::new(0, 0, 0, (-7, -2), (77, 19));
+    let mut context = crate::core::registry::SlideReadContext::new(Some(&cache), 8192);
+    let expected = reader
+        .read_region_fastpath(&mut context, &request)
+        .unwrap()
+        .unwrap();
+    let before = test_count(Event::CpuPoolDispatches);
+    let actual = reader
+        .read_region_fastpath(&mut context, &request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual.as_u8(), expected.as_u8());
+    assert_eq!(
+        test_count(Event::CpuPoolDispatches) - before,
+        0,
+        "cached strip composition has no CPU codec work to dispatch"
+    );
+}

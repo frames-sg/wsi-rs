@@ -1,8 +1,6 @@
 //! ETS payload reads, codec dispatch and sparse background tiles.
 
 use std::borrow::Cow;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use j2k_core::BackendRequest;
@@ -22,11 +20,17 @@ impl EtsScene {
         tile: &EtsTile,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        let mut file = File::open(&self.path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: self.path.clone(),
-        })?;
-        file.seek(SeekFrom::Start(tile.offset))?;
+        crate::core::batch::exactly_one(
+            decode_batch_jp2k(&[self.prepare_tile(tile, backend)?]),
+            "Olympus ETS JP2K decode",
+        )?
+    }
+
+    pub(super) fn prepare_tile(
+        &self,
+        tile: &EtsTile,
+        backend: BackendRequest,
+    ) -> Result<Jp2kDecodeJob<'static>, WsiError> {
         let encoded_len = checked_product_to_usize(
             &[u64::from(tile.byte_count)],
             MAX_COMPRESSED_INPUT_BYTES.min(self.encoded_unit_limit),
@@ -34,17 +38,19 @@ impl EtsScene {
         )
         .map_err(WsiError::DisplayConversion)?;
         let mut bytes = vec![0; encoded_len];
-        file.read_exact(&mut bytes)?;
-        crate::core::batch::exactly_one(
-            decode_batch_jp2k(&[Jp2kDecodeJob {
-                data: Cow::Owned(bytes),
-                expected_width: self.levels[0].tile_width,
-                expected_height: self.levels[0].tile_height,
-                rgb_color_space: true,
-                backend,
-            }]),
-            "Olympus ETS JP2K decode",
-        )?
+        self.file
+            .read_exact_at(&mut bytes, tile.offset)
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: self.path.clone(),
+            })?;
+        Ok(Jp2kDecodeJob {
+            data: Cow::Owned(bytes),
+            expected_width: self.levels[0].tile_width,
+            expected_height: self.levels[0].tile_height,
+            rgb_color_space: true,
+            backend,
+        })
     }
 
     pub(super) fn background_tile(&self, width: u32, height: u32) -> Result<CpuTile, WsiError> {

@@ -1,5 +1,5 @@
 mod flights;
-pub(crate) use flights::TileClaim;
+pub(crate) use flights::{TileClaim, TileFlights};
 
 use lru::LruCache;
 use std::borrow::Borrow;
@@ -399,6 +399,13 @@ impl TileCache {
             state.misses += 1;
         }
         cached
+    }
+
+    /// Scheduling hint only: no pins, recency changes or hit/miss accounting.
+    /// A caller must still resolve every key normally because entries can evict.
+    pub(crate) fn contains_keys(&self, mut keys: impl Iterator<Item = CacheKey>) -> bool {
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        keys.all(|key| state.lru.entries.contains(&key))
     }
 
     /// Return an atomic snapshot of cache capacity and activity counters.

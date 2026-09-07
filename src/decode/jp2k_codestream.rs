@@ -12,6 +12,12 @@ pub(crate) struct Jp2kCodestreamInfo {
 
 pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo, WsiError> {
     let view = j2k::J2kView::parse(data).map_err(|e| WsiError::Jp2k(e.to_string()))?;
+    codestream_header_from_view(&view)
+}
+
+pub(crate) fn codestream_header_from_view(
+    view: &j2k::J2kView<'_>,
+) -> Result<Jp2kCodestreamInfo, WsiError> {
     let metadata = view
         .support_info()
         .ok_or_else(|| WsiError::Jp2k("missing strict J2K component metadata".into()))?;
