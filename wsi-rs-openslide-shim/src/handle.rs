@@ -77,7 +77,7 @@ impl CStringArray {
 
 impl OpenSlideHandle {
     pub(crate) fn open(path: PathBuf) -> Option<Box<Self>> {
-        match Slide::open(&path) {
+        match Slide::open(&path).and_then(crate::vmu::display_slide) {
             Ok(slide) => Some(Box::new(Self::from_slide(slide))),
             Err(err) if should_open_return_null(&err) => None,
             Err(err) => Some(Box::new(Self::from_error(err.to_string()))),

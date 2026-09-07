@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Hamamatsu VMU base/map NGR reading with native RGB16 samples, bounded positional
+  tile reads, metadata, and JPEG macro images. The OpenSlide shim converts RGB12
+  before region composition, including fractional reads. Validation uses synthetic
+  fixtures and independent OpenSlide comparisons; real scanner VMU validation remains pending.
+
 ### Fixed
 
 - Progressive JPEG DICOM metadata accepts the supported retired spectral-selection and full-progression transfer syntaxes, retaining frame process validation.

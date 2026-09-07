@@ -265,3 +265,35 @@ fresh readers versus warm revisits; a fresh reader is not cold disk or a cold
 process. Perf-runner retains legacy wall-clock throughput and checksum semantics.
 Its optional reader timing reports reader-active rates separately from verification
 and bookkeeping, using the longest worker's accumulated reader-call time.
+
+## Hamamatsu VMU
+
+`formats::hamamatsu_vmu` owns the bounded specimen INI parse, companion path
+resolution, dataset metadata, and macro JPEG. Its `ngr` module validates the
+28-byte little-endian header and complete pixel span before exposing tiles.
+NGR stores full-height columns, each containing row-major RGB16 samples.
+Virtual tiles are at most 256 by 64 pixels, and positioned reads split a row
+at storage-column boundaries. This avoids allocating scanner-sized columns
+or complete pyramid levels and keeps concurrent reads independent.
+
+Native output preserves all 16 stored bits instead of applying OpenSlide's
+lossy RGB12-to-RGB8 display conversion. The C shim's `vmu` adapter converts
+each tile before the existing fractional compositor; converting the final
+native region would either reject fractional U16 composition or change
+rounding. The adapter transfers the initially empty shared cache to its display
+slide and disables the inner native cache, so C cache entries contain RGB8 only.
+No new public format-specific API or dependency is required.
+
+Synthetic geometry, pixel values, limits, malformed spans, and companion rules
+are covered in `tests/hamamatsu_vmu.rs`. Independent comparisons require an
+installed OpenSlide library. On macOS, run the C ABI comparison with:
+
+```sh
+cargo build --locked -p wsi-rs-openslide-shim
+WSI_RS_VMU_SHIM_LIBRARY=target/debug/libwsi_rs_openslide_shim.dylib \
+  cargo test --locked --features parity-openslide --test hamamatsu_vmu -- --include-ignored
+```
+
+Use the platform's `.so` or `.dll` path on Linux or Windows. These tests establish
+synthetic layout and rendering agreement, not compatibility with every scanner's
+VMU metadata variants.
