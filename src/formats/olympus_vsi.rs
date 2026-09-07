@@ -4,9 +4,8 @@ use std::sync::Arc;
 use j2k_core::BackendRequest;
 
 use crate::core::registry::{
-    read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
-    ConservativeManagedReader, DatasetReader, FormatProbe, ManagedSlideReader, ProbeConfidence,
-    ProbeResult, SlideReader,
+    BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
+    ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::{AxesShape, CpuTile, Dataset, PlaneSelection, TileRequest};
 use crate::error::WsiError;
@@ -50,13 +49,10 @@ impl ConfiguredDatasetReader for OlympusVsiBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        let reader: Box<dyn SlideReader> = Box::new(OlympusVsiReader {
+        let reader = Box::new(OlympusVsiReader {
             slide: Arc::new(OlympusVsiSlide::parse_with_config(path, config)?),
         });
-        Ok(Box::new(ConservativeManagedReader::new(
-            reader,
-            config.limits.encoded_unit_bytes(),
-        )))
+        Ok(reader)
     }
 }
 
@@ -70,9 +66,32 @@ impl SlideReader for OlympusVsiReader {
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        read_cpu_tiles(reqs, |req, backend| {
-            self.read_tile_with_backend(req, backend)
-        })
+        let mut output = vec![None; reqs.len()];
+        let mut jobs = Vec::new();
+        let mut slots = Vec::new();
+        for (slot, req) in reqs.iter().enumerate() {
+            let (scene, level, tile) = self.tile_for_request(req)?;
+            if let Some(tile) = tile {
+                jobs.push(
+                    scene
+                        .prepare_tile(tile, BackendRequest::Cpu)
+                        .map_err(|err| tile_error(req, err))?,
+                );
+                slots.push(slot);
+            } else {
+                output[slot] = Some(scene.background_tile(level.tile_width, level.tile_height)?);
+            }
+        }
+        let decoded = crate::decode::jp2k::decode_batch_jp2k(&jobs);
+        let decoded =
+            crate::core::batch::expect_exact_count(decoded, slots.len(), "Olympus ETS batch")?;
+        for (slot, tile) in slots.into_iter().zip(decoded) {
+            output[slot] = Some(tile.map_err(|err| tile_error(&reqs[slot], err))?);
+        }
+        Ok(output
+            .into_iter()
+            .map(|tile| tile.expect("every ETS request has an output slot"))
+            .collect())
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -86,6 +105,19 @@ impl OlympusVsiReader {
         req: &TileRequest,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
+        let (scene, level, tile) = self.tile_for_request(req)?;
+        match tile {
+            Some(tile) => scene
+                .decode_tile(tile, backend)
+                .map_err(|err| tile_error(req, err)),
+            None => scene.background_tile(level.tile_width, level.tile_height),
+        }
+    }
+
+    fn tile_for_request(
+        &self,
+        req: &TileRequest,
+    ) -> Result<(&scene::EtsScene, &scene::EtsLevel, Option<&scene::EtsTile>), WsiError> {
         let scene = self
             .slide
             .scenes
@@ -133,17 +165,45 @@ impl OlympusVsiReader {
             col: req.col as u32,
             row: req.row as u32,
         };
-        let Some(tile) = scene.tiles.get(&key) else {
-            return scene.background_tile(level.tile_width, level.tile_height);
-        };
-        scene
-            .decode_tile(tile, backend)
-            .map_err(|err| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: err.to_string(),
-            })
+        Ok((scene, level, scene.tiles.get(&key)))
+    }
+}
+
+fn tile_error(req: &TileRequest, err: WsiError) -> WsiError {
+    WsiError::TileRead {
+        col: req.col,
+        row: req.row,
+        level: req.level.get(),
+        reason: err.to_string(),
+    }
+}
+
+impl ManagedSlideReader for OlympusVsiReader {
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(self
+            .tile_for_request(req)?
+            .2
+            .map_or(0, |tile| u64::from(tile.byte_count)))
+    }
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        reqs.iter().try_fold(0_u64, |sum, req| {
+            Ok(sum.saturating_add(self.tile_encoded_upper_bound(req)?))
+        })
+    }
+    fn display_tile_encoded_upper_bound(
+        &self,
+        _: &crate::TileViewRequest,
+    ) -> Result<u64, WsiError> {
+        Ok(self.slide.scenes[0].encoded_unit_limit)
+    }
+    fn associated_encoded_upper_bound(&self, _: &str) -> Result<u64, WsiError> {
+        Ok(self.slide.scenes[0].encoded_unit_limit)
+    }
+    fn region_fastpath_encoded_upper_bound(
+        &self,
+        _: &crate::RegionRequest,
+    ) -> Result<u64, WsiError> {
+        Ok(self.slide.scenes[0].encoded_unit_limit)
     }
 }
 

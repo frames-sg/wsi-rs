@@ -66,18 +66,27 @@ pub(super) fn preflight_czi_open_subblock_with_limits(
     offset: u64,
     limits: crate::SlideLimits,
 ) -> Result<FileIdentity, WsiError> {
+    preflight_czi_open_subblock_bounds(path, file, offset, limits).map(|(identity, _)| identity)
+}
+
+pub(super) fn preflight_czi_open_subblock_bounds(
+    path: &Path,
+    file: &mut File,
+    offset: u64,
+    limits: crate::SlideLimits,
+) -> Result<(FileIdentity, u64), WsiError> {
     let identity = FileIdentity::from_open_file(path, file)?;
     let file_len = file.metadata()?.len();
-    preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(|error| {
-        match error {
+    let bytes = preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(
+        |error| match error {
             WsiError::ResourceLimit { .. } => error,
             error => WsiError::InvalidSlide {
                 path: path.to_path_buf(),
                 message: error.to_string(),
             },
-        }
-    })?;
-    Ok(identity)
+        },
+    )?;
+    Ok((identity, bytes))
 }
 
 #[cfg(test)]
@@ -268,6 +277,7 @@ fn preflight_czi_subblock_reader(
         offset,
         crate::SlideLimits::default(),
     )
+    .map(|_| ())
 }
 
 fn preflight_czi_subblock_reader_with_limits(
@@ -275,7 +285,7 @@ fn preflight_czi_subblock_reader_with_limits(
     file_len: u64,
     offset: u64,
     limits: crate::SlideLimits,
-) -> Result<(), WsiError> {
+) -> Result<u64, WsiError> {
     let effective_size = read_segment_header(
         reader,
         file_len,
@@ -355,7 +365,7 @@ fn preflight_czi_subblock_reader_with_limits(
             "CZI subblock requires {actual_bytes} bytes, exceeding its {effective_size}-byte segment"
         )));
     }
-    Ok(())
+    Ok(actual_bytes)
 }
 
 fn read_segment_header(

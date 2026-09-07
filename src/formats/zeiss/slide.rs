@@ -5,7 +5,7 @@ use super::*;
 mod parse;
 
 type LevelImageCache = Mutex<PrivateCache<(usize, usize), Arc<CpuTile>>>;
-type LocalTileCache = Mutex<PrivateCache<(usize, usize, i64, i64), Arc<CpuTile>>>;
+type LocalTileCache = Mutex<PrivateCache<(usize, usize, i64, i64), CpuTile>>;
 
 #[cfg(test)]
 pub(super) static ZEISS_LOCAL_TILE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -31,9 +31,7 @@ impl SlideReader for ZeissReader {
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        read_cpu_tiles(reqs, |req, backend| {
-            self.read_tile_with_backend(req, backend)
-        })
+        self.read_cpu_batch(reqs)
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -126,6 +124,10 @@ impl ZeissReader {
 pub(super) struct ZeissSlide {
     #[cfg(test)]
     pub(super) subblock_decodes: AtomicU64,
+    #[cfg(test)]
+    pub(super) source_miss_barrier: Option<Arc<std::sync::Barrier>>,
+    #[cfg(test)]
+    pub(super) prepared_source_peak_bytes: AtomicU64,
     pub(super) limits: crate::SlideLimits,
     pub(super) source_path: PathBuf,
     pub(super) source_identity: FileIdentity,
@@ -135,6 +137,7 @@ pub(super) struct ZeissSlide {
     pub(super) level_cache: LevelImageCache,
     pub(super) tile_cache: LocalTileCache,
     pub(super) subblock_cache: Mutex<PrivateCache<u64, Arc<CpuTile>>>,
+    pub(super) source_flights: crate::core::cache::TileFlights<u64>,
     pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     pub(super) associated_sources: HashMap<String, czi_rs::AttachmentInfo>,
     pub(super) subblock_origin: (i32, i32),

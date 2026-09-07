@@ -17,6 +17,7 @@ use index::{EtsIndex, MAX_ETS_AXIS_INDEX};
 
 pub(super) struct EtsScene {
     pub(super) path: PathBuf,
+    pub(super) file: crate::core::positioned_file::PositionedFile,
     pub(super) name: Option<String>,
     pub(super) levels: Vec<EtsLevel>,
     pub(super) tiles: HashMap<EtsTileKey, EtsTile>,
@@ -54,6 +55,7 @@ impl EtsScene {
         let tiles = index.tiles;
         Ok(Self {
             path: path.to_path_buf(),
+            file: crate::core::positioned_file::PositionedFile::new(file),
             name: {
                 let name = path
                     .parent()

@@ -278,6 +278,60 @@ pub trait SlideReader: Send + Sync {
 /// they are wrapped by [`ConservativeManagedReader`] and admitted using the
 /// configured encoded-unit ceiling.
 pub(crate) trait ManagedSlideReader: SlideReader {
+    /// Complete already decoded output without entering a decoder worker. A
+    /// declined fast path retains ordinary source execution and admission.
+    fn read_tiles_cpu_fastpath(
+        &self,
+        _reqs: &[TileRequest],
+        _control: Option<&crate::ReadControl>,
+    ) -> Option<Result<Vec<CpuTile>, WsiError>> {
+        None
+    }
+
+    fn read_tiles_with_context(
+        &self,
+        reqs: &[TileRequest],
+        context: &crate::core::limits::ReadExecutionContext<'_>,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        match context.control {
+            Some(control) => self.read_tiles_cpu_controlled(reqs, control),
+            None => self.read_tiles_cpu(reqs),
+        }
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn prepare_adaptive_jp2k(
+        &self,
+        _reqs: &[TileRequest],
+        _workers: usize,
+        _control: Option<&crate::ReadControl>,
+    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
+        None
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_metal_with_context(
+        &self,
+        reqs: &[TileRequest],
+        session: &crate::output::metal::MetalBackendSessions,
+        context: &crate::core::limits::ReadExecutionContext<'_>,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        // Native owned preparation temporarily coexists with format-owned input.
+        let extra = context.try_extra(self.tile_batch_encoded_upper_bound(reqs)?)?;
+        if reqs.len() <= 1 || extra.is_some() {
+            self.read_tiles_metal(reqs, session)
+        } else {
+            reqs.iter()
+                .map(|req| {
+                    crate::core::batch::exactly_one(
+                        self.read_tiles_metal(std::slice::from_ref(req), session)?,
+                        "bounded strict Metal single tile",
+                    )
+                })
+                .collect()
+        }
+    }
+
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError>;
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError>;
     fn display_tile_encoded_upper_bound(&self, req: &TileViewRequest) -> Result<u64, WsiError>;
@@ -382,7 +436,10 @@ impl SlideReader for ConservativeManagedReader {
         ctx: &mut SlideReadContext<'_>,
         req: &RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
-        self.inner.read_region_fastpath(ctx, req)
+        // Preserve the worker context of custom readers; built-ins decide
+        // whether their fast path needs CPU work before entering the pool.
+        crate::core::decode_runtime::DecodeRuntime::default_arc()
+            .install_jp2k_cpu(|| self.inner.read_region_fastpath(ctx, req))
     }
 
     fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {

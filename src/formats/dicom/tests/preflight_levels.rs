@@ -86,6 +86,7 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
     .expect("split sparse parts should form one logical level");
     let reader = DicomReader {
         slide: Arc::new(DicomSlide {
+            encoded_unit_bytes: crate::SlideLimits::default().encoded_unit_bytes(),
             dataset: empty_dataset(),
             levels,
             associated: HashMap::new(),

@@ -14,15 +14,46 @@ impl MiraxSlide {
         image: &Arc<MiraxImage>,
         _backend: BackendRequest,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        if let Some(buffer) = self
-            .decoded_images
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&image.id)
-            .cloned()
-        {
-            return Ok(buffer);
+        self.resolve_image_claim(image, self.claim_image(image))
+    }
+
+    pub(super) fn claim_image(&self, image: &MiraxImage) -> crate::core::cache::TileClaim<'_, u32> {
+        let cached = || {
+            self.decoded_images
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&image.id)
+                .cloned()
+        };
+        if let Some(tile) = cached() {
+            return crate::core::cache::TileClaim::Ready(tile);
         }
+        #[cfg(test)]
+        if let Some(barrier) = &self.source_miss_barrier {
+            barrier.wait();
+        }
+        self.source_flights.claim_miss(&image.id, cached)
+    }
+
+    pub(super) fn resolve_image_claim(
+        &self,
+        image: &MiraxImage,
+        claim: crate::core::cache::TileClaim<'_, u32>,
+    ) -> Result<Arc<CpuTile>, WsiError> {
+        use crate::core::cache::TileClaim;
+        let producer = match claim {
+            TileClaim::Ready(tile) => return Ok(tile),
+            TileClaim::Waiter(flight) => {
+                if let Some(tile) = flight.wait() {
+                    return Ok(tile);
+                }
+                None
+            }
+            TileClaim::Producer(producer) => Some(producer),
+            TileClaim::Uncoalesced => None,
+        };
+        #[cfg(test)]
+        self.source_decodes.fetch_add(1, Ordering::Relaxed);
         let decoded = Arc::new(self.decode_record_to_sample_buffer(
             &image.record,
             image.format,
@@ -34,6 +65,9 @@ impl MiraxSlide {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .put(image.id, decoded.clone(), retained_bytes);
+        if let Some(producer) = producer {
+            producer.complete(decoded.clone());
+        }
         Ok(decoded)
     }
 
@@ -116,42 +150,46 @@ impl MiraxSlide {
     }
 
     pub(super) fn read_record_bytes(&self, record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
-        let mut file = self.open_file_handle(&record.path)?;
-        read_record_bytes_from_file_with_limit(
-            &mut file,
-            &record.path,
-            record.offset,
-            record.len,
+        let file = self.open_file_handle(&record.path)?;
+        let len = crate::core::limits::checked_product_to_usize(
+            &[record.len],
             self.encoded_unit_bytes,
+            "MIRAX record",
         )
+        .map_err(|message| invalid_slide(&record.path, message))?;
+        let mut bytes = vec![0; len];
+        file.read_exact_at(&mut bytes, record.offset)
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: record.path.clone(),
+            })?;
+        Ok(bytes)
     }
 
-    fn open_file_handle(&self, path: &Path) -> Result<File, WsiError> {
+    fn open_file_handle(
+        &self,
+        path: &Path,
+    ) -> Result<Arc<crate::core::positioned_file::PositionedFile>, WsiError> {
         if let Some(file) = self
             .open_files
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(path)
         {
-            return file.try_clone().map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            });
+            return Ok(Arc::clone(file));
         }
 
         let file = File::open(path).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
-        let reader = file.try_clone().map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
-        self.open_files
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(path.to_path_buf())
-            .or_insert(file);
-        Ok(reader)
+        let file = Arc::new(crate::core::positioned_file::PositionedFile::new(file));
+        Ok(Arc::clone(
+            self.open_files
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(path.to_path_buf())
+                .or_insert(file),
+        ))
     }
 }

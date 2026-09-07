@@ -26,9 +26,36 @@ pub(super) fn blit_fractional_saturating_u8(
     let out_row_stride = shape.width * shape.channels;
     let tile_row_stride = tile_width as usize * shape.channels;
 
+    // Admission reserves RGBA output. RGB/gray composition leaves enough space
+    // for a bounded horizontal table; RGBA and very thin strips use scalar
+    // sampling without an extra allocation.
+    let table_bytes = (end_x - start_x).saturating_mul(std::mem::size_of::<(i64, f32, f32)>());
+    let spare_output = shape
+        .width
+        .saturating_mul(shape.height)
+        .saturating_mul(4_usize.saturating_sub(shape.channels));
+    let horizontal = (table_bytes <= spare_output).then(|| {
+        (start_x..end_x)
+            .map(|x| sampling_axis(x, raster_dest.0, pixman_float_sampling))
+            .collect::<Vec<_>>()
+    });
     for out_y in start_y..end_y {
+        let (y0, wy0, wy1) = sampling_axis(out_y, raster_dest.1, pixman_float_sampling);
         for out_x in start_x..end_x {
-            let sample = bilinear_sample(out_x, out_y, raster_dest, pixman_float_sampling);
+            let (x0, wx0, wx1) = horizontal.as_ref().map_or_else(
+                || sampling_axis(out_x, raster_dest.0, pixman_float_sampling),
+                |horizontal| horizontal[out_x - start_x],
+            );
+            let sample = BilinearSample {
+                x0,
+                x1: x0 + 1,
+                y0,
+                y1: y0 + 1,
+                a00: wx0 * wy0,
+                a10: wx1 * wy0,
+                a01: wx0 * wy1,
+                a11: wx1 * wy1,
+            };
             let BilinearSample {
                 x0,
                 x1,
@@ -42,7 +69,10 @@ pub(super) fn blit_fractional_saturating_u8(
             let dest_offset = out_y * out_row_stride + out_x * shape.channels;
             let alpha_offset = out_y * shape.width + out_x;
 
-            let in_bounds = |x: i64, y: i64| x >= 0 && x < tile_width && y >= 0 && y < tile_height;
+            let interior = x0 >= 0 && x1 < tile_width && y0 >= 0 && y1 < tile_height;
+            let in_bounds = |x: i64, y: i64| {
+                interior || (x >= 0 && x < tile_width && y >= 0 && y < tile_height)
+            };
             let a00 = if in_bounds(x0, y0) { a00 } else { 0.0 };
             let a10 = if in_bounds(x1, y0) { a10 } else { 0.0 };
             let a01 = if in_bounds(x0, y1) { a01 } else { 0.0 };
@@ -140,6 +170,23 @@ pub(super) fn blit_fractional_saturating_u8(
     }
 }
 
+fn sampling_axis(out: usize, dest: f64, pixman: bool) -> (i64, f32, f32) {
+    let source = out as f64 - dest;
+    let low = source.floor() as i64;
+    let fraction = source - low as f64;
+    let high_weight = fraction as f32;
+    let low_weight = if pixman {
+        1.0_f32 - high_weight
+    } else {
+        (1.0 - fraction) as f32
+    };
+    (low, low_weight, high_weight)
+}
+
+#[cfg(test)]
+#[path = "fractional_u8/tests/reference.rs"]
+pub(super) mod reference;
+
 #[derive(Clone, Copy)]
 struct BilinearSample {
     x0: i64,
@@ -152,6 +199,7 @@ struct BilinearSample {
     a11: f32,
 }
 
+#[cfg(test)]
 fn bilinear_sample(
     out_x: usize,
     out_y: usize,

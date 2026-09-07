@@ -268,3 +268,151 @@ sha256           = "b2985306397cb664ff89bd0c6e51c64c328ab6ba04773db8182172f5537a
 citation         = "Generated reversible-RCT JP2K fixture with a retained decoded PPM oracle."
 phi_reviewed     = true
 url              = ""
+
+[[slide]]
+name = "trestle_001"
+alias = "trestle-001"
+path = ""
+format = "trestle"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "d52070d474de8cdaf3a6e2934dff077b0aee6e957c7883b101388770b6910b39"
+citation = "OpenSlide public testdata: Trestle/CMU-1.zip"
+phi_reviewed = true
+notes = "Public CMU-1 sample; metadata and macro image reviewed. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Trestle/CMU-1.zip"
+
+[[slide]]
+name = "philips_001"
+alias = "philips-001"
+path = ""
+format = "philips_tiff"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "6a743d3bbf721a63f1fc2920f41ddcca43571346665114c6827e63efe034a0b0"
+citation = "OpenSlide public testdata: Philips-TIFF/Philips-4.tiff"
+phi_reviewed = true
+notes = "CAMELYON17 public sample with barcode removed by the source; metadata and macro reviewed. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Philips-TIFF/Philips-4.tiff"
+
+[[slide]]
+name = "generic_tiff_001"
+alias = "generic-tiff-001"
+path = ""
+format = "tiff"
+codecs = ["jpeg"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+source = "openslide-testdata"
+license = "CC0-1.0"
+redistributable = true
+sha256 = "73a7e89bc15576587c3d68e55d9bf92f09690280166240b48ff4b48230b13bcd"
+citation = "OpenSlide public testdata: Generic-TIFF/CMU-1.tiff"
+phi_reviewed = true
+notes = "Public CMU-1 conversion; metadata reviewed, no associated images. OpenSlide comparison passed."
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Generic-TIFF/CMU-1.tiff"
+
+[[slide]]
+name = "public_dicom_progressive_sof2"
+alias = "dicom-fixture-progressive-sof2"
+path = "tests/fixtures/public_dicom/progressive-sof2.dcm"
+format = "dicom"
+codecs = ["jpeg-progressive"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = false
+color_paths = []
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "518c7e0bc594abd9b75314e98495786ce3579ccc0d492b71d314c47317711d74"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "public_dicom_ybr_rct"
+alias = "dicom-fixture-ybr-rct"
+path = "tests/fixtures/public_dicom/ybr-rct.dcm"
+format = "dicom"
+codecs = ["j2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+color_paths = ["YBR_RCT"]
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "a68b4ca457800abc3b4f165d645bd1cf34e804e431b19c219b50de7f14ae6f1b"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "public_dicom_ybr_ict"
+alias = "dicom-fixture-ybr-ict"
+path = "tests/fixtures/public_dicom/ybr-ict.dcm"
+format = "dicom"
+codecs = ["j2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = false
+color_paths = ["YBR_ICT"]
+openslide_required = false
+oracle_divergences = ["Derived single-frame codec fixture with synthetic metadata; independent full-frame pixels are checked by public_dicom_frames_match_independent_decoder_pixels. See tests/fixtures/public_dicom/README.md for scope and source corrections."]
+source = "OpenSlide testdata; derived by scripts/prepare-public-dicom-fixtures.py"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "bfb33e21d93cabf814fa66abd1a4f192cad3e44ce68c7253446af1eb61a73ce4"
+citation = "OpenSlide public DICOM testdata; exact source/member/frame and independent decoder recorded in tests/fixtures/public_dicom/README.md"
+url = ""
+
+[[slide]]
+name = "independent_openjph_rgb8_lossless"
+alias = "raw-htj2k-lossless-001"
+path = "tests/fixtures/jp2k/openjph_rgb_u8_53.j2k"
+format = "raw_jp2k"
+codecs = ["htj2k"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+openslide_required = false
+source = "OpenJPH 0.27.0 fixture from frames-sg/j2k v0.11.0"
+license = "MIT"
+redistributable = true
+phi_reviewed = true
+sha256 = "7beb2be356b59d8c9e5cc3bbe6bb730e19917eef27150ef237d9f5585527e4df"
+citation = "tests/fixtures/jp2k/README.md; upstream OpenJPH fixture generator and source pixels"
+url = ""
+
+[[slide]]
+name = "public_dicom_lossless_complete_cache"
+alias = "svcache-lossless-001"
+path = "tests/fixtures/public_dicom/ybr-rct.svcache"
+format = "svcache"
+codecs = ["zstd"]
+must_decode = ["base"]
+required_properties = ["openslide.vendor"]
+lossless = true
+openslide_required = false
+oracle_divergences = ["Complete WSI cache of the deidentified YBR_RCT fixture. The ordinary DICOM reference integration test compares every pixel exactly with OpenJPEG output after the temporary cache source has been removed."]
+source = "Derived public DICOM fixture; workspace wsi-rs 0.7.0 candidate cache writer"
+license = "CC0-1.0"
+redistributable = true
+phi_reviewed = true
+sha256 = "312c20a2d2a2e75c314bcd6fb13ccbe26ccd1347d6ee54de2da16f5b5c8c2990"
+citation = "tests/fixtures/public_dicom/README.md; OpenSlide CMU-1-JP2K-RCT-v2 source"
+url = ""

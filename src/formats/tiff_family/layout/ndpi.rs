@@ -602,8 +602,10 @@ impl NdpiInterpreter {
                     tile_layout: TileLayout::WholeLevel {
                         width,
                         height,
-                        virtual_tile_width: width_u32,
-                        virtual_tile_height: height_u32,
+                        // Generated levels are read in bounded virtual tiles;
+                        // region composition must not request the entire level.
+                        virtual_tile_width: width_u32.min(256),
+                        virtual_tile_height: height_u32.min(256),
                     },
                 });
 

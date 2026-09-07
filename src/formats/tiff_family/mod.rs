@@ -14,8 +14,8 @@ use crate::core::cache::CacheConfig;
 use crate::core::file_identity::FileIdentity;
 use crate::core::registry::{
     BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, ConfiguredProbeCache,
-    ConservativeManagedReader, DatasetReader, FormatProbe, ManagedSlideReader, OpenBudget,
-    ProbeConfidence, ProbeResult, SlideReader,
+    DatasetReader, FormatProbe, ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult,
+    SlideReader,
 };
 use crate::error::WsiError;
 use tracing::debug;
@@ -129,7 +129,7 @@ impl TiffFamilyBackend {
         &self,
         path: &Path,
         config: BackendOpenConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
         let started = Instant::now();
         let key = FileIdentity::from_path(path)?;
 
@@ -179,10 +179,10 @@ impl TiffFamilyBackend {
 
 impl DatasetReader for TiffFamilyBackend {
     fn open(&self, path: &Path) -> Result<Box<dyn SlideReader>, WsiError> {
-        self.open_configured(
+        Ok(self.open_configured(
             path,
             BackendOpenConfig::new(CacheConfig::deterministic(), crate::SlideLimits::default()),
-        )
+        )?)
     }
 }
 
@@ -192,10 +192,7 @@ impl ConfiguredDatasetReader for TiffFamilyBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        Ok(Box::new(ConservativeManagedReader::new(
-            self.open_configured(path, config)?,
-            config.limits.encoded_unit_bytes(),
-        )))
+        self.open_configured(path, config)
     }
 }
 

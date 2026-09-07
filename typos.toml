@@ -2,6 +2,8 @@
 extend-exclude = [
     ".git",
     "target",
+    # Binary P6 reference pixels can contain incidental ASCII words.
+    "tests/fixtures/public_dicom/*.ppm",
 ]
 
 [default.extend-words]

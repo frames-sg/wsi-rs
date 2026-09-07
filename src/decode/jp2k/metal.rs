@@ -11,12 +11,18 @@ pub(super) fn decode_prepared_jp2k_metal(
 ) -> Result<crate::output::metal::MetalDeviceTile, WsiError> {
     let mut decoder =
         J2kMetalJp2kDecoder::new(job.input).map_err(|err| WsiError::Jp2k(err.to_string()))?;
+    crate::core::execution_telemetry::record(
+        crate::core::execution_telemetry::Event::MetalSingleDecodes,
+        1,
+    );
     let surface = decoder
         .decode_request_to_device_with_session(
             MetalDecodeRequest::full(J2kPixelFormat::Rgb8, J2kBackendRequest::Metal),
             sessions.j2k(),
         )
         .map_err(|err| WsiError::Jp2k(format!("strict JP2K Metal decode failed: {err}")))?;
+    #[cfg(feature = "route-telemetry")]
+    crate::core::execution_telemetry::record_metal_pools(sessions);
     metal_tile_from_jp2k_surface(
         surface,
         job.expected_width,
@@ -24,6 +30,7 @@ pub(super) fn decode_prepared_jp2k_metal(
         job.output_colorspace,
         sessions,
     )
+    .and_then(|tile| sessions.retain_readback_queue(tile))
 }
 
 fn metal_tile_from_jp2k_surface(
@@ -33,17 +40,15 @@ fn metal_tile_from_jp2k_surface(
     colorspace: Jp2kColorSpace,
     sessions: &crate::output::metal::MetalBackendSessions,
 ) -> Result<crate::output::metal::MetalDeviceTile, WsiError> {
-    let tile = resident_metal_jp2k_tile(surface)?;
+    let tile = resident_metal_jp2k_tile(surface)?.crop_top_left(expected_width, expected_height)?;
     if colorspace == Jp2kColorSpace::YCbCr {
         let converter = sessions.ycbcr_to_rgb8_converter()?;
-        return tile
-            .ycbcr8_to_rgb8(&converter)?
-            .crop_top_left(expected_width, expected_height);
+        return tile.ycbcr8_to_rgb8(&converter);
     }
-    tile.crop_top_left(expected_width, expected_height)
+    Ok(tile)
 }
 
-fn resident_metal_jp2k_tile(
+pub(super) fn resident_metal_jp2k_tile(
     surface: j2k_metal::Surface,
 ) -> Result<crate::output::metal::MetalDeviceTile, WsiError> {
     crate::output::metal::MetalDeviceTile::from_j2k(surface)?.ok_or_else(|| WsiError::Unsupported {

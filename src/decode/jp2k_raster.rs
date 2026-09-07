@@ -44,6 +44,20 @@ const fn build_ycbcr_tables() -> YcbcrTables {
 // half-unit in the green Cb term, before combining green in 16-bit fixed point.
 static YCBCR_TABLES: YcbcrTables = build_ycbcr_tables();
 
+/// Constant-buffer order shared with the Metal converter: red, green Cb,
+/// green Cr, blue. Widening the short terms preserves every CPU table value.
+#[cfg(feature = "metal")]
+pub(crate) fn ycbcr_shader_tables() -> [i32; CHROMA_VALUES * 4] {
+    let mut values = [0; CHROMA_VALUES * 4];
+    for index in 0..CHROMA_VALUES {
+        values[index] = i32::from(YCBCR_TABLES.red_from_cr[index]);
+        values[CHROMA_VALUES + index] = YCBCR_TABLES.green_from_cb[index];
+        values[CHROMA_VALUES * 2 + index] = YCBCR_TABLES.green_from_cr[index];
+        values[CHROMA_VALUES * 3 + index] = i32::from(YCBCR_TABLES.blue_from_cb[index]);
+    }
+    values
+}
+
 #[inline]
 fn clamp_u8(v: i32) -> u8 {
     v.clamp(0, 255) as u8
@@ -64,6 +78,26 @@ fn ycbcr_to_rgb(yy: u8, cb: u8, cr: u8) -> [u8; 3] {
 pub(crate) fn interleaved_image_to_sample_buffer(
     image: DecodedInterleavedImage,
 ) -> Result<CpuTile, WsiError> {
+    validate_image_len(&image)?;
+    let mut pixels = image.pixels;
+    if image.colorspace == Jp2kColorSpace::YCbCr {
+        for pixel in pixels.chunks_exact_mut(3) {
+            let rgb = ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]);
+            pixel.copy_from_slice(&rgb);
+        }
+    }
+
+    Ok(CpuTile {
+        width: image.width as u32,
+        height: image.height as u32,
+        channels: 3,
+        color_space: ColorSpace::Rgb,
+        layout: CpuTileLayout::Interleaved,
+        data: CpuTileData::u8(pixels),
+    })
+}
+
+fn validate_image_len(image: &DecodedInterleavedImage) -> Result<(), WsiError> {
     let expected_len = image
         .width
         .checked_mul(image.height)
@@ -77,21 +111,49 @@ pub(crate) fn interleaved_image_to_sample_buffer(
         )));
     }
 
-    let pixels = match image.colorspace {
-        Jp2kColorSpace::Rgb => image.pixels,
-        Jp2kColorSpace::YCbCr => {
-            let mut rgb = vec![0u8; expected_len];
-            for (src, dst) in image.pixels.chunks_exact(3).zip(rgb.chunks_exact_mut(3)) {
-                let rgb = ycbcr_to_rgb(src[0], src[1], src[2]);
-                dst.copy_from_slice(&rgb);
+    Ok(())
+}
+
+pub(crate) fn interleaved_image_to_cropped_sample_buffer(
+    image: DecodedInterleavedImage,
+    width: u32,
+    height: u32,
+) -> Result<CpuTile, WsiError> {
+    validate_image_len(&image)?;
+    if width == 0 || height == 0 {
+        return Err(WsiError::Jp2k(
+            "cropped JP2K dimensions must be non-zero".into(),
+        ));
+    }
+    if width as usize > image.width || height as usize > image.height {
+        return Err(WsiError::Jp2k(format!(
+            "decoded JP2K buffer too small to crop: decoded {}x{}, requested {}x{}",
+            image.width, image.height, width, height,
+        )));
+    }
+    if (width as usize, height as usize) == (image.width, image.height) {
+        return interleaved_image_to_sample_buffer(image);
+    }
+    // The validated source dimensions bound the logical output and every row.
+    let row_bytes = width as usize * 3;
+    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+    for row in image
+        .pixels
+        .chunks_exact(image.width * 3)
+        .take(height as usize)
+    {
+        if image.colorspace == Jp2kColorSpace::YCbCr {
+            for pixel in row[..row_bytes].chunks_exact(3) {
+                pixels.extend_from_slice(&ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]));
             }
-            rgb
+        } else {
+            pixels.extend_from_slice(&row[..row_bytes]);
         }
-    };
+    }
 
     Ok(CpuTile {
-        width: image.width as u32,
-        height: image.height as u32,
+        width,
+        height,
         channels: 3,
         color_space: ColorSpace::Rgb,
         layout: CpuTileLayout::Interleaved,
@@ -99,6 +161,8 @@ pub(crate) fn interleaved_image_to_sample_buffer(
     })
 }
 
+// Retain the original two-stage crop as an independent test oracle.
+#[cfg(test)]
 pub(crate) fn crop_sample_buffer(
     buffer: CpuTile,
     expected_width: u32,

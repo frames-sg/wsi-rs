@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+### Added
+
+- Hamamatsu VMU base/map NGR reading with native RGB16 samples, bounded positional
+  tile reads, metadata, and JPEG macro images. The OpenSlide shim converts RGB12
+  before region composition, including fractional reads. Validation uses synthetic
+  fixtures and independent OpenSlide comparisons; real scanner VMU validation remains pending.
+
+### Fixed
+
+- Progressive JPEG DICOM metadata accepts the supported retired spectral-selection and full-progression transfer syntaxes, retaining frame process validation.
+
+- Generated NDPI pyramid levels expose bounded virtual tiles and crop native reads to that grid, allowing zoom and fractional-region reads without materializing an entire generated level.
+
+- Sparse Philips and generic TIFF tiles preserve transparent holes in both single and batched JPEG reads.
+
+- MIRAX concurrent reads use positional source access instead of cloned file
+  cursors, preventing reads from interfering with one another.
+- Metal YCbCr conversion uses the canonical CPU lookup tables, correcting
+  non-neutral colors and clipping to match CPU/OpenSlide-compatible RGB8 output.
+
+### Changed
+
+- Generic region reads reuse one validated plan and decode bounded consecutive
+  batches, with exact encoded-size accounting for tiled TIFF. Cached ordinary
+  regions avoid empty CPU-worker dispatches. CZI and MIRAX
+  batches share bounded source blocks and coalesce concurrent source misses.
+- VSI retains ETS handles and submits CPU codec batches; `.svcache` uses
+  positional payload reads where supported while preserving checksums.
+- Owned CPU YCbCr conversion reuses its allocation, cropped conversion allocates
+  only logical output, and direct single-image JP2K execution retains its parsed view.
+- Metal JP2K uses bounded native prepared batches, grouped color conversion
+  and direct shared-memory readback. Other storage uses bounded staged readback
+  through a retained session queue. Strict APIs retain strict Metal fallback.
+- Automatic JP2K reads start on CPU, then defer warmup and three alternating
+  comparisons to later reads. Decisions use the median ratio for the actual bounded
+  execution batch, require a 15% device advantage and skip optional work without memory
+  headroom. Calibration advances at most once per public read across its internal
+  batches and admission chunks. Only one caller calibrates each route, without
+  blocking competitors. The pending route remains owned until the initial CPU
+  output is ready, preventing concurrent warmup from racing startup. Cached native
+  DICOM batches avoid decoder-worker handoffs and unnecessary selected-device work.
+- Dense row-span planning and bounded fractional sampling reuse reduce composition
+  work while preserving pixel, overlap and alpha semantics.
+- Optional performance diagnostics separate reader-active time from verification
+  and retain existing wall-clock throughput and acceptance fields.
+
 ## [0.7.0] - 2026-09-05
 
 ### Added

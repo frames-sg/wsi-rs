@@ -1,16 +1,17 @@
 //! Coalesce active region misses without retaining another decoded-tile cache.
 use super::{CacheKey, CpuTile, TileCache};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::ThreadId;
 
-pub(super) struct TileFlights {
-    entries: Mutex<HashMap<CacheKey, Weak<TileFlight>>>,
+pub(crate) struct TileFlights<K: Hash + Eq = CacheKey> {
+    entries: Mutex<HashMap<K, Weak<TileFlight>>>,
     limit: usize,
 }
 
-impl TileFlights {
-    pub(super) fn new(cache_bytes: u64) -> Self {
+impl<K: Hash + Eq> TileFlights<K> {
+    pub(crate) fn new(cache_bytes: u64) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
             // Only active operations own these records. Bound coordination even
@@ -20,9 +21,9 @@ impl TileFlights {
     }
 }
 
-pub(crate) enum TileClaim<'a> {
+pub(crate) enum TileClaim<'a, K: Hash + Eq = CacheKey> {
     Ready(Arc<CpuTile>),
-    Producer(TileProducer<'a>),
+    Producer(TileProducer<'a, K>),
     Waiter(Arc<TileFlight>),
     Uncoalesced,
 }
@@ -43,13 +44,13 @@ impl TileFlight {
     }
 }
 
-pub(crate) struct TileProducer<'a> {
-    cache: &'a TileCache,
-    key: CacheKey,
+pub(crate) struct TileProducer<'a, K: Hash + Eq = CacheKey> {
+    flights: &'a TileFlights<K>,
+    key: K,
     flight: Arc<TileFlight>,
 }
 
-impl TileProducer<'_> {
+impl<K: Hash + Eq> TileProducer<'_, K> {
     pub(crate) fn complete(self, tile: Arc<CpuTile>) {
         self.flight
             .result
@@ -59,7 +60,7 @@ impl TileProducer<'_> {
     }
 }
 
-impl Drop for TileProducer<'_> {
+impl<K: Hash + Eq> Drop for TileProducer<'_, K> {
     fn drop(&mut self) {
         // Also release waiters when a read fails or unwinds. Failed reads are
         // retried by each caller so its original typed error is preserved.
@@ -68,8 +69,7 @@ impl Drop for TileProducer<'_> {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .0 = true;
-        self.cache
-            .flights
+        self.flights
             .entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -80,25 +80,31 @@ impl Drop for TileProducer<'_> {
 
 impl TileCache {
     pub(crate) fn claim_miss(&self, key: &CacheKey) -> TileClaim<'_> {
+        self.flights.claim_miss(key, || {
+            self.inner
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .lru
+                .get(key)
+                .cloned()
+        })
+    }
+}
+
+impl<K: Hash + Eq + Clone> TileFlights<K> {
+    pub(crate) fn claim_miss(
+        &self,
+        key: &K,
+        cached: impl FnOnce() -> Option<Arc<CpuTile>>,
+    ) -> TileClaim<'_, K> {
         // Never block a decode-pool worker waiting for work queued to its own
         // pool. NDPI's existing source-strip coalescing remains independent.
-        if self.flights.limit == 0 || rayon::current_thread_index().is_some() {
+        if self.limit == 0 || rayon::current_thread_index().is_some() {
             return TileClaim::Uncoalesced;
         }
-        let mut entries = self
-            .flights
-            .entries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         // The initial cache lookup may have raced a completed producer.
-        if let Some(tile) = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .lru
-            .get(key)
-            .cloned()
-        {
+        if let Some(tile) = cached() {
             return TileClaim::Ready(tile);
         }
         let owner = std::thread::current().id();
@@ -109,7 +115,7 @@ impl TileCache {
                 TileClaim::Waiter(flight)
             };
         }
-        if entries.len() >= self.flights.limit {
+        if entries.len() >= self.limit {
             return TileClaim::Uncoalesced;
         }
         let flight = Arc::new(TileFlight {
@@ -119,7 +125,7 @@ impl TileCache {
         });
         entries.insert(key.clone(), Arc::downgrade(&flight));
         TileClaim::Producer(TileProducer {
-            cache: self,
+            flights: self,
             key: key.clone(),
             flight,
         })

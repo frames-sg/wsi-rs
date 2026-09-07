@@ -1,3 +1,4 @@
+mod batch;
 mod helpers;
 mod index;
 mod slide;
@@ -19,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader,
+    crop_rgb_interleaved_u8_buffer, BackendOpenConfig, ConfiguredDatasetReader,
     ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader, FormatProbe,
     ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
@@ -188,9 +189,7 @@ impl SlideReader for MiraxReader {
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        read_cpu_tiles(reqs, |req, backend| {
-            self.read_tile_with_backend(req, backend)
-        })
+        self.read_cpu_batch(reqs)
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -345,12 +344,20 @@ fn validate_mirax_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), Ws
 }
 
 struct MiraxSlide {
+    #[cfg(test)]
+    source_decodes: AtomicU64,
+    #[cfg(test)]
+    prepared_source_peak_bytes: AtomicU64,
+    #[cfg(test)]
+    source_miss_barrier: Option<Arc<std::sync::Barrier>>,
+    limits: crate::SlideLimits,
     dataset: Dataset,
     levels: Vec<MiraxLevel>,
     associated: HashMap<String, MiraxRecord>,
     decoded_images: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
+    source_flights: crate::core::cache::TileFlights<u32>,
     associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
-    open_files: Mutex<HashMap<PathBuf, File>>,
+    open_files: Mutex<HashMap<PathBuf, Arc<crate::core::positioned_file::PositionedFile>>>,
     encoded_unit_bytes: u64,
 }
 

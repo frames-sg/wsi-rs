@@ -468,6 +468,17 @@ fn read_reference_tiff_jpeg_tile(
             ifd.offset
         ))
     })?;
+    if byte_count == 0 {
+        let len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| ReferenceTileError::fatal("reference sparse TIFF tile size overflow"))?;
+        return Ok(TileBuffer {
+            pixels_rgba: vec![0; len],
+            width,
+            height,
+        });
+    }
     let data = tiff.read_range(offset, byte_count)?;
     let tables = match ifd.get_bytes(&tiff, TIFF_JPEG_TABLES) {
         Ok(bytes) => Some(bytes),

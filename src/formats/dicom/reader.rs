@@ -19,6 +19,7 @@ mod batch_plan;
 mod cpu;
 #[cfg(any(feature = "metal", feature = "cuda"))]
 mod device;
+mod managed;
 
 pub(super) struct DicomReader {
     pub(super) slide: Arc<DicomSlide>,

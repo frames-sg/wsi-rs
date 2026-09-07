@@ -528,3 +528,32 @@ fn synthetic_ndpi_region_fastpath_falls_back_when_j2k_scaled_dims_do_not_match()
 
     assert_eq!((tile.width, tile.height), (2, 2));
 }
+
+#[test]
+fn synthetic_ndpi_native_tiles_crop_the_declared_virtual_grid() {
+    let mut reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
+    let full = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 1, 0, 0))
+        .unwrap();
+    reader.layout.dataset.scenes[0].series[0].levels[1].tile_layout = TileLayout::WholeLevel {
+        width: 4,
+        height: 4,
+        virtual_tile_width: 2,
+        virtual_tile_height: 2,
+    };
+    for (col, row) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let actual = reader
+            .read_tile_cpu(&TileRequest::new(0, 0, 1, col, row))
+            .unwrap();
+        let expected =
+            crop_rgb_interleaved_u8_buffer(&full, col as u32 * 2, row as u32 * 2, 2, 2).unwrap();
+        assert_eq!((actual.width, actual.height), (2, 2));
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+    assert!(reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 1, 2, 0))
+        .is_err());
+    assert!(reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 1, -1, 0))
+        .is_err());
+}

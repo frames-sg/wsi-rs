@@ -142,7 +142,7 @@ cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
 | DICOM VL WSI | `.dcm` files or a DICOM series directory |
 | Zeiss CZI (single-plane brightfield) and ZVI | `.czi`, `.zvi` |
 | MIRAX | `.mrxs` plus sibling data files |
-| Hamamatsu VMS/VMU | `.vms`, `.vmu` plus sibling image files |
+| Hamamatsu VMS/VMU | `.vms`, `.vmu` plus sibling JPEG (VMS) or NGR (VMU) files |
 | Olympus VSI | `.vsi` plus matching ETS companion data |
 | Raw JPEG 2000 codestream | `.j2k`, `.j2c` |
 | `.svcache` | `.svcache` |
@@ -162,6 +162,21 @@ Generic strip-based TIFF support is intentionally limited to one top-level,
 uncompressed 8-bit RGB image with top-left orientation, no predictor, and
 either interleaved or separate sample planes. Other ordinary TIFF variants
 remain unsupported unless they use a registered WSI layout.
+
+### Hamamatsu VMU pixels
+
+VMU reads the base and map NGR images at focal plane zero, plus an optional
+JPEG macro image. NGR pixels retain all stored RGB samples as interleaved
+`Uint16` (12 significant bits); native reads do not discard the low four bits.
+Use `read_region_rgba_windowed` with `DisplayWindow::new(0.0, 4095.0)?` for
+an explicit display conversion. The OpenSlide C shim applies OpenSlide's
+separate display rule, truncating each sample with `sample >> 4` before
+fractional region composition.
+
+VMU validation currently uses generated fixtures based on
+[OpenSlide's NGR layout](https://github.com/openslide/openslide/blob/main/misc/imhex/hamamatsu-vmu-ngr.hexpat),
+with native sample assertions and independent OpenSlide comparisons. A real
+scanner-generated VMU fixture has not yet been validated.
 
 ## Features
 

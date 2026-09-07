@@ -32,8 +32,14 @@ mod device;
 #[cfg(feature = "metal")]
 #[path = "jp2k/metal.rs"]
 mod metal_backend;
+#[cfg(all(feature = "metal", target_os = "macos"))]
+mod metal_batch;
 mod output;
 mod prepare;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+mod prepared_batch;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(crate) use prepared_batch::PreparedJp2kBatch;
 
 pub(crate) use batch::decode_batch_jp2k;
 #[cfg(test)]

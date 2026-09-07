@@ -29,8 +29,35 @@ pub(crate) fn decode_batch_jp2k(jobs: &[Jp2kDecodeJob<'_>]) -> Vec<Result<CpuTil
     if jobs.is_empty() {
         return Vec::new();
     }
-    let prepared = jobs.iter().map(prepare_jp2k_job).collect::<Vec<_>>();
-    if prepared.iter().all(Result::is_ok) {
+    use crate::core::execution_telemetry::{record, Event};
+    record(Event::CpuJp2kBatches, 1);
+    record(Event::CpuJp2kTiles, jobs.len());
+    if jobs.len() == 2 {
+        // Two independent native decoders stay below j2k 0.10.0's four
+        // worst-case generic claims. Reuse the invoking Rayon pool instead of
+        // creating scoped codec threads, and consume each validated view once.
+        // Larger batches retain the codec's aggregate admission and scheduler.
+        // Singleton batches retain the established fallback: this specialization
+        // regressed constrained-cache concurrent singleton reads by 5–6%.
+        return crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+            use rayon::prelude::*;
+            jobs.par_iter()
+                .map(|job| {
+                    super::cpu::decode_one_jp2k_job_with_parallelism(
+                        job,
+                        CpuDecodeParallelism::Serial,
+                    )
+                })
+                .collect()
+        });
+    }
+    decode_prepared_jobs(jobs.iter().map(prepare_jp2k_job).collect())
+}
+
+pub(super) fn decode_prepared_jobs(
+    prepared: Vec<Result<PreparedJp2kJob<'_>, WsiError>>,
+) -> Vec<Result<CpuTile, WsiError>> {
+    if prepared.len() > 2 && prepared.iter().all(Result::is_ok) {
         let prepared_jobs = prepared
             .iter()
             .map(|result| *result.as_ref().expect("all preparation results checked"))

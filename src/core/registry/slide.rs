@@ -1,5 +1,11 @@
 use super::*;
 
+mod execution;
+mod region;
+use crate::core::limits::ReadExecutionContext;
+use execution::AdmittedReader;
+use std::sync::atomic::AtomicBool;
+
 // ── Slide ──────────────────────────────────────────────────
 
 /// Top-level handle. Owns the SlideReader + shared cache.
@@ -210,8 +216,19 @@ impl Slide {
         let output_bytes = self.estimate_tile_output_bytes(req)?;
         let transient =
             self.ordinary_work_bytes(self.source.tile_encoded_upper_bound(req)?, output_bytes)?;
-        let _reservation = self.admission.reserve(transient, None)?;
-        let tile = self.source.read_tile_cpu(req)?;
+        let reservation = self.admission.reserve(transient, None)?;
+        let calibration = AtomicBool::new(false);
+        let context = ReadExecutionContext::new(
+            &reservation,
+            self.limits.operation_transient_bytes(),
+            None,
+            &calibration,
+        );
+        let tile = crate::core::batch::exactly_one(
+            self.source
+                .read_tiles_with_context(std::slice::from_ref(req), &context)?,
+            "admitted single tile",
+        )?;
         self.validate_decoded_output(&tile, "decoded tile")?;
         Ok(tile)
     }
@@ -248,8 +265,8 @@ impl Slide {
         reqs: &[TileRequest],
         session: &crate::output::metal::MetalBackendSessions,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        self.read_tiles_device_admitted(reqs, "admitted Metal tile batch", |chunk| {
-            self.source.read_tiles_metal(chunk, session)
+        self.read_tiles_device_admitted(reqs, "admitted Metal tile batch", |chunk, context| {
+            self.source.read_metal_with_context(chunk, session, context)
         })
     }
 
@@ -271,7 +288,7 @@ impl Slide {
         reqs: &[TileRequest],
         session: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        self.read_tiles_device_admitted(reqs, "admitted CUDA tile batch", |chunk| {
+        self.read_tiles_device_admitted(reqs, "admitted CUDA tile batch", |chunk, _context| {
             self.source.read_tiles_cuda(chunk, session)
         })
     }
@@ -324,13 +341,19 @@ impl Slide {
     /// tiles return `WsiError::DisplayConversion`.
     pub fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
         let output_bytes = self.check_region_output(req)?;
-        let encoded = self.source.region_fastpath_encoded_upper_bound(req)?;
-        let (source_bytes, largest_source_bytes) = self.region_source_work(req, None)?;
-        let _reservation = self.admission.reserve(
-            self.region_work_bytes(encoded, output_bytes, largest_source_bytes, false)?,
+        let mut planned = self.plan_region_read(req, None, output_bytes)?;
+        let reservation = self.admission.reserve(planned.work_bytes, None)?;
+        let calibration = AtomicBool::new(false);
+        let execution = ReadExecutionContext::new(
+            &reservation,
+            self.limits.operation_transient_bytes(),
             None,
-        )?;
-        check_region_pixel_limit(req.size_px.0, req.size_px.1, self.limits.region_pixels())?;
+            &calibration,
+        );
+        let admitted = AdmittedReader {
+            source: self.source.as_ref(),
+            execution: &execution,
+        };
         let cache = self.shared_tile_cache();
         let mut ctx = SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
         if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
@@ -338,21 +361,14 @@ impl Slide {
             self.validate_decoded_output(&tile, "decoded region")?;
             return Ok(tile);
         }
-        let tile = if source_bytes > output_bytes {
-            composite_region_from_source_streaming(
-                self.source.as_ref(),
-                Some(cache.as_ref()),
-                req,
-                self.limits.region_pixels(),
-            )?
-        } else {
-            composite_region_from_source(
-                self.source.as_ref(),
-                Some(cache.as_ref()),
-                req,
-                self.limits.region_pixels(),
-            )?
-        };
+        let batch_ends = planned.batch_ends(self, req, output_bytes)?;
+        let tile = composition::composite_region_from_plan(
+            &admitted,
+            Some(cache.as_ref()),
+            req,
+            planned.plan,
+            &batch_ends,
+        )?;
         self.validate_decoded_output(&tile, "decoded region")?;
         Ok(tile)
     }
@@ -381,34 +397,32 @@ impl Slide {
         }
 
         let output_bytes = self.check_region_output(req)?;
-        let encoded = self.source.region_fastpath_encoded_upper_bound(req)?;
         let origin = (
             req.origin_px.0 as f64 + offset_px.0,
             req.origin_px.1 as f64 + offset_px.1,
         );
-        let (source_bytes, largest_source_bytes) = self.region_source_work(req, Some(origin))?;
-        let _reservation = self.admission.reserve(
-            self.region_work_bytes(encoded, output_bytes, largest_source_bytes, true)?,
+        let mut planned = self.plan_region_read(req, Some(origin), output_bytes)?;
+        let reservation = self.admission.reserve(planned.work_bytes, None)?;
+        let calibration = AtomicBool::new(false);
+        let execution = ReadExecutionContext::new(
+            &reservation,
+            self.limits.operation_transient_bytes(),
             None,
-        )?;
-        let cache = self.shared_tile_cache();
-        let tile = if source_bytes > output_bytes {
-            composite_fractional_region_from_source_streaming(
-                self.source.as_ref(),
-                Some(cache.as_ref()),
-                req,
-                origin,
-                self.limits.region_pixels(),
-            )?
-        } else {
-            composite_fractional_region_from_source(
-                self.source.as_ref(),
-                Some(cache.as_ref()),
-                req,
-                origin,
-                self.limits.region_pixels(),
-            )?
+            &calibration,
+        );
+        let admitted = AdmittedReader {
+            source: self.source.as_ref(),
+            execution: &execution,
         };
+        let cache = self.shared_tile_cache();
+        let batch_ends = planned.batch_ends(self, req, output_bytes)?;
+        let tile = composition::composite_region_from_plan(
+            &admitted,
+            Some(cache.as_ref()),
+            req,
+            planned.plan,
+            &batch_ends,
+        )?;
         self.validate_decoded_output(&tile, "decoded region")?;
         Ok(tile)
     }
@@ -421,9 +435,20 @@ impl Slide {
         let output_bytes = checked_rgba_bytes(req.tile_width, req.tile_height, "display tile")?;
         self.check_output_limit(output_bytes, "decoded tile/associated output")?;
         let encoded = self.source.display_tile_encoded_upper_bound(req)?;
-        let _reservation = self
+        let reservation = self
             .admission
             .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
+        let calibration = AtomicBool::new(false);
+        let execution = ReadExecutionContext::new(
+            &reservation,
+            self.limits.operation_transient_bytes(),
+            None,
+            &calibration,
+        );
+        let admitted = AdmittedReader {
+            source: self.source.as_ref(),
+            execution: &execution,
+        };
         // For Regular tile layouts, route through the generic composition path
         // with cache so intermediate tile reads are reused. For WholeLevel and
         // Irregular layouts, delegate to the source's override which may have
@@ -441,7 +466,7 @@ impl Slide {
                 .source
                 .use_display_tile_cache(req)
                 .then_some(self.display_cache.as_ref());
-            let tile = read_display_tile_from_source(self.source.as_ref(), display_cache, req)?;
+            let tile = read_display_tile_from_source(&admitted, display_cache, req)?;
             self.validate_decoded_output(&tile, "decoded display tile")?;
             Ok(tile)
         } else {
@@ -477,13 +502,7 @@ impl Slide {
             reqs,
             control,
             "admitted CPU tile batch",
-            |chunk| {
-                if let Some(control) = control {
-                    self.source.read_tiles_cpu_controlled(chunk, control)
-                } else {
-                    self.source.read_tiles_cpu(chunk)
-                }
-            },
+            |chunk, context| self.source.read_tiles_with_context(chunk, context),
             |tile| self.validate_decoded_output(tile, "decoded tile"),
         )
     }
@@ -493,7 +512,7 @@ impl Slide {
         &self,
         reqs: &[TileRequest],
         context: &'static str,
-        decode: impl FnMut(&[TileRequest]) -> Result<Vec<T>, WsiError>,
+        decode: impl FnMut(&[TileRequest], &ReadExecutionContext<'_>) -> Result<Vec<T>, WsiError>,
     ) -> Result<Vec<T>, WsiError> {
         self.read_tiles_admitted_with(reqs, None, context, decode, |_| Ok(()))
     }
@@ -503,7 +522,7 @@ impl Slide {
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
         context: &'static str,
-        mut decode: impl FnMut(&[TileRequest]) -> Result<Vec<T>, WsiError>,
+        mut decode: impl FnMut(&[TileRequest], &ReadExecutionContext<'_>) -> Result<Vec<T>, WsiError>,
         mut validate: impl FnMut(&T) -> Result<(), WsiError>,
     ) -> Result<Vec<T>, WsiError> {
         let estimates = reqs
@@ -516,6 +535,7 @@ impl Slide {
             .min(self.limits.operation_transient_bytes())
             .min(self.limits.slide_transient_bytes());
         let mut output = Vec::with_capacity(reqs.len());
+        let calibration = AtomicBool::new(false);
         let mut start = 0;
         while start < reqs.len() {
             if let Some(control) = control {
@@ -546,8 +566,14 @@ impl Slide {
                 }
             }
 
-            let _reservation = self.admission.reserve(chunk_bytes, control)?;
-            let chunk = decode(&reqs[start..end])?;
+            let reservation = self.admission.reserve(chunk_bytes, control)?;
+            let execution = ReadExecutionContext::new(
+                &reservation,
+                self.limits.operation_transient_bytes(),
+                control,
+                &calibration,
+            );
+            let chunk = decode(&reqs[start..end], &execution)?;
             if chunk.len() != end - start {
                 return Err(WsiError::BackendContract {
                     context,
@@ -666,53 +692,6 @@ impl Slide {
             });
         }
         Ok(bytes)
-    }
-
-    fn region_source_work(
-        &self,
-        req: &RegionRequest,
-        fractional_origin: Option<(f64, f64)>,
-    ) -> Result<(u64, u64), WsiError> {
-        let Some(level) = self
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-        else {
-            return Ok((0, 0));
-        };
-        let hits = match fractional_origin {
-            Some((x, y)) => {
-                level
-                    .tile_layout
-                    .tiles_for_fractional_region(x, y, req.size_px.0, req.size_px.1)
-            }
-            None => level.tile_layout.tiles_for_region(
-                req.origin_px.0,
-                req.origin_px.1,
-                req.size_px.0,
-                req.size_px.1,
-            ),
-        };
-        hits.into_iter()
-            .try_fold((0_u64, 0_u64), |(total, largest), hit| {
-                let tile_req = TileRequest {
-                    scene: req.scene,
-                    series: req.series,
-                    level: req.level,
-                    plane: req.plane,
-                    col: hit.col,
-                    row: hit.row,
-                };
-                let bytes = self.estimate_tile_output_bytes(&tile_req)?;
-                let total = total.checked_add(bytes).ok_or(WsiError::ResourceLimit {
-                    resource: "per-operation transient work",
-                    requested: u64::MAX,
-                    limit: self.limits.operation_transient_bytes(),
-                })?;
-                Ok((total, largest.max(bytes)))
-            })
     }
 
     fn region_work_bytes(

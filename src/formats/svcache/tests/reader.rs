@@ -160,7 +160,7 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
 }
 
 #[test]
-fn reader_recovers_from_a_poisoned_file_lock() {
+fn reader_concurrent_payload_reads_preserve_checksums_and_lock_recovery() {
     let mut payload = tempfile::tempfile().unwrap();
     let tile = CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![7, 8, 9]).unwrap();
     let tile_meta = write_tile_payload(&mut payload, &tile).unwrap();
@@ -172,20 +172,39 @@ fn reader_recovers_from_a_poisoned_file_lock() {
 
     let (file, payload_start, metadata) = read_svcache(&path).unwrap();
     let reader = std::sync::Arc::new(SvcacheReader {
-        file: Mutex::new(file),
+        file: PositionedFile::new(file),
         payload_start,
         dataset: super::super::storage::dataset_from_metadata(&path, &metadata),
         metadata,
         associated_index: HashMap::new(),
         encoded_unit_bytes: u64::MAX,
     });
-    let poisoner = std::sync::Arc::clone(&reader);
-    assert!(std::thread::spawn(move || {
-        let _guard = poisoner.file.lock().unwrap();
-        panic!("poison the test mutex");
-    })
-    .join()
-    .is_err());
+    #[cfg(not(unix))]
+    {
+        let poisoner = std::sync::Arc::clone(&reader);
+        assert!(
+            std::thread::spawn(move || poisoner.file.poison_position_for_test())
+                .join()
+                .is_err()
+        );
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    for _ in 0..20 {
+                        let tile = reader
+                            .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+                            .unwrap();
+                        assert_eq!(tile.as_u8().unwrap(), &[7, 8, 9]);
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
 
     let decoded = reader
         .read_tile_cpu(&TileRequest {

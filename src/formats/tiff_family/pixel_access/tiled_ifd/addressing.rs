@@ -276,11 +276,7 @@ impl TiffPixelReader {
         let offset = offsets[tile_idx];
         let byte_count = byte_counts[tile_idx];
         if byte_count == 0 {
-            return if self.layout.dataset.properties.vendor() == Some("generic-tiff") {
-                Self::empty_transparent_tile(width, height)
-            } else {
-                Self::empty_rgb_tile(width, height)
-            };
+            return self.empty_tiled_ifd_tile(width, height);
         }
 
         let tile_data = self

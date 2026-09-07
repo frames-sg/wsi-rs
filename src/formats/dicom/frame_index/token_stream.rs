@@ -15,6 +15,7 @@ use super::model::{DicomEncapsulatedFrames, DicomFragmentRef};
 use super::offset_tables::{build_encapsulated_frame_index, validate_basic_offset_table_len};
 use crate::formats::dicom::metadata::invalid_slide;
 use crate::formats::dicom::preflight::preflight_file_meta;
+use crate::formats::dicom::preflight::DicomMetadataTransferSyntaxIndex;
 use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
 
 pub(super) fn scan_encapsulated_frames_tokenized(
@@ -24,7 +25,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
     control: Option<&crate::ReadControl>,
 ) -> Result<DicomEncapsulatedFrames, WsiError> {
     check_index_control(control)?;
-    let transfer_syntax = TransferSyntaxRegistry
+    let transfer_syntax = DicomMetadataTransferSyntaxIndex
         .get(transfer_syntax_uid)
         .or_else(|| {
             JP2K_TRANSFER_SYNTAXES

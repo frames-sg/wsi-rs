@@ -22,6 +22,7 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
+#[cfg(test)]
 pub(crate) fn composite_fractional_region_from_source<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
@@ -33,6 +34,7 @@ pub(crate) fn composite_fractional_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
+#[cfg(test)]
 pub(crate) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
@@ -53,18 +55,22 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     batch_size: usize,
 ) -> Result<CpuTile, WsiError> {
     let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1))
-}
-
-pub(crate) fn composite_fractional_region_from_source_streaming<T: SlideReader + ?Sized>(
-    source: &T,
-    cache: Option<&TileCache>,
-    req: &RegionRequest,
-    origin_px: (f64, f64),
-    max_region_pixels: u64,
-) -> Result<CpuTile, WsiError> {
-    let plan = RegionReadPlan::fractional(source.dataset(), req, origin_px, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan, 1)
+    let dataset_id = source.dataset().id;
+    let cached = cache.is_some_and(|cache| {
+        cache.contains_keys(
+            plan.hits
+                .iter()
+                .map(|hit| CacheKey::from_region_tile(dataset_id, req, hit.col, hit.row)),
+        )
+    });
+    let compose = || compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1));
+    if cached {
+        // The hint changes scheduling only. Normal resolution still handles
+        // eviction; the NDPI source dispatches any late miss into the same pool.
+        compose()
+    } else {
+        crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(compose)
+    }
 }
 
 fn compose_resolved_region<T: SlideReader + ?Sized>(
@@ -98,6 +104,50 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
         plan.output_height,
         plan.preserve_alpha,
     )
+}
+
+pub(in crate::core::registry) fn composite_region_from_plan<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    plan: RegionReadPlan<'_>,
+    batch_ends: &[usize],
+) -> Result<CpuTile, WsiError> {
+    if batch_ends.len() <= 1 {
+        return compose_resolved_region(source, cache, req, plan);
+    }
+    let resolver = RegionTileResolver::new(source, cache, req);
+    let mut composer = None;
+    let mut start = 0;
+    for &end in batch_ends {
+        let hits = &plan.hits[start..end];
+        let single;
+        let batch;
+        let tiles: &[Arc<CpuTile>] = if hits.len() == 1 {
+            single = [resolver.resolve_one(hits[0].col, hits[0].row)?];
+            &single
+        } else {
+            batch = resolver.resolve_hits(hits)?;
+            &batch
+        };
+        if composer.is_none() {
+            composer = Some(RegionComposer::new(
+                plan.output_width,
+                plan.output_height,
+                tiles[0].as_ref(),
+                plan.preserve_alpha,
+                &plan.hits,
+            )?);
+        }
+        let composer = composer.as_mut().expect("first batch initialized composer");
+        for (hit, tile) in hits.iter().zip(tiles) {
+            composer.blit(hit, tile.as_ref())?;
+        }
+        start = end;
+    }
+    composer
+        .expect("nonempty batch plan initialized composer")
+        .finish()
 }
 
 fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
@@ -441,7 +491,7 @@ use super::output::crop_rgb_interleaved_u8_buffer;
 mod composition_tests;
 use std::sync::Arc;
 
-use crate::core::cache::TileCache;
+use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::SlideReader;
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout, RegionRequest, TileHit};
 use crate::error::WsiError;

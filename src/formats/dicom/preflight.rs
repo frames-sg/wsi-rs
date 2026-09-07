@@ -11,6 +11,25 @@ const MAX_METADATA_TOKENS: usize = 2_000_000;
 const MAX_METADATA_SEQUENCE_DEPTH: usize = 64;
 const MAX_TRANSFER_SYNTAX_UID_BYTES: u32 = 128;
 
+pub(super) struct DicomMetadataTransferSyntaxIndex;
+
+impl TransferSyntaxIndex for DicomMetadataTransferSyntaxIndex {
+    fn get(&self, uid: &str) -> Option<&dicom_transfer_syntax_registry::TransferSyntax> {
+        let uid = uid.trim_end_matches('\0');
+        TransferSyntaxRegistry.get(uid).or_else(|| {
+            // These retired JPEG syntaxes use Explicit VR Little Endian for
+            // metadata. Pixel frames are decoded and process-validated by our
+            // JPEG path, independently of the dicom-rs codec registry.
+            matches!(
+                uid,
+                JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX
+            )
+            .then(|| TransferSyntaxRegistry.get(uids::EXPLICIT_VR_LITTLE_ENDIAN))
+            .flatten()
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DicomPixelDataLocation {
     Native { value_offset: u64, value_len: u32 },
@@ -49,6 +68,7 @@ pub(super) fn open_metadata_object_until_with_budget(
             path: path.to_path_buf(),
         })?;
     let object = OpenFileOptions::new()
+        .transfer_syntax_index(DicomMetadataTransferSyntaxIndex)
         .read_until(stop_tag)
         .read_preamble(ReadPreamble::Auto)
         .from_reader(file)
@@ -75,7 +95,7 @@ fn preflight_dicom_metadata_with_budget(
     budget: &OpenBudget,
 ) -> Result<DicomPixelDataLocation, WsiError> {
     let transfer_syntax_uid = preflight_file_meta(file, path)?;
-    let transfer_syntax = TransferSyntaxRegistry
+    let transfer_syntax = DicomMetadataTransferSyntaxIndex
         .get(&transfer_syntax_uid)
         .ok_or_else(|| {
             invalid_slide(

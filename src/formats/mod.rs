@@ -3,6 +3,7 @@ mod composition;
 pub(crate) mod dicom;
 mod geometry;
 pub(crate) mod hamamatsu_vms;
+pub(crate) mod hamamatsu_vmu;
 mod ini;
 pub(crate) mod mirax;
 pub(crate) mod olympus_vsi;

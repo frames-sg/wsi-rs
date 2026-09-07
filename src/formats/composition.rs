@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::core::registry::FormatRegistry;
 use crate::formats::dicom::DicomBackend;
 use crate::formats::hamamatsu_vms::HamamatsuVmsBackend;
+use crate::formats::hamamatsu_vmu::HamamatsuVmuBackend;
 use crate::formats::mirax::MiraxBackend;
 use crate::formats::olympus_vsi::OlympusVsiBackend;
 use crate::formats::raw_jp2k::RawJp2kBackend;
@@ -34,6 +35,8 @@ impl FormatRegistry {
         self.register_cache_configured(mirax.clone(), mirax);
         let vms = Arc::new(HamamatsuVmsBackend::new());
         self.register_cache_configured(vms.clone(), vms);
+        let vmu = Arc::new(HamamatsuVmuBackend);
+        self.register_cache_configured(vmu.clone(), vmu);
         let vsi = Arc::new(OlympusVsiBackend);
         self.register_cache_configured(vsi.clone(), vsi);
         let raw_jp2k = Arc::new(RawJp2kBackend);

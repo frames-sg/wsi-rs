@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn tiled_input_bounds_account_for_every_encoded_payload_and_duplicate() {
+    use crate::core::registry::ManagedSlideReader;
+    let tiles = [
+        encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),
+        encode_solid_rgb_jpeg(8, 8, [10, 200, 10]),
+    ];
+    let reader = build_tiled_jpeg_reader(16, 8, 8, 8, &tiles);
+    let a = TileRequest::new(0, 0, 0, 0, 0);
+    let b = TileRequest::new(0, 0, 0, 1, 0);
+    assert_eq!(
+        reader.tile_encoded_upper_bound(&a).unwrap(),
+        tiles[0].len() as u64 * 2
+    );
+    assert_eq!(
+        reader
+            .tile_batch_encoded_upper_bound(&[b, a.clone(), a])
+            .unwrap(),
+        2 * (tiles[1].len() + 2 * tiles[0].len()) as u64
+    );
+    assert_eq!(reader.tile_batch_encoded_upper_bound(&[]).unwrap(), 0);
+    assert!(reader
+        .tile_encoded_upper_bound(&TileRequest::new(0, 0, 0, 2, 0))
+        .is_err());
+}
+
+#[test]
 fn read_tiles_classifies_distinct_jpeg_tiled_ifd_requests_as_batchable() {
     let tiles = [
         encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),
@@ -351,4 +377,27 @@ fn tiled_ifd_irregular_layout_uses_tiff_grid_metadata_for_missing_tile_index() {
     assert!(err
         .to_string()
         .contains("irregular tile row/col out of range for TIFF tile grid"));
+}
+
+#[test]
+fn sparse_philips_and_generic_tiles_preserve_transparency_in_single_and_batch_reads() {
+    for vendor in ["philips", "generic-tiff", "aperio"] {
+        let mut reader = build_tiled_jpeg_reader(8, 8, 8, 8, &[Vec::new()]);
+        reader
+            .layout
+            .dataset
+            .properties
+            .insert("openslide.vendor", vendor);
+        let request = TileRequest::new(0, 0, 0, 0, 0);
+        let single = reader.read_tile_cpu(&request).unwrap();
+        let batch = reader.read_tiles_cpu(&[request]).unwrap();
+        let channels = if vendor == "aperio" { 3 } else { 4 };
+        for tile in std::iter::once(&single).chain(&batch) {
+            assert_eq!(tile.channels, channels, "sparse {vendor} channel contract");
+            assert_eq!(
+                tile.data.as_u8().unwrap(),
+                vec![0; 8 * 8 * channels as usize]
+            );
+        }
+    }
 }

@@ -134,6 +134,23 @@ impl TiffPixelReader {
         })
     }
 
+    pub(in super::super) fn empty_tiled_ifd_tile(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<CpuTile, WsiError> {
+        // Missing Philips and generic TIFF tiles represent transparent holes,
+        // including when the JPEG batch path bypasses single-tile decoding.
+        if matches!(
+            self.layout.dataset.properties.vendor(),
+            Some("generic-tiff" | "philips")
+        ) {
+            Self::empty_transparent_tile(width, height)
+        } else {
+            Self::empty_rgb_tile(width, height)
+        }
+    }
+
     pub(in super::super) fn empty_rgb_tile(width: u32, height: u32) -> Result<CpuTile, WsiError> {
         let pixel_count = usize::try_from(width)
             .ok()

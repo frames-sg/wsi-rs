@@ -179,6 +179,116 @@ fn synthetic_vsi_opens_with_metadata_and_reads_encoded_and_background_tiles() {
 }
 
 #[test]
+fn open_vsi_keeps_payloads_bound_to_its_parsed_ets_file() {
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+    let req = TileRequest::new(0, 0, 0, 1, 0);
+    let expected = reader.read_tile_cpu(&req).unwrap();
+    let ets = companion_dir(&fixture.path)
+        .unwrap()
+        .join("scene/frame_t.ets");
+    fs::rename(&ets, ets.with_extension("retained")).unwrap();
+    fs::write(&ets, b"replacement is not the parsed ETS source").unwrap();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| reader.read_tiles_cpu(&[req.clone(), req.clone()]).unwrap()))
+            .collect();
+        for handle in handles {
+            for actual in handle.join().unwrap() {
+                assert_eq!(actual.as_u8(), expected.as_u8());
+            }
+        }
+    });
+}
+
+#[test]
+fn vsi_submits_one_codec_batch_and_preserves_sparse_duplicate_slots() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+    let reqs = [
+        TileRequest::new(0, 0, 0, 1, 0),
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| reader.read_tile_cpu(req).unwrap())
+        .collect();
+    let before = test_count(Event::CpuJp2kBatches);
+    let actual = reader.read_tiles_cpu(&reqs).unwrap();
+    assert_eq!(test_count(Event::CpuJp2kBatches) - before, 1);
+    assert_eq!(actual.len(), expected.len());
+    for (a, b) in actual.iter().zip(&expected) {
+        assert_eq!(a.as_u8(), b.as_u8());
+    }
+}
+
+#[test]
+fn admitted_vsi_batch_uses_payload_sizes_and_keeps_sparse_duplicate_pixels() {
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let limits = crate::SlideLimits::default()
+        .with_operation_transient_bytes(8 * 1024)
+        .unwrap();
+    let slide = Slide::open_with_options(
+        &fixture.path,
+        crate::SlideOpenOptions::default()
+            .with_limits(limits)
+            .with_cache_config(crate::CacheConfig::deterministic()),
+    )
+    .unwrap();
+    let reqs = [
+        TileRequest::new(0, 0, 0, 1, 0),
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    let expected: Vec<_> = reqs
+        .iter()
+        .map(|req| slide.read_tile(req).unwrap())
+        .collect();
+    let actual = slide.read_tiles(&reqs).unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+}
+
+#[test]
+fn vsi_batch_decode_and_retained_file_errors_identify_the_failed_tile() {
+    let spec = EtsSpec {
+        chunks: vec![ChunkSpec::new(&[1, 0, 0], b"invalid codestream")],
+        ..EtsSpec::default()
+    };
+    let fixture = write_vsi_fixture(&[("scene", spec)]);
+    let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+    let present = TileRequest::new(0, 0, 0, 1, 0);
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    for error in [
+        reader.read_tile_cpu(&present).unwrap_err(),
+        reader
+            .read_tiles_cpu(&[sparse.clone(), present.clone()])
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, WsiError::TileRead { col: 1, row: 0, level: 0, reason } if !reason.is_empty())
+        );
+    }
+    let ets = companion_dir(&fixture.path)
+        .unwrap()
+        .join("scene/frame_t.ets");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&ets)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    let error = reader.read_tiles_cpu(&[sparse, present]).unwrap_err();
+    assert!(
+        matches!(error, WsiError::TileRead { col: 1, row: 0, level: 0, reason } if reason.contains("frame_t.ets"))
+    );
+}
+
+#[test]
 fn reader_reports_scene_series_level_plane_and_tile_bounds() {
     let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
     let reader = OlympusVsiBackend

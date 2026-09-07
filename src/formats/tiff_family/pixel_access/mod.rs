@@ -44,6 +44,7 @@ mod dispatch;
 mod image_ops;
 mod jpeg_frame;
 mod jpegxr;
+mod managed;
 mod ndpi_batch;
 mod ndpi_core;
 mod ndpi_retile;

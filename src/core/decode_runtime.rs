@@ -21,8 +21,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
-const ROUTE_SAMPLE_SIZE: usize = 8;
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
 const DEVICE_WIN_RATIO: f64 = 0.85;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 const ROUTE_CACHE_MAX_ENTRIES: usize = 1024;
@@ -90,6 +88,7 @@ pub fn decode_route_telemetry_json() -> String {
     let metal = METAL_ROUTE_TELEMETRY.snapshot();
     let cuda = CUDA_ROUTE_TELEMETRY.snapshot();
     serde_json::json!({
+        "execution": crate::core::execution_telemetry::snapshot(),
         "metal": {
             "device_attempt_tiles": metal.device_attempt_tiles,
             "device_tiles": metal.device_tiles,
@@ -114,7 +113,8 @@ pub fn decode_route_telemetry_json() -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeAcceleration {
-    /// Measure CPU against an available Metal or CUDA path, including readback.
+    /// Start on CPU, then calibrate on later eligible reads against an available
+    /// Metal or CUDA path, including readback. Optional work never waits for memory.
     Auto,
     /// Decode entirely on the CPU.
     CpuOnly,
@@ -246,42 +246,26 @@ impl DecodeRuntime {
         if rayon::current_thread_index().is_some() {
             operation()
         } else if let Some(pool) = process_jp2k_cpu_pool() {
+            crate::core::execution_telemetry::record(
+                crate::core::execution_telemetry::Event::CpuPoolDispatches,
+                1,
+            );
             pool.install(operation)
         } else {
             operation()
         }
     }
 
+    pub(crate) fn cpu_worker_count(&self) -> usize {
+        if rayon::current_thread_index().is_some() {
+            rayon::current_num_threads()
+        } else {
+            process_jp2k_cpu_pool().map_or(1, ThreadPool::current_num_threads)
+        }
+    }
+
     pub(crate) fn options(&self) -> DecodeExecutionOptions {
         self.options
-    }
-
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
-    fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
-        self.route_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .peek(key)
-            .cloned()
-    }
-
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
-    fn store_route(
-        &self,
-        key: DecodeRouteKey,
-        decision: DecodeRouteDecision,
-        control: Option<&crate::ReadControl>,
-    ) -> Result<(), WsiError> {
-        let mut cache = self
-            .route_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(control) = control {
-            control.publish_if_active(|| insert_decode_route(&mut cache, key, decision))
-        } else {
-            insert_decode_route(&mut cache, key, decision);
-            Ok(())
-        }
     }
 
     #[cfg(feature = "metal")]
@@ -312,28 +296,9 @@ impl DecodeRuntime {
 }
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
-type DecodeRouteCache = LruCache<DecodeRouteKey, DecodeRouteDecision>;
-
+mod calibration;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
-fn new_decode_route_cache() -> DecodeRouteCache {
-    LruCache::new(
-        NonZeroUsize::new(ROUTE_CACHE_MAX_ENTRIES).expect("route cache capacity is nonzero"),
-    )
-}
-
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
-fn insert_decode_route(
-    cache: &mut DecodeRouteCache,
-    key: DecodeRouteKey,
-    decision: DecodeRouteDecision,
-) {
-    // Peeks keep reads and replacements on the existing FIFO eviction order.
-    if let Some(existing) = cache.peek_mut(&key) {
-        *existing = decision;
-    } else {
-        cache.put(key, decision);
-    }
-}
+use calibration::*;
 
 fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
     static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
@@ -446,6 +411,7 @@ struct DecodeRouteKey {
     codec_kind: TileCodecKind,
     device_identity: String,
     sample_tile_count: usize,
+    cpu_workers: usize,
 }
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
@@ -456,32 +422,22 @@ struct RouteTileGeometry {
 }
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct RouteSampleGeometry {
-    tiles: [RouteTileGeometry; ROUTE_SAMPLE_SIZE],
-    len: u8,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RouteSampleGeometry(Vec<(RouteTileGeometry, usize)>);
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 impl RouteSampleGeometry {
-    #[cfg(test)]
-    fn from_dimensions<const N: usize>(dimensions: [(u32, u32); N]) -> Self {
-        assert!(
-            N <= ROUTE_SAMPLE_SIZE,
-            "route sample geometry exceeds its fixed capacity"
-        );
-        let mut tiles = [RouteTileGeometry {
-            width: 0,
-            height: 0,
-        }; ROUTE_SAMPLE_SIZE];
-        for (slot, (width, height)) in tiles.iter_mut().zip(dimensions) {
-            *slot = RouteTileGeometry { width, height };
+    fn from_dimensions(dimensions: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        let mut counts = std::collections::BTreeMap::new();
+        for dimensions in dimensions {
+            *counts.entry(dimensions).or_insert(0) += 1;
         }
-        tiles[..N].sort_unstable_by_key(|tile| (tile.width, tile.height));
-        Self {
-            tiles,
-            len: N as u8,
-        }
+        Self(
+            counts
+                .into_iter()
+                .map(|((width, height), count)| (RouteTileGeometry { width, height }, count))
+                .collect(),
+        )
     }
 }
 
@@ -490,6 +446,8 @@ pub(crate) struct AdaptiveDecodeReader {
     runtime: Arc<DecodeRuntime>,
 }
 
+#[cfg(any(feature = "metal", feature = "cuda"))]
+mod adaptive;
 mod reader;
 #[cfg(test)]
 use reader::*;

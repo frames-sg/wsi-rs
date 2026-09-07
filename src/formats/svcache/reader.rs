@@ -56,7 +56,7 @@ impl ConfiguredDatasetReader for SvcacheBackend {
             associated_index.insert(assoc.name.clone(), idx);
         }
         let reader = SvcacheReader {
-            file: Mutex::new(file),
+            file: PositionedFile::new(file),
             payload_start,
             metadata,
             dataset,
@@ -179,7 +179,6 @@ impl SvcacheReader {
             })?;
         let mut encoded = vec![0_u8; payload_len];
         {
-            let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
             let offset = self
                 .payload_start
                 .checked_add(tile.payload_offset)
@@ -187,8 +186,7 @@ impl SvcacheReader {
                     path: PathBuf::from(&self.metadata.source.path),
                     message: "svcache tile payload offset overflow".into(),
                 })?;
-            file.seek(SeekFrom::Start(offset))?;
-            file.read_exact(&mut encoded)?;
+            self.file.read_exact_at(&mut encoded, offset)?;
         }
         let actual_hash = hex_encode(&Sha256::digest(&encoded));
         if actual_hash != tile.sha256 {
