@@ -98,3 +98,6 @@ impl SlideReader for VmuDisplay {
         self.native.read_associated(name)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -112,6 +112,17 @@ fn module_wiring_changes_are_declaration_only_even_when_the_file_has_functions()
 
 #[test]
 fn portable_changed_coverage_candidates_match_the_lcov_surface() {
+    for path in [
+        "src/core/decode_runtime/adaptive.rs",
+        "src/decode/jp2k/prepared_batch.rs",
+        "src/decode/jp2k/metal_batch.rs",
+    ] {
+        assert!(
+            !is_production_coverage_path(Path::new(path)),
+            "device-only module: {path}"
+        );
+    }
+
     assert!(is_production_coverage_path(Path::new(
         "src/decode/jp2k/cpu.rs"
     )));

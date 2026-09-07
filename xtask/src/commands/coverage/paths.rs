@@ -25,6 +25,11 @@ pub(super) fn path_matches_root(path: &Path, root: &str) -> bool {
 
 pub(super) fn is_production_coverage_path(path: &Path) -> bool {
     const PORTABLE_EXCLUSIONS: &[&str] = &[
+        // These split modules, like the existing device modules below, are
+        // compiled only with Metal/CUDA and cannot appear in CPU-only LCOV.
+        "src/core/decode_runtime/adaptive",
+        "src/decode/jp2k/prepared_batch",
+        "src/decode/jp2k/metal_batch",
         "src/decode/jp2k/cuda",
         "src/decode/jp2k/device",
         "src/decode/jp2k/metal",
