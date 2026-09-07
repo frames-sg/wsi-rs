@@ -2,7 +2,9 @@
 use super::prepare::{prepare_jp2k_job, PreparedJp2kJob};
 use super::{Jp2kColorSpace, Jp2kDecodeJob};
 use crate::{CpuTile, WsiError};
-use j2k::{BatchDecodeOptions, BatchLayout, EncodedImage, PreparedBatch};
+#[cfg(all(feature = "metal", target_os = "macos"))]
+use j2k::PreparedBatch;
+use j2k::{BatchDecodeOptions, BatchLayout, EncodedImage};
 use j2k_core::BackendRequest;
 use std::sync::Arc;
 
@@ -31,6 +33,7 @@ impl OwnedJob {
 
 pub(crate) struct PreparedJp2kBatch {
     jobs: Vec<OwnedJob>,
+    #[cfg(all(feature = "metal", target_os = "macos"))]
     prepared: PreparedBatch,
     sequential_cpu_images: bool,
 }
@@ -68,8 +71,13 @@ impl PreparedJp2kBatch {
             options,
         )
         .map_err(|error| WsiError::Jp2k(error.to_string()))?;
+        // Preserve preparation validation on every backend; only the macOS
+        // Metal executor consumes the retained batch plan.
+        #[cfg(not(all(feature = "metal", target_os = "macos")))]
+        drop(prepared);
         Ok(Self {
             jobs,
+            #[cfg(all(feature = "metal", target_os = "macos"))]
             prepared,
             sequential_cpu_images: false,
         })
