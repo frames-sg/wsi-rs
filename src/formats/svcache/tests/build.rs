@@ -260,8 +260,9 @@ fn svcache_complete_and_partial_builders_cover_merge_and_invalid_inputs() {
             SvcacheTileSelection::new(SceneId::new(0), SeriesId::new(0), LevelIdx::new(0), 1, 0),
         ),
         (
+            // The raw codestream exposes three resolution levels.
             "level",
-            SvcacheTileSelection::new(SceneId::new(0), SeriesId::new(0), LevelIdx::new(1), 0, 0),
+            SvcacheTileSelection::new(SceneId::new(0), SeriesId::new(0), LevelIdx::new(3), 0, 0),
         ),
     ] {
         let path = out_dir.path().join(format!("invalid-{name}.svcache"));

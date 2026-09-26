@@ -1,11 +1,13 @@
-use j2k::{CpuDecodeParallelism, J2kDecoder as J2kJp2kDecoder};
-use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelFormat};
+use j2k::{CpuDecodeParallelism, J2kDecoder as J2kJp2kDecoder, J2kScratchPool, J2kView};
+use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelFormat, Rect};
 
 use super::output::sample_buffer_from_rgb8_bytes;
 use super::prepare::{prepare_jp2k_input_and_view, PreparedJp2kJob};
 use super::Jp2kColorSpace;
 use super::Jp2kDecodeJob;
 use crate::core::types::CpuTile;
+use crate::decode::jp2k_backend::effective_output_colorspace;
+use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_pixel_contract};
 use crate::error::WsiError;
 
 pub(crate) fn decode_jp2k_to_sample_buffer(
@@ -21,6 +23,92 @@ pub(crate) fn decode_jp2k_to_sample_buffer(
         colorspace,
         J2kBackendRequest::Auto,
     )
+}
+
+/// Decodes the codestream's own reduced-resolution image. Each reduction level
+/// discards one wavelet level; nothing is resampled from a full decode.
+pub(crate) fn decode_jp2k_reduced_to_sample_buffer(
+    data: &[u8],
+    reduction_levels: u8,
+    colorspace: Jp2kColorSpace,
+) -> Result<CpuTile, WsiError> {
+    let view = J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    let header = codestream_header_from_view(&view)?;
+    validate_pixel_contract(&header)?;
+    let full = (header.image_width, header.image_height);
+    let (width, height) = reduced_jp2k_dimensions(full, reduction_levels)?;
+    let row_bytes = width as usize * J2kPixelFormat::Rgb8.bytes_per_pixel();
+    let mut rgb = vec![0; row_bytes * height as usize];
+    let mut decoder =
+        J2kJp2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    decoder.set_cpu_decode_parallelism(CpuDecodeParallelism::Auto);
+    decoder
+        .decode_region_scaled_pow2_into(
+            &mut J2kScratchPool::default(),
+            &mut rgb,
+            row_bytes,
+            J2kPixelFormat::Rgb8,
+            Rect::full(full),
+            reduction_levels,
+        )
+        .map_err(|err| WsiError::Jp2k(format!("j2k JP2K reduced decode failed: {err}")))?;
+    sample_buffer_from_rgb8_bytes(
+        rgb,
+        width,
+        height,
+        width,
+        height,
+        effective_output_colorspace(&header, colorspace),
+    )
+}
+
+/// Reduced dimensions follow the codestream grid: each level rounds up.
+pub(crate) fn reduced_jp2k_dimensions(
+    (width, height): (u32, u32),
+    reduction_levels: u8,
+) -> Result<(u32, u32), WsiError> {
+    let denominator = 1_u32
+        .checked_shl(u32::from(reduction_levels))
+        .ok_or_else(|| {
+            WsiError::Jp2k(format!("unrepresentable JP2K reduction {reduction_levels}"))
+        })?;
+    Ok((width.div_ceil(denominator), height.div_ceil(denominator)))
+}
+
+/// The deepest reduction this codestream decodes. The main header advertises a
+/// resolution ladder that component overrides may shorten, so each candidate
+/// depth is proven with a one-pixel decode before it is offered.
+pub(crate) fn jp2k_decodable_reduction_levels(data: &[u8]) -> Result<u8, WsiError> {
+    let view = J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    let advertised = view.info().resolution_levels.saturating_sub(1);
+    let mut decoder =
+        J2kJp2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    decoder.set_cpu_decode_parallelism(CpuDecodeParallelism::Serial);
+    let mut pool = J2kScratchPool::default();
+    let mut pixel = [0_u8; 3];
+    let stride = pixel.len();
+    let origin = Rect {
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+    };
+    for levels in (1..=advertised).rev() {
+        match decoder.decode_region_scaled_pow2_into(
+            &mut pool,
+            &mut pixel,
+            stride,
+            J2kPixelFormat::Rgb8,
+            origin,
+            levels,
+        ) {
+            Ok(_) => return Ok(levels),
+            Err(error) => {
+                tracing::debug!(%error, levels, "JP2K reduction is not decodable");
+            }
+        }
+    }
+    Ok(0)
 }
 
 fn decode_jp2k_to_sample_buffer_with_backend(

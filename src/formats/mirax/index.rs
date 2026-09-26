@@ -105,7 +105,7 @@ pub(super) struct MiraxIndexBuildContext<'a, R> {
     pub(super) levels: &'a mut [MiraxLevelBuilder],
     pub(super) slide_positions: &'a [i32],
     pub(super) quickhash: &'a mut Quickhash1,
-    pub(super) quickhash_files: &'a mut HashMap<PathBuf, File>,
+    pub(super) quickhash_files: &'a mut HashMap<PathBuf, CachedMiraxFile>,
     pub(super) open_budget: &'a OpenBudget,
 }
 

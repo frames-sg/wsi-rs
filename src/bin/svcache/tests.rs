@@ -227,5 +227,11 @@ fn complete_and_window_build_commands_write_readable_caches() {
 
     let slide = Slide::open(&window).unwrap();
     assert_eq!(slide.dataset().scenes.len(), 1);
-    assert_eq!(slide.dataset().scenes[0].series[0].levels.len(), 1);
+    let source_levels = Slide::open(source.path()).unwrap().dataset().scenes[0].series[0]
+        .levels
+        .len();
+    assert_eq!(
+        slide.dataset().scenes[0].series[0].levels.len(),
+        source_levels
+    );
 }

@@ -242,6 +242,32 @@ fn dispatch_fallbacks_and_associated_metadata_errors_are_contextual() {
 }
 
 #[test]
+fn repeated_tiff_cpu_requests_share_decoded_pixels_in_request_order() {
+    let reader = build_tiled_jpeg_reader(
+        16,
+        8,
+        8,
+        8,
+        &[
+            encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),
+            encode_solid_rgb_jpeg(8, 8, [10, 200, 10]),
+        ],
+    );
+    let requests = [1, 0, 1].map(|col| TileRequest::new(0, 0, 0, col, 0));
+    let tiles = reader.read_tiles_cpu(&requests).unwrap();
+
+    assert_eq!(tiles.len(), requests.len());
+    for (tile, request) in tiles.iter().zip(&requests) {
+        assert_eq!(tile.as_u8(), reader.read_tile_cpu(request).unwrap().as_u8());
+    }
+    assert_ne!(tiles[0].as_u8(), tiles[1].as_u8());
+    assert!(Arc::ptr_eq(
+        &tiles[0].pixels_arc().unwrap(),
+        &tiles[2].pixels_arc().unwrap()
+    ));
+}
+
+#[test]
 fn malformed_jp2k_batch_preserves_tile_request_context() {
     let reader = build_tiled_encoded_reader(
         8,

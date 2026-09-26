@@ -7,7 +7,9 @@ use crate::core::registry::{
     BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
-use crate::core::types::{AxesShape, CpuTile, Dataset, PlaneSelection, TileRequest};
+use crate::core::types::{
+    AxesShape, CpuTile, Dataset, PlaneSelection, RawCompressedTile, TileCodecKind, TileRequest,
+};
 use crate::error::WsiError;
 
 mod pixels;
@@ -69,8 +71,16 @@ impl SlideReader for OlympusVsiReader {
         let mut output = vec![None; reqs.len()];
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
+        let mut unique = std::collections::HashMap::new();
+        let mut duplicates = Vec::new();
         for (slot, req) in reqs.iter().enumerate() {
             let (scene, level, tile) = self.tile_for_request(req)?;
+            let key = (req.scene.get(), tile_key(req));
+            if let Some(&source_slot) = unique.get(&key) {
+                duplicates.push((slot, source_slot));
+                continue;
+            }
+            unique.insert(key, slot);
             if let Some(tile) = tile {
                 jobs.push(
                     scene
@@ -88,6 +98,9 @@ impl SlideReader for OlympusVsiReader {
         for (slot, tile) in slots.into_iter().zip(decoded) {
             output[slot] = Some(tile.map_err(|err| tile_error(&reqs[slot], err))?);
         }
+        for (slot, source_slot) in duplicates {
+            output[slot] = output[source_slot].clone();
+        }
         Ok(output
             .into_iter()
             .map(|tile| tile.expect("every ETS request has an output slot"))
@@ -97,9 +110,107 @@ impl SlideReader for OlympusVsiReader {
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.read_tile_with_backend(req, BackendRequest::Cpu)
     }
+
+    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        // Sparse tiles are synthesized from the ETS background without a codec.
+        match self.tile_for_request(req) {
+            Ok((_, _, Some(_))) => TileCodecKind::Jp2k,
+            Ok((_, _, None)) | Err(_) => TileCodecKind::Other,
+        }
+    }
+
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        let (scene, _, tile) = self.tile_for_request(req)?;
+        let tile = tile.ok_or_else(|| WsiError::Unsupported {
+            reason: "J2K passthrough is not available for sparse ETS background tiles".into(),
+        })?;
+        scene.raw_compressed_tile(tile)
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_tiles_metal(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::metal::MetalBackendSessions,
+    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
+        let stored = self.stored_jp2k_tiles(reqs, None)?;
+        crate::decode::jp2k::decode_batch_jp2k_metal(&stored.jobs(BackendRequest::Metal), sessions)
+            .into_iter()
+            .zip(reqs)
+            .map(|(result, req)| result.map_err(|err| tile_error(req, err)))
+            .collect()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn read_tiles_cuda(
+        &self,
+        reqs: &[TileRequest],
+        sessions: &crate::output::cuda::CudaBackendSessions,
+    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
+        let stored = self.stored_jp2k_tiles(reqs, None)?;
+        crate::decode::jp2k::decode_batch_jp2k_cuda(&stored.jobs(BackendRequest::Cuda), sessions)
+            .into_iter()
+            .zip(reqs)
+            .map(|(result, req)| result.map_err(|err| tile_error(req, err)))
+            .collect()
+    }
+}
+
+/// Stored ETS codestreams for strict device and adaptive reads.
+#[cfg(any(feature = "metal", feature = "cuda"))]
+struct StoredJp2kTiles<'a> {
+    payloads: Vec<Vec<u8>>,
+    /// The scene and payload index of each request, in request order.
+    slots: Vec<(&'a scene::EtsScene, usize)>,
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl StoredJp2kTiles<'_> {
+    fn jobs(&self, backend: BackendRequest) -> Vec<crate::decode::jp2k::Jp2kDecodeJob<'_>> {
+        self.slots
+            .iter()
+            .map(|(scene, index)| scene.jp2k_job(&self.payloads[*index], backend))
+            .collect()
+    }
 }
 
 impl OlympusVsiReader {
+    /// Reads each distinct stored tile once. Sparse background tiles have no
+    /// codestream, so device reads reject them rather than upload host pixels.
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn stored_jp2k_tiles(
+        &self,
+        reqs: &[TileRequest],
+        control: Option<&crate::ReadControl>,
+    ) -> Result<StoredJp2kTiles<'_>, WsiError> {
+        use std::collections::hash_map::Entry;
+        let mut unique = std::collections::HashMap::new();
+        let mut payloads = Vec::new();
+        let mut slots = Vec::with_capacity(reqs.len());
+        for req in reqs {
+            if let Some(control) = control {
+                control.check_cancelled()?;
+            }
+            let (scene, _, tile) = self.tile_for_request(req)?;
+            let tile = tile.ok_or_else(|| WsiError::Unsupported {
+                reason: "device backend not available for sparse ETS background tile".into(),
+            })?;
+            let index = match unique.entry((req.scene.get(), tile_key(req))) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    payloads.push(
+                        scene
+                            .read_payload(tile)
+                            .map_err(|err| tile_error(req, err))?,
+                    );
+                    *entry.insert(payloads.len() - 1)
+                }
+            };
+            slots.push((scene, index));
+        }
+        Ok(StoredJp2kTiles { payloads, slots })
+    }
+
     fn read_tile_with_backend(
         &self,
         req: &TileRequest,
@@ -157,15 +268,19 @@ impl OlympusVsiReader {
             });
         }
 
-        let key = EtsTileKey {
-            level: req.level.get(),
-            z: req.plane.get().z,
-            c: req.plane.get().c,
-            t: req.plane.get().t,
-            col: req.col as u32,
-            row: req.row as u32,
-        };
+        let key = tile_key(req);
         Ok((scene, level, scene.tiles.get(&key)))
+    }
+}
+
+fn tile_key(req: &TileRequest) -> EtsTileKey {
+    EtsTileKey {
+        level: req.level.get(),
+        z: req.plane.get().z,
+        c: req.plane.get().c,
+        t: req.plane.get().t,
+        col: req.col as u32,
+        row: req.row as u32,
     }
 }
 
@@ -179,6 +294,18 @@ fn tile_error(req: &TileRequest, err: WsiError) -> WsiError {
 }
 
 impl ManagedSlideReader for OlympusVsiReader {
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn prepare_adaptive_jp2k(
+        &self,
+        reqs: &[TileRequest],
+        workers: usize,
+        control: Option<&crate::ReadControl>,
+    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
+        Some(self.stored_jp2k_tiles(reqs, control).and_then(|stored| {
+            crate::decode::jp2k::PreparedJp2kBatch::new(&stored.jobs(BackendRequest::Cpu), workers)
+        }))
+    }
+
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
         Ok(self
             .tile_for_request(req)?
@@ -186,8 +313,13 @@ impl ManagedSlideReader for OlympusVsiReader {
             .map_or(0, |tile| u64::from(tile.byte_count)))
     }
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        let mut unique = std::collections::HashSet::new();
         reqs.iter().try_fold(0_u64, |sum, req| {
-            Ok(sum.saturating_add(self.tile_encoded_upper_bound(req)?))
+            let tile = self.tile_for_request(req)?.2;
+            if !unique.insert((req.scene.get(), tile_key(req))) {
+                return Ok(sum);
+            }
+            Ok(sum.saturating_add(tile.map_or(0, |tile| u64::from(tile.byte_count))))
         })
     }
     fn display_tile_encoded_upper_bound(

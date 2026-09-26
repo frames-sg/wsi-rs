@@ -63,6 +63,58 @@ impl SlideReader for OverlappingSource {
 }
 
 #[test]
+fn overlapping_native_display_reads_load_the_source_tile_once() {
+    for second_is_region in [false, true] {
+        let source = OverlappingSource::new(true);
+        let cache = TileCache::new(1024);
+        let display = crate::TileViewRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: Default::default(),
+            col: 1,
+            row: 0,
+            tile_width: 1,
+            tile_height: 1,
+        };
+        let read_display = || {
+            crate::core::registry::composition::read_display_tile_from_source(
+                &source,
+                Some(&cache),
+                &display,
+            )
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(read_display);
+            let second = scope.spawn(|| {
+                if second_is_region {
+                    composite_region_from_source(
+                        &source,
+                        Some(&cache),
+                        &RegionRequest::new(0usize, 0usize, 0u32, (1, 0), (1, 1)),
+                        16,
+                    )
+                } else {
+                    read_display()
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while cache.stats().misses < 2 && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let both_planned = cache.stats().misses >= 2;
+            source.release();
+            assert!(both_planned, "both requests must reach the cold cache");
+            for result in [first.join().unwrap(), second.join().unwrap()] {
+                assert_eq!(result.unwrap().as_u8().unwrap(), &[1, 1, 1]);
+            }
+        });
+        assert_eq!(source.reads[1].load(Ordering::SeqCst), 1);
+        assert_eq!(cache.stats().puts, 1);
+    }
+}
+
+#[test]
 fn overlapping_region_batches_load_each_source_tile_once() {
     let source = OverlappingSource::new(true);
     let cache = TileCache::new(1024);

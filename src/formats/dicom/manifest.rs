@@ -34,6 +34,27 @@ impl DicomSlide {
         config: BackendOpenConfig,
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
+        let manifest = DicomSeriesManifest::resolve_with_budget(path, budget.as_ref())?;
+        Self::from_manifest(path, config, budget.as_ref(), manifest)
+    }
+
+    pub(super) fn parse_selected_metadata_with_config(
+        path: &Path,
+        config: BackendOpenConfig,
+        budget: &OpenBudget,
+        selected_meta: ParsedDicomMetadata,
+    ) -> Result<Self, WsiError> {
+        let manifest =
+            DicomSeriesManifest::from_selected_metadata_with_budget(path, budget, selected_meta)?;
+        Self::from_manifest(path, config, budget, manifest)
+    }
+
+    fn from_manifest(
+        path: &Path,
+        config: BackendOpenConfig,
+        budget: &OpenBudget,
+        manifest: DicomSeriesManifest,
+    ) -> Result<Self, WsiError> {
         let DicomSeriesManifest {
             study_instance_uid,
             series_instance_uid,
@@ -44,7 +65,7 @@ impl DicomSlide {
             volume_images,
             associated_images,
             source_file_count,
-        } = DicomSeriesManifest::resolve_with_budget(path, budget.as_ref())?;
+        } = manifest;
         let private_cache_count = volume_images
             .len()
             .saturating_add(associated_images.len())
@@ -59,7 +80,7 @@ impl DicomSlide {
                 DicomImage::from_metadata_with_private_cache_budget(
                     meta,
                     &mut private_cache_budget,
-                    budget.as_ref(),
+                    budget,
                 )
             })
             .map(|result| result.map(Arc::new))
@@ -70,7 +91,7 @@ impl DicomSlide {
                 DicomImage::from_metadata_with_private_cache_budget(
                     meta,
                     &mut private_cache_budget,
-                    budget.as_ref(),
+                    budget,
                 )
                 .map(Arc::new)
                 .map(|image| (kind.name().to_string(), image))
@@ -503,6 +524,14 @@ impl DicomSeriesManifest {
 
     fn from_selected_file_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
         let selected_meta = parse_metadata_object_with_budget(path, budget)?;
+        Self::from_selected_metadata_with_budget(path, budget, selected_meta)
+    }
+
+    pub(super) fn from_selected_metadata_with_budget(
+        path: &Path,
+        budget: &OpenBudget,
+        selected_meta: ParsedDicomMetadata,
+    ) -> Result<Self, WsiError> {
         let selected_series_uid = selected_meta.series_instance_uid.clone();
         let scan_root = path.parent().unwrap_or_else(|| Path::new("."));
         let selected_key = canonicalize_or_fallback(path);

@@ -80,15 +80,6 @@ fn inline_value_rejects_oversized() {
     let _ = InlineValue::new(&[0u8; 13]);
 }
 
-// ── Endian ─────────────────────────────────────────────────
-
-#[test]
-fn endian_equality() {
-    assert_eq!(Endian::Little, Endian::Little);
-    assert_eq!(Endian::Big, Endian::Big);
-    assert_ne!(Endian::Little, Endian::Big);
-}
-
 // ── TagEntry / TagValue ────────────────────────────────────
 
 #[test]

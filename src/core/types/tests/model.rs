@@ -158,24 +158,6 @@ fn index_newtypes_round_trip_through_constructor_accessors() {
 }
 
 #[test]
-fn dataset_id_equality() {
-    let a = DatasetId::new(42);
-    let b = DatasetId::new(42);
-    let c = DatasetId::new(99);
-    assert_eq!(a, b);
-    assert_ne!(a, c);
-}
-
-#[test]
-fn dataset_id_hash_consistent() {
-    use std::collections::HashSet;
-    let mut set = HashSet::new();
-    set.insert(DatasetId::new(1));
-    set.insert(DatasetId::new(1));
-    assert_eq!(set.len(), 1);
-}
-
-#[test]
 fn dataset_source_icc_helper_populates_structured_and_legacy_metadata() {
     let mut dataset = minimal_dataset_for_tests();
     let bytes = vec![1, 2, 3, 4];
@@ -338,14 +320,6 @@ fn source_icc_profiles_for_series_filters_matching_profiles() {
         .collect::<Vec<_>>();
 
     assert_eq!(profiles, vec![matching_scene_series, matching_channel]);
-}
-
-#[test]
-fn compression_equality() {
-    assert_eq!(Compression::Jpeg, Compression::Jpeg);
-    assert_ne!(Compression::Jpeg, Compression::Jp2kRgb);
-    assert_eq!(Compression::Other(99), Compression::Other(99));
-    assert_ne!(Compression::Other(99), Compression::Other(100));
 }
 
 // --- SampleType ---

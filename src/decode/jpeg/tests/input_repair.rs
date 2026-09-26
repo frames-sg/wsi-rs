@@ -85,6 +85,25 @@ fn jpeg_preparation_length_reserves_space_for_repaired_eoi() {
 }
 
 #[test]
+fn jpeg_preparation_combines_dimension_and_eoi_repairs() {
+    let image = image::RgbImage::new(8, 4);
+    let mut jpeg = super::encode_test_jpeg(&image);
+    let sof = jpeg
+        .windows(2)
+        .position(|bytes| bytes[0] == 0xff && is_sof_marker(bytes[1]))
+        .expect("encoded fixture has SOF");
+    jpeg[sof + 5..sof + 9].fill(0);
+    jpeg.truncate(jpeg.len() - 2);
+    let original = jpeg.clone();
+
+    let prepared = prepare_jpeg_input(&jpeg, None, 8, 4, false).unwrap();
+    assert_eq!(jpeg, original, "preparation must not mutate source bytes");
+    assert_eq!(&prepared[sof + 5..sof + 7], &4_u16.to_be_bytes());
+    assert_eq!(&prepared[sof + 7..sof + 9], &8_u16.to_be_bytes());
+    assert!(prepared.ends_with(&[0xff, 0xd9]));
+}
+
+#[test]
 fn jpeg_tile_geometry_parses_dri_after_sof() {
     let jpeg = vec![
         0xFF, 0xD8, // SOI

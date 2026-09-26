@@ -1,6 +1,5 @@
 use super::region::composite_region_from_source;
-use super::resolution::validate_region_request;
-use std::sync::Arc;
+use super::resolution::{resolve_tile_miss, validate_region_request};
 
 use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::{SlideReader, DEFAULT_MAX_REGION_PIXELS};
@@ -85,8 +84,7 @@ fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
         if let Some(cached) = cache.get(&key) {
             (cached.as_ref().clone(), Some(true))
         } else {
-            let tile = Arc::new(read_display_source_tile(source, req)?);
-            cache.put(key, tile.clone());
+            let tile = resolve_tile_miss(source, Some(cache), key, &display_tile_request(req))?;
             (tile.as_ref().clone(), Some(false))
         }
     } else {

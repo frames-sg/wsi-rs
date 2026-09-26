@@ -8,7 +8,10 @@ use j2k_core::BackendRequest;
 use crate::core::limits::{
     checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES, MAX_DECODED_IMAGE_BYTES,
 };
-use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
+use crate::core::types::{
+    ColorSpace, Compression, CpuTile, CpuTileData, CpuTileLayout,
+    EncodedTilePhotometricInterpretation, RawCompressedTile, SampleType,
+};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::error::WsiError;
 
@@ -31,6 +34,28 @@ impl EtsScene {
         tile: &EtsTile,
         backend: BackendRequest,
     ) -> Result<Jp2kDecodeJob<'static>, WsiError> {
+        Ok(Jp2kDecodeJob {
+            data: Cow::Owned(self.read_payload(tile)?),
+            ..self.jp2k_job(&[], backend)
+        })
+    }
+
+    /// Every ETS tile is a full-size RGB codestream; edges are cropped later.
+    pub(super) fn jp2k_job<'a>(
+        &self,
+        payload: &'a [u8],
+        backend: BackendRequest,
+    ) -> Jp2kDecodeJob<'a> {
+        Jp2kDecodeJob {
+            data: Cow::Borrowed(payload),
+            expected_width: self.levels[0].tile_width,
+            expected_height: self.levels[0].tile_height,
+            rgb_color_space: true,
+            backend,
+        }
+    }
+
+    pub(super) fn read_payload(&self, tile: &EtsTile) -> Result<Vec<u8>, WsiError> {
         let encoded_len = checked_product_to_usize(
             &[u64::from(tile.byte_count)],
             MAX_COMPRESSED_INPUT_BYTES.min(self.encoded_unit_limit),
@@ -44,13 +69,40 @@ impl EtsScene {
                 source: Arc::new(source),
                 path: self.path.clone(),
             })?;
-        Ok(Jp2kDecodeJob {
-            data: Cow::Owned(bytes),
-            expected_width: self.levels[0].tile_width,
-            expected_height: self.levels[0].tile_height,
-            rgb_color_space: true,
-            backend,
-        })
+        Ok(bytes)
+    }
+
+    pub(super) fn raw_compressed_tile(
+        &self,
+        tile: &EtsTile,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let bits_allocated = match self.sample_type {
+            SampleType::Uint8 => 8,
+            SampleType::Uint16 => 16,
+            SampleType::Float32 => {
+                return Err(WsiError::Unsupported {
+                    reason: "J2K passthrough does not support floating-point ETS samples".into(),
+                })
+            }
+        };
+        let (samples_per_pixel, photometric_interpretation) = match self.samples_per_pixel {
+            1 => (1, EncodedTilePhotometricInterpretation::Monochrome2),
+            3 => (3, EncodedTilePhotometricInterpretation::Rgb),
+            other => {
+                return Err(WsiError::Unsupported {
+                    reason: format!(
+                        "J2K passthrough requires 1 or 3 ETS samples per pixel, got {other}"
+                    ),
+                })
+            }
+        };
+        Ok(RawCompressedTile::builder(Compression::Jp2kRgb)
+            .dimensions(self.levels[0].tile_width, self.levels[0].tile_height)
+            .bits_allocated(bits_allocated)
+            .samples_per_pixel(samples_per_pixel)
+            .photometric_interpretation(photometric_interpretation)
+            .data(self.read_payload(tile)?)
+            .build()?)
     }
 
     pub(super) fn background_tile(&self, width: u32, height: u32) -> Result<CpuTile, WsiError> {

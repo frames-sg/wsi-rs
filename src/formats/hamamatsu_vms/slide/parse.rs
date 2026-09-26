@@ -140,13 +140,17 @@ fn load_vms_sources(
         .finish()
         .ok_or_else(|| invalid_slide(path, "failed to compute VMS quickhash"))?;
     let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
-    let opt_offsets = parse_vms_opt_offsets(opt_path.as_deref(), &image_paths)?;
+    let headers = image_paths
+        .iter()
+        .map(|image_path| VmsJpeg::read_header(image_path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let opt_offsets = parse_vms_opt_offsets(opt_path.as_deref(), &headers)?;
 
     let mut base_images = Vec::with_capacity(image_paths.len());
-    for (idx, image_path) in image_paths.iter().enumerate() {
-        let row_starts = opt_offsets.get(idx).cloned().unwrap_or_default();
-        base_images.push(Arc::new(VmsJpeg::parse_with_private_cache_budget(
+    for ((image_path, header), row_starts) in image_paths.iter().zip(headers).zip(opt_offsets) {
+        base_images.push(Arc::new(VmsJpeg::from_header(
             image_path,
+            header,
             row_starts,
             &mut private_cache_budget,
             budget.limits().encoded_unit_bytes(),

@@ -64,6 +64,48 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         backend: BackendRequest,
     ) -> Result<Vec<CpuTile>, WsiError> {
+        if reqs.len() < 2 {
+            return self.read_unique_tiles_cpu_with_backend(reqs, backend);
+        }
+
+        let mut first_slots = HashMap::with_capacity(reqs.len());
+        let mut unique_indices = Vec::with_capacity(reqs.len());
+        let mut output_slots = Vec::with_capacity(reqs.len());
+        for (index, req) in reqs.iter().enumerate() {
+            let key = (
+                req.scene, req.series, req.level, req.plane, req.col, req.row,
+            );
+            let slot = *first_slots.entry(key).or_insert_with(|| {
+                let slot = unique_indices.len();
+                unique_indices.push(index);
+                slot
+            });
+            output_slots.push(slot);
+        }
+        if unique_indices.len() == reqs.len() {
+            return self.read_unique_tiles_cpu_with_backend(reqs, backend);
+        }
+
+        let unique_requests: Vec<_> = unique_indices
+            .into_iter()
+            .map(|index| reqs[index].clone())
+            .collect();
+        let tiles = crate::core::batch::expect_exact_count(
+            self.read_unique_tiles_cpu_with_backend(&unique_requests, backend)?,
+            unique_requests.len(),
+            "TIFF unique CPU tile batch",
+        )?;
+        Ok(output_slots
+            .into_iter()
+            .map(|slot| tiles[slot].clone())
+            .collect())
+    }
+
+    fn read_unique_tiles_cpu_with_backend(
+        &self,
+        reqs: &[TileRequest],
+        backend: BackendRequest,
+    ) -> Result<Vec<CpuTile>, WsiError> {
         if reqs.is_empty() {
             return Ok(Vec::new());
         }

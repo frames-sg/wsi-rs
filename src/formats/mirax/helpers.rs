@@ -1,27 +1,42 @@
 use super::*;
 use crate::core::limits::{checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES};
 
+pub(super) struct CachedMiraxFile {
+    pub(super) file: File,
+    len: u64,
+}
+
+fn cached_file<'a>(
+    files: &'a mut HashMap<PathBuf, CachedMiraxFile>,
+    path: &Path,
+) -> Result<&'a mut CachedMiraxFile, WsiError> {
+    if !files.contains_key(path) {
+        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+        let len = file
+            .metadata()
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.to_path_buf(),
+            })?
+            .len();
+        files.insert(path.to_path_buf(), CachedMiraxFile { file, len });
+    }
+    Ok(files.get_mut(path).expect("MIRAX cached file was inserted"))
+}
+
 pub(super) fn read_record_bytes(record: &MiraxRecord) -> Result<Vec<u8>, WsiError> {
     read_record_bytes_fields(&record.path, record.offset, record.len)
 }
 
 pub(super) fn read_jpeg_dimensions_from_record(
     path: &Path,
-    quickhash_files: &mut HashMap<PathBuf, File>,
+    quickhash_files: &mut HashMap<PathBuf, CachedMiraxFile>,
     record: &MiraxRecord,
 ) -> Result<(u32, u32), WsiError> {
-    let file = if let Some(file) = quickhash_files.get_mut(&record.path) {
-        file
-    } else {
-        let file = File::open(&record.path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: record.path.clone(),
-        })?;
-        quickhash_files.insert(record.path.clone(), file);
-        quickhash_files
-            .get_mut(&record.path)
-            .expect("MIRAX cached file must exist after insertion")
-    };
+    let file = &mut cached_file(quickhash_files, &record.path)?.file;
     file.seek(SeekFrom::Start(record.offset))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
@@ -103,30 +118,14 @@ pub(super) fn read_record_bytes_from_file_with_limit(
 
 pub(super) fn quickhash_file_part_cached(
     quickhash: &mut Quickhash1,
-    files: &mut HashMap<PathBuf, File>,
+    files: &mut HashMap<PathBuf, CachedMiraxFile>,
     path: &Path,
     offset: u64,
     len: u64,
 ) -> Result<(), WsiError> {
-    let file = if let Some(file) = files.get_mut(path) {
-        file
-    } else {
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
-        files.insert(path.to_path_buf(), file);
-        files
-            .get_mut(path)
-            .expect("MIRAX quickhash file must exist after insertion")
-    };
-    let file_len = file
-        .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
-        .len();
+    let cached = cached_file(files, path)?;
+    let file_len = cached.len;
+    let file = &mut cached.file;
     let range_end = offset
         .checked_add(len)
         .ok_or_else(|| WsiError::IoWithPath {

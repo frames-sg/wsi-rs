@@ -83,7 +83,12 @@ impl ConfiguredFormatProbe for DicomBackend {
         let budget = OpenBudget::new(config.limits);
         match parse_metadata_object_with_budget(path, budget.as_ref()) {
             Ok(meta) if is_vl_wsi(meta.obj.meta().media_storage_sop_class_uid()) => {
-                let slide = self.parse_with_config(path, config)?;
+                let slide = Arc::new(DicomSlide::parse_selected_metadata_with_config(
+                    path,
+                    config,
+                    budget.as_ref(),
+                    meta,
+                )?);
                 self.probe_cache.insert(key, config, slide);
                 Ok(ProbeResult::detected("dicom", ProbeConfidence::Definite))
             }

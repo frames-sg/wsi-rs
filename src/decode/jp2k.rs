@@ -44,7 +44,10 @@ pub(crate) use prepared_batch::PreparedJp2kBatch;
 pub(crate) use batch::decode_batch_jp2k;
 #[cfg(test)]
 pub(crate) use batch::decode_jp2k_tile_batch_to_sample_buffers;
-pub(crate) use cpu::decode_jp2k_to_sample_buffer;
+pub(crate) use cpu::{
+    decode_jp2k_reduced_to_sample_buffer, decode_jp2k_to_sample_buffer,
+    jp2k_decodable_reduction_levels, reduced_jp2k_dimensions,
+};
 #[cfg(feature = "cuda")]
 pub(crate) use device::decode_batch_jp2k_cuda;
 #[cfg(feature = "metal")]

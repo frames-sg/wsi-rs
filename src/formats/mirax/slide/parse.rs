@@ -33,7 +33,7 @@ struct MiraxHierarchyGeometry {
 struct MiraxIndexSources {
     hierarchy: MiraxHierarchyGeometry,
     associated: HashMap<String, MiraxRecord>,
-    quickhash_files: HashMap<PathBuf, File>,
+    quickhash_files: HashMap<PathBuf, CachedMiraxFile>,
     quickhash: String,
     dataset_id: DatasetId,
 }
@@ -653,7 +653,7 @@ fn assemble_dataset_and_caches(
                 .map(|(path, file)| {
                     (
                         path,
-                        Arc::new(crate::core::positioned_file::PositionedFile::new(file)),
+                        Arc::new(crate::core::positioned_file::PositionedFile::new(file.file)),
                     )
                 })
                 .collect(),

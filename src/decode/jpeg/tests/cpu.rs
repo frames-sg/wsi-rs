@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn repeated_color_overrides_match_explicit_codec_decodes() {
+    let mut rgb = image::RgbImage::new(16, 16);
+    for (idx, pixel) in rgb.pixels_mut().enumerate() {
+        *pixel = image::Rgb([idx as u8, 90, 210]);
+    }
+    let data = encode_test_jpeg(&rgb);
+    let mut forced = Vec::new();
+    for transform in [
+        J2kColorTransform::ForceRgb,
+        J2kColorTransform::ForceYCbCr,
+        J2kColorTransform::Auto,
+        J2kColorTransform::ForceRgb,
+        J2kColorTransform::ForceYCbCr,
+    ] {
+        let view = j2k_jpeg::JpegView::parse_with_options(
+            &data,
+            j2k_jpeg::DecodeOptions::default().with_color_transform(transform),
+        )
+        .unwrap();
+        let expected = j2k_jpeg::Decoder::from_view(view)
+            .unwrap()
+            .decode_request(j2k_jpeg::DecodeRequest::full(j2k_jpeg::PixelFormat::Rgb8))
+            .unwrap()
+            .0;
+        let actual = decode_jpeg_rgb_with_color_transform(&data, None, 16, 16, transform).unwrap();
+        assert_eq!(actual.pixels, expected);
+        forced.push(actual.pixels);
+    }
+    assert_ne!(
+        forced[0], forced[1],
+        "the fixture must distinguish RGB from YCbCr interpretation"
+    );
+}
+
+#[test]
 fn decode_valid_jpeg() {
     let mut rgb = image::RgbImage::new(8, 8);
     for pixel in rgb.pixels_mut() {

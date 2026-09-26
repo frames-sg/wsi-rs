@@ -87,7 +87,7 @@ fn j2k_cpu_vs_reference_within_tolerance() {
                     continue;
                 }
             };
-            let ref_buf = match read_ppm_oracle(&path.with_extension("ppm")) {
+            let ref_buf = match read_ppm_oracle(&reference_ppm_path(&path, level)) {
                 Ok(buf) => buf,
                 Err(ppm_error) => {
                     failures.push(format!(
@@ -157,6 +157,19 @@ fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
     } else {
         Tolerance::JPEG_TIGHT
     }
+}
+
+/// Level 0 is compared with `{stem}.ppm`; reduced level `k` with the
+/// independent OpenJPEG `-r k` decode in `{stem}.r{k}.ppm`.
+fn reference_ppm_path(codestream: &Path, level: u32) -> std::path::PathBuf {
+    if level == 0 {
+        return codestream.with_extension("ppm");
+    }
+    let stem = codestream
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    codestream.with_file_name(format!("{stem}.r{level}.ppm"))
 }
 
 fn read_ppm_oracle(path: &Path) -> Result<support::oracles::TileBuffer, String> {

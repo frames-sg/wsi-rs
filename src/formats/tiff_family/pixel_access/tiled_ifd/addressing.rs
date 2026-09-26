@@ -355,6 +355,28 @@ impl TiffPixelReader {
         }
         let tile_data = self.read_tiled_ifd_tile_span(span)?;
         let (data, info) = standalone_jpeg_frame_owned(tile_data, jpeg_tables)?;
+        let bitstream_hint = jpeg_bitstream_color_hint(&data, None);
+        let photometric_interpretation = if self.layout.dataset.properties.vendor()
+            == Some("philips")
+        {
+            match bitstream_hint {
+                JpegBitstreamColorHint::Rgb => EncodedTilePhotometricInterpretation::Rgb,
+                JpegBitstreamColorHint::YCbCr => EncodedTilePhotometricInterpretation::YbrFull422,
+                JpegBitstreamColorHint::RgbComponentIds012 | JpegBitstreamColorHint::Unknown => {
+                    info.photometric_interpretation
+                }
+            }
+        } else {
+            let photometric = self
+                .container
+                .get_u32(ifd_id, tags::PHOTOMETRIC)
+                .unwrap_or(2);
+            tiff_jpeg_encoded_photometric_interpretation(
+                photometric,
+                u32::from(info.samples_per_pixel),
+                bitstream_hint,
+            )?
+        };
         Ok(RawCompressedTile::builder(Compression::Jpeg)
             // The encoded JPEG commonly retains a full physical tile at the
             // right and bottom edges. Preserve the TIFF level's logical edge
@@ -362,7 +384,7 @@ impl TiffPixelReader {
             .dimensions(span.width, span.height)
             .bits_allocated(info.bits_allocated)
             .samples_per_pixel(info.samples_per_pixel)
-            .photometric_interpretation(info.photometric_interpretation)
+            .photometric_interpretation(photometric_interpretation)
             .data(data)
             .build()?)
     }

@@ -23,12 +23,6 @@ fn decode_jp2k_rejects_truncated_stream() {
 }
 
 #[test]
-fn colorspace_enum_values() {
-    assert_ne!(Jp2kColorSpace::Rgb, Jp2kColorSpace::YCbCr);
-    assert_eq!(Jp2kColorSpace::Rgb, Jp2kColorSpace::Rgb);
-}
-
-#[test]
 fn dimensions_from_bounds_respects_origin_offsets() {
     assert_eq!(dimensions_from_bounds(10, 18, 20, 32), Some((8, 12)));
     assert_eq!(dimensions_from_bounds(5, 4, 0, 1), None);

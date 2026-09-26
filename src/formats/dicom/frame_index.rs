@@ -29,6 +29,7 @@ pub(super) use offset_tables::{
     read_extended_offset_tables_le, read_extended_offset_tables_with_reader,
     validate_basic_offset_table_len,
 };
+#[cfg(test)]
 pub(super) use raw_little_endian::read_exact_at;
 #[cfg(test)]
 pub(super) use raw_little_endian::scan_encapsulated_frames_raw_little_endian;

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use super::super::ini::{parse_image_key_suffix, parse_u32, parse_vms_ini, parse_vms_opt_offsets};
+use super::super::jpeg::read_vms_jpeg_header;
 use super::super::*;
 use super::fixtures::VmsFixture;
 
@@ -128,6 +129,22 @@ fn open_rejects_invalid_duplicate_and_unsafe_image_mappings() {
 }
 
 #[test]
+fn open_wraps_malformed_base_jpeg_as_invalid_slide() {
+    let fixture = VmsFixture::complete();
+    fs::write(&fixture.image_paths[0], b"not a JPEG").expect("corrupt VMS image shard");
+
+    let message = invalid_slide_message(expect_wsi_error(
+        HamamatsuVmsBackend::new().open(&fixture.path),
+        "malformed base JPEG must fail",
+    ));
+    assert!(
+        message.contains("failed to derive VMS JPEG tile geometry")
+            && message.contains("missing SOI marker"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
 fn image_key_suffix_parses_supported_forms_and_rejects_malformed_coordinates() {
     let path = Path::new("synthetic.vms");
     let plain = parse_image_key_suffix(path, "ImageFile").expect("plain image key");
@@ -171,19 +188,24 @@ fn vms_key_file_enforces_its_bounded_input_limit() {
 #[test]
 fn optimisation_offsets_use_complete_rows_and_discard_truncation() {
     let fixture = VmsFixture::complete();
-    let offsets = parse_vms_opt_offsets(Some(&fixture.opt_path), &fixture.image_paths)
+    let headers = fixture
+        .image_paths
+        .iter()
+        .map(|path| read_vms_jpeg_header(path).unwrap())
+        .collect::<Vec<_>>();
+    let offsets = parse_vms_opt_offsets(Some(&fixture.opt_path), &headers)
         .expect("parse complete VMS optimisation file");
     assert_eq!(offsets.len(), 2);
     assert!(offsets.iter().all(|rows| rows.len() == 2));
     assert!(offsets.iter().flatten().all(Option::is_some));
 
     assert_eq!(
-        parse_vms_opt_offsets(None, &fixture.image_paths).unwrap(),
+        parse_vms_opt_offsets(None, &headers).unwrap(),
         vec![Vec::new(), Vec::new()]
     );
     fs::write(&fixture.opt_path, [0u8; 41]).expect("truncate optimisation fixture");
     assert_eq!(
-        parse_vms_opt_offsets(Some(&fixture.opt_path), &fixture.image_paths).unwrap(),
+        parse_vms_opt_offsets(Some(&fixture.opt_path), &headers).unwrap(),
         vec![Vec::new(), Vec::new()]
     );
 }
