@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub(super) fn ensure_clean_worktree() -> Result<(), String> {
     ensure_clean_worktree_at(Path::new("."))
@@ -69,6 +69,8 @@ pub(super) fn run_program_capture(
     eprintln!("+ {} {}", display, args.join(" "));
     let mut command = Command::new(&program);
     command.args(args);
+    // Capture API text on stdout while keeping build progress visible in CI.
+    command.stderr(Stdio::inherit());
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -78,10 +80,9 @@ pub(super) fn run_program_capture(
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!(
-            "`{}` exited with {}\n{}",
-            display, output.status, stderr
+            "`{}` exited with {}; see command diagnostics above",
+            display, output.status
         ))
     }
 }
