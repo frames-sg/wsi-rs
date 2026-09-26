@@ -7,11 +7,23 @@ criteria = "safe-to-deploy"
 version = "0.1.1"
 notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed facade ownership, strict device selection and CPU fallback boundaries. Optional accelerator implementations remain separate dependencies. CPU decode and CZI/TIFF JPEG XR integration tests exercise this pinned facade."
 
+[[audits.jxr]]
+who = "Claude-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.1 -> 0.1.2"
+notes = "Reviewed the exact published package diff. Changes are exact-version bumps of jxr-core, jxr-native, jxr-metal and jxr-cuda, README wording, and test-only Metal availability guards. No library source changed; no unsafe code or new runtime capabilities."
+
 [[audits.jxr-core]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed request limits, checked geometry, output-layout validation, owned/borrowed surface contracts and typed errors. This package provides contracts over j2k-core and has no build script."
+
+[[audits.jxr-core]]
+who = "Claude-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
+notes = "Reviewed the exact published package diff. Adds the doc-hidden device_plan module: host-side word-array planning for the Metal and CUDA adapters. The crate still forbids unsafe code, and the module performs no filesystem, network, process or environment access. Offset, stride and index conversions use checked arithmetic with typed errors. The overlap scheduler relies on caller-validated plane geometry for some unchecked u32 edge arithmetic; pathological geometry can panic in debug builds or build oversized schedules, while out-of-range indices are rejected by checked conversion. Only jxr-metal and jxr-cuda use the module; the CPU decode path does not."
 
 [[audits.jxr-math]]
 who = "Codex-assisted source review"
@@ -24,6 +36,12 @@ who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed bounded header and packet bit readers, Annex-A ranges, request preparation and limits, reconstruction contracts and output plane/crop validation. Parsing and CPU decoding consume caller-provided bytes; SIMD is delegated through the safe fearless_simd API. Typed failures precede output use. This is a source review, not a claim of exhaustive conformance or formal verification."
+
+[[audits.jxr-native]]
+who = "Claude-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
+notes = "Reviewed the exact published package diff. Only the package version and the exact jxr-core pin (=0.1.0 -> =0.1.1) changed; no source changes."
 
 [[audits.sha2-asm]]
 who = "Codex-assisted source review"
