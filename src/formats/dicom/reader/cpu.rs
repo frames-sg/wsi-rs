@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use j2k_core::BackendRequest;
@@ -35,6 +36,9 @@ impl DicomReader {
         let mut jpeg_metas = Vec::new();
         let mut jp2k_metas = Vec::new();
         let mut rle_metas = Vec::new();
+        let mut first_frame_slots = HashMap::new();
+        let mut duplicate_frame_slots = Vec::new();
+        let deduplicate_frames = reqs.len() > 1;
         let planner = DicomBatchPlanner::new(&self.slide, control, DicomBatchPlanMode::Cpu);
 
         for (slot, req) in reqs.iter().enumerate() {
@@ -44,6 +48,21 @@ impl DicomReader {
                     results[slot] = Some(tile);
                 }
                 DicomResolvedBatchPlanEntry::Frame(meta) => {
+                    if deduplicate_frames {
+                        let key = (
+                            req.scene.get(),
+                            req.series.get(),
+                            req.level.get(),
+                            req.plane.get(),
+                            req.col,
+                            req.row,
+                        );
+                        if let Some(&first_slot) = first_frame_slots.get(&key) {
+                            duplicate_frame_slots.push((slot, first_slot));
+                            continue;
+                        }
+                        first_frame_slots.insert(key, slot);
+                    }
                     if is_jpeg_transfer_syntax(&meta.image.transfer_syntax_uid) {
                         jpeg_metas.push(meta);
                     } else if JP2K_TRANSFER_SYNTAXES
@@ -181,6 +200,10 @@ impl DicomReader {
                 meta.actual_width,
                 meta.actual_height,
             )?);
+        }
+
+        for (slot, first_slot) in duplicate_frame_slots {
+            results[slot] = results[first_slot].clone();
         }
 
         check_read_control(control)?;

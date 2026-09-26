@@ -4,9 +4,9 @@ mod input;
 mod tests;
 
 use input::{
-    checked_jpeg_rgb_len, decode_jpeg_rgb_with_color_transform_and_patch, expand_grayscale_to_rgb,
-    j2k_downscale_for_dimensions, prepare_jpeg_input, resize_jpeg_rgb_nearest,
-    try_decode_jpeg_rgb_scaled,
+    checked_jpeg_rgb_len, decode_jpeg_rgb_with_color_transform_and_patch,
+    effective_jpeg_color_transform, expand_grayscale_to_rgb, j2k_downscale_for_dimensions,
+    prepare_jpeg_input, resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
 };
 pub(crate) use input::{decode_jpeg_rgb_with_color_transform, jpeg_dimensions};
 
@@ -132,6 +132,7 @@ struct PreparedBatchJpeg<'a> {
     stride: usize,
     scale: J2kDownscale,
     grayscale: bool,
+    effective_color_transform: J2kColorTransform,
 }
 
 pub(crate) fn decode_jpeg_rgb_with_size_override(
@@ -205,15 +206,6 @@ pub(crate) fn decode_batch_jpeg<'a>(jobs: &[JpegDecodeJob<'a>]) -> Vec<Result<Cp
 fn try_decode_batch_jpeg_with_j2k<'a>(
     jobs: &[JpegDecodeJob<'a>],
 ) -> Option<Vec<Result<CpuTile, WsiError>>> {
-    let first = jobs.first()?;
-    let color_transform = first.color_transform;
-    if jobs
-        .iter()
-        .any(|job| job.color_transform != color_transform)
-    {
-        return None;
-    }
-
     let mut prepared = Vec::with_capacity(jobs.len());
     let mut needs_scaled_api = false;
     for job in jobs {
@@ -226,13 +218,24 @@ fn try_decode_batch_jpeg_with_j2k<'a>(
     if prepared.iter().any(|job| job.grayscale != grayscale) {
         return None;
     }
+    let effective_color_transform = prepared.first()?.effective_color_transform;
+    if prepared
+        .iter()
+        .any(|job| job.effective_color_transform != effective_color_transform)
+    {
+        return None;
+    }
     let pixel_format = if grayscale {
         J2kPixelFormat::Gray8
     } else {
         J2kPixelFormat::Rgb8
     };
 
-    let decode_options = J2kDecodeOptions::default().with_color_transform(color_transform);
+    let decode_options = if effective_color_transform == J2kColorTransform::Auto {
+        J2kDecodeOptions::default()
+    } else {
+        J2kDecodeOptions::default().with_color_transform(effective_color_transform)
+    };
     let mut outputs = prepared
         .iter()
         .map(|job| vec![0u8; job.output_len])
@@ -332,16 +335,17 @@ fn prepare_j2k_batch_jpeg_job<'j, 'a>(job: &'j JpegDecodeJob<'a>) -> Option<Prep
         job.force_dimensions,
     )
     .ok()?;
-    let info = J2kJpegView::parse_with_options(
-        input.as_ref(),
-        J2kDecodeOptions::default().with_color_transform(job.color_transform),
-    )
-    .ok()?;
+    let info = J2kJpegView::parse(input.as_ref()).ok()?;
     let encoded_dimensions = info.info().dimensions;
     if encoded_dimensions != (job.expected_width, job.expected_height) {
         return None;
     }
     let grayscale = info.info().color_space == J2kColorSpace::Grayscale;
+    let effective_color_transform = effective_jpeg_color_transform(
+        info.info().sampling.len(),
+        info.info().color_space,
+        job.color_transform,
+    );
     let rgb_len = checked_jpeg_rgb_len(output_width, output_height).ok()?;
     let output_len = if grayscale { rgb_len / 3 } else { rgb_len };
     let channels = if grayscale { 1 } else { 3 };
@@ -355,6 +359,7 @@ fn prepare_j2k_batch_jpeg_job<'j, 'a>(job: &'j JpegDecodeJob<'a>) -> Option<Prep
         stride,
         scale,
         grayscale,
+        effective_color_transform,
     })
 }
 

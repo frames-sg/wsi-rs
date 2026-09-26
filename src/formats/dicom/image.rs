@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -6,6 +7,7 @@ use j2k_core::BackendRequest;
 
 use crate::core::cache::{PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
+use crate::core::positioned_file::PositionedFile;
 use crate::core::registry::OpenBudget;
 use crate::core::types::{CpuTile, RawCompressedTile};
 use crate::error::WsiError;
@@ -61,6 +63,7 @@ pub(super) struct DicomFrameStore {
 #[derive(Debug)]
 pub(super) struct NativePixelData {
     source_identity: FileIdentity,
+    source_file: PositionedFile,
     value_offset: u64,
     value_len: u32,
 }
@@ -128,8 +131,19 @@ impl DicomImage {
                     "native transfer syntax does not have native Pixel Data",
                 ));
             };
+            let source_file = File::open(&meta.path).map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: meta.path.clone(),
+            })?;
+            if FileIdentity::from_open_file(&meta.path, &source_file)? != meta.source_identity {
+                return Err(invalid_slide(
+                    &meta.path,
+                    "DICOM source changed while metadata was parsed",
+                ));
+            }
             Some(NativePixelData {
                 source_identity: meta.source_identity,
+                source_file: PositionedFile::new(source_file),
                 value_offset,
                 value_len,
             })

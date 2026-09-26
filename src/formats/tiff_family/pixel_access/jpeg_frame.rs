@@ -36,6 +36,31 @@ pub(super) fn tiff_jpeg_color_transform(
     }
 }
 
+pub(super) fn tiff_jpeg_encoded_photometric_interpretation(
+    photometric: u32,
+    samples_per_pixel: u32,
+    bitstream_hint: JpegBitstreamColorHint,
+) -> Result<EncodedTilePhotometricInterpretation, WsiError> {
+    match samples_per_pixel {
+        1 => Ok(EncodedTilePhotometricInterpretation::Monochrome2),
+        3 => match tiff_jpeg_color_transform(photometric, samples_per_pixel, bitstream_hint) {
+            J2kColorTransform::ForceRgb => Ok(EncodedTilePhotometricInterpretation::Rgb),
+            J2kColorTransform::ForceYCbCr => Ok(EncodedTilePhotometricInterpretation::YbrFull422),
+            J2kColorTransform::Auto => match bitstream_hint {
+                JpegBitstreamColorHint::Rgb | JpegBitstreamColorHint::RgbComponentIds012 => {
+                    Ok(EncodedTilePhotometricInterpretation::Rgb)
+                }
+                JpegBitstreamColorHint::YCbCr | JpegBitstreamColorHint::Unknown => {
+                    Ok(EncodedTilePhotometricInterpretation::YbrFull422)
+                }
+            },
+        },
+        other => Err(WsiError::Unsupported {
+            reason: format!("JPEG passthrough supports 1 or 3 components, got {other}"),
+        }),
+    }
+}
+
 pub(super) fn jpeg_bitstream_color_hint(
     data: &[u8],
     tables: Option<&[u8]>,
@@ -86,7 +111,8 @@ pub(super) fn jpeg_segment_color_hint(data: &[u8]) -> JpegBitstreamColorHint {
             0xEE if payload.len() >= 12 && &payload[..5] == b"Adobe" => {
                 return match payload[11] {
                     0 => JpegBitstreamColorHint::Rgb,
-                    1 | 2 => JpegBitstreamColorHint::YCbCr,
+                    1 => JpegBitstreamColorHint::YCbCr,
+                    2 => JpegBitstreamColorHint::Unknown,
                     _ => JpegBitstreamColorHint::Unknown,
                 };
             }

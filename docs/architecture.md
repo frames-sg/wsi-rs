@@ -70,7 +70,10 @@ Direct single-image CPU decodes consume the validated `J2kView`. Two-image batch
 reuse the invoking CPU pool and consume each validated view once. Their two generic
 native claims stay below the codec's existing four-claim ceiling. Singleton native
 batches retain the original executor after the specialization regressed a constrained
-concurrent workload. Larger borrowed CPU batches retain the codec's
+concurrent workload. Intra-image parallelism for singleton decodes stays serial:
+on 240–256 px corpus tiles it saved at most 16% for one caller on one format,
+cost 11–13% for one caller on another, and cost 22–36% with one caller per
+worker. Larger borrowed CPU batches retain the codec's
 aggregate allocation guards and parallel scheduler. Operation-local
 `PreparedJp2kBatch` owners retain j2k 0.10.0 prepared groups for automatic route
 comparisons, sharing encoded input and validated metadata between CPU and device
@@ -120,6 +123,19 @@ Logical crops precede one batch YCbCr conversion submission.
 The converter uploads the immutable CPU lookup tables once and uses them in both
 checked-u32 and u64-addressing shaders, giving exact CPU-compatible RGB conversion.
 
+CUDA JP2K decodes one image per submission and rejects YCbCr output without
+codestream MCT (Aperio 33003) instead of converting it on the device. Batched
+CUDA submission and a resident YCbCr conversion are not implemented.
+
+Raw JP2K codestreams expose each decodable wavelet reduction as a single-tile
+pyramid level. Level `k` has dimensions rounded up from `2^k` source blocks and
+downsample exactly `2^k`. The main-header ladder can be shortened by component
+overrides, so opening proves the deepest offered reduction with a one-pixel
+decode. Reduced levels decode on the CPU from discarded resolution levels rather
+than resampling a full decode. Their pixels equal OpenJPEG reduced decodes, not a
+box-filtered full decode. Only full resolution has compressed passthrough, strict
+device reads, and adaptive device routing.
+
 ## DICOM
 
 DICOM frame indexing is independent of tile decoding:
@@ -154,7 +170,11 @@ owns immutable metadata, with checked header and chunk-index parsing in its
 `header` and `index` modules. `pixels` owns ETS payload reads, JPEG 2000
 batch dispatch, and sparse background tiles. Each ETS scene retains its parsed
 file handle and reads payloads positionally on Unix. Parsing retains the original
-validation order and shared open budgets.
+validation order and shared open budgets. Stored ETS tiles report JP2K, so their
+CPU decodes use the JP2K pool and participate in automatic device routing. Raw
+passthrough, strict Metal/CUDA reads, and adaptive preparation read each distinct
+stored tile once. Sparse background tiles have no codestream: they stay CPU-only
+and strict device reads reject them.
 
 `output::download` materializes tightly packed CPU tiles from completed
 device readback bytes. Metal and CUDA retain their own transfer, pitch, device

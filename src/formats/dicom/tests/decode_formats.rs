@@ -66,6 +66,45 @@ fn rgb_bytes(tile: &CpuTile) -> Vec<u8> {
     tile.data.as_u8().expect("u8 RGB tile").to_vec()
 }
 
+#[test]
+fn native_frame_reads_are_concurrent_and_reject_source_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retained-native.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let slide = DicomSlide::parse(&path).expect("parse native DICOM slide");
+    let image = &slide.levels[0].parts[0];
+    let expected = image
+        .read_tile(0, 0, 0, BackendRequest::Cpu)
+        .expect("read native frame");
+
+    std::thread::scope(|scope| {
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    image
+                        .read_tile(0, 0, 0, BackendRequest::Cpu)
+                        .expect("read native frame concurrently")
+                })
+            })
+            .collect();
+        for reader in readers {
+            assert_eq!(reader.join().unwrap().data.as_u8(), expected.data.as_u8());
+        }
+    });
+
+    std::fs::rename(&path, path.with_extension("original")).expect("rename parsed source");
+    write_test_dicom(
+        &path,
+        TestDicomOptions::native(vec![0; test_rgb_pixel_data().len()]),
+    );
+    let error = image
+        .read_tile(0, 0, 0, BackendRequest::Cpu)
+        .expect_err("replacement source must be rejected");
+    assert!(error
+        .to_string()
+        .contains("DICOM source changed after metadata was parsed"));
+}
+
 fn load_rgb_fixture(bytes: &[u8]) -> ::image::RgbImage {
     match ::image::load(Cursor::new(bytes), ImageFormat::Pnm).expect("load JP2K reference PPM") {
         DynamicImage::ImageRgb8(image) => image,

@@ -1,4 +1,4 @@
-use super::jpeg::read_vms_jpeg_header;
+use super::jpeg::VmsJpegHeader;
 use super::model::invalid_slide;
 use super::*;
 #[cfg(test)]
@@ -102,19 +102,19 @@ pub(super) fn parse_image_key_suffix(path: &Path, key: &str) -> Result<ImageDims
 
 pub(super) fn parse_vms_opt_offsets(
     opt_path: Option<&Path>,
-    image_paths: &[PathBuf],
+    headers: &[VmsJpegHeader],
 ) -> Result<Vec<Vec<Option<u64>>>, WsiError> {
     let Some(opt_path) = opt_path.filter(|path| path.is_file()) else {
-        return Ok(vec![Vec::new(); image_paths.len()]);
+        return Ok(vec![Vec::new(); headers.len()]);
     };
 
     let mut file = File::open(opt_path).map_err(|source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: opt_path.to_path_buf(),
     })?;
-    let mut per_image = Vec::with_capacity(image_paths.len());
-    for image_path in image_paths {
-        let geometry = jpeg_geometry_from_file(image_path)?;
+    let mut per_image = Vec::with_capacity(headers.len());
+    for header in headers {
+        let geometry = &header.geometry;
         let tiles_down = geometry.height / geometry.tile_height;
         let mut row_starts = Vec::with_capacity(tiles_down as usize);
         let mut block = [0u8; 40];
@@ -125,15 +125,11 @@ pub(super) fn parse_vms_opt_offsets(
                     row_starts.push((offset > 0).then_some(offset));
                 }
                 Err(_) => {
-                    return Ok(vec![Vec::new(); image_paths.len()]);
+                    return Ok(vec![Vec::new(); headers.len()]);
                 }
             }
         }
         per_image.push(row_starts);
     }
     Ok(per_image)
-}
-
-fn jpeg_geometry_from_file(path: &Path) -> Result<JpegTileGeometry, WsiError> {
-    Ok(read_vms_jpeg_header(path)?.geometry)
 }

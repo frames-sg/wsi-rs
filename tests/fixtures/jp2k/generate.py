@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -80,9 +81,9 @@ def read_ppm_pixels(path: Path) -> tuple[int, int, bytes]:
     if maxval != 255:
         raise ValueError(f"unsupported maxval in {path}: {maxval}")
 
-    while cursor < len(data) and chr(data[cursor]).isspace():
-        cursor += 1
-    return width, height, data[cursor:]
+    # Exactly one whitespace byte separates maxval from samples; a sample byte
+    # may itself be a whitespace value.
+    return width, height, data[cursor + 1 :]
 
 
 def ycbcr_triplets_to_rgb(ycbcr_data: bytes) -> list[tuple[int, int, int]]:
@@ -128,9 +129,42 @@ def build_fixture(
     shutil.copy2(j2k, ROOT / j2k.name)
 
 
+# Codestreams whose reduced-resolution decodes are independent references for
+# wsi-rs raw JP2K pyramid levels. All have three resolution levels.
+REDUCED_REFERENCE_STEMS = ("rgb_nomct", "rgb_mct", "rgb_rct", "openjph_rgb_u8_53")
+REDUCTIONS = (1, 2)
+
+
+def write_reduced_references(tmp: Path) -> None:
+    """Decode committed codestreams at each reduction without re-encoding them."""
+    for stem in REDUCED_REFERENCE_STEMS:
+        for reduction in REDUCTIONS:
+            decoded = tmp / f"{stem}.r{reduction}.opj.ppm"
+            run(
+                "opj_decompress",
+                "-i",
+                str(ROOT / f"{stem}.j2k"),
+                "-r",
+                str(reduction),
+                "-o",
+                str(decoded),
+            )
+            width, height, pixels = read_ppm_pixels(decoded)
+            if len(pixels) != width * height * 3:
+                raise ValueError(f"{decoded} has {len(pixels)} bytes for {width}x{height} RGB")
+            with (ROOT / f"{stem}.r{reduction}.ppm").open("wb") as fh:
+                fh.write(f"P6\n{width} {height}\n255\n".encode("ascii"))
+                fh.write(pixels)
+
+
 def main() -> None:
     if shutil.which("opj_compress") is None or shutil.which("opj_decompress") is None:
         raise SystemExit("opj_compress and opj_decompress must be available on PATH")
+
+    if sys.argv[1:] == ["--reduced-only"]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_reduced_references(Path(tmpdir))
+        return
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -220,6 +254,7 @@ def main() -> None:
             upsample=True,
             convert_ycbcr_reference=False,
         )
+        write_reduced_references(tmp)
 
 
 if __name__ == "__main__":

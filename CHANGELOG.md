@@ -10,8 +10,16 @@
   tile reads, metadata, and JPEG macro images. The OpenSlide shim converts RGB12
   before region composition, including fractional reads. Validation uses synthetic
   fixtures and independent OpenSlide comparisons; real scanner VMU validation remains pending.
+- Raw `.j2k`/`.j2c` codestreams expose their wavelet resolution levels as pyramid
+  levels, decoded from discarded resolutions without resampling and matching
+  OpenJPEG reduced decodes exactly.
+- Olympus VSI supports raw JP2K tile passthrough and strict Metal/CUDA tile reads
+  for stored ETS tiles.
 
 ### Fixed
+
+- Raw JP2K datasets publish `openslide.vendor` and `openslide.quickhash-1` like other
+  formats, with unchanged dataset IDs, instead of relying on the OpenSlide shim.
 
 - Progressive JPEG DICOM metadata accepts the supported retired spectral-selection and full-progression transfer syntaxes, retaining frame process validation.
 
@@ -32,6 +40,8 @@
   batches share bounded source blocks and coalesce concurrent source misses.
 - VSI retains ETS handles and submits CPU codec batches; `.svcache` uses
   positional payload reads where supported while preserving checksums.
+- VSI JP2K decodes run on the shared JP2K CPU pool and participate in automatic
+  device routing.
 - Owned CPU YCbCr conversion reuses its allocation, cropped conversion allocates
   only logical output, and direct single-image JP2K execution retains its parsed view.
 - Metal JP2K uses bounded native prepared batches, grouped color conversion

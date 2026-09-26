@@ -100,29 +100,7 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
             return Ok(cached);
         }
 
-        let claim = self
-            .cache
-            .map(|cache| cache.claim_miss(&key))
-            .unwrap_or(TileClaim::Uncoalesced);
-        let producer = match claim {
-            TileClaim::Ready(tile) => return Ok(tile),
-            TileClaim::Waiter(flight) => {
-                if let Some(tile) = flight.wait() {
-                    return Ok(tile);
-                }
-                None
-            }
-            TileClaim::Producer(producer) => Some(producer),
-            TileClaim::Uncoalesced => None,
-        };
-        let tile = Arc::new(self.source.read_tile_cpu(&self.tile_request(col, row))?);
-        if let Some(cache) = self.cache {
-            cache.put(key, tile.clone());
-        }
-        if let Some(producer) = producer {
-            producer.complete(tile.clone());
-        }
-        Ok(tile)
+        resolve_tile_miss(self.source, self.cache, key, &self.tile_request(col, row))
     }
 
     pub(super) fn resolve_hits(&self, hits: &[TileHit]) -> Result<Vec<Arc<CpuTile>>, WsiError> {
@@ -248,4 +226,34 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
             })
             .collect()
     }
+}
+
+pub(super) fn resolve_tile_miss<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    key: CacheKey,
+    req: &TileRequest,
+) -> Result<Arc<CpuTile>, WsiError> {
+    let claim = cache
+        .map(|cache| cache.claim_miss(&key))
+        .unwrap_or(TileClaim::Uncoalesced);
+    let producer = match claim {
+        TileClaim::Ready(tile) => return Ok(tile),
+        TileClaim::Waiter(flight) => {
+            if let Some(tile) = flight.wait() {
+                return Ok(tile);
+            }
+            None
+        }
+        TileClaim::Producer(producer) => Some(producer),
+        TileClaim::Uncoalesced => None,
+    };
+    let tile = Arc::new(source.read_tile_cpu(req)?);
+    if let Some(cache) = cache {
+        cache.put(key, tile.clone());
+    }
+    if let Some(producer) = producer {
+        producer.complete(tile.clone());
+    }
+    Ok(tile)
 }

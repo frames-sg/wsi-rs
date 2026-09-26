@@ -6,7 +6,9 @@ use crate::test_support::{assert_cpu_tile_matches_rgb_fixture_with_tolerance, re
 use flate2::write::ZlibEncoder;
 use flate2::Compression as DeflateCompression;
 use image::{DynamicImage, ImageFormat};
-use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
+use jpeg_encoder::{
+    ColorType as JpegColorType, Encoder as JpegEncoder, SamplingFactor as JpegSamplingFactor,
+};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::io::Write;

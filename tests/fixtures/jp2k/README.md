@@ -15,6 +15,17 @@ Regenerate with:
 
 Requires `opj_compress` and `opj_decompress` on `PATH`.
 
+## Reduced-resolution references
+
+`{stem}.r1.ppm` and `{stem}.r2.ppm` are OpenJPEG 2.5.4 `opj_decompress -r 1`
+and `-r 2` decodes of the committed `rgb_nomct`, `rgb_mct`, `rgb_rct`, and
+`openjph_rgb_u8_53` codestreams. They are independent references for raw JP2K
+pyramid levels. Regenerate only these, without re-encoding any codestream, with:
+
+```sh
+./.venv/bin/python tests/fixtures/jp2k/generate.py --reduced-only
+```
+
 ## Independent lossless HTJ2K
 
 `openjph_rgb_u8_53.j2k` and its `.ppm` source are unchanged fixtures from

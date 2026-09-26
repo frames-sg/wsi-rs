@@ -100,19 +100,25 @@ fn opens_supported_slide_and_exposes_core_metadata() {
         assert!(!osr.is_null());
         assert!(openslide_get_error(osr).is_null());
 
-        assert_eq!(openslide_get_level_count(osr), 1);
+        // The raw codestream's two wavelet decompositions are pyramid levels.
+        assert_eq!(openslide_get_level_count(osr), 3);
         let mut w = 0;
         let mut h = 0;
         openslide_get_level0_dimensions(osr, &mut w, &mut h);
         assert_eq!((w, h), (16, 12));
+        for (level, dimensions, downsample) in [(1, (8, 6), 2.0), (2, (4, 3), 4.0)] {
+            openslide_get_level_dimensions(osr, level, &mut w, &mut h);
+            assert_eq!((w, h), dimensions);
+            assert_eq!(openslide_get_level_downsample(osr, level), downsample);
+        }
         assert_eq!(openslide_get_level_downsample(osr, 0), 1.0);
-        assert_eq!(openslide_get_best_level_for_downsample(osr, 4.0), 0);
+        assert_eq!(openslide_get_best_level_for_downsample(osr, 4.0), 2);
 
         let level_count_key = CString::new("openslide.level-count").unwrap();
         let vendor_key = CString::new("openslide.vendor").unwrap();
         assert_eq!(
             c_string(openslide_get_property_value(osr, level_count_key.as_ptr())),
-            "1"
+            "3"
         );
         assert_eq!(
             c_string(openslide_get_property_value(osr, vendor_key.as_ptr())),
@@ -176,7 +182,7 @@ fn invalid_read_level_zeroes_dest_without_making_handle_terminal() {
         assert_eq!(argb, [0; 4]);
 
         assert!(openslide_get_error(osr).is_null());
-        assert_eq!(openslide_get_level_count(osr), 1);
+        assert_eq!(openslide_get_level_count(osr), 3);
 
         let mut w = 123;
         let mut h = 456;

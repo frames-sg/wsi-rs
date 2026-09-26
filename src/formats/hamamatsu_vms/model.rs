@@ -18,7 +18,10 @@ pub(super) struct VmsLevel {
 
 pub(super) struct VmsJpeg {
     pub(super) path: PathBuf,
+    /// Sequential cursor used only while extending the lazy restart-marker index.
     pub(super) file: Mutex<File>,
+    /// Positional payload reads stay independent so warm-index readers can run concurrently.
+    pub(super) payload_file: crate::core::positioned_file::PositionedFile,
     pub(super) header: Vec<u8>,
     pub(super) sof_dimensions_offset: usize,
     pub(super) file_len: u64,

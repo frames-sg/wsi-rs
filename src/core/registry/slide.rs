@@ -480,7 +480,7 @@ impl Slide {
     /// Only works for Uint8 data (brightfield). For Uint16/Float32,
     /// use read_region() + to_rgba_windowed() with an explicit DisplayWindow.
     pub fn read_region_rgba(&self, req: &RegionRequest) -> Result<image::RgbaImage, WsiError> {
-        self.read_region(req)?.to_rgba()
+        self.read_region(req)?.into_rgba()
     }
 
     /// Read a region and convert to RgbaImage with explicit windowing.

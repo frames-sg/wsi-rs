@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 #[cfg(test)]
 use std::io::{Read, Seek};
@@ -165,6 +165,7 @@ impl DicomImage {
         }
 
         let mut missing = Vec::new();
+        let mut seen = HashSet::with_capacity(frame_indices.len());
         if cache_result {
             let mut cache = self
                 .frame_store
@@ -175,7 +176,7 @@ impl DicomImage {
                 if let Some(control) = control {
                     control.check_cancelled()?;
                 }
-                if results.contains_key(&frame_index) {
+                if !seen.insert(frame_index) {
                     continue;
                 }
                 if let Some(bytes) = cache.get(&frame_index).cloned() {
@@ -189,7 +190,7 @@ impl DicomImage {
                 if let Some(control) = control {
                     control.check_cancelled()?;
                 }
-                if !results.contains_key(&frame_index) {
+                if seen.insert(frame_index) {
                     missing.push(frame_index);
                 }
             }

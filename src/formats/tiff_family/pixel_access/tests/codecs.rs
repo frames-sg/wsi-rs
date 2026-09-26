@@ -105,6 +105,24 @@ fn jpeg_unknown_bitstream_falls_back_to_tiff_photometric() {
     );
 }
 
+#[test]
+fn jpeg_unknown_encoded_photometric_follows_tiff_photometric() {
+    assert_eq!(
+        tiff_jpeg_encoded_photometric_interpretation(2, 3, JpegBitstreamColorHint::Unknown)
+            .unwrap(),
+        EncodedTilePhotometricInterpretation::Rgb
+    );
+    assert_eq!(
+        tiff_jpeg_encoded_photometric_interpretation(6, 3, JpegBitstreamColorHint::Unknown)
+            .unwrap(),
+        EncodedTilePhotometricInterpretation::YbrFull422
+    );
+    assert_eq!(
+        tiff_jpeg_encoded_photometric_interpretation(2, 3, JpegBitstreamColorHint::YCbCr).unwrap(),
+        EncodedTilePhotometricInterpretation::YbrFull422
+    );
+}
+
 // ── FullDecodeCache tests ─────────────────────────────────────
 
 #[test]
@@ -127,6 +145,40 @@ fn raw_compressed_tile_returns_standalone_tiled_jpeg_byte_identical() {
     assert_eq!((raw.width(), raw.height()), (8, 8));
     assert_eq!(raw.bits_allocated(), 8);
     assert_eq!(raw.samples_per_pixel(), 3);
+    assert_eq!(raw.data(), jpeg);
+}
+
+#[test]
+fn raw_compressed_rgb_tiff_uses_container_hint_for_ambiguous_jpeg() {
+    let pixels = [90, 40, 210].repeat(8 * 8);
+    let mut jpeg = Vec::new();
+    let mut encoder = JpegEncoder::new(&mut jpeg, 95);
+    encoder.set_sampling_factor(JpegSamplingFactor::R_4_4_4);
+    encoder.encode(&pixels, 8, 8, JpegColorType::Rgb).unwrap();
+    assert_eq!(
+        jpeg_bitstream_color_hint(&jpeg, None),
+        JpegBitstreamColorHint::RgbComponentIds012
+    );
+    let reader = build_tiled_encoded_reader(
+        8,
+        8,
+        8,
+        8,
+        std::slice::from_ref(&jpeg),
+        Compression::Jpeg,
+        7,
+        3,
+        2,
+    );
+
+    let raw = reader
+        .read_raw_compressed_tile(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
+        .unwrap();
+
+    assert_eq!(
+        raw.photometric_interpretation(),
+        EncodedTilePhotometricInterpretation::Rgb
+    );
     assert_eq!(raw.data(), jpeg);
 }
 

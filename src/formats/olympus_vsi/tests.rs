@@ -215,9 +215,13 @@ fn vsi_submits_one_codec_batch_and_preserves_sparse_duplicate_slots() {
         .iter()
         .map(|req| reader.read_tile_cpu(req).unwrap())
         .collect();
-    let before = test_count(Event::CpuJp2kBatches);
+    let batches_before = test_count(Event::CpuJp2kBatches);
+    let tiles_before = test_count(Event::CpuJp2kTiles);
+    let preparations_before = test_count(Event::Jp2kPreparations);
     let actual = reader.read_tiles_cpu(&reqs).unwrap();
-    assert_eq!(test_count(Event::CpuJp2kBatches) - before, 1);
+    assert_eq!(test_count(Event::CpuJp2kBatches) - batches_before, 1);
+    assert_eq!(test_count(Event::CpuJp2kTiles) - tiles_before, 1);
+    assert_eq!(test_count(Event::Jp2kPreparations) - preparations_before, 1);
     assert_eq!(actual.len(), expected.len());
     for (a, b) in actual.iter().zip(&expected) {
         assert_eq!(a.as_u8(), b.as_u8());
@@ -227,6 +231,17 @@ fn vsi_submits_one_codec_batch_and_preserves_sparse_duplicate_slots() {
 #[test]
 fn admitted_vsi_batch_uses_payload_sizes_and_keeps_sparse_duplicate_pixels() {
     let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let managed = OlympusVsiBackend
+        .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
+        .unwrap();
+    let encoded = TileRequest::new(0, 0, 0, 1, 0);
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    assert_eq!(
+        managed
+            .tile_batch_encoded_upper_bound(&[encoded.clone(), sparse.clone(), encoded.clone()])
+            .unwrap(),
+        managed.tile_encoded_upper_bound(&encoded).unwrap(),
+    );
     let limits = crate::SlideLimits::default()
         .with_operation_transient_bytes(8 * 1024)
         .unwrap();
@@ -286,6 +301,198 @@ fn vsi_batch_decode_and_retained_file_errors_identify_the_failed_tile() {
     assert!(
         matches!(error, WsiError::TileRead { col: 1, row: 0, level: 0, reason } if reason.contains("frame_t.ets"))
     );
+}
+
+#[test]
+fn stored_ets_tiles_are_jp2k_passthrough_sources_and_sparse_tiles_are_not() {
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+    let stored = TileRequest::new(0, 0, 0, 1, 0);
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    assert_eq!(reader.tile_codec_kind(&stored), TileCodecKind::Jp2k);
+    assert_eq!(reader.tile_codec_kind(&sparse), TileCodecKind::Other);
+    assert_eq!(
+        reader.tile_codec_kind(&TileRequest::new(0, 0, 0, 2, 0)),
+        TileCodecKind::Other
+    );
+
+    let raw = reader.read_raw_compressed_tile(&stored).unwrap();
+    assert_eq!(raw.compression(), Compression::Jp2kRgb);
+    assert_eq!((raw.width(), raw.height()), (16, 12));
+    assert_eq!((raw.bits_allocated(), raw.samples_per_pixel()), (8, 3));
+    assert_eq!(
+        raw.photometric_interpretation(),
+        EncodedTilePhotometricInterpretation::Rgb
+    );
+    assert_eq!(raw.data(), RGB_CODESTREAM);
+    let passthrough = crate::decode::jp2k::decode_jp2k_to_sample_buffer(
+        raw.data(),
+        raw.width(),
+        raw.height(),
+        crate::decode::jp2k::Jp2kColorSpace::Rgb,
+    )
+    .unwrap();
+    assert_eq!(
+        passthrough.as_u8(),
+        reader.read_tile_cpu(&stored).unwrap().as_u8()
+    );
+    assert!(matches!(
+        reader.read_raw_compressed_tile(&sparse),
+        Err(WsiError::Unsupported { .. })
+    ));
+}
+
+#[test]
+fn raw_ets_tiles_describe_their_declared_samples() {
+    for (pixel_type, samples_per_pixel, expected) in [
+        (
+            3,
+            3,
+            Some((16, 3, EncodedTilePhotometricInterpretation::Rgb)),
+        ),
+        (
+            1,
+            1,
+            Some((8, 1, EncodedTilePhotometricInterpretation::Monochrome2)),
+        ),
+        (9, 3, None),
+    ] {
+        let spec = EtsSpec {
+            pixel_type,
+            samples_per_pixel,
+            ..EtsSpec::default()
+        };
+        let fixture = write_vsi_fixture(&[("scene", spec)]);
+        let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+        let raw = reader.read_raw_compressed_tile(&TileRequest::new(0, 0, 0, 1, 0));
+        match expected {
+            Some((bits, samples, photometric)) => {
+                let raw = raw.unwrap();
+                assert_eq!(raw.bits_allocated(), bits);
+                assert_eq!(raw.samples_per_pixel(), samples);
+                assert_eq!(raw.photometric_interpretation(), photometric);
+            }
+            None => assert!(matches!(raw, Err(WsiError::Unsupported { .. }))),
+        }
+    }
+}
+
+#[test]
+fn vsi_codestream_reads_run_on_the_jp2k_decode_pool() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let slide = Slide::open_with_options(
+        &fixture.path,
+        crate::SlideOpenOptions::default().with_decode_execution_options(
+            crate::DecodeExecutionOptions::default()
+                .with_acceleration(crate::DecodeAcceleration::CpuOnly),
+        ),
+    )
+    .unwrap();
+    let before = test_count(Event::CpuPoolDispatches);
+    slide.read_tile(&TileRequest::new(0, 0, 0, 0, 0)).unwrap();
+    assert_eq!(
+        test_count(Event::CpuPoolDispatches) - before,
+        0,
+        "sparse background tiles have no codec work"
+    );
+    slide.read_tile(&TileRequest::new(0, 0, 0, 1, 0)).unwrap();
+    assert_eq!(test_count(Event::CpuPoolDispatches) - before, 1);
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+#[test]
+fn adaptive_vsi_preparation_matches_ordinary_reads_and_rejects_sparse_tiles() {
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let managed = OlympusVsiBackend
+        .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
+        .unwrap();
+    let stored = TileRequest::new(0, 0, 0, 1, 0);
+    let expected = managed.read_tile_cpu(&stored).unwrap();
+    let prepared = managed
+        .prepare_adaptive_jp2k(&[stored.clone(), stored.clone()], 2, None)
+        .expect("VSI participates in adaptive JP2K routing")
+        .unwrap();
+    let actual = prepared.read_cpu().unwrap();
+    assert_eq!(actual.len(), 2);
+    for tile in &actual {
+        assert_eq!(tile.as_u8(), expected.as_u8());
+    }
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    assert!(matches!(
+        managed.prepare_adaptive_jp2k(&[stored, sparse], 2, None),
+        Some(Err(WsiError::Unsupported { .. }))
+    ));
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn vsi_metal_reads_match_cpu_pixels_and_reject_sparse_tiles() {
+    let Ok(sessions) = crate::output::metal::MetalBackendSessions::system_default() else {
+        return;
+    };
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let slide = Slide::open(&fixture.path).unwrap();
+    let stored = TileRequest::new(0, 0, 0, 1, 0);
+    let expected = slide.read_tile(&stored).unwrap();
+    let tiles = slide
+        .read_tiles_metal(&[stored.clone(), stored.clone()], &sessions)
+        .unwrap();
+    assert_eq!(tiles.len(), 2);
+    for tile in &tiles {
+        assert_eq!(tile.download_cpu().unwrap().as_u8(), expected.as_u8());
+    }
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    assert!(matches!(
+        slide.read_tiles_metal(&[stored, sparse], &sessions),
+        Err(WsiError::Unsupported { .. })
+    ));
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn vsi_metal_decode_failures_identify_the_failed_tile() {
+    let Ok(sessions) = crate::output::metal::MetalBackendSessions::system_default() else {
+        return;
+    };
+    let spec = EtsSpec {
+        chunks: vec![ChunkSpec::new(&[1, 0, 0], b"invalid codestream")],
+        ..EtsSpec::default()
+    };
+    let fixture = write_vsi_fixture(&[("scene", spec)]);
+    let reader = OlympusVsiBackend.open(&fixture.path).unwrap();
+    let error = reader
+        .read_tiles_metal(&[TileRequest::new(0, 0, 0, 1, 0)], &sessions)
+        .unwrap_err();
+    assert!(
+        matches!(error, WsiError::TileRead { col: 1, row: 0, level: 0, reason } if !reason.is_empty())
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn vsi_cuda_reads_match_cpu_pixels_and_reject_sparse_tiles() {
+    if std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() {
+        eprintln!("skipping CUDA VSI device test; J2K_REQUIRE_CUDA_RUNTIME is unset");
+        return;
+    }
+    let sessions = crate::output::cuda::CudaBackendSessions::new();
+    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
+    let slide = Slide::open(&fixture.path).unwrap();
+    let stored = TileRequest::new(0, 0, 0, 1, 0);
+    let expected = slide.read_tile(&stored).unwrap();
+    let tiles = slide
+        .read_tiles_cuda(&[stored.clone(), stored.clone()], &sessions)
+        .unwrap();
+    assert_eq!(tiles.len(), 2);
+    for tile in &tiles {
+        assert_eq!(tile.download_cpu().unwrap().as_u8(), expected.as_u8());
+    }
+    let sparse = TileRequest::new(0, 0, 0, 0, 0);
+    assert!(matches!(
+        slide.read_tiles_cuda(&[stored, sparse], &sessions),
+        Err(WsiError::Unsupported { .. })
+    ));
 }
 
 #[test]

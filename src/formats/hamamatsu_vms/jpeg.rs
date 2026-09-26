@@ -32,12 +32,32 @@ impl VmsJpeg {
         private_cache_budget: &mut PrivateCacheBudget,
         encoded_unit_bytes: u64,
     ) -> Result<Self, WsiError> {
-        let header = read_vms_jpeg_header(path).map_err(|err| {
+        let header = Self::read_header(path)?;
+        Self::from_header(
+            path,
+            header,
+            row_starts,
+            private_cache_budget,
+            encoded_unit_bytes,
+        )
+    }
+
+    pub(super) fn read_header(path: &Path) -> Result<VmsJpegHeader, WsiError> {
+        read_vms_jpeg_header(path).map_err(|err| {
             invalid_slide(
                 path,
                 format!("failed to derive VMS JPEG tile geometry: {err}"),
             )
-        })?;
+        })
+    }
+
+    pub(super) fn from_header(
+        path: &Path,
+        header: VmsJpegHeader,
+        row_starts: Vec<Option<u64>>,
+        private_cache_budget: &mut PrivateCacheBudget,
+        encoded_unit_bytes: u64,
+    ) -> Result<Self, WsiError> {
         let geometry = header.geometry;
         let tiles_across = geometry.width.div_ceil(geometry.tile_width);
         let tiles_down = geometry.height.div_ceil(geometry.tile_height);
@@ -69,14 +89,26 @@ impl VmsJpeg {
         if !mcu_starts.is_empty() {
             mcu_starts[0] = Some(header.scan_data_offset);
         }
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+        let scan_file = header.file;
+        #[cfg(unix)]
+        let payload_file = scan_file
+            .try_clone()
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: path.to_path_buf(),
+            })?;
+        // PositionedFile's non-Unix fallback seeks its handle. Keep that cursor
+        // independent from the lazy restart scanner's cursor.
+        #[cfg(not(unix))]
+        let payload_file = File::open(path).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
         })?;
 
         Ok(Self {
             path: path.to_path_buf(),
-            file: Mutex::new(file),
+            file: Mutex::new(scan_file),
+            payload_file: crate::core::positioned_file::PositionedFile::new(payload_file),
             header: header.header,
             sof_dimensions_offset: header.sof_dimensions_offset,
             file_len: header.file_len,
@@ -198,13 +230,8 @@ impl VmsJpeg {
                 limit: self.encoded_unit_bytes,
             })?;
         entropy.resize(data_len, 0);
-        let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
-        file.seek(SeekFrom::Start(start))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
-        file.read_exact(&mut entropy)
+        self.payload_file
+            .read_exact_at(&mut entropy, start)
             .map_err(|source| WsiError::IoWithPath {
                 source: Arc::new(source),
                 path: self.path.clone(),
@@ -393,6 +420,7 @@ fn checked_vms_entropy_len_with_limit(
 }
 
 pub(super) struct VmsJpegHeader {
+    file: File,
     pub(super) header: Vec<u8>,
     pub(super) geometry: JpegTileGeometry,
     pub(super) sof_dimensions_offset: usize,
@@ -525,6 +553,7 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
                 let sof_dimensions_offset = sof_dimensions_offset
                     .expect("SOF dimensions and their byte offset are recorded together");
                 return Ok(VmsJpegHeader {
+                    file,
                     header,
                     geometry: JpegTileGeometry {
                         width,

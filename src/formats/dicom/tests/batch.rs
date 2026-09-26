@@ -20,10 +20,10 @@ fn read_tiles_cpu_decodes_jpeg_frames_in_request_order() {
 
     let slide = Slide::open(&path).expect("open generated DICOM JPEG slide");
     let tiles = slide
-        .read_tiles(&[tile_request(1, 0), tile_request(0, 0)])
+        .read_tiles(&[tile_request(1, 0), tile_request(0, 0), tile_request(1, 0)])
         .expect("read JPEG CPU tile batch");
 
-    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles.len(), 3);
     let first = &tiles[0];
     let second = &tiles[1];
     assert_ne!(
@@ -31,6 +31,15 @@ fn read_tiles_cpu_decodes_jpeg_frames_in_request_order() {
         second.data.as_u8().expect("second JPEG tile").get(0..3),
         "request order should be preserved across distinct decoded frames"
     );
+    assert_eq!(
+        first.data.as_u8(),
+        tiles[2].data.as_u8(),
+        "duplicate requests should preserve output order and pixels"
+    );
+    assert!(Arc::ptr_eq(
+        &first.pixels_arc().expect("first JPEG pixels"),
+        &tiles[2].pixels_arc().expect("duplicate JPEG pixels"),
+    ));
 }
 
 type RecordedTileAdmissions = Arc<Mutex<Vec<Vec<(i64, i64)>>>>;
@@ -338,13 +347,16 @@ fn extract_encapsulated_frames_batch_preserves_requested_frames() {
     options.pixel_data = TestPixelData::EncapsulatedFrames(frames.clone());
     write_test_dicom(&path, options);
 
-    let (_reader, image) = reader_and_first_image(&path);
-    let extracted = image
-        .extract_encapsulated_frames_controlled(&[2, 0], 0, 0, 0, true, None)
-        .expect("batch extract frames");
+    for cache_result in [false, true] {
+        let (_reader, image) = reader_and_first_image(&path);
+        let extracted = image
+            .extract_encapsulated_frames_controlled(&[2, 0, 2, 0], 0, 0, 0, cache_result, None)
+            .expect("batch extract frames");
 
-    assert_eq!(extracted.get(&2).unwrap().as_slice(), frames[2].as_slice());
-    assert_eq!(extracted.get(&0).unwrap().as_slice(), frames[0].as_slice());
+        assert_eq!(extracted.len(), 2);
+        assert_eq!(extracted.get(&2).unwrap().as_slice(), frames[2].as_slice());
+        assert_eq!(extracted.get(&0).unwrap().as_slice(), frames[0].as_slice());
+    }
 }
 
 #[test]

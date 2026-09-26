@@ -104,8 +104,11 @@ fn preflight_dicom_metadata_with_budget(
             )
         })?;
     let pixel_data = {
+        // The lazy parser reads headers in small pieces. Buffer those reads while
+        // retaining its byte positions and all pre-allocation budget checks.
+        let mut buffered = std::io::BufReader::new(&mut *file);
         let mut reader =
-            LazyDataSetReader::new_with_ts(&mut *file, transfer_syntax).map_err(|source| {
+            LazyDataSetReader::new_with_ts(&mut buffered, transfer_syntax).map_err(|source| {
                 invalid_slide(
                     path,
                     format!("cannot initialize DICOM metadata preflight: {source}"),

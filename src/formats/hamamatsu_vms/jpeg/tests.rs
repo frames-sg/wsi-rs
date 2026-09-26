@@ -312,17 +312,40 @@ fn poisoned_vms_jpeg_mutexes_recover_without_changing_pixels() {
 }
 
 #[test]
+fn concurrent_tile_payload_reads_preserve_each_tiles_bytes() {
+    let temp = tempfile::tempdir().expect("temporary VMS JPEG directory");
+    let path = temp.path().join("tile.jpg");
+    write_restart_jpeg(&path, 128, 16);
+    let jpeg = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
+    let expected: Vec<_> = (0..4)
+        .map(|tile_index| jpeg.tile_jpeg_bytes(tile_index, 64, 8).unwrap())
+        .collect();
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|tile_index| {
+                let jpeg = &jpeg;
+                scope.spawn(move || jpeg.tile_jpeg_bytes(tile_index, 64, 8).unwrap())
+            })
+            .collect();
+        for (tile_index, handle) in handles.into_iter().enumerate() {
+            assert_eq!(handle.join().unwrap(), expected[tile_index]);
+        }
+    });
+}
+
+#[test]
 fn tile_read_reports_file_read_and_entropy_marker_failures() {
     let temp = tempfile::tempdir().expect("temporary mutable JPEG directory");
     let path = temp.path().join("tile.jpg");
     write_restart_jpeg(&path, 128, 16);
 
-    let read_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
+    let mut read_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
     let write_only = OpenOptions::new()
         .write(true)
         .open(&path)
         .expect("write-only JPEG");
-    *read_failure.file.lock().unwrap() = write_only;
+    read_failure.payload_file = crate::core::positioned_file::PositionedFile::new(write_only);
     assert!(matches!(
         read_failure.decode_tile(0, 1, BackendRequest::Auto),
         Err(WsiError::IoWithPath { .. })
@@ -375,12 +398,12 @@ fn single_tile_reads_report_bounds_and_file_handle_failures_at_the_tile_boundary
         .to_string()
         .contains("invalid VMS JPEG entropy bounds"));
 
-    let read_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse readable JPEG");
+    let mut read_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse readable JPEG");
     let write_only = OpenOptions::new()
         .write(true)
         .open(&path)
         .expect("open write-only JPEG");
-    *read_failure.file.lock().unwrap() = write_only;
+    read_failure.payload_file = crate::core::positioned_file::PositionedFile::new(write_only);
     assert!(matches!(
         read_failure.tile_jpeg_bytes(0, 64, 8),
         Err(WsiError::IoWithPath { path: error_path, .. }) if error_path == path
@@ -388,9 +411,9 @@ fn single_tile_reads_report_bounds_and_file_handle_failures_at_the_tile_boundary
 
     #[cfg(unix)]
     {
-        let seek_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse seek fixture");
+        let mut seek_failure = VmsJpeg::parse(&path, Vec::new()).expect("parse seek fixture");
         let directory = File::open(temp.path()).expect("open directory handle");
-        *seek_failure.file.lock().unwrap() = directory;
+        seek_failure.payload_file = crate::core::positioned_file::PositionedFile::new(directory);
         assert!(matches!(
             seek_failure.tile_jpeg_bytes(0, 64, 8),
             Err(WsiError::IoWithPath { path: error_path, .. }) if error_path == path
@@ -469,8 +492,8 @@ fn nonseekable_and_write_only_handles_preserve_vms_io_context() {
     let path = temp.path().join("tiles.jpg");
     write_restart_jpeg(&path, 128, 16);
 
-    let jpeg = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
-    *jpeg.file.lock().unwrap() = socket_file();
+    let mut jpeg = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
+    jpeg.payload_file = crate::core::positioned_file::PositionedFile::new(socket_file());
     assert!(matches!(
         jpeg.tile_jpeg_bytes(0, 64, 8),
         Err(WsiError::IoWithPath { path: error_path, .. }) if error_path == path

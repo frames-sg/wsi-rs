@@ -1,6 +1,7 @@
 //! Shared read-only file handles without cross-reader seek interference.
 use std::{fs::File, io};
 
+#[derive(Debug)]
 pub(crate) struct PositionedFile {
     file: File,
     #[cfg(not(unix))]

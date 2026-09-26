@@ -1,11 +1,10 @@
 use std::borrow::Cow;
-use std::fs::File;
 use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
 use crate::core::file_identity::FileIdentity;
-use crate::core::types::CpuTile;
+use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::error::WsiError;
@@ -16,7 +15,6 @@ use crate::formats::dicom::decode::{
     decode_rle_lossless_frame, dicom_jpeg_color_transform, frame_bytes_to_rgb_tile,
     jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
-use crate::formats::dicom::frame_index::read_exact_at;
 use crate::formats::dicom::metadata::invalid_slide;
 use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
 
@@ -98,34 +96,43 @@ impl DicomImage {
                 limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
             })?;
         frame.resize(frame_len, 0);
-        let mut file =
-            File::open(&self.frame_store.path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.frame_store.path.clone(),
-            })?;
-        if FileIdentity::from_open_file(&self.frame_store.path, &file)?
-            != native_pixel_data.source_identity
-        {
+        if FileIdentity::from_path(&self.frame_store.path)? != native_pixel_data.source_identity {
             return Err(invalid_slide(
                 &self.frame_store.path,
                 "DICOM source changed after metadata was parsed",
             ));
         }
-        read_exact_at(
-            &mut file,
-            &self.frame_store.path,
-            absolute_start,
-            &mut frame,
-        )?;
-        frame_bytes_to_rgb_tile(
-            &frame,
-            self.tile_width,
-            self.tile_height,
-            self.samples_per_pixel,
-            self.planar_configuration.unwrap_or(0),
-            &self.photometric_interpretation,
-        )
-        .map_err(|err| WsiError::TileRead {
+        native_pixel_data
+            .source_file
+            .read_exact_at(&mut frame, absolute_start)
+            .map_err(|source| WsiError::IoWithPath {
+                source: Arc::new(source),
+                path: self.frame_store.path.clone(),
+            })?;
+        let planar_configuration = self.planar_configuration.unwrap_or(0);
+        let tile = if self.samples_per_pixel == 3
+            && planar_configuration == 0
+            && self.photometric_interpretation == "RGB"
+        {
+            CpuTile::new(
+                self.tile_width,
+                self.tile_height,
+                3,
+                ColorSpace::Rgb,
+                CpuTileLayout::Interleaved,
+                CpuTileData::u8(frame),
+            )
+        } else {
+            frame_bytes_to_rgb_tile(
+                &frame,
+                self.tile_width,
+                self.tile_height,
+                self.samples_per_pixel,
+                planar_configuration,
+                &self.photometric_interpretation,
+            )
+        };
+        tile.map_err(|err| WsiError::TileRead {
             col,
             row,
             level,

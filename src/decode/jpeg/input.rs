@@ -44,8 +44,8 @@ pub(super) fn prepare_jpeg_input<'a>(
     expected_height: u32,
     force_dimensions: bool,
 ) -> Result<Cow<'a, [u8]>, WsiError> {
-    let _ = checked_jpeg_preparation_len(data.len(), tables.map_or(0, <[u8]>::len))?;
-    let input = if let Some(tbl) = tables {
+    let capacity = checked_jpeg_preparation_len(data.len(), tables.map_or(0, <[u8]>::len))?;
+    let mut input = if let Some(tbl) = tables {
         let tbl_end = if tbl.len() >= 2 && tbl[tbl.len() - 2..] == [0xFF, 0xD9] {
             tbl.len() - 2
         } else {
@@ -56,23 +56,52 @@ pub(super) fn prepare_jpeg_input<'a>(
         } else {
             0
         };
-        Cow::Owned([&tbl[..tbl_end], &data[data_start..]].concat())
+        let mut joined = try_prepared_jpeg_buffer(capacity)?;
+        joined.extend_from_slice(&tbl[..tbl_end]);
+        joined.extend_from_slice(&data[data_start..]);
+        Cow::Owned(joined)
     } else {
         Cow::Borrowed(data)
     };
-    let patched = patch_jpeg_dimensions(
+
+    let dimension_patch = planned_dimension_patch(
         input.as_ref(),
         expected_width,
         expected_height,
         force_dimensions,
     );
-    Ok(match ensure_jpeg_eoi(patched.as_ref()) {
-        Cow::Borrowed(bytes) if tables.is_none() && bytes.as_ptr() == data.as_ptr() => {
-            Cow::Borrowed(data)
+    let needs_eoi_repair = !input.ends_with(&[0xFF, 0xD9]);
+    if (dimension_patch.is_some() || needs_eoi_repair) && matches!(input, Cow::Borrowed(_)) {
+        let mut owned = try_prepared_jpeg_buffer(capacity)?;
+        owned.extend_from_slice(input.as_ref());
+        input = Cow::Owned(owned);
+    }
+
+    if let Some((sof_offset, width, height, force)) = dimension_patch {
+        let bytes = input.to_mut();
+        if force {
+            set_sof_dimensions(bytes, sof_offset, width, height);
+        } else {
+            patch_sof_dimensions(bytes, sof_offset, width, height);
         }
-        Cow::Borrowed(bytes) => Cow::Owned(bytes.to_vec()),
-        Cow::Owned(bytes) => Cow::Owned(bytes),
-    })
+    }
+
+    if needs_eoi_repair {
+        repair_jpeg_eoi(input.to_mut());
+    }
+    Ok(input)
+}
+
+fn try_prepared_jpeg_buffer(capacity: usize) -> Result<Vec<u8>, WsiError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| WsiError::ResourceLimit {
+            resource: "prepared JPEG input",
+            requested: capacity as u64,
+            limit: MAX_COMPRESSED_INPUT_BYTES,
+        })?;
+    Ok(bytes)
 }
 
 fn find_sof_position(header: &[u8]) -> Option<usize> {
@@ -133,6 +162,48 @@ pub(crate) fn decode_jpeg_rgb_with_color_transform(
     )
 }
 
+fn parse_jpeg_view(
+    data: &[u8],
+    color_transform: J2kColorTransform,
+) -> Result<JpegView<'_>, WsiError> {
+    let view = JpegView::parse(data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    // Redundant overrides disable the codec's bounded prepared-plan cache.
+    // Keep the default plan when its interpretation already matches the caller.
+    let color_transform = effective_jpeg_color_transform(
+        view.info().sampling.len(),
+        view.info().color_space,
+        color_transform,
+    );
+    if color_transform == J2kColorTransform::Auto {
+        return Ok(view);
+    }
+    drop(view);
+    JpegView::parse_with_options(
+        data,
+        J2kDecodeOptions::default().with_color_transform(color_transform),
+    )
+    .map_err(|err| WsiError::Jpeg(err.to_string()))
+}
+
+pub(super) fn effective_jpeg_color_transform(
+    sampling_len: usize,
+    color_space: j2k_jpeg::ColorSpace,
+    requested: J2kColorTransform,
+) -> J2kColorTransform {
+    if sampling_len != 3
+        || matches!(
+            (requested, color_space),
+            (J2kColorTransform::Auto, _)
+                | (J2kColorTransform::ForceRgb, j2k_jpeg::ColorSpace::Rgb)
+                | (J2kColorTransform::ForceYCbCr, j2k_jpeg::ColorSpace::YCbCr)
+        )
+    {
+        J2kColorTransform::Auto
+    } else {
+        requested
+    }
+}
+
 pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
     data: &[u8],
     tables: Option<&[u8]>,
@@ -148,12 +219,8 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_height,
         force_dimensions,
     )?;
-    validate_j2k_jpeg_output_size(input.as_ref())?;
-    let view = JpegView::parse_with_options(
-        input.as_ref(),
-        J2kDecodeOptions::default().with_color_transform(color_transform),
-    )
-    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let view = parse_jpeg_view(input.as_ref(), color_transform)?;
+    let _ = checked_jpeg_rgb_len(view.info().dimensions.0, view.info().dimensions.1)?;
     let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
     let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let (pixels, outcome) = decoder
@@ -223,12 +290,8 @@ pub(super) fn try_decode_jpeg_rgb_scaled(
         req.expected_height,
         req.force_dimensions,
     )?;
-    validate_j2k_jpeg_output_size(input.as_ref())?;
-    let view = JpegView::parse_with_options(
-        input.as_ref(),
-        J2kDecodeOptions::default().with_color_transform(req.color_transform),
-    )
-    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let view = parse_jpeg_view(input.as_ref(), req.color_transform)?;
+    let _ = checked_jpeg_rgb_len(view.info().dimensions.0, view.info().dimensions.1)?;
     let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
     let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
     let pixel_format = if grayscale {
@@ -304,30 +367,25 @@ pub(crate) fn jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), WsiError> {
     Ok(info.dimensions)
 }
 
+#[cfg(test)]
 pub(super) fn ensure_jpeg_eoi<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
     if input.len() >= 2 && input[input.len() - 2..] == [0xFF, 0xD9] {
         return Cow::Borrowed(input);
     }
 
     let mut repaired = input.to_vec();
-    if repaired.len() >= 2 && repaired[repaired.len() - 2] == 0xFF {
-        let last = repaired.len() - 1;
-        repaired[last] = 0xD9;
-    } else {
-        repaired.push(0xFF);
-        repaired.push(0xD9);
-    }
+    repair_jpeg_eoi(&mut repaired);
     Cow::Owned(repaired)
 }
 
-pub(super) fn validate_j2k_jpeg_output_size(input: &[u8]) -> Result<(), WsiError> {
-    inspect_j2k_jpeg_output_size(input).map(|_| ())
-}
-
-pub(super) fn inspect_j2k_jpeg_output_size(input: &[u8]) -> Result<(u32, u32), WsiError> {
-    let info = J2kJpegDecoder::inspect(input).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-    let _ = checked_jpeg_rgb_len(info.dimensions.0, info.dimensions.1)?;
-    Ok(info.dimensions)
+fn repair_jpeg_eoi(input: &mut Vec<u8>) {
+    if input.len() >= 2 && input[input.len() - 2] == 0xFF {
+        let last = input.len() - 1;
+        input[last] = 0xD9;
+    } else {
+        input.push(0xFF);
+        input.push(0xD9);
+    }
 }
 
 pub(super) fn checked_jpeg_rgb_len(width: u32, height: u32) -> Result<usize, WsiError> {
@@ -410,26 +468,46 @@ pub(super) fn resize_jpeg_rgb_nearest(
     })
 }
 
+#[cfg(test)]
 pub(super) fn patch_jpeg_dimensions<'a>(
     input: &'a [u8],
     expected_width: u32,
     expected_height: u32,
     force_dimensions: bool,
 ) -> Cow<'a, [u8]> {
+    let Some((sof_offset, width, height, force)) =
+        planned_dimension_patch(input, expected_width, expected_height, force_dimensions)
+    else {
+        return Cow::Borrowed(input);
+    };
+
+    let mut patched = input.to_vec();
+    if force {
+        set_sof_dimensions(&mut patched, sof_offset, width, height);
+    } else {
+        patch_sof_dimensions(&mut patched, sof_offset, width, height);
+    }
+    Cow::Owned(patched)
+}
+
+fn planned_dimension_patch(
+    input: &[u8],
+    expected_width: u32,
+    expected_height: u32,
+    force_dimensions: bool,
+) -> Option<(usize, u16, u16, bool)> {
     if expected_width == 0
         || expected_height == 0
         || expected_width > u16::MAX as u32
         || expected_height > u16::MAX as u32
     {
-        return Cow::Borrowed(input);
+        return None;
     }
 
-    let Some(sof_offset) = find_sof_position(input) else {
-        return Cow::Borrowed(input);
-    };
+    let sof_offset = find_sof_position(input)?;
 
     if sof_offset + 9 > input.len() {
-        return Cow::Borrowed(input);
+        return None;
     }
 
     let encoded_height = u16::from_be_bytes([input[sof_offset + 5], input[sof_offset + 6]]);
@@ -440,24 +518,12 @@ pub(super) fn patch_jpeg_dimensions<'a>(
             && (encoded_width != expected_width as u16
                 || encoded_height != expected_height as u16));
     if !needs_patch {
-        return Cow::Borrowed(input);
+        return None;
     }
-
-    let mut patched = input.to_vec();
-    if force_dimensions {
-        set_sof_dimensions(
-            &mut patched,
-            sof_offset,
-            expected_width as u16,
-            expected_height as u16,
-        );
-    } else {
-        patch_sof_dimensions(
-            &mut patched,
-            sof_offset,
-            expected_width as u16,
-            expected_height as u16,
-        );
-    }
-    Cow::Owned(patched)
+    Some((
+        sof_offset,
+        expected_width as u16,
+        expected_height as u16,
+        force_dimensions,
+    ))
 }
