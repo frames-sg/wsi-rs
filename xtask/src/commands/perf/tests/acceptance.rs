@@ -41,7 +41,9 @@ fn engine_capture(library: &str, p50: u64, p95: u64, p99: u64, rss: u64) -> Valu
                             "diagnostics": {
                                 "decode_route": {
                                     "feature": "metal",
+                                    "device_attempt_tiles": 1,
                                     "device_tiles": 1,
+                                    "adaptive_cpu_tiles": 0,
                                     "fallback_tiles": 0,
                                 }
                             },
@@ -252,34 +254,93 @@ fn openslide_acceptance_fails_closed_without_peak_rss_measurements() {
         .any(|failure| failure.contains("peak RSS measurements are missing")));
 }
 
-#[test]
-fn openslide_acceptance_fails_closed_without_actual_gpu_route_evidence() {
-    let openslide = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
-    let mut wsi_rs = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
-    let run = wsi_rs["runs"]
+fn first_jp2k_run(capture: &mut Value) -> &mut Value {
+    capture["runs"]
         .as_array_mut()
         .expect("runs")
         .iter_mut()
         .find(|run| run["benchmark_group"] == "aperio/j2k")
-        .expect("JP2K run");
-    run["workloads"][0]["diagnostics"] = json!({});
+        .expect("JP2K run")
+}
+
+fn set_jp2k_routes(capture: &mut Value, route: impl Fn(usize) -> Value) {
+    for run in capture["runs"].as_array_mut().expect("runs") {
+        if run["benchmark_group"] != "aperio/j2k" {
+            continue;
+        }
+        for (index, workload) in run["workloads"]
+            .as_array_mut()
+            .expect("workloads")
+            .iter_mut()
+            .enumerate()
+        {
+            workload["diagnostics"] = json!({"decode_route": route(index)});
+        }
+    }
+}
+
+#[test]
+fn openslide_acceptance_fails_closed_without_actual_gpu_route_evidence() {
+    let openslide = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
+    let mut wsi_rs = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    for workload in first_jp2k_run(&mut wsi_rs)["workloads"]
+        .as_array_mut()
+        .expect("workloads")
+    {
+        workload["diagnostics"] = json!({});
+    }
 
     let error = evaluate_openslide_acceptance(&openslide, &wsi_rs)
-        .expect_err("missing GPU route evidence must fail closed");
+        .expect_err("a JP2K process without device work must fail closed");
 
     assert!(error.contains("actual metal route evidence"), "{error}");
 }
 
 #[test]
+fn gpu_route_evidence_accepts_measured_cpu_choices_and_cached_cells() {
+    // The 0.7 release capture: each process measured Metal in one cell and
+    // automatic routing kept every tile on CPU; cached cells decode nothing.
+    let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    set_jp2k_routes(&mut capture, |index| {
+        json!({
+            "feature": "metal",
+            "device_attempt_tiles": u64::from(index == 1) * 4,
+            "device_tiles": 0,
+            "adaptive_cpu_tiles": 215,
+            "fallback_tiles": 0,
+            "device_failure_fallback_tiles": 0,
+            "unavailable_fallback_tiles": 0,
+        })
+    });
+    first_jp2k_run(&mut capture)["workloads"][0]["diagnostics"] = json!({});
+
+    validate_gpu_route_evidence(&capture).expect("measured CPU routing is valid GPU evidence");
+}
+
+#[test]
+fn gpu_route_evidence_rejects_any_fallback_or_foreign_route() {
+    for (field, value) in [("fallback_tiles", json!(1)), ("feature", json!("cuda"))] {
+        let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+        // A non-viewer cell counts: device failure anywhere invalidates the run.
+        let workloads = first_jp2k_run(&mut capture)["workloads"]
+            .as_array_mut()
+            .expect("workloads");
+        let mut failed = workloads[0].clone();
+        failed["name"] = json!("large_region_l0");
+        failed["diagnostics"]["decode_route"][field] = value;
+        workloads.push(failed);
+
+        let error = validate_gpu_route_evidence(&capture).expect_err("fallback must fail");
+
+        assert!(error.contains("workload=large_region_l0"), "{error}");
+        assert!(error.contains("requires zero fallback"), "{error}");
+    }
+}
+
+#[test]
 fn gpu_route_evidence_ignores_non_decode_workloads() {
     let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
-    let run = capture["runs"]
-        .as_array_mut()
-        .expect("runs")
-        .iter_mut()
-        .find(|run| run["benchmark_group"] == "aperio/j2k")
-        .expect("JP2K run");
-    run["workloads"]
+    first_jp2k_run(&mut capture)["workloads"]
         .as_array_mut()
         .expect("workloads")
         .push(json!({"name": "open_latency", "n": 10}));

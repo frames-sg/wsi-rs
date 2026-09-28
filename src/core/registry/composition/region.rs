@@ -1,5 +1,6 @@
 use super::fractional_u8::{
-    blit_fractional_saturating_u8, contract_pixman_unorm8, unpremultiply_u8,
+    blit_alpha_source_saturating_u8, blit_fractional_saturating_u8, contract_pixman_unorm8,
+    is_alpha_source, unpremultiplied_rgba_u8, unpremultiply_u8,
 };
 use super::integral::{
     blit_integral_samples, hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
@@ -174,6 +175,7 @@ fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
 
     let first = resolver.resolve_one(plan.hits[0].col, plan.hits[0].row)?;
     if plan.hits.len() == 1
+        && !composes_alpha_sources(&plan.hits, [first.as_ref()])
         && hit_covers_output(
             &plan.hits[0],
             first.as_ref(),
@@ -230,6 +232,18 @@ fn compose_region_tiles(
         return Err(WsiError::DisplayConversion(
             "planar compositing not supported".into(),
         ));
+    }
+    // Coverage-carrying RGBA tiles never take the copy fast paths; the
+    // composer validates each against its RGB output as it blits.
+    if composes_alpha_sources(hits, hit_tiles.iter().map(Arc::as_ref)) {
+        return compose_general_region(
+            hits,
+            hit_tiles,
+            width,
+            height,
+            first_tile.as_ref(),
+            preserve_alpha,
+        );
     }
     for tile in &hit_tiles[1..] {
         if tile.data.sample_type() != first_tile.data.sample_type() {
@@ -324,18 +338,24 @@ impl RegionComposer {
                 "planar compositing not supported".into(),
             ));
         }
+        let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
+        // An alpha-source template still composes RGB color plus coverage.
+        let (channels, color_space) = if pixman_compatible && is_alpha_source(template) {
+            (3, ColorSpace::Rgb)
+        } else {
+            (template.channels, template.color_space.clone())
+        };
         let shape = CompositionShape {
             width: width as usize,
             height: height as usize,
-            channels: usize::from(template.channels),
+            channels: usize::from(channels),
         };
-        let total_samples = checked_total_samples(width, height, template.channels)?;
+        let total_samples = checked_total_samples(width, height, channels)?;
         let out_data = match &template.data {
             CpuTileData::U8(_) => CpuTileData::u8(vec![0u8; total_samples]),
             CpuTileData::U16(_) => CpuTileData::u16(vec![0u16; total_samples]),
             CpuTileData::F32(_) => CpuTileData::f32(vec![0.0f32; total_samples]),
         };
-        let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
         let alpha_buffer =
             if matches!(&out_data, CpuTileData::U8(_)) && hits.iter().any(needs_fractional_blit) {
                 Some(vec![0.0f32; checked_region_pixels_usize(width, height)?])
@@ -345,8 +365,8 @@ impl RegionComposer {
         Ok(Self {
             width,
             height,
-            channels: template.channels,
-            color_space: template.color_space.clone(),
+            channels,
+            color_space,
             layout: template.layout,
             shape,
             out_data,
@@ -358,6 +378,21 @@ impl RegionComposer {
 
     fn blit(&mut self, hit: &TileHit, tile: &CpuTile) -> Result<(), WsiError> {
         tile.validate_invariants()?;
+        if self.pixman_compatible
+            && self.channels == 3
+            && self.color_space == ColorSpace::Rgb
+            && is_alpha_source(tile)
+        {
+            let (CpuTileData::U8(out), Some(alpha)) =
+                (&mut self.out_data, self.alpha_buffer.as_mut())
+            else {
+                return Err(WsiError::DisplayConversion(
+                    "alpha-source composition requires u8 pixels and alpha state".into(),
+                ));
+            };
+            let out = Arc::make_mut(out).as_mut_slice();
+            return blit_alpha_source_saturating_u8(out, alpha, tile, hit, self.shape);
+        }
         if tile.data.sample_type() != self.out_data.sample_type()
             || tile.channels != self.channels
             || tile.color_space != self.color_space
@@ -385,6 +420,21 @@ impl RegionComposer {
                     "Pixman-compatible composition requires u8 pixels and alpha state".into(),
                 ));
             };
+            if self.preserve_alpha
+                && self.shape.channels == 3
+                && self.layout == CpuTileLayout::Interleaved
+            {
+                // Unpremultiply and widen in one pass; coverage becomes alpha.
+                let rgba = unpremultiplied_rgba_u8(out, alpha);
+                return Ok(CpuTile {
+                    width: self.width,
+                    height: self.height,
+                    channels: 4,
+                    color_space: ColorSpace::Rgba,
+                    layout: CpuTileLayout::Interleaved,
+                    data: CpuTileData::u8(rgba),
+                });
+            }
             unpremultiply_u8(
                 Arc::make_mut(out).as_mut_slice(),
                 alpha,
@@ -478,6 +528,15 @@ fn blit_region_tile(
 
 fn needs_fractional_blit(hit: &TileHit) -> bool {
     !is_integral_hit(hit)
+}
+
+/// Whether Pixman-compatible composition will treat any tile's straight alpha
+/// as coverage, which rules out copying tiles into the output.
+fn composes_alpha_sources<'a>(
+    hits: &[TileHit],
+    tiles: impl IntoIterator<Item = &'a CpuTile>,
+) -> bool {
+    hits.iter().any(|hit| hit.cairo_fixed_dest.is_some()) && tiles.into_iter().any(is_alpha_source)
 }
 
 #[cfg(test)]

@@ -283,6 +283,17 @@ pub(crate) enum TileSource {
         strip_byte_count: u64,
     },
 
+    /// Ventana BIF reduced level in OpenSlide's subtile model: the level uses
+    /// the level-0 tilemap scaled by its downsample, and irregular cell
+    /// `(col, row)` crops the `1 / subtiles_per_tile` share of stored TIFF
+    /// tile `(col / subtiles_per_tile, row / subtiles_per_tile)`.
+    TiledIfdSubtiles {
+        ifd_id: IfdId,
+        jpeg_tables: Option<Vec<u8>>,
+        compression: Compression,
+        subtiles_per_tile: u32,
+    },
+
     /// Synthetic NDPI power-of-two level derived from a higher-resolution level.
     ///
     /// The compatibility model exposes a complete power-of-two NDPI pyramid even when the

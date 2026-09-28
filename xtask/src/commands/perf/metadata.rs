@@ -15,9 +15,10 @@ use super::worker::{
 };
 use super::PERF_CAPTURE_SCHEMA_VERSION;
 
-const TRACKED_ENV_VARS: [&str; 19] = [
+const TRACKED_ENV_VARS: [&str; 20] = [
     "RUSTFLAGS",
     "RAYON_NUM_THREADS",
+    "WSI_RS_SHIM_JP2K_CPU_THREADS",
     "WSI_RS_PERF_RESULTS_DIR",
     "WSI_RS_PERF_SLIDES",
     "WSI_RS_PERF_REPEATS",

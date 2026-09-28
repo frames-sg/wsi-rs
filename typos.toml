@@ -4,6 +4,7 @@ extend-exclude = [
     "target",
     # Binary P6 reference pixels can contain incidental ASCII words.
     "tests/fixtures/public_dicom/*.ppm",
+    "tests/fixtures/dicom_12bit/*.ppm",
 ]
 
 [default.extend-words]
@@ -15,3 +16,4 @@ Siz = "Siz"
 ome = "ome"
 siz = "siz"
 subtile = "subtile"
+subtiles = "subtiles"

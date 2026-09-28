@@ -72,8 +72,8 @@ fn interpret_builds_stitched_pyramid_associated_images_and_properties() {
         vec![
             SyntheticTag::long(tags::IMAGE_WIDTH, 384),
             SyntheticTag::long(tags::IMAGE_LENGTH, 256),
-            SyntheticTag::long(tags::TILE_WIDTH, 128),
-            SyntheticTag::long(tags::TILE_LENGTH, 128),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
             SyntheticTag::short(tags::COMPRESSION, 33004),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "level=1"),
         ],
@@ -113,7 +113,45 @@ fn interpret_builds_stitched_pyramid_associated_images_and_properties() {
     };
     assert!(tiles.values().all(|entry| entry.dimensions == (256, 256)));
     assert!(tiles.values().all(|entry| entry.tiff_tile_index.is_none()));
-    assert!(matches!(levels[1].tile_layout, TileLayout::Regular { .. }));
+    let TileLayout::Irregular {
+        tile_advance: level0_advance,
+        ..
+    } = &levels[0].tile_layout
+    else {
+        unreachable!("level 0 was already characterized as irregular");
+    };
+    // Level 1 is the level-0 tilemap at half scale: each 256x256 stored tile
+    // supplies 2x2 cells of 128x128, placed at the halved stitched advance.
+    let TileLayout::Irregular {
+        tile_advance,
+        tiles: level1_tiles,
+        ..
+    } = &levels[1].tile_layout
+    else {
+        panic!("reduced Ventana levels use the stitched tilemap");
+    };
+    assert_eq!(
+        *tile_advance,
+        (level0_advance.0 / 2.0, level0_advance.1 / 2.0)
+    );
+    assert_eq!(level1_tiles.len(), tiles.len());
+    assert!(level1_tiles
+        .values()
+        .all(|entry| entry.dimensions == (128, 128) && entry.extent.is_none()));
+    assert!(matches!(
+        layout.tile_sources[&TileSourceKey {
+            scene: 0,
+            series: 0,
+            level: 1,
+            z: 0,
+            c: 0,
+            t: 0,
+        }],
+        TileSource::TiledIfdSubtiles {
+            subtiles_per_tile: 2,
+            ..
+        }
+    ));
     assert_eq!(layout.tile_sources.len(), 2);
     assert_eq!(
         layout.dataset.associated_images["thumbnail"].dimensions,
@@ -139,6 +177,90 @@ fn interpret_builds_stitched_pyramid_associated_images_and_properties() {
     assert!(properties
         .get("openslide.comment")
         .is_some_and(|value| value.starts_with("level=0")));
+}
+
+#[test]
+fn interpret_rejects_reduced_levels_with_a_different_tile_size() {
+    // OpenSlide's subtile arithmetic assumes level-0 tile sizes at every level
+    // and refuses such slides as "Inconsistent TIFF tile sizes".
+    let level0_description = format!("level=0;{}", encode_info());
+    let file = build_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 768),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 512),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, &level0_description),
+            SyntheticTag::ascii(tags::XMP, "<xmp><iScan/></xmp>"),
+        ],
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 384),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 256),
+            SyntheticTag::long(tags::TILE_WIDTH, 128),
+            SyntheticTag::long(tags::TILE_LENGTH, 128),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "level=1"),
+        ],
+    ]);
+    let container = TiffContainer::open(file.path()).unwrap();
+    let error = VentanaInterpreter.interpret(&container).unwrap_err();
+    assert!(
+        error.to_string().contains("differs from level 0"),
+        "{error}"
+    );
+}
+
+#[test]
+fn reduced_tilemap_keeps_fractional_subtile_extents_and_skips_clipped_cells() {
+    let bif = BifInfo {
+        areas: vec![BifArea {
+            x: 0,
+            y: 0,
+            start_col: 0,
+            start_row: 0,
+            tiles_across: 2,
+            tiles_down: 3,
+        }],
+        tiles: Vec::new(),
+        tile_advance_x: 1000.0,
+        tile_advance_y: 1300.0,
+    };
+    // At 32x the 1024x1360 stored tile yields 32 x 42.5 subtiles; Cairo
+    // paints each from a ceil-sized 32x43 surface. Rows 0..3 map to stored
+    // offsets 0, 42.5 and 85; a 100-row stored image clips the third.
+    let stored = VentanaStoredLevel {
+        width: 4000,
+        height: 100,
+        tile_width: 1024,
+        tile_height: 1360,
+    };
+    let TileLayout::Irregular {
+        tile_advance,
+        tiles,
+        ..
+    } = ventana_tilemap_layout(&bif, 32, &stored).unwrap()
+    else {
+        panic!("Ventana tilemaps are irregular");
+    };
+    assert_eq!(tile_advance, (1000.0 / 32.0, 1300.0 / 32.0));
+    assert_eq!(tiles.len(), 6);
+    for entry in tiles.values() {
+        assert_eq!(entry.dimensions, (32, 43));
+        assert_eq!(entry.extent(), (32.0, 42.5));
+    }
+
+    let clipped = VentanaStoredLevel {
+        height: 85,
+        ..stored
+    };
+    let TileLayout::Irregular { tiles, .. } = ventana_tilemap_layout(&bif, 32, &clipped).unwrap()
+    else {
+        panic!("Ventana tilemaps are irregular");
+    };
+    let mut kept: Vec<_> = tiles.keys().copied().collect();
+    kept.sort_unstable();
+    assert_eq!(kept, vec![(0, 0), (0, 1), (1, 0), (1, 1)]);
 }
 
 #[test]
@@ -509,6 +631,7 @@ fn test_tiles_from_bif_areas(bif: &BifInfo) -> HashMap<(i64, i64), TileEntry> {
                         offset: (offset_x, offset_y),
                         dimensions: (256, 256),
                         tiff_tile_index: Some(tiff_idx),
+                        extent: None,
                     },
                 );
                 tiff_idx += 1;
@@ -604,6 +727,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
+            extent: None,
         },
     );
     tiles.insert(
@@ -612,6 +736,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
+            extent: None,
         },
     );
     tiles.insert(
@@ -620,6 +745,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
+            extent: None,
         },
     );
 
@@ -637,6 +763,7 @@ fn overlap_detected_fails_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
+            extent: None,
         },
     );
     tiles.insert(
@@ -645,6 +772,7 @@ fn overlap_detected_fails_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
+            extent: None,
         },
     );
 
@@ -767,6 +895,7 @@ fn non_adjacent_overlap_detected() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
+            extent: None,
         },
     );
     // (1,0) exists but is normal
@@ -776,6 +905,7 @@ fn non_adjacent_overlap_detected() {
             offset: (0.0, 0.0),
             dimensions: (100, 256), // narrow tile
             tiff_tile_index: Some(1),
+            extent: None,
         },
     );
     // (2,0) has a large negative offset that pushes it back into (0,0)'s territory
@@ -785,6 +915,7 @@ fn non_adjacent_overlap_detected() {
             offset: (-350.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
+            extent: None,
         },
     );
 

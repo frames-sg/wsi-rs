@@ -246,6 +246,99 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
     )
 }
 
+/// Full-size decode of a 12-bit JPEG to interleaved RGB16 samples in the
+/// 0..=4095 range. Grayscale is projected to R=G=B by the codec.
+pub(super) fn decode_jpeg_rgb16_with_color_transform(
+    data: &[u8],
+    tables: Option<&[u8]>,
+    expected_width: u32,
+    expected_height: u32,
+    color_transform: J2kColorTransform,
+) -> Result<DecodedJpegRgb<u16>, WsiError> {
+    let input = prepare_jpeg_input(data, tables, expected_width, expected_height, false)?;
+    let view = parse_jpeg_view(input.as_ref(), color_transform)?;
+    let (width, height) = view.info().dimensions;
+    let sample_count = checked_jpeg_rgb16_len(width, height)?;
+    let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let (bytes, outcome) = decoder
+        .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb16))
+        .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let decoded_samples = u64::from(outcome.decoded.w) * u64::from(outcome.decoded.h) * 3;
+    if bytes.len() as u64 != decoded_samples * 2 || decoded_samples > sample_count as u64 {
+        return Err(WsiError::Jpeg(format!(
+            "12-bit JPEG decode produced {} bytes for {}x{} RGB16",
+            bytes.len(),
+            outcome.decoded.w,
+            outcome.decoded.h
+        )));
+    }
+    // The codec writes 16-bit samples little-endian.
+    let pixels = bytes
+        .chunks_exact(2)
+        .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
+        .collect();
+    crop_jpeg_rgb_to_expected(
+        DecodedJpegRgb {
+            width: outcome.decoded.w,
+            height: outcome.decoded.h,
+            pixels,
+        },
+        expected_width,
+        expected_height,
+    )
+}
+
+/// DCT-scaled decode of a JPEG whose SOF is forced to `image_width` x
+/// `image_height`. Like libjpeg's `scale_denom`, the output keeps partial MCUs:
+/// each dimension is `ceil(image_dim / denominator)`.
+pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
+    data: &[u8],
+    image_width: u32,
+    image_height: u32,
+    scale: J2kDownscale,
+    color_transform: J2kColorTransform,
+) -> Result<DecodedJpegRgb, WsiError> {
+    if image_width == 0
+        || image_height == 0
+        || image_width > u32::from(u16::MAX)
+        || image_height > u32::from(u16::MAX)
+    {
+        return Err(WsiError::Jpeg(
+            "JPEG size override requires nonzero u16 dimensions".into(),
+        ));
+    }
+    let input = prepare_jpeg_input(data, None, image_width, image_height, true)?;
+    let view = parse_jpeg_view(input.as_ref(), color_transform)?;
+    let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
+    let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let pixel_format = if grayscale {
+        J2kPixelFormat::Gray8
+    } else {
+        J2kPixelFormat::Rgb8
+    };
+    let (pixels, _outcome) = decoder
+        .decode_request(J2kJpegDecodeRequest::scaled(pixel_format, scale))
+        .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let pixels = if grayscale {
+        expand_grayscale_to_rgb(pixels)?
+    } else {
+        pixels
+    };
+    let width = image_width.div_ceil(scale.denominator());
+    let height = image_height.div_ceil(scale.denominator());
+    if pixels.len() != checked_jpeg_rgb_len(width, height)? {
+        return Err(WsiError::Jpeg(format!(
+            "scaled JPEG decode produced {} bytes, expected {width}x{height} RGB",
+            pixels.len()
+        )));
+    }
+    Ok(DecodedJpegRgb {
+        width,
+        height,
+        pixels,
+    })
+}
+
 pub(super) fn j2k_downscale_for_dimensions(
     expected_width: u32,
     expected_height: u32,
@@ -402,11 +495,24 @@ pub(super) fn checked_jpeg_rgb_len(width: u32, height: u32) -> Result<usize, Wsi
     Ok(usize::try_from(bytes).expect("the 512 MiB JPEG limit fits supported usize targets"))
 }
 
-pub(super) fn crop_jpeg_rgb_to_expected(
-    decoded: DecodedJpegRgb,
+/// RGB16 sample count for a decode, bounded by the same byte limit as 8-bit
+/// RGB decodes.
+fn checked_jpeg_rgb16_len(width: u32, height: u32) -> Result<usize, WsiError> {
+    let samples = checked_jpeg_rgb_len(width, height)?;
+    let bytes = samples as u64 * 2;
+    if bytes > MAX_JPEG_DECODE_BYTES {
+        return Err(WsiError::Jpeg(format!(
+            "JPEG decode size {bytes} bytes exceeds {MAX_JPEG_DECODE_BYTES} byte limit"
+        )));
+    }
+    Ok(samples)
+}
+
+pub(super) fn crop_jpeg_rgb_to_expected<T: Copy>(
+    decoded: DecodedJpegRgb<T>,
     expected_width: u32,
     expected_height: u32,
-) -> Result<DecodedJpegRgb, WsiError> {
+) -> Result<DecodedJpegRgb<T>, WsiError> {
     if expected_width == 0 || expected_height == 0 {
         return Ok(decoded);
     }

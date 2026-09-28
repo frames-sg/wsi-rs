@@ -32,6 +32,7 @@ fn ndpi_restart_tile_decodes_target_strip_via_public_read_path() {
             ifd_id,
             col: 1,
             native_row: 1,
+            scale_denom: 1,
         })
         .is_some());
 }

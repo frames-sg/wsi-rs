@@ -164,7 +164,7 @@ fn fractional_grid_tiles_for_region(
     hits
 }
 
-fn cairo_bilinear_destination(destination: f64) -> f64 {
+pub(crate) fn cairo_bilinear_destination(destination: f64) -> f64 {
     // Cairo splits a non-integral translation between Pixman's integer source
     // offset and a 16.16 transform. Reproducing that split per tile preserves
     // translation invariance that would be lost by rounding the full origin.
@@ -190,37 +190,55 @@ fn irregular_tiles_for_fractional_region(
         return Vec::new();
     }
 
+    // Mirror OpenSlide's tilemap grid exactly: it truncates the starting tile,
+    // keeps the offset within it, widens the range by the extra tiles after
+    // shifting the Cairo origin by the left/top extras, and paints from the
+    // bottom-right tile back to the top-left. Under SATURATE the first painter
+    // owns an overlap, so both the order and the translation arithmetic decide
+    // which overlapping tile supplies each pixel.
     let (extra_top, extra_bottom, extra_left, extra_right) = extra_tiles;
     let region_x2 = x + f64::from(width);
     let region_y2 = y + f64::from(height);
-    let start_col = (x / adv_x) as i64 - i64::from(extra_left);
+    let first_col = (x / adv_x) as i64;
+    let first_row = (y / adv_y) as i64;
+    let offset_x = x - first_col as f64 * adv_x;
+    let offset_y = y - first_row as f64 * adv_y;
+    let start_col = first_col - i64::from(extra_left);
     let end_col = (region_x2 / adv_x).ceil() as i64 + i64::from(extra_right);
-    let start_row = (y / adv_y) as i64 - i64::from(extra_top);
+    let start_row = first_row - i64::from(extra_top);
     let end_row = (region_y2 / adv_y).ceil() as i64 + i64::from(extra_bottom);
+    let origin_x = -f64::from(extra_left) * adv_x;
+    let origin_y = -f64::from(extra_top) * adv_y;
     let mut hits = Vec::new();
-    for row in start_row..end_row {
-        for col in start_col..end_col {
+    for row in (start_row..end_row).rev() {
+        let translate_y = origin_y + ((row - start_row) as f64 * adv_y - offset_y);
+        for col in (start_col..end_col).rev() {
             let Some(entry) = tiles.get(&(col, row)) else {
                 continue;
             };
             let tile_x = col as f64 * adv_x + entry.offset.0;
             let tile_y = row as f64 * adv_y + entry.offset.1;
-            let tile_x2 = tile_x + f64::from(entry.dimensions.0);
-            let tile_y2 = tile_y + f64::from(entry.dimensions.1);
-
-            if tile_x2 > x && tile_x < region_x2 && tile_y2 > y && tile_y < region_y2 {
-                let dest_x_f64 = tile_x - x;
-                let dest_y_f64 = tile_y - y;
-                hits.push(TileHit {
-                    col,
-                    row,
-                    dest_x: dest_x_f64.round() as i64,
-                    dest_y: dest_y_f64.round() as i64,
-                    dest_x_f64,
-                    dest_y_f64,
-                    cairo_fixed_dest: None,
-                });
+            let (extent_w, extent_h) = entry.extent();
+            let tile_x2 = tile_x + extent_w;
+            let tile_y2 = tile_y + extent_h;
+            if !(tile_x2 > x && tile_x < region_x2 && tile_y2 > y && tile_y < region_y2) {
+                continue;
             }
+            let translate_x = origin_x + ((col - start_col) as f64 * adv_x - offset_x);
+            let dest_x_f64 = translate_x + entry.offset.0;
+            let dest_y_f64 = translate_y + entry.offset.1;
+            hits.push(TileHit {
+                col,
+                row,
+                dest_x: dest_x_f64.round() as i64,
+                dest_y: dest_y_f64.round() as i64,
+                dest_x_f64,
+                dest_y_f64,
+                cairo_fixed_dest: Some((
+                    cairo_bilinear_destination(dest_x_f64),
+                    cairo_bilinear_destination(dest_y_f64),
+                )),
+            });
         }
     }
     hits
@@ -385,6 +403,10 @@ pub struct TileEntry {
     /// index to use when reading from tile_offsets/tile_byte_counts arrays.
     /// `None` for regular row-major addressing.
     pub tiff_tile_index: Option<usize>,
+    /// Fractional placement extent when it differs from the whole-pixel
+    /// source `dimensions`, as for Ventana reduced-level subtiles
+    /// (`1360 / 32 = 42.5` rows painted from a 43-row source).
+    pub(crate) extent: Option<(f64, f64)>,
 }
 
 impl TileEntry {
@@ -393,11 +415,24 @@ impl TileEntry {
             offset,
             dimensions,
             tiff_tile_index: None,
+            extent: None,
         }
     }
 
     pub fn with_tiff_tile_index(mut self, tiff_tile_index: usize) -> Self {
         self.tiff_tile_index = Some(tiff_tile_index);
         self
+    }
+
+    pub(crate) fn with_extent(mut self, extent: (f64, f64)) -> Self {
+        self.extent = Some(extent);
+        self
+    }
+
+    /// The tile's placement extent in level pixels. Tilemap hit testing uses
+    /// this rather than the source dimensions, as OpenSlide does.
+    pub fn extent(&self) -> (f64, f64) {
+        self.extent
+            .unwrap_or((f64::from(self.dimensions.0), f64::from(self.dimensions.1)))
     }
 }

@@ -94,6 +94,38 @@ pub(crate) fn crop_rgb_interleaved_u8_buffer(
     width: u32,
     height: u32,
 ) -> Result<CpuTile, WsiError> {
+    validate_rgb_crop(src, x, y, width, height)?;
+    let src_data = src
+        .data
+        .as_u8()
+        .ok_or_else(|| WsiError::DisplayConversion("RGB crop expects U8 source data".into()))?;
+    let out = crop_rgb_interleaved_samples(src_data, src.width, x, y, width, height)?;
+    Ok(rgb_interleaved_tile(width, height, CpuTileData::u8(out)))
+}
+
+/// Crop 3-channel interleaved U8 or U16 samples, keeping the sample type.
+pub(crate) fn crop_rgb_interleaved_buffer(
+    src: &CpuTile,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<CpuTile, WsiError> {
+    let CpuTileData::U16(src_data) = &src.data else {
+        return crop_rgb_interleaved_u8_buffer(src, x, y, width, height);
+    };
+    validate_rgb_crop(src, x, y, width, height)?;
+    let out = crop_rgb_interleaved_samples(src_data, src.width, x, y, width, height)?;
+    Ok(rgb_interleaved_tile(width, height, CpuTileData::u16(out)))
+}
+
+fn validate_rgb_crop(
+    src: &CpuTile,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<(), WsiError> {
     if src.layout != CpuTileLayout::Interleaved || src.channels != 3 {
         return Err(WsiError::DisplayConversion(
             "RGB crop expects 3-channel interleaved data".into(),
@@ -109,12 +141,18 @@ pub(crate) fn crop_rgb_interleaved_u8_buffer(
             width, height, x, y, src.width, src.height
         )));
     }
+    Ok(())
+}
 
-    let src_data = src
-        .data
-        .as_u8()
-        .ok_or_else(|| WsiError::DisplayConversion("RGB crop expects U8 source data".into()))?;
-    let src_stride = (src.width as usize)
+fn crop_rgb_interleaved_samples<T: Copy + Default>(
+    src_data: &[T],
+    src_width: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<Vec<T>, WsiError> {
+    let src_stride = (src_width as usize)
         .checked_mul(3)
         .ok_or_else(|| WsiError::DisplayConversion("RGB crop source stride overflow".into()))?;
     let dst_stride = (width as usize).checked_mul(3).ok_or_else(|| {
@@ -123,20 +161,23 @@ pub(crate) fn crop_rgb_interleaved_u8_buffer(
     let out_len = dst_stride.checked_mul(height as usize).ok_or_else(|| {
         WsiError::DisplayConversion("RGB crop destination byte count overflow".into())
     })?;
-    let mut out = vec![0u8; out_len];
+    let mut out = vec![T::default(); out_len];
     for row in 0..height as usize {
         let src_start = (y as usize + row) * src_stride + x as usize * 3;
         let src_end = src_start + dst_stride;
         let dst_start = row * dst_stride;
         out[dst_start..dst_start + dst_stride].copy_from_slice(&src_data[src_start..src_end]);
     }
+    Ok(out)
+}
 
-    Ok(CpuTile {
+fn rgb_interleaved_tile(width: u32, height: u32, data: CpuTileData) -> CpuTile {
+    CpuTile {
         width,
         height,
         channels: 3,
         color_space: ColorSpace::Rgb,
         layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(out),
-    })
+        data,
+    }
 }

@@ -487,3 +487,66 @@ fn bounded_region_batches_preserve_pixels_and_do_not_load_the_whole_region() {
     );
     assert_eq!(source.single_reads.load(Ordering::SeqCst), 8);
 }
+
+/// Two vertically stacked 4x4 tiles that overlap by 1.5 rows, as stitched
+/// Ventana and MIRAX tiles do. Each tile is one solid value.
+struct OverlappingRowsSource {
+    dataset: Dataset,
+}
+
+impl OverlappingRowsSource {
+    fn new(offset_x: f64) -> Self {
+        let mut dataset = crate::test_support::regular_rgb_dataset_for_test(
+            DatasetId::new(79),
+            "s0",
+            "ser0",
+            crate::test_support::RegularLevelForTest {
+                dimensions: (8, 8),
+                tile_width: 4,
+                tile_height: 4,
+                tiles_across: 1,
+                tiles_down: 2,
+            },
+        );
+        let tiles = [(0, 0), (0, 1)]
+            .into_iter()
+            .map(|key| (key, TileEntry::new((offset_x, 0.0), (4, 4))))
+            .collect();
+        dataset.scenes[0].series[0].levels[0].tile_layout = TileLayout::Irregular {
+            tile_advance: (4.0, 2.5),
+            extra_tiles: (1, 0, 0, 0),
+            tiles,
+        };
+        Self { dataset }
+    }
+}
+
+impl SlideReader for OverlappingRowsSource {
+    fn dataset(&self) -> &Dataset {
+        &self.dataset
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        let value = if req.row == 0 { 10 } else { 200 };
+        CpuTile::from_u8_interleaved(4, 4, 3, ColorSpace::Rgb, vec![value; 4 * 4 * 3])
+    }
+}
+
+#[test]
+fn overlapping_irregular_tiles_keep_the_lower_tile_like_openslide() {
+    // OpenSlide paints tilemaps from the bottom-right tile back to the top-left
+    // under SATURATE, so the first-painted lower tile owns the overlap rows
+    // 2.5..4. Painting top-down let the upper tile win instead.
+    for offset_x in [0.0, 0.25] {
+        let source = OverlappingRowsSource::new(offset_x);
+        let req = RegionRequest::new(0usize, 0usize, 0u32, (0, 0), (4, 6));
+        let region =
+            composite_fractional_region_from_source(&source, None, &req, (0.0, 0.0), 64).unwrap();
+        let rgba = region.into_rgba().unwrap().into_raw();
+        let red_at = |x: usize, y: usize| rgba[(y * 4 + x) * 4];
+        // Column 2 is fully inside both tiles for either horizontal offset.
+        assert_eq!(red_at(2, 1), 10, "upper tile alone, offset_x={offset_x}");
+        assert_eq!(red_at(2, 3), 200, "overlap belongs to the lower tile");
+        assert_eq!(red_at(2, 5), 200, "lower tile alone, offset_x={offset_x}");
+    }
+}

@@ -148,7 +148,7 @@ fn decoded_frame_cache_recovers_from_poisoning() {
         JPEG_TRANSFER_SYNTAX,
     );
     poison(&image.decoded_frame_cache);
-    let tile = Arc::new(black_sample_buffer(2, 2).expect("black tile"));
+    let tile = Arc::new(black_sample_buffer(2, 2, DicomBitDepth::Eight).expect("black tile"));
 
     assert!(image.cached_decoded_frame(7).is_none());
     image.cache_decoded_frame(7, tile.clone());

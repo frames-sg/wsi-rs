@@ -104,6 +104,7 @@ impl DicomSlide {
 
         dedupe_associated(path, &mut associated_images)?;
         let mut levels = build_levels(path, level_images)?;
+        validate_uniform_level_bit_depth(path, &levels)?;
         levels.sort_by(|a, b| {
             b.area()
                 .cmp(&a.area())
@@ -180,7 +181,7 @@ impl DicomSlide {
                     name.clone(),
                     AssociatedImage {
                         dimensions: (image.width, image.height),
-                        sample_type: SampleType::Uint8,
+                        sample_type: image.bit_depth.sample_type(),
                         channels: 3,
                         icc_profile: image.icc_profile.clone(),
                     },
@@ -198,7 +199,7 @@ impl DicomSlide {
                     id: "ser0".into(),
                     axes: AxesShape::default(),
                     levels: public_levels,
-                    sample_type: SampleType::Uint8,
+                    sample_type: level0.bit_depth().sample_type(),
                     channels: vec![],
                 }],
             }],
@@ -281,6 +282,7 @@ impl DicomLevel {
             || self.samples_per_pixel() != image.samples_per_pixel
             || self.planar_configuration() != image.planar_configuration
             || self.photometric_interpretation() != image.photometric_interpretation
+            || self.bit_depth() != image.bit_depth
         {
             return Err(invalid_slide(
                 path,
@@ -304,6 +306,10 @@ impl DicomLevel {
 
     pub(super) fn photometric_interpretation(&self) -> &str {
         &self.parts[0].photometric_interpretation
+    }
+
+    pub(super) fn bit_depth(&self) -> DicomBitDepth {
+        self.parts[0].bit_depth
     }
 
     pub(super) fn image_for_tile(&self, col: u32, row: u32) -> Option<Arc<DicomImage>> {
@@ -340,7 +346,7 @@ impl DicomLevel {
         }
 
         let (width, height) = self.actual_tile_dimensions(col_u32, row_u32);
-        black_sample_buffer(width, height)
+        black_sample_buffer(width, height, self.bit_depth())
     }
 
     pub(super) fn read_raw_compressed_tile(
@@ -625,7 +631,7 @@ impl DicomSeriesManifest {
 
         let mut volume_images = Vec::new();
         let mut associated_images = Vec::new();
-        for meta in metas {
+        for mut meta in metas {
             match meta.classify()? {
                 ImageRole::Ignore => {}
                 ImageRole::Level => volume_images.push(meta),
@@ -644,6 +650,31 @@ impl DicomSeriesManifest {
             associated_images,
             source_file_count,
         })
+    }
+}
+
+/// Pyramid levels form one series with one sample type, so every level must
+/// share its precision. Split parts of one level are already checked when
+/// they are merged. Associated images keep their own precision.
+fn validate_uniform_level_bit_depth(path: &Path, levels: &[DicomLevel]) -> Result<(), WsiError> {
+    let Some(first) = levels.first() else {
+        return Ok(());
+    };
+    match levels
+        .iter()
+        .find(|level| level.bit_depth() != first.bit_depth())
+    {
+        Some(mixed) => Err(invalid_slide(
+            path,
+            format!(
+                "DICOM series mixes {}-bit and {}-bit pyramid images ({} vs. {})",
+                first.bit_depth().bits_stored(),
+                mixed.bit_depth().bits_stored(),
+                first.parts[0].sop_instance_uid,
+                mixed.parts[0].sop_instance_uid
+            ),
+        )),
+        None => Ok(()),
     }
 }
 

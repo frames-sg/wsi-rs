@@ -378,9 +378,10 @@ impl Slide {
     /// This is the compatibility boundary for APIs such as OpenSlide that
     /// express reduced-level reads in level-0 coordinates. `offset_px` must be
     /// finite and lie in `[0, 1)` on both axes; it is added to
-    /// [`RegionRequest::origin_px`] before tile composition. A nonzero offset
-    /// returns RGBA8 so the interpolation coverage remains available to
-    /// callers that require premultiplied output.
+    /// [`RegionRequest::origin_px`] before tile composition. A nonzero offset,
+    /// or any read of an irregular tile map, returns RGBA8 when tile coverage
+    /// can be partial, so the interpolation and stitching coverage remains
+    /// available to callers that require premultiplied output.
     pub fn read_region_subpixel(
         &self,
         req: &RegionRequest,
@@ -392,7 +393,17 @@ impl Slide {
                 offset_px.0, offset_px.1
             )));
         }
-        if offset_px == (0.0, 0.0) {
+        // Irregular tile maps have fractional tile placements and gaps even at
+        // whole-pixel origins, so they keep the coverage-preserving plan.
+        let irregular = self
+            .source
+            .dataset()
+            .scenes
+            .get(req.scene.get())
+            .and_then(|scene| scene.series.get(req.series.get()))
+            .and_then(|series| series.levels.get(req.level.get() as usize))
+            .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
+        if offset_px == (0.0, 0.0) && !irregular {
             return self.read_region(req);
         }
 

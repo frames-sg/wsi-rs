@@ -1,10 +1,12 @@
 use super::*;
+use crate::decode::jpeg::{decode_batch_jpeg, decode_batch_jpeg_rgb16, JpegDecodeJob};
 
 pub(super) fn validate_jpeg_transfer_syntax_frame(
     transfer_syntax_uid: &str,
+    bit_depth: DicomBitDepth,
     frame: &[u8],
 ) -> Result<(), WsiError> {
-    let (sof, lossless_predictor) = jpeg_process_header(frame)?;
+    let (sof, precision, lossless_predictor) = jpeg_process_header(frame)?;
     let valid = match transfer_syntax_uid {
         uids::JPEG_BASELINE8_BIT => sof == j2k_jpeg::SofKind::Baseline8,
         uids::JPEG_EXTENDED12_BIT => {
@@ -32,19 +34,26 @@ pub(super) fn validate_jpeg_transfer_syntax_frame(
             ),
         });
     }
+    if precision != bit_depth.bits_stored() {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "DICOM JPEG frame precision {precision} does not match BitsStored {}",
+                bit_depth.bits_stored()
+            ),
+        });
+    }
     Ok(())
 }
 
-fn jpeg_process_header(frame: &[u8]) -> Result<(j2k_jpeg::SofKind, Option<u8>), WsiError> {
+/// Returns the frame's SOF process, sample precision and SOS predictor byte.
+fn jpeg_process_header(frame: &[u8]) -> Result<(j2k_jpeg::SofKind, u8, Option<u8>), WsiError> {
     let mut sof = None;
     for segment in j2k_jpeg::iter_segments(frame) {
         let segment = segment.map_err(|err| WsiError::Jpeg(err.to_string()))?;
         if j2k_jpeg::is_sof_marker(segment.marker) && sof.is_none() {
-            sof = Some(
-                j2k_jpeg::parse_sof_info(segment.marker, segment.payload)
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?
-                    .sof_kind,
-            );
+            let info = j2k_jpeg::parse_sof_info(segment.marker, segment.payload)
+                .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+            sof = Some((info.sof_kind, info.bit_depth));
         }
         if segment.marker != 0xda {
             continue;
@@ -60,12 +69,23 @@ fn jpeg_process_header(frame: &[u8]) -> Result<(j2k_jpeg::SofKind, Option<u8>), 
             .get(predictor_offset)
             .copied()
             .ok_or_else(|| WsiError::Jpeg("DICOM JPEG SOS is truncated".into()));
-        return Ok((
-            sof.ok_or_else(|| WsiError::Jpeg("DICOM JPEG frame has no SOF marker".into()))?,
-            Some(predictor?),
-        ));
+        let (sof, precision) =
+            sof.ok_or_else(|| WsiError::Jpeg("DICOM JPEG frame has no SOF marker".into()))?;
+        return Ok((sof, precision, Some(predictor?)));
     }
     Err(WsiError::Jpeg("DICOM JPEG frame has no SOS marker".into()))
+}
+
+/// Decode JPEG frames at their validated DICOM precision: 8-bit frames keep the
+/// U8 RGB path, 12-bit frames decode to U16 RGB.
+pub(super) fn decode_dicom_jpeg_batch(
+    bit_depth: DicomBitDepth,
+    jobs: &[JpegDecodeJob<'_>],
+) -> Vec<Result<CpuTile, WsiError>> {
+    match bit_depth {
+        DicomBitDepth::Eight => decode_batch_jpeg(jobs),
+        DicomBitDepth::Twelve => decode_batch_jpeg_rgb16(jobs),
+    }
 }
 
 pub(super) fn dicom_jpeg_color_transform(
@@ -369,7 +389,7 @@ pub(super) fn crop_sample_buffer_rgb(
     if buffer.width == width && buffer.height == height {
         return Ok(buffer.clone());
     }
-    crop_rgb_interleaved_u8_buffer(buffer, 0, 0, width, height)
+    crop_rgb_interleaved_buffer(buffer, 0, 0, width, height)
 }
 
 pub(super) fn crop_or_keep_sample_buffer_rgb(
@@ -440,19 +460,29 @@ pub(super) fn trim_encapsulated_frame_padding(data: &mut Vec<u8>) {
     }
 }
 
-pub(super) fn black_sample_buffer(width: u32, height: u32) -> Result<CpuTile, WsiError> {
+/// Black RGB tile in the image's decoded sample type, so sparse gaps composite
+/// with decoded 8-bit or 12-bit frames.
+pub(super) fn black_sample_buffer(
+    width: u32,
+    height: u32,
+    bit_depth: DicomBitDepth,
+) -> Result<CpuTile, WsiError> {
     let len = crate::core::limits::checked_product_to_usize(
         &[u64::from(width), u64::from(height), 3],
         crate::core::limits::MAX_DECODED_IMAGE_BYTES,
         "DICOM black tile",
     )
     .map_err(WsiError::DisplayConversion)?;
+    let data = match bit_depth {
+        DicomBitDepth::Eight => CpuTileData::u8(vec![0; len]),
+        DicomBitDepth::Twelve => CpuTileData::u16(vec![0; len]),
+    };
     CpuTile::new(
         width,
         height,
         3,
         ColorSpace::Rgb,
         CpuTileLayout::Interleaved,
-        CpuTileData::u8(vec![0; len]),
+        data,
     )
 }

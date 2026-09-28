@@ -29,32 +29,65 @@ pub(super) struct ParsedDicomMetadata {
     pub(super) pixel_spacing: Option<(f64, f64)>,
     pub(super) objective_lens_power: Option<f64>,
     pub(super) source_icc_profiles: Vec<SourceIccProfile>,
+    /// Sample precision validated by [`Self::classify`]; 8-bit until then.
+    pub(super) bit_depth: DicomBitDepth,
+}
+
+/// Stored sample precision of a supported DICOM image.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DicomBitDepth {
+    /// BitsAllocated 8, BitsStored 8, HighBit 7.
+    Eight,
+    /// BitsAllocated 16, BitsStored 12, HighBit 11 (JPEG Extended or
+    /// progressive frames only).
+    Twelve,
+}
+
+impl DicomBitDepth {
+    pub(super) fn bits_allocated(self) -> u16 {
+        match self {
+            Self::Eight => 8,
+            Self::Twelve => 16,
+        }
+    }
+
+    pub(super) fn bits_stored(self) -> u8 {
+        match self {
+            Self::Eight => 8,
+            Self::Twelve => 12,
+        }
+    }
+
+    pub(super) fn sample_type(self) -> SampleType {
+        match self {
+            Self::Eight => SampleType::Uint8,
+            Self::Twelve => SampleType::Uint16,
+        }
+    }
 }
 
 impl ParsedDicomMetadata {
-    pub(super) fn classify(&self) -> Result<ImageRole, WsiError> {
+    /// Classify the image and, for supported roles, validate its pixel format
+    /// and record its sample precision.
+    pub(super) fn classify(&mut self) -> Result<ImageRole, WsiError> {
         let image_type_refs = self
             .image_type
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        if matches_type(&image_type_refs, LEVEL_IMAGE_TYPES) {
-            validate_supported_pixel_format(self)?;
-            return Ok(ImageRole::Level);
-        }
-        if matches_type(&image_type_refs, LABEL_IMAGE_TYPES) {
-            validate_supported_pixel_format(self)?;
-            return Ok(ImageRole::Associated(AssociatedKind::Label));
-        }
-        if matches_type(&image_type_refs, OVERVIEW_IMAGE_TYPES) {
-            validate_supported_pixel_format(self)?;
-            return Ok(ImageRole::Associated(AssociatedKind::Macro));
-        }
-        if matches_type(&image_type_refs, THUMBNAIL_IMAGE_TYPES) {
-            validate_supported_pixel_format(self)?;
-            return Ok(ImageRole::Associated(AssociatedKind::Thumbnail));
-        }
-        Ok(ImageRole::Ignore)
+        let role = if matches_type(&image_type_refs, LEVEL_IMAGE_TYPES) {
+            ImageRole::Level
+        } else if matches_type(&image_type_refs, LABEL_IMAGE_TYPES) {
+            ImageRole::Associated(AssociatedKind::Label)
+        } else if matches_type(&image_type_refs, OVERVIEW_IMAGE_TYPES) {
+            ImageRole::Associated(AssociatedKind::Macro)
+        } else if matches_type(&image_type_refs, THUMBNAIL_IMAGE_TYPES) {
+            ImageRole::Associated(AssociatedKind::Thumbnail)
+        } else {
+            return Ok(ImageRole::Ignore);
+        };
+        self.bit_depth = validate_supported_pixel_format(self)?;
+        Ok(role)
     }
 }
 
@@ -224,6 +257,7 @@ fn parse_metadata_object_until_with_budget(
         pixel_spacing,
         objective_lens_power,
         source_icc_profiles,
+        bit_depth: DicomBitDepth::Eight,
     })
 }
 
@@ -416,22 +450,16 @@ pub(super) fn ensure_same_sop(path: &Path, current: &str, previous: &str) -> Res
     }
 }
 
-pub(super) fn validate_supported_pixel_format(meta: &ParsedDicomMetadata) -> Result<(), WsiError> {
+pub(super) fn validate_supported_pixel_format(
+    meta: &ParsedDicomMetadata,
+) -> Result<DicomBitDepth, WsiError> {
     if !SUPPORTED_TRANSFER_SYNTAXES.contains(&meta.transfer_syntax_uid.as_str()) {
         return Err(invalid_slide(
             &meta.path,
             format!("Unsupported transfer syntax {}", meta.transfer_syntax_uid),
         ));
     }
-    verify_required_int(
-        &meta.obj,
-        tags::BITS_ALLOCATED,
-        8,
-        "BitsAllocated",
-        &meta.path,
-    )?;
-    verify_required_int(&meta.obj, tags::BITS_STORED, 8, "BitsStored", &meta.path)?;
-    verify_required_int(&meta.obj, tags::HIGH_BIT, 7, "HighBit", &meta.path)?;
+    let bit_depth = validate_sample_bit_depth(meta)?;
     match meta.samples_per_pixel {
         1 | 3 => {}
         value => {
@@ -485,7 +513,7 @@ pub(super) fn validate_supported_pixel_format(meta: &ParsedDicomMetadata) -> Res
         meta.photometric_interpretation == "RGB"
     };
     if supported {
-        Ok(())
+        Ok(bit_depth)
     } else {
         Err(invalid_slide(
             &meta.path,
@@ -496,6 +524,39 @@ pub(super) fn validate_supported_pixel_format(meta: &ParsedDicomMetadata) -> Res
             ),
         ))
     }
+}
+
+/// Accept 12-bit samples only for the JPEG processes that encode them.
+///
+/// Every other transfer syntax keeps the 8/8/7 contract and its exact error
+/// messages: native, RLE, JPEG lossless and JPEG 2000 frames would otherwise
+/// open and then fail on read.
+fn validate_sample_bit_depth(meta: &ParsedDicomMetadata) -> Result<DicomBitDepth, WsiError> {
+    let bits_allocated = required_u32(&meta.obj, tags::BITS_ALLOCATED, "BitsAllocated")?;
+    if bits_allocated == 16 && is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid) {
+        verify_required_int(&meta.obj, tags::BITS_STORED, 12, "BitsStored", &meta.path)?;
+        verify_required_int(&meta.obj, tags::HIGH_BIT, 11, "HighBit", &meta.path)?;
+        return Ok(DicomBitDepth::Twelve);
+    }
+    verify_required_int(
+        &meta.obj,
+        tags::BITS_ALLOCATED,
+        8,
+        "BitsAllocated",
+        &meta.path,
+    )?;
+    verify_required_int(&meta.obj, tags::BITS_STORED, 8, "BitsStored", &meta.path)?;
+    verify_required_int(&meta.obj, tags::HIGH_BIT, 7, "HighBit", &meta.path)?;
+    Ok(DicomBitDepth::Eight)
+}
+
+fn is_twelve_bit_jpeg_transfer_syntax(transfer_syntax_uid: &str) -> bool {
+    matches!(
+        transfer_syntax_uid,
+        uids::JPEG_EXTENDED12_BIT
+            | JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX
+            | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX
+    )
 }
 
 #[cfg(test)]

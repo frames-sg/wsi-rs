@@ -3,7 +3,7 @@ use super::*;
 use crate::SlideLimits;
 #[test]
 fn private_frame_cache_capacity_tracks_cache_config_bytes() {
-    let entry_bytes = dicom_frame_cache_entry_bytes(16, 16, 3);
+    let entry_bytes = dicom_frame_cache_entry_bytes(16, 16, 3, DicomBitDepth::Eight);
     let mut small_budget = CacheConfig::deterministic()
         .with_shared_tile_bytes(12 * 1024)
         .private_cache_budget(2);

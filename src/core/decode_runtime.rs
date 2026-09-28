@@ -339,66 +339,85 @@ fn telemetry_counters(device: DeviceKind) -> &'static DecodeRouteTelemetryCounte
     }
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
-fn telemetry_add(counter: &AtomicU64, tiles: usize) {
-    let tiles = u64::try_from(tiles).unwrap_or(u64::MAX);
-    counter.fetch_add(tiles, Ordering::Relaxed);
+/// Where the adaptive router sent a JP2K tile. Every tile a routed batch
+/// returns is recorded exactly once as `Device`, `AdaptiveCpu` or a fallback.
+#[cfg(any(feature = "metal", feature = "cuda"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteTileOutcome {
+    DeviceAttempt,
+    Device,
+    AdaptiveCpu,
+    DeviceFailureFallback,
+    UnavailableFallback,
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
+thread_local! {
+    static TEST_ROUTE_TILES: std::cell::Cell<[u64; 5]> = const { std::cell::Cell::new([0; 5]) };
+}
+
+// Only the Metal adaptive-routing tests read these counters.
+#[cfg(all(test, feature = "metal"))]
+fn test_route_tiles(outcome: RouteTileOutcome) -> u64 {
+    TEST_ROUTE_TILES.with(|cell| cell.get()[outcome as usize])
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+fn record_route(device: DeviceKind, outcome: RouteTileOutcome, tiles: usize) {
+    #[cfg(feature = "route-telemetry")]
+    {
+        let counters = telemetry_counters(device);
+        let tiles = u64::try_from(tiles).unwrap_or(u64::MAX);
+        let add = |counter: &AtomicU64| {
+            counter.fetch_add(tiles, Ordering::Relaxed);
+        };
+        match outcome {
+            RouteTileOutcome::DeviceAttempt => add(&counters.device_attempt_tiles),
+            RouteTileOutcome::Device => add(&counters.device_tiles),
+            RouteTileOutcome::AdaptiveCpu => add(&counters.adaptive_cpu_tiles),
+            RouteTileOutcome::DeviceFailureFallback => {
+                add(&counters.fallback_tiles);
+                add(&counters.device_failure_fallback_tiles);
+            }
+            RouteTileOutcome::UnavailableFallback => {
+                add(&counters.fallback_tiles);
+                add(&counters.unavailable_fallback_tiles);
+            }
+        }
+    }
+    #[cfg(test)]
+    TEST_ROUTE_TILES.with(|cell| {
+        let mut counts = cell.get();
+        counts[outcome as usize] += tiles as u64;
+        cell.set(counts);
+    });
+    let _ = (device, outcome, tiles);
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
 fn record_device_attempt(device: DeviceKind, tiles: usize) {
-    telemetry_add(&telemetry_counters(device).device_attempt_tiles, tiles);
+    record_route(device, RouteTileOutcome::DeviceAttempt, tiles);
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+#[cfg(any(feature = "metal", feature = "cuda"))]
 fn record_device_route(device: DeviceKind, tiles: usize) {
-    telemetry_add(&telemetry_counters(device).device_tiles, tiles);
+    record_route(device, RouteTileOutcome::Device, tiles);
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+#[cfg(any(feature = "metal", feature = "cuda"))]
 fn record_adaptive_cpu_route(device: DeviceKind, tiles: usize) {
-    telemetry_add(&telemetry_counters(device).adaptive_cpu_tiles, tiles);
+    record_route(device, RouteTileOutcome::AdaptiveCpu, tiles);
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+#[cfg(any(feature = "metal", feature = "cuda"))]
 fn record_device_failure_fallback(device: DeviceKind, tiles: usize) {
-    let counters = telemetry_counters(device);
-    telemetry_add(&counters.fallback_tiles, tiles);
-    telemetry_add(&counters.device_failure_fallback_tiles, tiles);
+    record_route(device, RouteTileOutcome::DeviceFailureFallback, tiles);
 }
 
-#[cfg(all(feature = "route-telemetry", any(feature = "metal", feature = "cuda")))]
+#[cfg(any(feature = "metal", feature = "cuda"))]
 fn record_unavailable_fallback(device: DeviceKind, tiles: usize) {
-    let counters = telemetry_counters(device);
-    telemetry_add(&counters.fallback_tiles, tiles);
-    telemetry_add(&counters.unavailable_fallback_tiles, tiles);
+    record_route(device, RouteTileOutcome::UnavailableFallback, tiles);
 }
-
-#[cfg(all(
-    not(feature = "route-telemetry"),
-    any(feature = "metal", feature = "cuda")
-))]
-fn record_device_attempt(_device: DeviceKind, _tiles: usize) {}
-#[cfg(all(
-    not(feature = "route-telemetry"),
-    any(feature = "metal", feature = "cuda")
-))]
-fn record_device_route(_device: DeviceKind, _tiles: usize) {}
-#[cfg(all(
-    not(feature = "route-telemetry"),
-    any(feature = "metal", feature = "cuda")
-))]
-fn record_adaptive_cpu_route(_device: DeviceKind, _tiles: usize) {}
-#[cfg(all(
-    not(feature = "route-telemetry"),
-    any(feature = "metal", feature = "cuda")
-))]
-fn record_device_failure_fallback(_device: DeviceKind, _tiles: usize) {}
-#[cfg(all(
-    not(feature = "route-telemetry"),
-    any(feature = "metal", feature = "cuda")
-))]
-fn record_unavailable_fallback(_device: DeviceKind, _tiles: usize) {}
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

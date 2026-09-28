@@ -56,35 +56,40 @@ fn ndpi_display_tile_only_populates_requested_strip_keys() {
         .get(&NdpiStripKey {
             ifd_id,
             col: 0,
-            native_row: 0
+            native_row: 0,
+            scale_denom: 1
         })
         .is_some());
     assert!(cache
         .get(&NdpiStripKey {
             ifd_id,
             col: 1,
-            native_row: 0
+            native_row: 0,
+            scale_denom: 1
         })
         .is_some());
     assert!(cache
         .get(&NdpiStripKey {
             ifd_id,
             col: 0,
-            native_row: 1
+            native_row: 1,
+            scale_denom: 1
         })
         .is_some());
     assert!(cache
         .get(&NdpiStripKey {
             ifd_id,
             col: 1,
-            native_row: 1
+            native_row: 1,
+            scale_denom: 1
         })
         .is_some());
     assert!(cache
         .get(&NdpiStripKey {
             ifd_id,
             col: 2,
-            native_row: 1
+            native_row: 1,
+            scale_denom: 1
         })
         .is_none());
 }
@@ -99,6 +104,7 @@ fn ndpi_display_tile_composites_from_strip_cache_across_rows_and_columns() {
                 ifd_id,
                 col: 0,
                 native_row: 0,
+                scale_denom: 1,
             },
             make_ndpi_strip(128, 16, [10, 0, 0]),
         );
@@ -107,6 +113,7 @@ fn ndpi_display_tile_composites_from_strip_cache_across_rows_and_columns() {
                 ifd_id,
                 col: 1,
                 native_row: 0,
+                scale_denom: 1,
             },
             make_ndpi_strip(128, 16, [20, 0, 0]),
         );
@@ -115,6 +122,7 @@ fn ndpi_display_tile_composites_from_strip_cache_across_rows_and_columns() {
                 ifd_id,
                 col: 0,
                 native_row: 1,
+                scale_denom: 1,
             },
             make_ndpi_strip(128, 16, [30, 0, 0]),
         );
@@ -123,6 +131,7 @@ fn ndpi_display_tile_composites_from_strip_cache_across_rows_and_columns() {
                 ifd_id,
                 col: 1,
                 native_row: 1,
+                scale_denom: 1,
             },
             make_ndpi_strip(128, 16, [40, 0, 0]),
         );
@@ -165,6 +174,7 @@ fn ndpi_display_tile_composites_across_multiple_strip_rows_and_columns() {
                         ifd_id,
                         col,
                         native_row,
+                        scale_denom: 1,
                     },
                     make_ndpi_strip(128, 16, [(col * 50) as u8, native_row as u8, 7]),
                 );

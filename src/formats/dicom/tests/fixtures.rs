@@ -17,6 +17,9 @@ pub(super) struct TestDicomOptions {
     pub(super) samples_per_pixel: u16,
     pub(super) photometric_interpretation: &'static str,
     pub(super) planar_configuration: Option<u16>,
+    pub(super) bits_allocated: u16,
+    pub(super) bits_stored: u16,
+    pub(super) high_bit: u16,
     pub(super) rows: u16,
     pub(super) columns: u16,
     pub(super) total_pixel_matrix_rows: u32,
@@ -39,6 +42,9 @@ impl TestDicomOptions {
             samples_per_pixel: 3,
             photometric_interpretation: "RGB",
             planar_configuration: Some(0),
+            bits_allocated: 8,
+            bits_stored: 8,
+            high_bit: 7,
             rows: 2,
             columns: 2,
             total_pixel_matrix_rows: 2,
@@ -51,6 +57,53 @@ impl TestDicomOptions {
             pixel_data: TestPixelData::Native(pixel_data),
         }
     }
+
+    /// A single-frame 16x16 DICOM with 12-bit JPEG Extended samples.
+    pub(super) fn jpeg_12bit(frame: Vec<u8>, photometric_interpretation: &'static str) -> Self {
+        let samples_per_pixel = if photometric_interpretation.starts_with("MONOCHROME") {
+            1
+        } else {
+            3
+        };
+        Self {
+            transfer_syntax: uids::JPEG_EXTENDED12_BIT,
+            samples_per_pixel,
+            photometric_interpretation,
+            planar_configuration: (samples_per_pixel == 3).then_some(0),
+            bits_allocated: 16,
+            bits_stored: 12,
+            high_bit: 11,
+            rows: 16,
+            columns: 16,
+            total_pixel_matrix_rows: 16,
+            total_pixel_matrix_columns: 16,
+            pixel_data: TestPixelData::Encapsulated(frame),
+            ..Self::native(Vec::new())
+        }
+    }
+}
+
+/// Encoded frames of a committed 12-bit fixture in `tests/fixtures/dicom_12bit`.
+///
+/// The reader's frame index extracts them because the DICOM object parser does
+/// not register the retired progressive transfer syntaxes.
+pub(super) fn twelve_bit_fixture_frames(name: &str) -> Vec<Vec<u8>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/dicom_12bit")
+        .join(format!("{name}.dcm"));
+    let slide = DicomSlide::parse(&path).expect("open 12-bit fixture");
+    let image = &slide.levels[0].parts[0];
+    (0..image.number_of_frames)
+        .map(|frame_index| {
+            let mut frame = image
+                .extract_encapsulated_frame(frame_index, 0, 0, 0, false)
+                .expect("fixture frame")
+                .as_ref()
+                .clone();
+            trim_encapsulated_frame_padding(&mut frame);
+            frame
+        })
+        .collect()
 }
 
 pub(super) fn test_rgb_pixel_data() -> Vec<u8> {
@@ -124,17 +177,17 @@ pub(super) fn write_test_dicom(path: &Path, options: TestDicomOptions) {
     object.put(DataElement::new(
         tags::BITS_ALLOCATED,
         VR::US,
-        PrimitiveValue::from(8u16),
+        PrimitiveValue::from(options.bits_allocated),
     ));
     object.put(DataElement::new(
         tags::BITS_STORED,
         VR::US,
-        PrimitiveValue::from(8u16),
+        PrimitiveValue::from(options.bits_stored),
     ));
     object.put(DataElement::new(
         tags::HIGH_BIT,
         VR::US,
-        PrimitiveValue::from(7u16),
+        PrimitiveValue::from(options.high_bit),
     ));
     object.put(DataElement::new(
         tags::PIXEL_REPRESENTATION,

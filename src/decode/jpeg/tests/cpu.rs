@@ -198,3 +198,61 @@ fn non_power_of_two_requested_sizes_use_full_decode_resize_in_both_entry_points(
     assert_eq!((job_decode.width, job_decode.height), (3, 5));
     assert_eq!(job_decode.data.as_u8().unwrap(), expected);
 }
+
+#[test]
+fn downscaled_size_override_keeps_partial_mcus_like_libjpeg() {
+    // NDPI edge strips force a SOF size that ends mid-MCU. libjpeg's scaled
+    // output keeps ceil(dim / denominator) samples, and for 4:4:4 each block
+    // scales independently, so the result is a crop of the aligned decode.
+    let rgb = image::RgbImage::from_fn(24, 16, |x, y| {
+        image::Rgb([(x * 10) as u8, (y * 15) as u8, ((x ^ y) * 9) as u8])
+    });
+    let mut data = Vec::new();
+    let mut encoder = JpegEncoder::new(&mut data, 90);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
+    encoder
+        .encode(rgb.as_raw(), 24, 16, JpegColorType::Rgb)
+        .unwrap();
+
+    let aligned = decode_jpeg_rgb_downscaled_with_size_override(
+        &data,
+        24,
+        16,
+        J2kDownscale::Half,
+        J2kColorTransform::Auto,
+    )
+    .unwrap();
+    let partial = decode_jpeg_rgb_downscaled_with_size_override(
+        &data,
+        21,
+        13,
+        J2kDownscale::Half,
+        J2kColorTransform::Auto,
+    )
+    .unwrap();
+
+    assert_eq!((aligned.width, aligned.height), (12, 8));
+    assert_eq!((partial.width, partial.height), (11, 7));
+    let cropped: Vec<u8> = aligned
+        .pixels
+        .chunks_exact(12 * 3)
+        .take(7)
+        .flat_map(|row| row[..11 * 3].iter().copied())
+        .collect();
+    assert_eq!(partial.pixels, cropped);
+}
+
+#[test]
+fn downscaled_size_override_rejects_non_u16_dimensions() {
+    let data = encode_test_jpeg(&image::RgbImage::new(8, 8));
+    for (width, height) in [(0, 8), (8, 0), (70_000, 8)] {
+        assert!(decode_jpeg_rgb_downscaled_with_size_override(
+            &data,
+            width,
+            height,
+            J2kDownscale::Half,
+            J2kColorTransform::Auto,
+        )
+        .is_err());
+    }
+}

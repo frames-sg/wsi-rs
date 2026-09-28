@@ -74,7 +74,7 @@ impl MiraxReader {
                     images.push(tile.image.clone());
                     images.len() - 1
                 });
-                plan.push((index, tile.src_x, tile.src_y, entry.dimensions));
+                plan.push((index, tile, entry.dimensions));
                 source_bytes = next_source;
                 live_bytes = next_live;
                 largest_source = next_largest;
@@ -126,15 +126,8 @@ impl MiraxReader {
                 .map(|(_, tile)| tile)
                 .collect::<Result<Vec<_>, _>>()?;
             start += plan.len();
-            for (index, x, y, (width, height)) in plan {
-                let source = decoded[index].as_ref();
-                output.push(
-                    if x == 0 && y == 0 && (source.width, source.height) == (width, height) {
-                        source.clone()
-                    } else {
-                        crop_rgb_interleaved_u8_buffer(source, x, y, width, height)?
-                    },
-                );
+            for (index, tile, dimensions) in plan {
+                output.push(tile.extract(decoded[index].as_ref(), dimensions)?);
             }
         }
         Ok(output)

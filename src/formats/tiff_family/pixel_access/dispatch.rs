@@ -310,6 +310,9 @@ impl SlideReader for TiffPixelReader {
             TileSource::NdpiFullDecode { .. } => Err(WsiError::Unsupported {
                 reason: "NDPI JPEG passthrough is not available for whole-level full-decode JPEG sources".into(),
             }),
+            TileSource::TiledIfdSubtiles { .. } => Err(WsiError::Unsupported {
+                reason: "compressed passthrough is not available for Ventana subtiles cropped from stored tiles".into(),
+            }),
             TileSource::SyntheticDownsample { .. } => Err(WsiError::Unsupported {
                 reason: "JPEG passthrough is not available for synthetic downsample levels".into(),
             }),
@@ -551,6 +554,18 @@ impl SlideReader for TiffPixelReader {
                     *factor,
                 )
             }
+            TileSource::TiledIfdSubtiles {
+                ifd_id,
+                jpeg_tables,
+                compression,
+                subtiles_per_tile,
+            } => self.read_tiled_ifd_subtile(
+                req,
+                *ifd_id,
+                jpeg_tables.as_deref(),
+                *compression,
+                *subtiles_per_tile,
+            ),
             TileSource::StrippedLevel {
                 ifd_id,
                 compression,

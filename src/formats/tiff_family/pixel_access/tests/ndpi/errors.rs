@@ -210,6 +210,7 @@ fn ndpi_display_tile_rejects_invalid_layout_coordinates_and_cached_strips() {
         ifd_id,
         col: 0,
         native_row: 0,
+        scale_denom: 1,
     };
     reader.ndpi_strip_cache.put(
         key,

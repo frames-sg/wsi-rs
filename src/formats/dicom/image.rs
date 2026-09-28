@@ -20,7 +20,9 @@ use super::decode::{
     validate_jpeg_transfer_syntax_frame,
 };
 use super::frame_index::DicomEncapsulatedFrames;
-use super::metadata::{invalid_slide, parse_sparse_tile_map_with_budget, ParsedDicomMetadata};
+use super::metadata::{
+    invalid_slide, parse_sparse_tile_map_with_budget, DicomBitDepth, ParsedDicomMetadata,
+};
 use super::preflight::DicomPixelDataLocation;
 
 mod frame_decode;
@@ -36,6 +38,7 @@ pub(super) struct DicomImage {
     pub(super) photometric_interpretation: String,
     pub(super) samples_per_pixel: u16,
     pub(super) planar_configuration: Option<u16>,
+    pub(super) bit_depth: DicomBitDepth,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) tile_width: u32,
@@ -106,8 +109,12 @@ impl DicomImage {
         } else {
             DicomGrid::Full
         };
-        let estimated_frame_bytes =
-            dicom_frame_cache_entry_bytes(tile_width, tile_height, meta.samples_per_pixel);
+        let estimated_frame_bytes = dicom_frame_cache_entry_bytes(
+            tile_width,
+            tile_height,
+            meta.samples_per_pixel,
+            meta.bit_depth,
+        );
         let encapsulated_frame_cache =
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
         let decoded_frame_cache =
@@ -154,6 +161,7 @@ impl DicomImage {
             photometric_interpretation: meta.photometric_interpretation,
             samples_per_pixel: meta.samples_per_pixel,
             planar_configuration: meta.planar_configuration,
+            bit_depth: meta.bit_depth,
             width,
             height,
             tile_width,
@@ -193,7 +201,7 @@ impl DicomImage {
             checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         let Some(frame_index) = self.frame_index(col_u32, row_u32) else {
             let (width, height) = self.actual_tile_dimensions(col_u32, row_u32);
-            return black_sample_buffer(width, height);
+            return black_sample_buffer(width, height, self.bit_depth);
         };
 
         let (actual_width, actual_height) = self.actual_tile_dimensions(col_u32, row_u32);
@@ -228,12 +236,12 @@ impl DicomImage {
         let mut data = bytes.as_ref().clone();
         trim_encapsulated_frame_padding(&mut data);
         if is_jpeg_transfer_syntax(&self.transfer_syntax_uid) {
-            validate_jpeg_transfer_syntax_frame(&self.transfer_syntax_uid, &data)?;
+            validate_jpeg_transfer_syntax_frame(&self.transfer_syntax_uid, self.bit_depth, &data)?;
         }
 
         Ok(RawCompressedTile::builder(compression)
             .dimensions(self.tile_width, self.tile_height)
-            .bits_allocated(8)
+            .bits_allocated(self.bit_depth.bits_allocated())
             .samples_per_pixel(self.samples_per_pixel)
             .photometric_interpretation(photometric_interpretation)
             .data(data)
@@ -295,6 +303,7 @@ impl DicomImage {
             self.tile_width,
             self.tile_height,
             self.samples_per_pixel,
+            self.bit_depth,
         )
         .saturating_add(256);
         u64::try_from(batch_len)
@@ -312,11 +321,16 @@ pub(super) fn dicom_frame_cache_entry_bytes(
     tile_width: u32,
     tile_height: u32,
     samples_per_pixel: u16,
+    bit_depth: DicomBitDepth,
 ) -> u64 {
-    u64::from(tile_width)
-        .saturating_mul(u64::from(tile_height))
-        .saturating_mul(u64::from(samples_per_pixel))
-        // Keep the estimate safe for both the supported 8-bit transfer
-        // syntaxes and future 16-bit decoded storage.
-        .saturating_mul(2)
+    let pixels = u64::from(tile_width).saturating_mul(u64::from(tile_height));
+    match bit_depth {
+        // Keep the historical 8-bit estimate, which is already twice the
+        // stored samples.
+        DicomBitDepth::Eight => pixels
+            .saturating_mul(u64::from(samples_per_pixel))
+            .saturating_mul(2),
+        // Decoded 12-bit frames, monochrome included, are always RGB16.
+        DicomBitDepth::Twelve => pixels.saturating_mul(3 * 2),
+    }
 }

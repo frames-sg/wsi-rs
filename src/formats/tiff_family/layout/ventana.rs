@@ -29,6 +29,7 @@ mod stitching;
 
 use geometry::{
     ventana_exact_tile_dimensions, ventana_level0_dimensions, ventana_public_level_dimensions,
+    ventana_tilemap_layout, VentanaStoredLevel,
 };
 #[cfg(test)]
 use metadata::{extract_encode_info, extract_encode_info_bytes, extract_iscan_fragment_bytes};

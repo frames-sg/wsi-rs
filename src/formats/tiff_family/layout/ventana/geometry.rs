@@ -168,4 +168,129 @@ pub(super) fn ventana_public_level_dimensions(
     ))
 }
 
+/// Stored TIFF geometry of one Ventana pyramid directory.
+pub(super) struct VentanaStoredLevel {
+    pub(super) width: u64,
+    pub(super) height: u64,
+    pub(super) tile_width: u32,
+    pub(super) tile_height: u32,
+}
+
+/// OpenSlide's BIF tilemap for one level: the level-0 grid with its tile
+/// advance and per-area offsets divided by `downsample`. At a reduced level
+/// every level-0 cell is a `tile / downsample` subtile of the level's stored
+/// TIFF tiles, so a fractional subtile size keeps its exact placement extent.
+/// Cells whose subtile starts beyond the stored image are omitted: OpenSlide
+/// clips those pixels to transparency, so they paint nothing.
+pub(super) fn ventana_tilemap_layout(
+    bif: &BifInfo,
+    downsample: u32,
+    stored: &VentanaStoredLevel,
+) -> Result<TileLayout, TiffParseError> {
+    if downsample == 0 || stored.tile_width == 0 || stored.tile_height == 0 {
+        return Err(TiffParseError::Structure(format!(
+            "Ventana BIF: invalid tilemap downsample {downsample} or tile size {}x{}",
+            stored.tile_width, stored.tile_height
+        )));
+    }
+    let scale = f64::from(downsample);
+    let tile_advance = (bif.tile_advance_x / scale, bif.tile_advance_y / scale);
+    let extent = (
+        f64::from(stored.tile_width) / scale,
+        f64::from(stored.tile_height) / scale,
+    );
+    let dimensions = (extent.0.ceil() as u32, extent.1.ceil() as u32);
+    let fractional = extent.0.fract() != 0.0 || extent.1.fract() != 0.0;
+    let stored_tiles = (
+        stored.width.div_ceil(u64::from(stored.tile_width)),
+        stored.height.div_ceil(u64::from(stored.tile_height)),
+    );
+
+    let mut tiles = HashMap::with_capacity(bif.tiles.len());
+    let mut extras = (0u32, 0u32, 0u32, 0u32);
+    for area in &bif.areas {
+        let offset = (
+            (area.x as f64 - area.start_col as f64 * bif.tile_advance_x) / scale,
+            (area.y as f64 - area.start_row as f64 * bif.tile_advance_y) / scale,
+        );
+        let (top, bottom, left, right) = irregular_extra_tiles(
+            offset.0,
+            offset.1,
+            tile_advance.0,
+            tile_advance.1,
+            extent.0,
+            extent.1,
+        );
+        extras = (
+            extras.0.max(top),
+            extras.1.max(bottom),
+            extras.2.max(left),
+            extras.3.max(right),
+        );
+        let end_row = area.start_row.checked_add(area.tiles_down).ok_or_else(|| {
+            TiffParseError::Structure("Ventana BIF: tile row range overflows".into())
+        })?;
+        let end_col = area
+            .start_col
+            .checked_add(area.tiles_across)
+            .ok_or_else(|| {
+                TiffParseError::Structure("Ventana BIF: tile column range overflows".into())
+            })?;
+        for row in area.start_row..end_row {
+            for col in area.start_col..end_col {
+                if subtile_outside_stored_image(
+                    (col, row),
+                    downsample,
+                    extent,
+                    stored,
+                    stored_tiles,
+                ) {
+                    continue;
+                }
+                let entry = TileEntry::new(offset, dimensions);
+                tiles.insert(
+                    (col, row),
+                    if fractional {
+                        entry.with_extent(extent)
+                    } else {
+                        entry
+                    },
+                );
+            }
+        }
+    }
+    Ok(TileLayout::Irregular {
+        tile_advance,
+        extra_tiles: extras,
+        tiles,
+    })
+}
+
+/// Whether a cell's subtile starts beyond its stored tile's clipped extent.
+/// Cells addressing a stored tile outside the grid stay in the tilemap so the
+/// read reports the missing tile, as OpenSlide's does.
+fn subtile_outside_stored_image(
+    (col, row): (i64, i64),
+    downsample: u32,
+    extent: (f64, f64),
+    stored: &VentanaStoredLevel,
+    stored_tiles: (u64, u64),
+) -> bool {
+    let (Ok(col), Ok(row)) = (u64::try_from(col), u64::try_from(row)) else {
+        return false;
+    };
+    let per_tile = u64::from(downsample);
+    let (tile_col, tile_row) = (col / per_tile, row / per_tile);
+    if tile_col >= stored_tiles.0 || tile_row >= stored_tiles.1 {
+        return false;
+    }
+    let clipped_width =
+        (stored.width - tile_col * u64::from(stored.tile_width)).min(u64::from(stored.tile_width));
+    let clipped_height = (stored.height - tile_row * u64::from(stored.tile_height))
+        .min(u64::from(stored.tile_height));
+    let subtile_x = (col % per_tile) as f64 * extent.0;
+    let subtile_y = (row % per_tile) as f64 * extent.1;
+    subtile_x >= clipped_width as f64 || subtile_y >= clipped_height as f64
+}
+
 // ── Tests ───────────────────────────────────────────────────────────

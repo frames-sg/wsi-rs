@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex};
 use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
-    crop_rgb_interleaved_u8_buffer, BackendOpenConfig, ConfiguredDatasetReader,
-    ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader, FormatProbe,
-    ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
+    cairo_subtile_surface_u8, crop_rgb_interleaved_u8_buffer, BackendOpenConfig,
+    ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader,
+    FormatProbe, ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
@@ -165,7 +165,7 @@ impl ConfiguredDatasetReader for MiraxBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        Ok(Box::new(ConservativeManagedReader::new(
+        Ok(Box::new(ConservativeManagedReader::builtin(
             self.open_parsed_with_config(path, config)?,
             config.limits.encoded_unit_bytes(),
         )))
@@ -201,6 +201,13 @@ impl SlideReader for MiraxReader {
         if tile.image.format != MiraxImageFormat::Jpeg {
             return Err(WsiError::Unsupported {
                 reason: "MIRAX raw compressed tile access requires a JPEG backing image".into(),
+            });
+        }
+        if tile.resample_origin.is_some() {
+            return Err(WsiError::Unsupported {
+                reason:
+                    "MIRAX raw JPEG passthrough cannot represent a resampled fractional subtile"
+                        .into(),
             });
         }
         if tile.src_x != 0 || tile.src_y != 0 {
@@ -309,20 +316,15 @@ impl MiraxReader {
     ) -> Result<CpuTile, WsiError> {
         let (entry, tile) = self.tile_for_request(req)?;
         let decoded = self.slide.decode_image_with_backend(&tile.image, backend)?;
-        if tile.src_x == 0
+        if tile.resample_origin.is_none()
+            && tile.src_x == 0
             && tile.src_y == 0
             && decoded.width == entry.dimensions.0
             && decoded.height == entry.dimensions.1
         {
             return Ok(Arc::unwrap_or_clone(decoded));
         }
-        crop_rgb_interleaved_u8_buffer(
-            decoded.as_ref(),
-            tile.src_x,
-            tile.src_y,
-            entry.dimensions.0,
-            entry.dimensions.1,
-        )
+        tile.extract(decoded.as_ref(), entry.dimensions)
     }
 }
 
@@ -385,6 +387,22 @@ struct MiraxTile {
     image: Arc<MiraxImage>,
     src_x: u32,
     src_y: u32,
+    /// Fractional source origin of a subtile that OpenSlide resamples through
+    /// an intermediate surface; `src_x`/`src_y` are unused when set.
+    resample_origin: Option<(f64, f64)>,
+}
+
+impl MiraxTile {
+    /// The logical tile of `dimensions` cut from its decoded source image.
+    fn extract(&self, decoded: &CpuTile, dimensions: (u32, u32)) -> Result<CpuTile, WsiError> {
+        if let Some(origin) = self.resample_origin {
+            return cairo_subtile_surface_u8(decoded, origin, dimensions);
+        }
+        if self.src_x == 0 && self.src_y == 0 && (decoded.width, decoded.height) == dimensions {
+            return Ok(decoded.clone());
+        }
+        crop_rgb_interleaved_u8_buffer(decoded, self.src_x, self.src_y, dimensions.0, dimensions.1)
+    }
 }
 
 #[derive(Clone)]

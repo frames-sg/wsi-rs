@@ -163,6 +163,19 @@ uncompressed 8-bit RGB image with top-left orientation, no predictor, and
 either interleaved or separate sample planes. Other ordinary TIFF variants
 remain unsupported unless they use a registered WSI layout.
 
+### DICOM pixels
+
+DICOM VL WSI images are 8-bit (BitsAllocated 8, BitsStored 8, HighBit 7) for
+every supported transfer syntax. JPEG Extended (1.2.840.10008.1.2.4.51) and the
+retired progressive syntaxes (1.2.840.10008.1.2.4.53 and .55) also accept 12-bit
+frames: BitsAllocated 16, BitsStored 12 and HighBit 11. These series report
+`Uint16` and return interleaved RGB `U16` tiles with the 12-bit samples
+unchanged. Monochrome frames expand to R=G=B at either depth. Use
+`read_region_rgba_windowed` with `DisplayWindow::new(0.0, 4095.0)?` for display.
+Each frame's JPEG precision must match BitsStored, and every pyramid level must
+share one depth; associated images keep their own. 12-bit JPEG decodes on the
+CPU only. The OpenSlide C shim rejects 12-bit DICOM, as OpenSlide does.
+
 ### Hamamatsu VMU pixels
 
 VMU reads the base and map NGR images at focal plane zero, plus an optional

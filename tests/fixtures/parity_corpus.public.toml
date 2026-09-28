@@ -121,7 +121,9 @@ alias            = "ndpi-001"
 path             = ""
 format           = "ndpi"
 codecs           = ["jpeg"]
-must_decode      = ["base", "level2"]
+# level1 and level8 are libjpeg DCT-scaled levels (restart-interval and
+# whole-image bases); OpenSlide compares them like stored levels.
+must_decode      = ["base", "level1", "level2", "level8"]
 required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
@@ -137,7 +139,8 @@ alias            = "vms-001"
 path             = ""
 format           = "hamamatsu_vms"
 codecs           = ["jpeg"]
-must_decode      = ["base"]
+# level2 and level6 are libjpeg DCT-scaled decodes of the main and map JPEGs.
+must_decode      = ["base", "level2", "level6"]
 required_properties = ["openslide.vendor"]
 source           = "openslide-testdata"
 license          = "CC0-1.0"
