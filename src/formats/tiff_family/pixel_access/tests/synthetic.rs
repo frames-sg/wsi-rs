@@ -561,7 +561,16 @@ fn synthetic_ndpi_native_tiles_crop_the_declared_virtual_grid() {
 /// 128x32 textured 4:4:4 NDPI base with 8-MCU restart intervals (64x8 strips),
 /// plus synthetic levels at factors 2 and 4 over it.
 fn build_restart_based_synthetic_ndpi_reader() -> (TiffPixelReader, Vec<u8>) {
-    let (width, height) = (128u32, 32u32);
+    build_restart_based_synthetic_ndpi_reader_with_height(32)
+}
+
+/// [`build_restart_based_synthetic_ndpi_reader`] with `height / 8` strip rows.
+/// `height` must be a multiple of 32 so both synthetic levels divide evenly.
+fn build_restart_based_synthetic_ndpi_reader_with_height(
+    height: u32,
+) -> (TiffPixelReader, Vec<u8>) {
+    assert!(height.is_multiple_of(32));
+    let width = 128u32;
     let image = image::RgbImage::from_fn(width, height, |x, y| {
         image::Rgb([
             ((x * 7 + y * 3) ^ (y * 29)) as u8,
@@ -582,15 +591,17 @@ fn build_restart_based_synthetic_ndpi_reader() -> (TiffPixelReader, Vec<u8>) {
         )
         .unwrap();
     let jpeg_header = jpeg[..find_test_jpeg_bitstream_start(&jpeg).unwrap()].to_vec();
-    let file = build_ndpi_full_jpeg_tiff(width, height, &jpeg, 8);
+    let strip_rows = height / 8;
+    let file = build_ndpi_full_jpeg_tiff(width, height, &jpeg, 2 * strip_rows as usize);
     let container = Arc::new(TiffContainer::open(file.path()).unwrap());
     let ifd_id = *container.top_ifds().first().unwrap();
+    let h = u64::from(height);
     let layout = single_series_layout(
         DatasetId::new(101),
         vec![
-            whole_level((128, 32), 1.0, (64, 8)),
-            whole_level((64, 16), 2.0, (64, 16)),
-            whole_level((32, 8), 4.0, (32, 8)),
+            whole_level((128, h), 1.0, (64, 8)),
+            whole_level((64, h / 2), 2.0, (64, height / 2)),
+            whole_level((32, h / 4), 4.0, (32, height / 4)),
         ],
         HashMap::from([
             (
@@ -600,7 +611,7 @@ fn build_restart_based_synthetic_ndpi_reader() -> (TiffPixelReader, Vec<u8>) {
                     jpeg_header,
                     mcu_starts_tag: 65426,
                     tiles_across: 2,
-                    tiles_down: 4,
+                    tiles_down: strip_rows,
                     restart_interval: 8,
                     strip_offset: 8,
                     strip_byte_count: jpeg.len() as u64,
@@ -700,6 +711,51 @@ fn synthetic_ndpi_scaled_strips_are_shared_through_the_tile_cache() {
     let base_key =
         CacheKey::from_tile_request(reader.layout.dataset.id, &TileRequest::new(0, 0, 0, 0, 0));
     assert!(cache.get(&base_key).is_none());
+}
+
+#[test]
+fn concurrent_synthetic_ndpi_level_reads_in_one_rayon_pool_do_not_deadlock() {
+    // Display-tile reads run inside the shared JP2K rayon pool. Readers of a
+    // synthetic level wait on its single-flight claim, so the claim owner must
+    // not depend on work other pool threads can steal: a thief can later pick
+    // up one of those waiters and block beneath the stolen band.
+    use rayon::prelude::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .unwrap();
+        let result = pool.install(|| {
+            (0..40).try_for_each(|_| {
+                let (reader, jpeg) = build_restart_based_synthetic_ndpi_reader_with_height(256);
+                let expected = j2k_scaled_rgb(&jpeg, J2kDownscale::Half);
+                (0..256u32).into_par_iter().try_for_each(|i| {
+                    let row = i64::from(i % 8);
+                    let tile = reader.read_synthetic_display_tile(
+                        &TileViewRequest::new(0, 0, 1, 0, row, 64, 16),
+                        0,
+                        2,
+                    )?;
+                    let start = row as usize * 16 * 64 * 3;
+                    assert_eq!(
+                        tile.data.as_u8().unwrap(),
+                        &expected[start..start + 16 * 64 * 3]
+                    );
+                    Ok::<(), WsiError>(())
+                })
+            })
+        });
+        let _ = done_tx.send(result);
+    });
+
+    match done_rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(result) => result.unwrap(),
+        Err(_) => panic!("concurrent synthetic NDPI level reads deadlocked"),
+    }
 }
 
 fn read_synthetic_ndpi_region_at(
