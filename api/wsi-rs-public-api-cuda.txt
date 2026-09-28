@@ -943,6 +943,7 @@ pub wsi_rs::TileEntry::dimensions: (u32, u32)
 pub wsi_rs::TileEntry::offset: (f64, f64)
 pub wsi_rs::TileEntry::tiff_tile_index: core::option::Option<usize>
 impl wsi_rs::TileEntry
+pub fn wsi_rs::TileEntry::extent(&self) -> (f64, f64)
 pub fn wsi_rs::TileEntry::new((f64, f64), (u32, u32)) -> Self
 pub fn wsi_rs::TileEntry::with_tiff_tile_index(self, usize) -> Self
 #[non_exhaustive] pub struct wsi_rs::TileHit
