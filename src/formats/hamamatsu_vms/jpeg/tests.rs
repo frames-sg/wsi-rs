@@ -35,7 +35,7 @@ fn scan_one_restart_offset(
     path: &Path,
 ) -> Result<Option<u64>, WsiError> {
     let mut offset = [None];
-    find_restart_offsets(file, file_len, path, &mut offset)?;
+    find_restart_offsets(file, file_len, path, &mut offset, 1)?;
     Ok(offset[0])
 }
 
@@ -264,10 +264,38 @@ fn restart_scanner_records_multiple_offsets_in_one_pass() {
     let mut file = File::open(&path).expect("open restart stream");
     let mut offsets = [None; 3];
     assert_eq!(
-        find_restart_offsets(&mut file, 14, &path, &mut offsets).unwrap(),
+        find_restart_offsets(&mut file, 14, &path, &mut offsets, 3).unwrap(),
         3
     );
     assert_eq!(offsets, [Some(3), Some(9), Some(12)]);
+}
+
+#[test]
+fn restart_prefetch_is_bounded_and_preserves_the_requested_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("prefetch.bin");
+    let mut bytes = vec![0; JPEG_SCAN_CHUNK_BYTES];
+    bytes[..6].copy_from_slice(&[0xFF, 0xD0, 0, 0xFF, 0xD1, 0]);
+    bytes.extend_from_slice(&[0xFF, 0xD2, 0xFF, 0xE1]);
+    fs::write(&path, &bytes).unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut offsets = [None; 4];
+    assert_eq!(
+        find_restart_offsets(&mut file, bytes.len() as u64, &path, &mut offsets, 1).unwrap(),
+        2
+    );
+    assert_eq!(offsets, [Some(2), Some(5), None, None]);
+
+    // An invalid marker beyond the requested boundary must not make the
+    // already discovered tile fail merely because it shares a read chunk.
+    fs::write(&path, [0xFF, 0xD0, 0, 0xFF, 0xE1]).unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut offsets = [None; 2];
+    assert_eq!(
+        find_restart_offsets(&mut file, 5, &path, &mut offsets, 1).unwrap(),
+        1
+    );
+    assert_eq!(offsets, [Some(2), None]);
 }
 
 #[test]

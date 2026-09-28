@@ -336,7 +336,8 @@ impl VmsJpeg {
             &mut file,
             self.file_len,
             &self.path,
-            &mut starts[first_good + 1..=target],
+            &mut starts[first_good + 1..],
+            requested,
         )?;
         if found < requested {
             return Err(WsiError::Jpeg(format!(
@@ -639,11 +640,14 @@ fn patch_sof_dimensions(
     Ok(())
 }
 
+// Once the requested boundary is found, retain the other markers already in
+// that read chunk. Later tile reads can use them without rereading the chunk.
 fn find_restart_offsets(
     file: &mut File,
     file_len: u64,
     path: &Path,
     offsets: &mut [Option<u64>],
+    minimum: usize,
 ) -> Result<usize, WsiError> {
     if offsets.is_empty() {
         return Ok(0);
@@ -651,13 +655,13 @@ fn find_restart_offsets(
     let mut buf = [0u8; JPEG_SCAN_CHUNK_BYTES];
     let mut pending_ff = false;
     let mut found = 0;
+    let mut base = file
+        .stream_position()
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
     loop {
-        let base = file
-            .stream_position()
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
         if base >= file_len {
             return Ok(found);
         }
@@ -698,7 +702,7 @@ fn find_restart_offsets(
                 }
                 continue;
             }
-            if byte == 0xD9 {
+            if byte == 0xD9 || found >= minimum {
                 return Ok(found);
             }
             return Err(WsiError::Jpeg(format!(
@@ -706,6 +710,10 @@ fn find_restart_offsets(
                 path.display()
             )));
         }
+        if found >= minimum {
+            return Ok(found);
+        }
+        base = base.saturating_add(n as u64);
     }
 }
 

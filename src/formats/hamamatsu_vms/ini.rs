@@ -125,7 +125,12 @@ pub(super) fn parse_vms_opt_offsets(
                     row_starts.push((offset > 0).then_some(offset));
                 }
                 Err(_) => {
-                    return Ok(vec![Vec::new(); headers.len()]);
+                    // A missing final record does not invalidate earlier rows.
+                    // Each retained offset is still checked against its JPEG
+                    // restart marker before the lazy index trusts it.
+                    per_image.push(row_starts);
+                    per_image.resize_with(headers.len(), Vec::new);
+                    return Ok(per_image);
                 }
             }
         }

@@ -186,7 +186,7 @@ fn vms_key_file_enforces_its_bounded_input_limit() {
 }
 
 #[test]
-fn optimisation_offsets_use_complete_rows_and_discard_truncation() {
+fn optimisation_offsets_preserve_complete_rows_before_truncation() {
     let fixture = VmsFixture::complete();
     let headers = fixture
         .image_paths
@@ -203,10 +203,16 @@ fn optimisation_offsets_use_complete_rows_and_discard_truncation() {
         parse_vms_opt_offsets(None, &headers).unwrap(),
         vec![Vec::new(), Vec::new()]
     );
-    fs::write(&fixture.opt_path, [0u8; 41]).expect("truncate optimisation fixture");
+    let complete = fs::read(&fixture.opt_path).unwrap();
+    fs::write(&fixture.opt_path, &complete[..121]).expect("truncate final optimisation row");
     assert_eq!(
         parse_vms_opt_offsets(Some(&fixture.opt_path), &headers).unwrap(),
-        vec![Vec::new(), Vec::new()]
+        vec![offsets[0].clone(), offsets[1][..1].to_vec()]
+    );
+    fs::write(&fixture.opt_path, &complete[..41]).expect("truncate first image offsets");
+    assert_eq!(
+        parse_vms_opt_offsets(Some(&fixture.opt_path), &headers).unwrap(),
+        vec![offsets[0][..1].to_vec(), Vec::new()]
     );
 }
 
