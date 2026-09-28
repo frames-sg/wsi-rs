@@ -75,7 +75,7 @@ on 240–256 px corpus tiles it saved at most 16% for one caller on one format,
 cost 11–13% for one caller on another, and cost 22–36% with one caller per
 worker. Larger borrowed CPU batches retain the codec's
 aggregate allocation guards and parallel scheduler. Operation-local
-`PreparedJp2kBatch` owners retain j2k 0.11.2 prepared groups for automatic route
+`PreparedJp2kBatch` owners retain j2k 0.11.3 prepared groups for automatic route
 comparisons, sharing encoded input and validated metadata between CPU and device
 work. Metal consumes native prepared plans. CPU uses the established borrowed
 batch executor: the j2k 0.10.0 owned CPU batch experiment changed lossy rounding

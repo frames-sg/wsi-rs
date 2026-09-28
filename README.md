@@ -21,23 +21,16 @@ produce black or partial pixels.
 
 ## Install
 
-The latest published crate is [0.6.0](https://crates.io/crates/wsi-rs/0.6.0):
+Install [wsi-rs 0.7.0](https://crates.io/crates/wsi-rs/0.7.0):
 
 ```sh
 cargo add wsi-rs
 ```
 
-This checkout and the examples below describe the unreleased 0.7.0 API. It uses
-published J2K 0.11.2 and JXR 0.2.0 packages; sibling codec checkouts are not
-required. To use the current source API before wsi-rs 0.7.0 is published, point
-your application at this checkout:
+The examples below use the [0.7.0 API](https://docs.rs/wsi-rs/0.7.0).
+It uses published J2K 0.11.3 and JXR 0.2.1 packages; sibling codec checkouts
+are not required.
 
-```toml
-[dependencies]
-wsi-rs = { path = "../wsi-rs" }
-```
-
-For the published 0.6.0 API, use its [versioned documentation](https://docs.rs/wsi-rs/0.6.0).
 Supported architectures are x86_64 and aarch64. The JPEG backend in the
 required J2K 0.11 series does not support 32-bit targets.
 
@@ -248,7 +241,15 @@ Performance acceptance requires reviewed capture JSON files in
 `cargo xtask perf-capture-pair <label>` using the default five alternating
 repetitions and worker matrix; collect the previous-release capture with the
 same corpus, workloads, cache budget, and thread limits. Missing captures or
-failed comparisons block preflight. Temporary dependency exceptions and their
+failed comparisons block preflight. Before collecting any of these captures,
+set `WSI_RS_PERF_PINNED_HOST_ID` to the same stable identifier for the physical
+host and set `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda` for that host.
+The paired capture compares the benchmark regions numerically with OpenSlide
+in separate workers outside timing and memory measurements. It uses the corpus
+color tolerances and requires exact alpha. Previous-release timing gates compare
+workloads with unchanged pixels; corrected output is checked against OpenSlide
+and reported explicitly instead of comparing its speed with an incorrect image.
+Temporary dependency exceptions and their
 expiry dates are recorded in
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
 Releases that include the `cuda` feature also require the fail-closed

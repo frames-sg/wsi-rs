@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-28
+
 ### Added
 
 - DICOM VL WSI with 12-bit JPEG frames (BitsAllocated 16, BitsStored 12,
@@ -15,13 +17,6 @@
   must share one bit depth. 12-bit decoding stays on the CPU. Other transfer
   syntaxes still require 8-bit samples, and the OpenSlide shim still rejects
   12-bit DICOM with its previous error.
-
-## [0.7.0] - 2026-09-27
-
-This section records an unreleased source baseline. The latest published crate
-is still 0.6.0.
-
-### Added
 
 - Hamamatsu VMU base/map NGR reading with native RGB16 samples, bounded positional
   tile reads, metadata, and JPEG macro images. The OpenSlide shim converts RGB12
@@ -47,8 +42,21 @@ is still 0.6.0.
 
 ### Fixed
 
-- Updates J2K to 0.11.2 to fix subsampled nonzero-origin decoding found by the
-  raw-codestream fuzz target, and JXR to 0.2.0 for the current codec release set.
+- VMS reads retain complete optimization records when the file ends with an
+  incomplete row, and reuse restart markers already found in a scan chunk.
+  Missing offsets still fall back to scanning the JPEG.
+- Sparse OpenSlide-compatible reads avoid image construction in empty tile-map
+  regions. Integral composition copies uncovered rows in bulk and converts
+  fully opaque output without per-pixel alpha arithmetic.
+- Fixes a deadlock when concurrent NDPI display-tile reads share a generated
+  level. The decode that other readers wait on processes strip bands on its
+  calling thread; independent region reads retain parallel strip decoding.
+- Updates J2K to 0.11.3 to fix subsampled nonzero-origin decoding and excessive
+  tag-tree construction found by the raw-codestream fuzz target, and JXR to
+  0.2.1 for the current codec release set.
+- Raw JP2K resolution probing returns corrupt-codestream errors immediately,
+  while still trying shallower reductions when component coding styles require
+  them. The truncated tall-tile reproducer is retained in the fuzz corpus.
 
 - Raw JP2K datasets publish `openslide.vendor` and `openslide.quickhash-1` like other
   formats, with unchanged dataset IDs, instead of relying on the OpenSlide shim.
