@@ -114,6 +114,39 @@ pub(super) fn run_bench(
     }
 }
 
+pub(super) fn run_pixel_comparison(
+    candidate: &BenchInvocation,
+    reference: &BenchInvocation,
+    slide: &Path,
+    cache_bytes: usize,
+    only_workload: Option<&str>,
+) -> Result<wsi_rs_perf::PixelComparison, String> {
+    let mut command = Command::new(&candidate.worker);
+    command.args(worker_args(
+        BenchLibrary::WsiRs,
+        candidate,
+        slide,
+        0,
+        cache_bytes,
+        1,
+        only_workload,
+    ));
+    command.arg("--compare-library").arg(&reference.library);
+    configure_worker_environment(&mut command, BenchLibrary::WsiRs, 1);
+    let output = command
+        .output()
+        .map_err(|error| format!("pixel comparison: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "pixel comparison for {}: {}",
+            slide.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid pixel comparison: {error}"))
+}
+
 fn configure_worker_environment(
     command: &mut Command,
     library: BenchLibrary,

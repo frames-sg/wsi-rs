@@ -25,6 +25,7 @@ pub struct WorkerConfig {
     pub workers: usize,
     pub only: Option<String>,
     pub required_version_prefix: Option<String>,
+    pub comparison_library: Option<PathBuf>,
 }
 
 impl WorkerConfig {
@@ -37,6 +38,7 @@ impl WorkerConfig {
         let mut workers = None;
         let mut only = None;
         let mut required_version_prefix = None;
+        let mut comparison_library = None;
         let mut args = args.into_iter();
 
         while let Some(flag) = args.next() {
@@ -46,6 +48,11 @@ impl WorkerConfig {
             match flag.as_str() {
                 "--engine" => assign_once(&mut engine, "--engine", parse_engine(&value)?)?,
                 "--library" => assign_once(&mut library_path, "--library", PathBuf::from(value))?,
+                "--compare-library" => assign_once(
+                    &mut comparison_library,
+                    "--compare-library",
+                    PathBuf::from(value),
+                )?,
                 "--slide" => assign_once(&mut slide_path, "--slide", PathBuf::from(value))?,
                 "--repeat-index" => {
                     let repeat = value
@@ -100,6 +107,7 @@ impl WorkerConfig {
             workers: workers.unwrap_or(1),
             only,
             required_version_prefix,
+            comparison_library,
         })
     }
 }

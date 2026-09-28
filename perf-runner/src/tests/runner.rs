@@ -210,6 +210,7 @@ fn orchestration_fails_with_context_before_or_during_dynamic_loading() {
         workers: 2,
         only: Some("single_tile_l0".into()),
         required_version_prefix: None,
+        comparison_library: None,
     };
 
     assert!(run(&config(missing.clone(), manifest.clone()))

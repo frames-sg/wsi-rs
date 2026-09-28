@@ -127,10 +127,13 @@ pub(super) fn validate_cross_capture_checksums(
         "required cell",
         describe_cell,
         |cell, first, second| {
-            format!(
+            if numerical_parity_matches(&before, &after, cell, first, second) {
+                return None;
+            }
+            Some(format!(
                 "output checksum mismatch for {}: {first} != {second}",
                 describe_cell(cell)
-            )
+            ))
         },
     )?;
     compare_maps(
@@ -138,8 +141,78 @@ pub(super) fn validate_cross_capture_checksums(
         capture_geometry_map(&after)?,
         "geometry",
         describe_geometry_key,
-        |key, _, _| format!("slide geometry mismatch for {}", describe_geometry_key(key)),
+        |key, _, _| {
+            Some(format!(
+                "slide geometry mismatch for {}",
+                describe_geometry_key(key)
+            ))
+        },
     )
+}
+
+fn numerical_parity_matches(
+    before: &CaptureDocument,
+    after: &CaptureDocument,
+    cell: &RequiredCell,
+    first: &str,
+    second: &str,
+) -> bool {
+    if after.metadata.benchmark.library != "wsi_rs"
+        || !matches!(
+            before.metadata.benchmark.library.as_str(),
+            "openslide" | "wsi_rs"
+        )
+    {
+        return false;
+    }
+    let key = &cell.checksum;
+    let mut reports = after
+        .runs
+        .iter()
+        .filter(|run| {
+            run.alias() == key.alias && run.slide_sha256.as_deref() == Some(&key.slide_sha256)
+        })
+        .filter_map(|run| run.pixel_comparison.as_ref().map(|report| (run, report)));
+    let Some((run, report)) = reports.next() else {
+        return false;
+    };
+    if reports.next().is_some() || report.reference_version != "4.0.1" {
+        return false;
+    }
+    let mut workloads = report
+        .workloads
+        .iter()
+        .filter(|workload| workload.name == key.workload);
+    let Some(proof) = workloads.next() else {
+        return false;
+    };
+    if workloads.next().is_some()
+        || proof.candidate_checksum_sha256 != second
+        || proof.reference_checksum_sha256.is_empty()
+        || (before.metadata.benchmark.library == "openslide"
+            && proof.reference_checksum_sha256 != first)
+        || !proof.alpha_exact
+        || proof.regions == 0
+        || run
+            .workloads
+            .iter()
+            .find(|workload| workload.name == key.workload)
+            .and_then(|workload| workload.n)
+            != Some(proof.regions)
+    {
+        return false;
+    }
+    // Match the existing corpus parity contract; alpha never uses a tolerance.
+    let (max_abs, mean_abs) = if key.benchmark_group.ends_with("/jpeg") {
+        (1, 0.05)
+    } else if key.benchmark_group.ends_with("/j2k") {
+        (4, 1.0)
+    } else {
+        (0, 0.0)
+    };
+    proof.max_abs <= max_abs
+        && proof.max_mean_abs.is_finite()
+        && (0.0..=mean_abs).contains(&proof.max_mean_abs)
 }
 
 pub(super) fn validate_declared_capture_plan(capture: &Value) -> Result<(), String> {
@@ -406,7 +479,7 @@ fn compare_maps<K: Ord, V: PartialEq>(
     second: BTreeMap<K, V>,
     label: &str,
     describe: impl Fn(&K) -> String,
-    mismatch: impl Fn(&K, &V, &V) -> String,
+    mismatch: impl Fn(&K, &V, &V) -> Option<String>,
 ) -> Result<(), String> {
     for (key, first_value) in &first {
         let Some(second_value) = second.get(key) else {
@@ -416,7 +489,9 @@ fn compare_maps<K: Ord, V: PartialEq>(
             ));
         };
         if first_value != second_value {
-            return Err(mismatch(key, first_value, second_value));
+            if let Some(error) = mismatch(key, first_value, second_value) {
+                return Err(error);
+            }
         }
     }
     if let Some(key) = second.keys().find(|key| !first.contains_key(*key)) {

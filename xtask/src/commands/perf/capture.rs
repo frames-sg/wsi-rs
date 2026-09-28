@@ -11,7 +11,8 @@ use super::metadata::capture_summary;
 use super::process_metrics::annotate_run_resource_usage_typed;
 use super::schema::CaptureRun;
 use super::worker::{
-    cache_bytes, prepare_bench, prepare_pair, result_dir, run_bench, BenchInvocation, BenchLibrary,
+    cache_bytes, prepare_bench, prepare_pair, result_dir, run_bench, run_pixel_comparison,
+    BenchInvocation, BenchLibrary,
 };
 
 const DEFAULT_REPEAT_COUNT: u32 = 5;
@@ -87,6 +88,24 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
                     }
                 }
             }
+        }
+    }
+
+    // Separate workers keep oracle decoding out of every timed/RSS sample.
+    let mut compared = BTreeSet::new();
+    for run in &mut wsi_rs_runs {
+        if compared.insert(run.slide_path.clone()) {
+            println!(
+                "Comparing benchmark pixels with OpenSlide: {}",
+                run.slide_path
+            );
+            run.pixel_comparison = Some(run_pixel_comparison(
+                &wsi_rs,
+                &openslide,
+                std::path::Path::new(&run.slide_path),
+                settings.cache_bytes,
+                settings.only_workload.as_deref(),
+            )?);
         }
     }
 

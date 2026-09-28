@@ -166,10 +166,11 @@ pub(in crate::commands) fn compare(args: Vec<String>) -> Result<(), String> {
             );
         }
     }
+    let summaries = comparable_previous_summaries(&before, &after, summaries)?;
     let regressions = regressions_from_summaries(&summaries);
     if regressions.is_empty() {
         println!(
-            "no benchmark regressions above {:.0}% noise guard",
+            "no benchmark regressions for unchanged pixels above {:.0}% noise guard",
             (REGRESSION_RATIO - 1.0) * 100.0
         );
         return Ok(());
@@ -194,6 +195,70 @@ pub(in crate::commands) fn compare(args: Vec<String>) -> Result<(), String> {
         "{} benchmark regression group(s) exceeded guard",
         regressions.len()
     ))
+}
+
+fn comparable_previous_summaries(
+    before: &Value,
+    after: &Value,
+    summaries: Vec<MetricSummary>,
+) -> Result<Vec<MetricSummary>, String> {
+    let before = CaptureDocument::parse(before)?;
+    let after = CaptureDocument::parse(after)?;
+    let output_map = |capture: &CaptureDocument| {
+        capture
+            .runs
+            .iter()
+            .flat_map(|run| {
+                run.workloads.iter().map(move |workload| {
+                    (
+                        (
+                            run.slide_path.clone(),
+                            run.worker_count(),
+                            workload.name.clone(),
+                        ),
+                        workload.checksum_sha256.clone(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let previous = output_map(&before);
+    let current = output_map(&after);
+    let changed = current
+        .iter()
+        .filter_map(|(key, value)| (previous.get(key) != Some(value)).then_some(key.clone()))
+        .collect::<BTreeSet<_>>();
+    for (slide, workers, workload) in &changed {
+        println!("{slide} workers={workers} {workload}: pixels changed; previous timing is not equivalent, OpenSlide numerical and performance gates apply");
+    }
+    // Input validation above requires bound OpenSlide numerical evidence for
+    // every changed output. Comparing its timing with an older, different
+    // image would penalize correctness fixes. Whole-process RSS is likewise
+    // comparable only when that process performed the same image work.
+    let comparable = summaries
+        .into_iter()
+        .filter(|summary| {
+            if summary.workload == PROCESS_METRICS_WORKLOAD {
+                !changed.iter().any(|(slide, workers, _)| {
+                    slide == &summary.slide_path && *workers == summary.worker_count
+                })
+            } else {
+                !changed.contains(&(
+                    summary.slide_path.clone(),
+                    summary.worker_count,
+                    summary.workload.clone(),
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
+    if !comparable.iter().any(|summary| {
+        summary.workload != PROCESS_METRICS_WORKLOAD
+            && summary.workload != "open_latency"
+            && is_previous_release_gate_metric(summary.metric)
+    }) {
+        return Err("previous-release comparison has no equivalent image workloads".into());
+    }
+    Ok(comparable)
 }
 
 fn validate_same_engine_inputs(before: &Value, after: &Value) -> Result<(), String> {

@@ -51,6 +51,55 @@ fn cross_capture_checksum_validation_rejects_unequal_output() {
 }
 
 #[test]
+fn cross_capture_accepts_bound_numerical_parity_and_rejects_invalid_evidence() {
+    let mut reference = declared_capture();
+    reference["metadata"]["benchmark"]["library"] = json!("openslide");
+    reference["runs"][0]["workloads"][0]["checksum_sha256"] = json!("reference-pixels");
+    let mut candidate = declared_capture();
+    candidate["metadata"]["benchmark"]["library"] = json!("wsi_rs");
+    candidate["runs"][0]["workloads"][0]["n"] = json!(128);
+    candidate["runs"][0]["pixel_comparison"] = json!({
+        "reference_version": "4.0.1",
+        "workloads": [{
+            "name": "pan_trace_l0",
+            "candidate_checksum_sha256": "pixels",
+            "reference_checksum_sha256": "reference-pixels",
+            "regions": 128,
+            "max_abs": 1,
+            "max_mean_abs": 0.01,
+            "alpha_exact": true,
+        }],
+    });
+    validate_cross_capture_checksums(&reference, &candidate)
+        .expect("JPEG parity permits the existing numerical tolerance");
+
+    for (field, value) in [
+        ("candidate_checksum_sha256", json!("different-candidate")),
+        ("reference_checksum_sha256", json!("different-reference")),
+        ("regions", json!(0)),
+        ("max_abs", json!(2)),
+        ("max_mean_abs", json!(0.051)),
+        ("alpha_exact", json!(false)),
+    ] {
+        let mut invalid = candidate.clone();
+        invalid["runs"][0]["pixel_comparison"]["workloads"][0][field] = value;
+        assert!(
+            validate_cross_capture_checksums(&reference, &invalid).is_err(),
+            "{field}"
+        );
+    }
+    let mut stale = candidate.clone();
+    stale["runs"][0]["pixel_comparison"]["reference_version"] = json!("4.0.0");
+    assert!(validate_cross_capture_checksums(&reference, &stale).is_err());
+
+    let mut previous = reference;
+    previous["metadata"]["benchmark"]["library"] = json!("wsi_rs");
+    previous["runs"][0]["workloads"][0]["checksum_sha256"] = json!("old-incorrect-pixels");
+    validate_cross_capture_checksums(&previous, &candidate)
+        .expect("a corrected candidate is checked against OpenSlide, not old incorrect pixels");
+}
+
+#[test]
 fn cross_capture_checksum_validation_rejects_unequal_geometry() {
     let capture = |bounds_x: i64| {
         json!({

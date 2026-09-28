@@ -129,6 +129,32 @@ fn two_wsi_rs_captures_use_the_five_percent_regression_gate() {
 }
 
 #[test]
+fn corrected_pixels_do_not_hide_regressions_for_unchanged_workloads() {
+    let mut before = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    let mut after = engine_capture("wsi_rs", 11_000, 22_000, 33_000, 1_000);
+    for capture in [&mut before, &mut after] {
+        for run in capture["runs"].as_array_mut().unwrap() {
+            let mut unchanged = run["workloads"][0].clone();
+            unchanged["name"] = json!("pan_trace_l2");
+            run["workloads"].as_array_mut().unwrap().push(unchanged);
+        }
+    }
+    for run in after["runs"].as_array_mut().unwrap() {
+        run["workloads"][0]["checksum_sha256"] = json!("corrected-pixels");
+    }
+    let summaries = comparison_summaries(&before, &after).unwrap();
+    let comparable = comparable_previous_summaries(&before, &after, summaries).unwrap();
+    let regressions = regressions_from_summaries(&comparable);
+    assert!(!regressions.is_empty());
+    assert!(regressions
+        .iter()
+        .all(|regression| regression.workload == "pan_trace_l2"));
+    assert!(comparable
+        .iter()
+        .all(|summary| summary.workload != PROCESS_METRICS_WORKLOAD));
+}
+
+#[test]
 fn same_engine_input_validation_rejects_mismatched_output_cells() {
     let capture = |checksum: &str| {
         let mut capture = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);

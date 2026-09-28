@@ -22,6 +22,9 @@ pub const WORKER_SCHEMA_VERSION: u32 = 4;
 const OPEN_SAMPLE_COUNT: usize = 10;
 const ROUTE_TELEMETRY_PROPERTY: &str = "wsi-rs.internal.decode-route-telemetry";
 
+mod pixels;
+pub use pixels::{compare_pixels, PixelComparison, WorkloadPixelComparison};
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkerResult {
     pub schema_version: u32,

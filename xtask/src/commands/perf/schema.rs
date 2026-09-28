@@ -106,6 +106,9 @@ pub(super) struct CaptureRun {
     pub(super) levels: Vec<wsi_rs_perf::LevelResult>,
     #[serde(default)]
     pub(super) workloads: Vec<CaptureWorkload>,
+    /// Untimed numerical comparison, attached once per slide after the paired runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) pixel_comparison: Option<wsi_rs_perf::PixelComparison>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) alias: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
