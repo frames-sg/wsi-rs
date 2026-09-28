@@ -427,6 +427,7 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
             }
         };
         let expected = read(&cpu);
+        let mut probes = Vec::new();
         for call in 0..5 {
             let before = test_count(Event::MetalBatchSubmissions);
             let actual = read(&slide);
@@ -434,12 +435,16 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.as_u8(), expected.as_u8());
             }
-            assert_eq!(
-                test_count(Event::MetalBatchSubmissions) - before,
-                u64::from(call != 0),
-                "public read {call}, region={region}"
-            );
+            probes.push(test_count(Event::MetalBatchSubmissions) - before);
+            assert!(probes[call] <= 1, "public read {call}, region={region}");
         }
+        // Slow warmup completes a CPU decision immediately; other routes need
+        // all three measured comparisons. Neither path probes multiple chunks
+        // during one public read or initializes Metal on the first read.
+        assert!(
+            probes == [0, 1, 0, 0, 0] || probes == [0, 1, 1, 1, 1],
+            "unexpected calibration sequence {probes:?}, region={region}"
+        );
     }
 }
 
