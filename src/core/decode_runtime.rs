@@ -356,7 +356,8 @@ thread_local! {
     static TEST_ROUTE_TILES: std::cell::Cell<[u64; 5]> = const { std::cell::Cell::new([0; 5]) };
 }
 
-#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
+// Only the Metal adaptive-routing tests read these counters.
+#[cfg(all(test, feature = "metal"))]
 fn test_route_tiles(outcome: RouteTileOutcome) -> u64 {
     TEST_ROUTE_TILES.with(|cell| cell.get()[outcome as usize])
 }
