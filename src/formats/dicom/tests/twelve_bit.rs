@@ -104,7 +104,12 @@ fn rejects_pyramids_that_mix_8bit_and_12bit_levels() {
         },
     );
 
-    let error = open_error(dir.path());
+    // Parse the directory with the DICOM reader itself: on Windows, other
+    // format probes fail to open a directory first and mask its error.
+    let error = match DicomSlide::parse(dir.path()) {
+        Ok(_) => panic!("a mixed-depth pyramid must be rejected"),
+        Err(err) => err.to_string(),
+    };
     assert!(
         error.contains(
             "DICOM series mixes 8-bit and 12-bit pyramid images \
