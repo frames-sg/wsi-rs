@@ -314,11 +314,23 @@ fn blit_integral_saturating(
     let y0 = dest.1.max(0);
     let x1 = (dest.0 + i64::from(tile.width)).min(shape.width as i64);
     let y1 = (dest.1 + i64::from(tile.height)).min(shape.height as i64);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
     let tile_row_stride = tile.width as usize * channels;
     let opaque = unorm8_to_float(u8::MAX, true);
     for out_y in y0..y1 {
         let source_row = (out_y - dest.1) as usize * tile_row_stride;
         let alpha_row = out_y as usize * shape.width;
+        let row_alpha = &mut alpha[alpha_row + x0 as usize..alpha_row + x1 as usize];
+        if row_alpha.iter().all(|&coverage| coverage == 0.0) {
+            let source = source_row + (x0 - dest.0) as usize * channels;
+            let target = (alpha_row + x0 as usize) * channels;
+            let bytes = row_alpha.len() * channels;
+            out[target..target + bytes].copy_from_slice(&tile_data[source..source + bytes]);
+            row_alpha.fill(opaque);
+            continue;
+        }
         for out_x in x0..x1 {
             let pixel = alpha_row + out_x as usize;
             let dest_alpha = alpha[pixel];
@@ -511,6 +523,12 @@ pub(super) fn unpremultiply_u8(pixels: &mut [u8], alpha: &[f32], channels: usize
 /// same per-pixel arithmetic as [`unpremultiply_u8`] and a Pixman alpha byte.
 pub(super) fn unpremultiplied_rgba_u8(premultiplied: &[u8], alpha: &[f32]) -> Vec<u8> {
     let mut rgba = vec![0u8; alpha.len() * 4];
+    if alpha.iter().all(|&coverage| coverage == 1.0) {
+        for (target, source) in rgba.chunks_exact_mut(4).zip(premultiplied.chunks_exact(3)) {
+            target.copy_from_slice(&[source[0], source[1], source[2], u8::MAX]);
+        }
+        return rgba;
+    }
     for ((target, source), &coverage) in rgba
         .chunks_exact_mut(4)
         .zip(premultiplied.chunks_exact(3))

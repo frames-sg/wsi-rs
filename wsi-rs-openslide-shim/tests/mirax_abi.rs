@@ -5,6 +5,30 @@ mod support;
 use support::{fixture_path, fnv1a_argb};
 
 #[test]
+fn mirax_empty_regions_are_transparent_without_poisoning_the_handle() {
+    let Some(path) = fixture_path("mirax-001", "d/CMU-1.mrxs") else {
+        return;
+    };
+    // SAFETY: The path and output buffer remain live for each call, and the
+    // handle is closed exactly once after all reads.
+    unsafe {
+        let osr = openslide_open(path.as_ptr());
+        assert!(!osr.is_null());
+        for (x, y) in [(60_963, 113_099), (26_933, 160_457)] {
+            let mut pixels = vec![u32::MAX; 256 * 256];
+            openslide_read_region(osr, pixels.as_mut_ptr(), x, y, 0, 256, 256);
+            assert!(openslide_get_error(osr).is_null());
+            assert!(pixels.iter().all(|pixel| *pixel == 0));
+        }
+        let mut pixels = vec![0; 256 * 256];
+        openslide_read_region(osr, pixels.as_mut_ptr(), 26_933, 113_099, 0, 256, 256);
+        assert!(openslide_get_error(osr).is_null());
+        assert!(pixels.iter().any(|pixel| *pixel != 0));
+        openslide_close(osr);
+    }
+}
+
+#[test]
 fn mirax_coarse_levels_resample_fractional_subtiles_like_openslide() {
     // The fixture's 340-pixel images split into 42.5-pixel subtiles from
     // level 5, down to 2.66 pixels at level 9. OpenSlide resamples each onto

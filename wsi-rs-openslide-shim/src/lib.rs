@@ -16,7 +16,7 @@ use std::slice;
 use std::sync::Arc;
 
 use handle::{empty_names, OpenSlideHandle};
-use wsi_rs::{ColorSpace, LevelIdx, RegionRequest, SceneId, SeriesId, TileCache};
+use wsi_rs::{ColorSpace, LevelIdx, RegionRequest, SceneId, SeriesId, TileCache, TileLayout};
 
 const VERSION: &str = concat!("OpenSlide 4.0.1+wsi-rs-", env!("CARGO_PKG_VERSION"), "\0");
 
@@ -439,6 +439,25 @@ pub unsafe extern "C" fn openslide_read_region(
             handle.set_error(format!("level {level} has invalid geometry"));
             return Err(FfiPanic);
         };
+        // Sparse tile maps can contain large empty regions. The destination
+        // is already transparent, so avoid decoding a metadata probe and
+        // allocating/converting an image when no tile can contribute. Include
+        // the extra edge pixel reached by a fractional level origin.
+        if (pixel_len as u64) <= slide.limits().region_pixels()
+            && (pixel_len as u64) <= slide.limits().region_rgba_bytes() / 4
+            && matches!(level_meta.tile_layout, TileLayout::Irregular { .. })
+            && level_meta
+                .tile_layout
+                .tiles_for_region(
+                    level_x,
+                    level_y,
+                    width.saturating_add(1),
+                    height.saturating_add(1),
+                )
+                .is_empty()
+        {
+            return Ok(());
+        }
         let req = RegionRequest::new(
             SceneId::new(0),
             SeriesId::new(0),
