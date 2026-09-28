@@ -44,8 +44,6 @@
 
 - Automatic JP2K routing stays on CPU when device warmup takes more than four
   uncached CPU decodes, avoiding repeated costly foreground calibration probes.
-  Metal inputs requiring the strict single-image fallback stay on CPU for
-  automatic reads; explicit Metal reads retain that fallback.
 - MIRAX composition uses Pixman's integer interpolation for fully covered
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
   Integer-position opaque tiles compose directly into RGBA, avoiding separate

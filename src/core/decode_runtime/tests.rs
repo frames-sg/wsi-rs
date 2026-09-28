@@ -664,34 +664,6 @@ fn admitted_auto_reads_stop_probing_after_a_complete_route_decision() {
 
 #[cfg(feature = "metal")]
 #[test]
-fn auto_keeps_subsampled_inputs_on_cpu_without_strict_metal_probes() {
-    use crate::core::execution_telemetry::{test_count, Event};
-    let dir = tempfile::tempdir().unwrap();
-    for (name, bytes) in [
-        (
-            "420",
-            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_420.j2k").as_slice(),
-        ),
-        (
-            "422",
-            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_422.j2k").as_slice(),
-        ),
-    ] {
-        let path = dir.path().join(format!("{name}.j2k"));
-        std::fs::write(&path, bytes).unwrap();
-        let slide = crate::Slide::open(&path).unwrap();
-        let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
-        let before = test_count(Event::MetalBatchSubmissions);
-        let oracle = slide.read_tile(&request).unwrap();
-        for _ in 0..6 {
-            assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
-        }
-        assert_eq!(test_count(Event::MetalBatchSubmissions), before, "{name}");
-    }
-}
-
-#[cfg(feature = "metal")]
-#[test]
 fn constrained_admission_skips_calibration_and_strict_native_copying() {
     use crate::core::execution_telemetry::{test_count, Event};
     let bytes = include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k");

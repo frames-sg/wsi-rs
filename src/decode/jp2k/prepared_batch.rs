@@ -88,15 +88,6 @@ impl PreparedJp2kBatch {
         self
     }
 
-    #[cfg(all(feature = "metal", target_os = "macos"))]
-    pub(crate) fn can_calibrate_metal(&self) -> bool {
-        // The strict single-image fallback is correct but adds costly device
-        // round trips for inputs such as subsampled color. Automatic CPU-output
-        // reads only probe the native batch route; explicit Metal reads retain
-        // the full strict fallback support.
-        self.prepared.errors().is_empty()
-    }
-
     pub(crate) fn extra_work_bytes(&self) -> u64 {
         self.jobs.iter().fold(0_u64, |sum, job| {
             sum.saturating_add(job.bytes.len() as u64).saturating_add(

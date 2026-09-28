@@ -91,10 +91,6 @@ strict device APIs retain their separate scheduling; individually larger images
 retain existing admission. Automatic routing is foreground and bounded to 1,024
 decisions:
 
-Automatic Metal calibration requires native batch-compatible output. Inputs
-requiring the strict single-image fallback, including subsampled color, stay on
-CPU. Explicit Metal reads retain that fallback.
-
 1. A new eligible route returns CPU output and marks calibration pending without
    initializing the device.
 2. A later eligible read warms the device and times an uncached CPU decode of

@@ -108,20 +108,6 @@ impl AdaptiveDecodeReader {
             return self.read_adaptive_cpu(reqs, control);
         };
         Self::check_control(control)?;
-        #[cfg(all(feature = "metal", target_os = "macos"))]
-        if self.configured_device() == Some(DeviceKind::Metal) && !prepared.can_calibrate_metal() {
-            self.runtime.store_route(
-                key,
-                DecodeRouteDecision {
-                    winner: DecodeRoute::Cpu,
-                    cpu_elapsed: Duration::ZERO,
-                    device_elapsed: Duration::ZERO,
-                    device_failure: false,
-                },
-                control,
-            )?;
-            return self.read_adaptive_cpu(reqs, control);
-        }
         let Some(device) = self.preferred_device() else {
             if let RouteClaim::Calibrate(lease) = claim {
                 lease.fail(control)?;
