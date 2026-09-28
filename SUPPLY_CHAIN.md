@@ -10,7 +10,7 @@ Alliance, Google, and Mozilla. Uncovered crates are explicit
 `safe-to-deploy` exemptions, not implicit trust. Dependency updates must rerun
 `cargo vet --locked`; new exemptions require review in the same change.
 
-The J2K 0.11.2 family resolves from its coordinated crates.io release.
+The J2K 0.11.3 family resolves from its coordinated crates.io release.
 Exact-version Cargo Vet exemptions record local acceptance of its `objc2`,
 SIMD, and split CUDA engine dependency surface; any later J2K version requires
 another explicit review.
@@ -36,7 +36,7 @@ at build time and adds no persistent runtime cache.
 
 ## JPEG XR release gate
 
-The reader now resolves `jxr 0.2.0`, `jxr-core 0.2.0`, `jxr-native 0.2.0`, and
+The reader now resolves `jxr 0.2.1`, `jxr-core 0.2.1`, `jxr-native 0.2.1`, and
 `jxr-math 0.1.0` from crates.io. The source repository is
 https://github.com/frames-sg/jxr. Exact-version `safe-to-deploy` reviews for all four CPU
 packages are recorded in `supply-chain/audits.toml`; no exemptions were added

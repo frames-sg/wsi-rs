@@ -558,9 +558,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "j2k"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20f6bc6dc7c2659c68321f79c25134b8ce616e5be855e3241ca9c1df9d5a3b08"
+checksum = "e5dcb93d62c580930297896f25933b034bf665534568626787dbf0f03027e7b0"
 dependencies = [
  "j2k-core",
  "j2k-native",
@@ -571,27 +571,27 @@ dependencies = [
 
 [[package]]
 name = "j2k-codec-math"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de94dfecc9963d7254a76ff076666228827f573e9643d3144858830ed184982a"
+checksum = "a38b1ddbaa04c07213dba6180ed1168f0e96bfa35890542c414d872cea0c7d58"
 dependencies = [
  "j2k-types",
 ]
 
 [[package]]
 name = "j2k-core"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fd9e94fb0e8c153c3429c1b612715a7c6c99ee2b03c9171daca9f50c9e1be43"
+checksum = "ae969eb19e9b3a8d65c4342f9921717be407571cc0fbc44e4379daa0b588d01c"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "j2k-cuda"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88f01359e20d75da00d4f214e7984fd6035ed9d9561cc7a77fe16b075b86548d"
+checksum = "e2c00efe2b8830de9b39f47ea6b721f5eb2bd5f5267ebcae3bd146a291e4150f"
 dependencies = [
  "j2k",
  "j2k-core",
@@ -604,15 +604,15 @@ dependencies = [
 
 [[package]]
 name = "j2k-cuda-build-support"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e462c0a7b393cf1a71b47048799f337a6afc4f221378370eb43725f2661d718"
+checksum = "77c26f241a54e1be3a59a0e5dca4c123554ad213ccc4aa09c98b2443dd95806b"
 
 [[package]]
 name = "j2k-cuda-j2k-engine"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1b189766f69214e08893e17a378b12d614b4675214ed54ae843e06c363d6984"
+checksum = "3044c48dd5a3402ddad0df3c7190f30596f4f2050822de68e07452b5caa99ace"
 dependencies = [
  "j2k-codec-math",
  "j2k-core",
@@ -623,9 +623,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-cuda-runtime"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac92efe8253f97ed001a73b1db294cd8c56f1d0b285462008cd9ac37b65163f4"
+checksum = "0b382bd87e1c57314b0c1ed69b1a04fa748e1243c21d7eecfa58404c9178e581"
 dependencies = [
  "j2k-codec-math",
  "j2k-core",
@@ -636,9 +636,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-jpeg"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5980a6b9224a9a97e24ed6a9056d742427c292bc9709e511584ea8f562ec7d"
+checksum = "f49bd1ceed925eca33111980b0943a72758fab29dc709ea841ba671922482303"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -651,9 +651,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-metal"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c90e7d0da0e0ccadba1e3c94f3ae1615b65cdbf1eddbd6d86cceea3402c7fb68"
+checksum = "32d3ad47fd87427f0786fe671c8d9214781a904c57a8fd8dd6eb4be7b1c0da3b"
 dependencies = [
  "cc",
  "j2k",
@@ -673,9 +673,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-metal-support"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ec44f782f04069159ea95142604d9133f8784aa4e2a1ea6705bb837db79a96f"
+checksum = "0ca6e6f9a9ec28efc37ce2ed62c97b43eb9d41ad929541a4bad772f8f85d6ed5"
 dependencies = [
  "j2k-core",
  "log",
@@ -686,9 +686,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-native"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebf71c1a3408e02c1efd84f3836e48e2189e3b1539f0913217777a29189afdd0"
+checksum = "971da314ca1501363f686b6796d309ebbda7d2f88d34671c38d79132f7cb59ff"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -700,15 +700,15 @@ dependencies = [
 
 [[package]]
 name = "j2k-profile"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8772f134b2cde27be412d28633090297f5d78e14a26577b48e833338ae0af976"
+checksum = "3c1c0cc7e85f2ab1cc85c9a6d2bad3680319c0cdf558f3be14b4ccdbd6917fca"
 
 [[package]]
 name = "j2k-tilecodec"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0d7d58a9f923afe3590a8e5d11d8da68245dcf22c5e97c8746f78806ef7801"
+checksum = "61a45749f2f5be0fe863d76275be040f3567591aca68ff008ddcede93cc611c1"
 dependencies = [
  "flate2",
  "j2k-core",
@@ -719,9 +719,9 @@ dependencies = [
 
 [[package]]
 name = "j2k-types"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "013fb9c77e9c27a0bfea3578f8910ea8b910828e21c56e428e99380ff71fbcbb"
+checksum = "716edd556741a415294d955121f76d41b7d8d650554fb09f30d0654b15127ac9"
 
 [[package]]
 name = "jobserver"
@@ -761,9 +761,9 @@ dependencies = [
 
 [[package]]
 name = "jxr"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b41aa7b5714870007564212a183fbab678b54fa56a84338158c449b17cd4be0"
+checksum = "49b4cdee06e38e63caf16668e9a44d5fef007290c74c2cb70fa271e8efc628c1"
 dependencies = [
  "jxr-core",
  "jxr-native",
@@ -773,9 +773,9 @@ dependencies = [
 
 [[package]]
 name = "jxr-core"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76ae622a479cdc79cdc6616b22c911dea5761d61f73930a0fb2421b2a601a75b"
+checksum = "035778813630e6079117cf5fac0a79290ec0edaffe16ac0072c2ea5f11cc685e"
 dependencies = [
  "j2k-core",
 ]
@@ -788,9 +788,9 @@ checksum = "6506b3ec14544413cf741ae3ce3b3079e6cff860bc7060fa8ae311157f7b4752"
 
 [[package]]
 name = "jxr-native"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b39a57ae8a4fbc049753f5e43f9334d7c140be00aef2c2021ac7360f293ea6e5"
+checksum = "0459a9c1d26181e8904b0df164e6dd2f198e7a7a96f1e1c2ea463f8c3c09953a"
 dependencies = [
  "fearless_simd",
  "jxr-core",
