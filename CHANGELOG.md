@@ -48,6 +48,8 @@
   automatic reads; explicit Metal reads retain that fallback.
 - MIRAX composition uses Pixman's integer interpolation for fully covered
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
+  Integer-position opaque tiles compose directly into RGBA, avoiding separate
+  color and coverage images while preserving gaps and overlap order.
 - VMS reads retain complete optimization records when the file ends with an
   incomplete row, and reuse restart markers already found in a scan chunk.
   Missing offsets still fall back to scanning the JPEG.

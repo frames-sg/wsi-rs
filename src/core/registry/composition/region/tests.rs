@@ -109,6 +109,61 @@ fn fractional_u8_composition_saturates_prior_integral_tile() {
 }
 
 #[test]
+fn integral_rgba_composition_preserves_gaps_overlap_and_later_alpha_sources() {
+    let hits: Vec<_> = [-1, 1, 2]
+        .into_iter()
+        .map(|x| {
+            let mut hit = hit(x, x as f64);
+            hit.cairo_fixed_dest = Some((x as f64, 0.0));
+            hit
+        })
+        .collect();
+    let first =
+        CpuTile::from_u8_interleaved(3, 2, 3, ColorSpace::Rgb, [10, 20, 30].repeat(6)).unwrap();
+    let second =
+        CpuTile::from_u8_interleaved(2, 2, 3, ColorSpace::Rgb, [40, 50, 60].repeat(4)).unwrap();
+    for last in [
+        CpuTile::from_u8_interleaved(2, 2, 3, ColorSpace::Rgb, [200, 100, 50].repeat(4)).unwrap(),
+        CpuTile::from_u8_interleaved(2, 2, 4, ColorSpace::Rgba, [200, 100, 50, 128].repeat(4))
+            .unwrap(),
+    ] {
+        let mut composer = RegionComposer::new(5, 2, &first, true, &hits).unwrap();
+        let mut reference = vec![0; 5 * 2 * 3];
+        let mut coverage = vec![0.0; 5 * 2];
+        let shape = CompositionShape {
+            width: 5,
+            height: 2,
+            channels: 3,
+        };
+        for (hit, tile) in hits.iter().zip([&first, &second, &last]) {
+            composer.blit(hit, tile).unwrap();
+            if is_alpha_source(tile) {
+                blit_alpha_source_saturating_u8(&mut reference, &mut coverage, tile, hit, shape)
+                    .unwrap();
+            } else {
+                blit_fractional_saturating_u8(
+                    &mut reference,
+                    &mut coverage,
+                    tile.as_u8().unwrap(),
+                    tile,
+                    hit,
+                    shape,
+                );
+            }
+        }
+        let actual = composer.finish().unwrap().into_rgba().unwrap();
+        assert_eq!(
+            actual.as_raw(),
+            &unpremultiplied_rgba_u8(&reference, &coverage)
+        );
+        assert_eq!(actual.get_pixel(0, 0).0, [10, 20, 30, 255]);
+        assert_eq!(actual.get_pixel(1, 0).0, [10, 20, 30, 255]);
+        assert_eq!(actual.get_pixel(2, 0).0, [40, 50, 60, 255]);
+        assert_eq!(actual.get_pixel(4, 0).0, [0, 0, 0, 0]);
+    }
+}
+
+#[test]
 fn fractional_u8_composition_matches_cairo_saturate_rounding() {
     let hits = [hit_at(0, -1, 0.0, -0.871_526_272_621_85)];
     let tiles = [tile_2d(CpuTileData::u8(vec![236, 0, 241, 64]), 2, 2)];
