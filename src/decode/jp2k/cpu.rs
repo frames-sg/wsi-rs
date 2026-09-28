@@ -103,8 +103,21 @@ pub(crate) fn jp2k_decodable_reduction_levels(data: &[u8]) -> Result<u8, WsiErro
             levels,
         ) {
             Ok(_) => return Ok(levels),
+            Err(j2k::J2kError::Unsupported(j2k_core::Unsupported { what }))
+                if matches!(
+                    what,
+                    "requested reduction exceeds the codestream resolution ladder"
+                        | "tile coding style has fewer levels than the requested reduction"
+                        | "requested reduction exceeds supported image geometry"
+                        | "native backend did not honor the requested reduction level"
+                ) =>
+            {
+                tracing::debug!(what, levels, "JP2K reduction is not decodable");
+            }
             Err(error) => {
-                tracing::debug!(%error, levels, "JP2K reduction is not decodable");
+                return Err(WsiError::Jp2k(format!(
+                    "j2k JP2K reduction probe failed: {error}"
+                )));
             }
         }
     }

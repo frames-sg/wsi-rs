@@ -384,3 +384,36 @@ fn managed_reader_reports_encoded_working_set_bounds() {
         encoded_len
     );
 }
+
+#[test]
+fn open_rejects_truncated_packet_data_during_reduction_probing() {
+    let data = include_bytes!("../../../tests/fixtures/jp2k/truncated_tall_tag_tree.j2k");
+    let fixture = write_fixture("j2k", data);
+    let error = expect_error(
+        RawJp2kBackend.open(&fixture.path),
+        "truncated packet data must not be exposed as a full-resolution-only slide",
+    );
+    assert!(matches!(error, WsiError::Jp2k(_)), "{error}");
+}
+
+#[test]
+fn reduction_probing_preserves_shorter_component_ladders() {
+    let mut data = RGB_CODESTREAM.to_vec();
+    let cod = data
+        .windows(2)
+        .position(|marker| marker == [0xff, 0x52])
+        .unwrap();
+    let end = cod + 2 + usize::from(u16::from_be_bytes([data[cod + 2], data[cod + 3]]));
+    let parameters = data[cod + 9..end].to_vec();
+    assert_eq!(parameters.len(), 5);
+    // Advertise an extra global level, retaining the encoded two-level
+    // decomposition for each component through COC overrides.
+    data[cod + 9] += 1;
+    let mut overrides = Vec::new();
+    for component in 0..3 {
+        overrides.extend_from_slice(&[0xff, 0x53, 0, 9, component, 0]);
+        overrides.extend_from_slice(&parameters);
+    }
+    data.splice(end..end, overrides);
+    assert_eq!(jp2k_decodable_reduction_levels(&data).unwrap(), 2);
+}
