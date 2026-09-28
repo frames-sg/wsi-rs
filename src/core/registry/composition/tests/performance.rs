@@ -14,6 +14,7 @@ fn hit(x: f64, y: f64, pixman: bool) -> TileHit {
         dest_x_f64: x,
         dest_y_f64: y,
         cairo_fixed_dest: pixman.then_some((x, y)),
+        cairo_rgb24: false,
     }
 }
 
@@ -34,6 +35,59 @@ fn make_tile(width: u32, height: u32, channels: u16) -> CpuTile {
         pixels,
     )
     .unwrap()
+}
+
+#[test]
+fn opaque_pixman_clips_use_narrow_interpolation() {
+    let data = (0..8)
+        .flat_map(|y| (0..8).flat_map(move |x| [230 + x + 2 * y; 3]))
+        .collect();
+    let tile = CpuTile::from_u8_interleaved(8, 8, 3, ColorSpace::Rgb, data).unwrap();
+    let shape = CompositionShape {
+        width: 4,
+        height: 4,
+        channels: 3,
+    };
+    // Numeric results from Cairo 1.18.4 / Pixman 0.46.4, RGB24 source,
+    // ARGB32 destination, SATURATE. A fully covered clip uses 7-bit integer
+    // interpolation. Touching the bottom source edge keeps float sampling,
+    // even when that edge's out-of-bounds tap has zero weight.
+    for (dest_y, rgb24, first) in [(-2.0, true, 236u8), (-2.0, false, 237), (-4.0, true, 241)] {
+        let mut pixels = vec![0; 48];
+        let mut alpha = vec![0.0; 16];
+        let mut placement = hit(-2.25, dest_y, true);
+        placement.cairo_rgb24 = rgb24;
+        fractional_u8::blit_fractional_saturating_u8(
+            &mut pixels,
+            &mut alpha,
+            tile.as_u8().unwrap(),
+            &tile,
+            &placement,
+            shape,
+        );
+        let expected = (0..4)
+            .flat_map(|y| (0..4).flat_map(move |x| [first + x + 2 * y; 3]))
+            .collect::<Vec<_>>();
+        assert_eq!(pixels, expected, "source destination y={dest_y}");
+        assert_eq!(alpha, [1.0; 16]);
+    }
+    let mut pixels = [10, 20, 30].repeat(16);
+    let mut alpha = vec![128.0 / 255.0; 16];
+    pixels[3..6].copy_from_slice(&[2, 4, 6]);
+    alpha[1] = 1.0;
+    let mut placement = hit(-2.25, -2.0, true);
+    placement.cairo_rgb24 = true;
+    fractional_u8::blit_fractional_saturating_u8(
+        &mut pixels,
+        &mut alpha,
+        tile.as_u8().unwrap(),
+        &tile,
+        &placement,
+        shape,
+    );
+    // Cairo retains the first painter's color and fills only missing coverage.
+    assert_eq!(&pixels[..6], &[128, 138, 148, 2, 4, 6]);
+    assert_eq!(alpha, [1.0; 16]);
 }
 
 #[test]

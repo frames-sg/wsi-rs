@@ -38,6 +38,7 @@ fn hit_at(dest_x: i64, dest_y: i64, dest_x_f64: f64, dest_y_f64: f64) -> TileHit
         dest_x_f64,
         dest_y_f64,
         cairo_fixed_dest: None,
+        cairo_rgb24: false,
     }
 }
 

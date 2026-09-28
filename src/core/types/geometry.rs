@@ -100,6 +100,7 @@ fn grid_tiles_for_region(region: GridRegion, bounds: GridTileBounds) -> Vec<Tile
                     dest_x_f64: dest_x as f64,
                     dest_y_f64: dest_y as f64,
                     cairo_fixed_dest: None,
+                    cairo_rgb24: false,
                 });
             }
         }
@@ -158,6 +159,7 @@ fn fractional_grid_tiles_for_region(
                     cairo_bilinear_destination(dest_x_f64),
                     cairo_bilinear_destination(dest_y_f64),
                 )),
+                cairo_rgb24: false,
             });
         }
     }
@@ -238,6 +240,7 @@ fn irregular_tiles_for_fractional_region(
                     cairo_bilinear_destination(dest_x_f64),
                     cairo_bilinear_destination(dest_y_f64),
                 )),
+                cairo_rgb24: entry.cairo_rgb24,
             });
         }
     }
@@ -258,6 +261,8 @@ pub struct TileHit {
     pub dest_y_f64: f64,
     /// Cairo's fixed-point raster position for regular fractional grids.
     pub(crate) cairo_fixed_dest: Option<(f64, f64)>,
+    /// The reference paints an RGB24 source, permitting opaque-clip reduction.
+    pub(crate) cairo_rgb24: bool,
 }
 
 impl TileLayout {
@@ -407,6 +412,8 @@ pub struct TileEntry {
     /// source `dimensions`, as for Ventana reduced-level subtiles
     /// (`1360 / 32 = 42.5` rows painted from a 43-row source).
     pub(crate) extent: Option<(f64, f64)>,
+    /// Preserve the reference surface format independently of decoded channels.
+    pub(crate) cairo_rgb24: bool,
 }
 
 impl TileEntry {
@@ -416,6 +423,7 @@ impl TileEntry {
             dimensions,
             tiff_tile_index: None,
             extent: None,
+            cairo_rgb24: false,
         }
     }
 

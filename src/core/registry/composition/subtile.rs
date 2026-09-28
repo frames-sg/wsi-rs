@@ -116,7 +116,7 @@ impl BilinearAxis {
 
 /// Pixman `bilinear_interpolation` weights for the top-left, top-right,
 /// bottom-left and bottom-right taps; they sum to 65536.
-fn pixman_bilinear_weights(x_weight: u32, y_weight: u32) -> [u32; 4] {
+pub(super) fn pixman_bilinear_weights(x_weight: u32, y_weight: u32) -> [u32; 4] {
     let x = x_weight << (8 - BILINEAR_INTERPOLATION_BITS);
     let y = y_weight << (8 - BILINEAR_INTERPOLATION_BITS);
     [(256 - x) * (256 - y), x * (256 - y), (256 - x) * y, x * y]

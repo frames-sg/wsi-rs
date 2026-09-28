@@ -93,9 +93,62 @@ fn blit_fractional<const PIXMAN: bool, const ALPHA: bool>(
     let end_y = (raster_dest.1 + tile_height as f64)
         .ceil()
         .min(shape.height as f64) as usize;
+    if start_x >= end_x || start_y >= end_y {
+        return;
+    }
     let channels = shape.channels;
     let out_row_stride = shape.width * channels;
     let tile_row_stride = tile_width as usize * channels;
+
+    // Pixman reduces SATURATE to OVER_REVERSE when an opaque source covers
+    // every bilinear tap in the clipped paint area. That selects its narrow
+    // 7-bit filter, whose integer truncation differs from float contraction.
+    let source_x = start_x as f64 - raster_dest.0;
+    let source_y = start_y as f64 - raster_dest.1;
+    if PIXMAN
+        && !ALPHA
+        && hit.cairo_rgb24
+        && source_x.floor() >= 0.0
+        && source_y.floor() >= 0.0
+        && ((end_x - 1) as f64 - raster_dest.0).floor() + 1.0 < tile_width as f64
+        && ((end_y - 1) as f64 - raster_dest.1).floor() + 1.0 < tile_height as f64
+    {
+        let weights = super::subtile::pixman_bilinear_weights(
+            (source_x.fract() * 128.0) as u32,
+            (source_y.fract() * 128.0) as u32,
+        );
+        let first_x = source_x.floor() as usize;
+        let first_y = source_y.floor() as usize;
+        for y in start_y..end_y {
+            for x in start_x..end_x {
+                let pixel = y * shape.width + x;
+                let remaining = u32::from(255 - contract_pixman_unorm8(alpha[pixel]));
+                if remaining == 0 {
+                    continue;
+                }
+                let source =
+                    (first_y + y - start_y) * tile_row_stride + (first_x + x - start_x) * channels;
+                for channel in 0..channels {
+                    let sample = [
+                        tile_data[source + channel],
+                        tile_data[source + channels + channel],
+                        tile_data[source + tile_row_stride + channel],
+                        tile_data[source + tile_row_stride + channels + channel],
+                    ]
+                    .into_iter()
+                    .zip(weights)
+                    .map(|(value, weight)| u32::from(value) * weight)
+                    .sum::<u32>()
+                        >> 16;
+                    let target = pixel * channels + channel;
+                    out[target] =
+                        out[target].saturating_add(((sample * remaining + 127) / 255) as u8);
+                }
+                alpha[pixel] = 1.0;
+            }
+        }
+        return;
+    }
 
     // Admission reserves RGBA output. RGB/gray composition leaves enough space
     // for a bounded horizontal table; RGBA and very thin strips use scalar

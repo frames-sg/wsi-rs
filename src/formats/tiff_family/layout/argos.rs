@@ -403,6 +403,7 @@ fn sparse_level(
                 dimensions: (ifd.tile_width, ifd.tile_height),
                 tiff_tile_index: Some(index),
                 extent: None,
+                cairo_rgb24: false,
             },
         );
     }

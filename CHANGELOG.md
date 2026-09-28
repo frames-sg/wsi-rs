@@ -42,6 +42,8 @@
 
 ### Fixed
 
+- MIRAX composition uses Pixman's integer interpolation for fully covered
+  RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
 - VMS reads retain complete optimization records when the file ends with an
   incomplete row, and reuse restart markers already found in a scan chunk.
   Missing offsets still fall back to scanning the JPEG.

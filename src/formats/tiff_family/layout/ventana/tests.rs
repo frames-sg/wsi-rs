@@ -632,6 +632,7 @@ fn test_tiles_from_bif_areas(bif: &BifInfo) -> HashMap<(i64, i64), TileEntry> {
                         dimensions: (256, 256),
                         tiff_tile_index: Some(tiff_idx),
                         extent: None,
+                        cairo_rgb24: false,
                     },
                 );
                 tiff_idx += 1;
@@ -728,6 +729,7 @@ fn no_overlap_passes_validation() {
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
             extent: None,
+            cairo_rgb24: false,
         },
     );
     tiles.insert(
@@ -737,6 +739,7 @@ fn no_overlap_passes_validation() {
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
             extent: None,
+            cairo_rgb24: false,
         },
     );
     tiles.insert(
@@ -746,6 +749,7 @@ fn no_overlap_passes_validation() {
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
             extent: None,
+            cairo_rgb24: false,
         },
     );
 
@@ -764,6 +768,7 @@ fn overlap_detected_fails_validation() {
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
             extent: None,
+            cairo_rgb24: false,
         },
     );
     tiles.insert(
@@ -773,6 +778,7 @@ fn overlap_detected_fails_validation() {
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
             extent: None,
+            cairo_rgb24: false,
         },
     );
 
@@ -896,6 +902,7 @@ fn non_adjacent_overlap_detected() {
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
             extent: None,
+            cairo_rgb24: false,
         },
     );
     // (1,0) exists but is normal
@@ -906,6 +913,7 @@ fn non_adjacent_overlap_detected() {
             dimensions: (100, 256), // narrow tile
             tiff_tile_index: Some(1),
             extent: None,
+            cairo_rgb24: false,
         },
     );
     // (2,0) has a large negative offset that pushes it back into (0,0)'s territory
@@ -916,6 +924,7 @@ fn non_adjacent_overlap_detected() {
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
             extent: None,
+            cairo_rgb24: false,
         },
     );
 
