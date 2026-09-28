@@ -28,7 +28,10 @@ consecutive batches fit decoded tiles plus codec work within the remaining stagi
 allowance, with separate encoded bounds and the CPU worker limit. Streaming targets
 half the output allowance, capped at 1 MiB, for decoded/codec staging (or one
 larger source); wider windows regressed measured RSS. This target changes execution granularity, not public resource or
-cache limits. Singleton windows use direct tile resolution without batch vectors.
+cache limits. Singleton windows use direct tile resolution without batch vectors
+and query no worker count unless a second tile can fit. Fully cached regions pin
+their existing tiles under one cache lock and reuse dense composition without
+decoder staging.
 A source without sufficiently precise bounds streams single tiles. Whole-batch
 integral composition keeps the exact-tile return and dense row-copy path; streamed
 batches preserve hit order. Built-in readers reject unavailable region fast paths
@@ -38,8 +41,16 @@ regions also compose fully cached strips on the caller. A non-mutating cache
 presence hint selects one worker handoff for incomplete regions; ordinary
 resolution still handles eviction and sends late misses to the same pool. The
 hint neither pins tiles nor changes admission, recency or cache counters. The
-worker limit is queried from that same pool before planning. Synthetic NDPI fast paths retain their previous
+worker limit, when needed, is queried from that same pool. Synthetic NDPI fast paths retain their previous
 worker context.
+
+The OpenSlide shim writes the caller's destination in row bands, bounded to
+262,144 pixels for regular grids and 8,192 pixels for coverage-carrying tile maps.
+The complete request still obeys the region output limits. Stable band boundaries
+preserve clipping-dependent interpolation across worker counts. Opaque bands
+whose tile rectangles cover the output skip redundant alpha reconstruction.
+The shim starts with a 32 MiB decoded cache and no display-tile cache; private
+format caches use the existing proportional budget.
 Dense composition plans clipped row spans once. Fractional composition precomputes
 sampling axes only when the table fits the unused RGB/gray portion of the existing
 RGBA output reservation; RGBA and thin strips retain scalar sampling. The float
@@ -101,6 +112,12 @@ decisions:
    same prepared inputs. Measurement order alternates; the entire execution
    window is measured.
 4. The median device/CPU ratio must be at most 0.85 to select the device.
+
+A greater-than-fourfold measured device loss also keeps clipped sibling tiles on
+CPU when level, codec, batch count, device and CPU worker budget match. Every
+clipped dimension must fit within the measured uniform tile geometry. The original
+route owns the evidence; the shortcut publishes no additional calibration result.
+Larger workloads and other levels retain independent calibration.
 
 The key includes dataset, scene, series, level, codec, the full logical geometry
 histogram and batch count, CPU worker count, and the initialized device identity

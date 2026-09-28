@@ -240,7 +240,7 @@ fn irregular_tiles_for_fractional_region(
                     cairo_bilinear_destination(dest_x_f64),
                     cairo_bilinear_destination(dest_y_f64),
                 )),
-                cairo_rgb24: entry.cairo_rgb24,
+                cairo_rgb24: entry.cairo_rgb24(),
             });
         }
     }
@@ -411,9 +411,21 @@ pub struct TileEntry {
     /// Fractional placement extent when it differs from the whole-pixel
     /// source `dimensions`, as for Ventana reduced-level subtiles
     /// (`1360 / 32 = 42.5` rows painted from a 43-row source).
-    pub(crate) extent: Option<(f64, f64)>,
-    /// Preserve the reference surface format independently of decoded channels.
-    pub(crate) cairo_rgb24: bool,
+    pub(crate) extent: TileExtent,
+}
+
+// Store the surface flag in the extent variant's padding rather than adding
+// another aligned field to every retained tile-map entry.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TileExtent {
+    Default { rgb24: bool },
+    Explicit { value: (f64, f64), rgb24: bool },
+}
+
+impl Default for TileExtent {
+    fn default() -> Self {
+        Self::Default { rgb24: false }
+    }
 }
 
 impl TileEntry {
@@ -422,8 +434,7 @@ impl TileEntry {
             offset,
             dimensions,
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: TileExtent::default(),
         }
     }
 
@@ -433,14 +444,37 @@ impl TileEntry {
     }
 
     pub(crate) fn with_extent(mut self, extent: (f64, f64)) -> Self {
-        self.extent = Some(extent);
+        self.extent = TileExtent::Explicit {
+            value: extent,
+            rgb24: self.cairo_rgb24(),
+        };
         self
+    }
+
+    pub(crate) fn has_explicit_extent(&self) -> bool {
+        matches!(self.extent, TileExtent::Explicit { .. })
+    }
+
+    pub(crate) fn cairo_rgb24(&self) -> bool {
+        match self.extent {
+            TileExtent::Default { rgb24 } | TileExtent::Explicit { rgb24, .. } => rgb24,
+        }
+    }
+
+    pub(crate) fn set_cairo_rgb24(&mut self, value: bool) {
+        match &mut self.extent {
+            TileExtent::Default { rgb24 } | TileExtent::Explicit { rgb24, .. } => *rgb24 = value,
+        }
     }
 
     /// The tile's placement extent in level pixels. Tilemap hit testing uses
     /// this rather than the source dimensions, as OpenSlide does.
     pub fn extent(&self) -> (f64, f64) {
-        self.extent
-            .unwrap_or((f64::from(self.dimensions.0), f64::from(self.dimensions.1)))
+        match self.extent {
+            TileExtent::Default { .. } => {
+                (f64::from(self.dimensions.0), f64::from(self.dimensions.1))
+            }
+            TileExtent::Explicit { value, .. } => value,
+        }
     }
 }

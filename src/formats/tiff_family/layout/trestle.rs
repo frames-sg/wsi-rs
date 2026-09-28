@@ -121,8 +121,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
                             offset: (0.0, 0.0),
                             dimensions: (tile_width, tile_height),
                             tiff_tile_index: None,
-                            extent: None,
-                            cairo_rgb24: false,
+                            extent: Default::default(),
                         },
                     );
                 }

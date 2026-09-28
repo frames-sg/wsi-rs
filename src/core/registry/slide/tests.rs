@@ -390,7 +390,7 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
         calls.lock().unwrap().clear();
         let slide = Slide::from_managed_source_with_config_and_runtime(
             Box::new(source),
-            CacheConfig::default().with_shared_tile_bytes(0),
+            CacheConfig::default().with_shared_tile_bytes(8 * 1024 * 1024),
             SlideLimits::default(),
             Arc::new(
                 DecodeRuntime::new(
@@ -418,6 +418,13 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
             [vec![2; 12], vec![1]].concat()
         };
         assert_eq!(lengths, expected_batches, "region size {size}");
+        calls.lock().unwrap().clear();
+        let warm = pool.install(|| slide.read_region(&req)).unwrap();
+        assert_eq!(warm.as_u8(), actual.as_u8(), "cached region size {size}");
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "cached regions must not decode again"
+        );
     }
 }
 

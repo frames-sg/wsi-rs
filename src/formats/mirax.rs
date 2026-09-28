@@ -203,14 +203,14 @@ impl SlideReader for MiraxReader {
                 reason: "MIRAX raw compressed tile access requires a JPEG backing image".into(),
             });
         }
-        if tile.resample_origin.is_some() {
+        if tile.image.resample {
             return Err(WsiError::Unsupported {
                 reason:
                     "MIRAX raw JPEG passthrough cannot represent a resampled fractional subtile"
                         .into(),
             });
         }
-        if tile.src_x != 0 || tile.src_y != 0 {
+        if tile.src_x != 0.0 || tile.src_y != 0.0 {
             return Err(WsiError::Unsupported {
                 reason: format!(
                     "MIRAX raw JPEG passthrough cannot represent a logical tile cropped from source offset ({}, {})",
@@ -316,9 +316,9 @@ impl MiraxReader {
     ) -> Result<CpuTile, WsiError> {
         let (entry, tile) = self.tile_for_request(req)?;
         let decoded = self.slide.decode_image_with_backend(&tile.image, backend)?;
-        if tile.resample_origin.is_none()
-            && tile.src_x == 0
-            && tile.src_y == 0
+        if !tile.image.resample
+            && tile.src_x == 0.0
+            && tile.src_y == 0.0
             && decoded.width == entry.dimensions.0
             && decoded.height == entry.dimensions.1
         {
@@ -364,7 +364,7 @@ struct MiraxSlide {
 }
 
 struct MiraxLevel {
-    tiles: Vec<MiraxTile>,
+    tiles: Box<[MiraxTile]>,
 }
 
 struct MiraxLevelBuilder {
@@ -385,23 +385,26 @@ struct MiraxLevelBuilder {
 #[derive(Clone)]
 struct MiraxTile {
     image: Arc<MiraxImage>,
-    src_x: u32,
-    src_y: u32,
-    /// Fractional source origin of a subtile that OpenSlide resamples through
-    /// an intermediate surface; `src_x`/`src_y` are unused when set.
-    resample_origin: Option<(f64, f64)>,
+    src_x: f64,
+    src_y: f64,
 }
 
 impl MiraxTile {
     /// The logical tile of `dimensions` cut from its decoded source image.
     fn extract(&self, decoded: &CpuTile, dimensions: (u32, u32)) -> Result<CpuTile, WsiError> {
-        if let Some(origin) = self.resample_origin {
-            return cairo_subtile_surface_u8(decoded, origin, dimensions);
+        if self.image.resample {
+            return cairo_subtile_surface_u8(decoded, (self.src_x, self.src_y), dimensions);
         }
-        if self.src_x == 0 && self.src_y == 0 && (decoded.width, decoded.height) == dimensions {
+        if self.src_x == 0.0 && self.src_y == 0.0 && (decoded.width, decoded.height) == dimensions {
             return Ok(decoded.clone());
         }
-        crop_rgb_interleaved_u8_buffer(decoded, self.src_x, self.src_y, dimensions.0, dimensions.1)
+        crop_rgb_interleaved_u8_buffer(
+            decoded,
+            self.src_x as u32,
+            self.src_y as u32,
+            dimensions.0,
+            dimensions.1,
+        )
     }
 }
 
@@ -412,11 +415,13 @@ struct MiraxImage {
     format: MiraxImageFormat,
     expected_width: u32,
     expected_height: u32,
+    /// All subtiles of this encoded image use the same sampling mode.
+    resample: bool,
 }
 
 #[derive(Clone)]
 struct MiraxRecord {
-    path: PathBuf,
+    path: Arc<PathBuf>,
     offset: u64,
     len: u64,
 }

@@ -40,7 +40,7 @@ pub(super) fn read_jpeg_dimensions_from_record(
     file.seek(SeekFrom::Start(record.offset))
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
-            path: record.path.clone(),
+            path: record.path.as_ref().clone(),
         })?;
 
     let probe_len = record.len.min(MIRAX_ASSOCIATED_DIMENSION_PROBE_BYTES) as usize;
@@ -48,7 +48,7 @@ pub(super) fn read_jpeg_dimensions_from_record(
     file.read_exact(&mut probe)
         .map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),
-            path: record.path.clone(),
+            path: record.path.as_ref().clone(),
         })?;
     if let Ok(dimensions) = jpeg_dimensions(&probe) {
         return Ok(dimensions);

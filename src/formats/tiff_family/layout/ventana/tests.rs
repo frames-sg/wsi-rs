@@ -137,7 +137,7 @@ fn interpret_builds_stitched_pyramid_associated_images_and_properties() {
     assert_eq!(level1_tiles.len(), tiles.len());
     assert!(level1_tiles
         .values()
-        .all(|entry| entry.dimensions == (128, 128) && entry.extent.is_none()));
+        .all(|entry| entry.dimensions == (128, 128) && !entry.has_explicit_extent()));
     assert!(matches!(
         layout.tile_sources[&TileSourceKey {
             scene: 0,
@@ -631,8 +631,7 @@ fn test_tiles_from_bif_areas(bif: &BifInfo) -> HashMap<(i64, i64), TileEntry> {
                         offset: (offset_x, offset_y),
                         dimensions: (256, 256),
                         tiff_tile_index: Some(tiff_idx),
-                        extent: None,
-                        cairo_rgb24: false,
+                        extent: Default::default(),
                     },
                 );
                 tiff_idx += 1;
@@ -728,8 +727,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     tiles.insert(
@@ -738,8 +736,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     tiles.insert(
@@ -748,8 +745,7 @@ fn no_overlap_passes_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 
@@ -767,8 +763,7 @@ fn overlap_detected_fails_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     tiles.insert(
@@ -777,8 +772,7 @@ fn overlap_detected_fails_validation() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(1),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 
@@ -901,8 +895,7 @@ fn non_adjacent_overlap_detected() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(0),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     // (1,0) exists but is normal
@@ -912,8 +905,7 @@ fn non_adjacent_overlap_detected() {
             offset: (0.0, 0.0),
             dimensions: (100, 256), // narrow tile
             tiff_tile_index: Some(1),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     // (2,0) has a large negative offset that pushes it back into (0,0)'s territory
@@ -923,8 +915,7 @@ fn non_adjacent_overlap_detected() {
             offset: (-350.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: Some(2),
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 

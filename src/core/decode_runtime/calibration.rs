@@ -50,6 +50,16 @@ impl DecodeRuntime {
                 cache.put(key.clone(), entry);
             }
         }
+        if cache
+            .peek(&key)
+            .is_none_or(|entry| !entry.busy && entry.decision.is_none())
+        {
+            if let Some(decision) = clipped_cpu_preference(&cache, &key) {
+                // Keep the measured full-tile route as the evidence owner.
+                // No new decision is published by this optional shortcut.
+                return RouteClaim::Ready(decision);
+            }
+        }
         let Some(entry) = cache.peek_mut(&key) else {
             insert_entry(
                 &mut cache,
@@ -147,6 +157,39 @@ fn insert_entry(cache: &mut DecodeRouteCache, key: DecodeRouteKey, entry: RouteE
         cache.pop(&evict);
     }
     cache.put(key, entry);
+}
+
+fn clipped_cpu_preference(
+    cache: &DecodeRouteCache,
+    key: &DecodeRouteKey,
+) -> Option<DecodeRouteDecision> {
+    cache.iter().find_map(|(full, entry)| {
+        let decision = entry.decision.as_ref()?;
+        let [(geometry, _)] = full.sample_geometry.0.as_slice() else {
+            return None;
+        };
+        // A clipped edge has no more pixel work to amortize device overhead.
+        // Be conservative only after a greater-than-fourfold measured loss;
+        // larger batches, other levels, codecs, devices and CPU budgets still calibrate.
+        (decision.winner == DecodeRoute::Cpu
+            && !decision.device_failure
+            && !decision.cpu_elapsed.is_zero()
+            && decision.device_elapsed > decision.cpu_elapsed.saturating_mul(4)
+            && full.dataset_id == key.dataset_id
+            && full.scene == key.scene
+            && full.series == key.series
+            && full.level == key.level
+            && full.codec_kind == key.codec_kind
+            && full.device_identity == key.device_identity
+            && full.cpu_workers == key.cpu_workers
+            && full.sample_tile_count == key.sample_tile_count
+            && key
+                .sample_geometry
+                .0
+                .iter()
+                .all(|(edge, _)| edge.width <= geometry.width && edge.height <= geometry.height))
+        .then(|| decision.clone())
+    })
 }
 
 impl CalibrationLease<'_> {

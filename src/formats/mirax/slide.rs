@@ -161,7 +161,7 @@ impl MiraxSlide {
         file.read_exact_at(&mut bytes, record.offset)
             .map_err(|source| WsiError::IoWithPath {
                 source: Arc::new(source),
-                path: record.path.clone(),
+                path: record.path.as_ref().clone(),
             })?;
         Ok(bytes)
     }

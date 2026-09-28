@@ -127,6 +127,9 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
         quickhash_files,
         open_budget,
     } = context;
+    // Thousands of image records refer to a small set of data files. Retain
+    // each path once instead of allocating a full PathBuf for every image.
+    let datafile_paths: Vec<_> = datafile_paths.iter().cloned().map(Arc::new).collect();
     // Records are four adjacent i32 fields. Bound read-ahead while avoiding a
     // file read for every field; BufReader also handles absolute page seeks.
     let mut buffered_index = std::io::BufReader::with_capacity(8 * 1024, index_file);
@@ -229,6 +232,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                     format: level.image_format,
                     expected_width: level.raw_image_width,
                     expected_height: level.raw_image_height,
+                    resample: level.tile_width.fract() != 0.0 || level.tile_height.fract() != 0.0,
                 });
                 image_number = image_number
                     .checked_add(1)
@@ -317,9 +321,8 @@ pub(super) fn insert_tile(
         // and places it by its exact extent.
         level.descriptors.push(MiraxTile {
             image,
-            src_x: 0,
-            src_y: 0,
-            resample_origin: Some((src_x, src_y)),
+            src_x,
+            src_y,
         });
         TileEntry::new(
             (offset_x, offset_y),
@@ -333,9 +336,8 @@ pub(super) fn insert_tile(
         let (src_x, src_y) = (src_x as u32, src_y as u32);
         level.descriptors.push(MiraxTile {
             image,
-            src_x,
-            src_y,
-            resample_origin: None,
+            src_x: f64::from(src_x),
+            src_y: f64::from(src_y),
         });
         TileEntry::new(
             (offset_x, offset_y),
@@ -347,7 +349,7 @@ pub(super) fn insert_tile(
     };
     // OpenSlide wraps whole MIRAX images as RGB24, but crops subtiles through
     // ARGB32 surfaces even when every resulting pixel is opaque.
-    entry.cairo_rgb24 = params.tiles_per_image == 1;
+    entry.set_cairo_rgb24(params.tiles_per_image == 1);
     level.tiles.insert(
         (tile_x, tile_y),
         entry.with_tiff_tile_index(descriptor_index),
@@ -547,7 +549,7 @@ pub(super) fn build_associated_records(
         associated.insert(
             name.into(),
             MiraxRecord {
-                path: record.path,
+                path: Arc::new(record.path),
                 offset: record.offset,
                 len: record.len,
             },

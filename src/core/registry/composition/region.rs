@@ -117,6 +117,23 @@ pub(in crate::core::registry) fn composite_region_from_plan<T: SlideReader + ?Si
     if batch_ends.len() <= 1 {
         return compose_resolved_region(source, cache, req, plan);
     }
+    if let Some(tiles) = cache.and_then(|cache| {
+        cache.get_complete(
+            plan.hits
+                .iter()
+                .map(|hit| CacheKey::from_region_tile(source.dataset().id, req, hit.col, hit.row)),
+        )
+    }) {
+        // Cached tiles need no decoder staging. Reuse the dense compositor
+        // instead of treating an already resident region as streamed misses.
+        return compose_region_tiles(
+            &plan.hits,
+            &tiles,
+            plan.output_width,
+            plan.output_height,
+            plan.preserve_alpha,
+        );
+    }
     let resolver = RegionTileResolver::new(source, cache, req);
     let mut composer = None;
     let mut start = 0;
@@ -418,12 +435,25 @@ impl RegionComposer {
                             let start =
                                 ((row - y) as usize * tile.width as usize + (x0 - x) as usize) * 3;
                             let count = (x1 - x0) as usize;
-                            for (target, source) in out[target..target + count * 4]
-                                .chunks_exact_mut(4)
-                                .zip(source[start..start + count * 3].chunks_exact(3))
-                            {
-                                if target[3] == 0 {
+                            let row = &mut out[target..target + count * 4];
+                            let source = &source[start..start + count * 3];
+                            if row.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+                                // Most tile rows have no overlap. Keep the
+                                // RGB-to-RGBA loop free of per-pixel branches.
+                                for (target, source) in
+                                    row.chunks_exact_mut(4).zip(source.chunks_exact(3))
+                                {
                                     target.copy_from_slice(&[source[0], source[1], source[2], 255]);
+                                }
+                            } else {
+                                for (target, source) in
+                                    row.chunks_exact_mut(4).zip(source.chunks_exact(3))
+                                {
+                                    if target[3] == 0 {
+                                        target.copy_from_slice(&[
+                                            source[0], source[1], source[2], 255,
+                                        ]);
+                                    }
                                 }
                             }
                         }

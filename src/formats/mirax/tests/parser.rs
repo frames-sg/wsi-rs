@@ -117,7 +117,7 @@ fn binary_readers_hash_ranges_and_record_limits_keep_path_context() {
     ));
 
     let record = MiraxRecord {
-        path: source.path().to_path_buf(),
+        path: source.path().to_path_buf().into(),
         offset: 1,
         len: 3,
     };
@@ -188,7 +188,7 @@ fn associated_jpeg_dimension_probe_falls_back_to_the_complete_record() {
     jpeg.splice(2..2, long_comment);
     write_bytes(&data_path, &jpeg);
     let record = MiraxRecord {
-        path: data_path,
+        path: data_path.into(),
         offset: 0,
         len: jpeg.len() as u64,
     };
@@ -330,13 +330,14 @@ fn fractional_edge_tile_dimensions_stay_within_the_backing_image() {
     let image = Arc::new(MiraxImage {
         id: 0,
         record: MiraxRecord {
-            path: PathBuf::from("tile.jpg"),
+            path: PathBuf::from("tile.jpg").into(),
             offset: 0,
             len: 1,
         },
         format: MiraxImageFormat::Jpeg,
         expected_width: 340,
         expected_height: 256,
+        resample: true,
     });
     let mut level = MiraxLevelBuilder {
         dimensions: (340, 256),
@@ -368,10 +369,9 @@ fn fractional_edge_tile_dimensions_stay_within_the_backing_image() {
     let entry = &level.tiles[&(7, 0)];
     assert_eq!(entry.dimensions, (43, 32));
     assert_eq!(entry.extent(), (42.5, 32.0));
-    assert_eq!(
-        level.descriptors[entry.tiff_tile_index.unwrap()].resample_origin,
-        Some((297.5, 0.0))
-    );
+    let tile = &level.descriptors[entry.tiff_tile_index.unwrap()];
+    assert!(tile.image.resample);
+    assert_eq!((tile.src_x, tile.src_y), (297.5, 0.0));
 }
 
 #[test]

@@ -3,6 +3,148 @@ use std::collections::HashMap;
 use wsi_rs::{TileEntry, TileLayout};
 
 #[test]
+fn banded_reads_preserve_fractional_pixels_gaps_and_edges() {
+    use wsi_rs::{
+        AxesShape, CpuTile, Dataset, DatasetId, SampleType, Scene, Series, SlideReader, TileRequest,
+    };
+
+    struct Pattern(Dataset);
+    impl SlideReader for Pattern {
+        fn dataset(&self) -> &Dataset {
+            &self.0
+        }
+        fn read_tile_cpu(&self, request: &TileRequest) -> Result<CpuTile, WsiError> {
+            let mut data = Vec::with_capacity(128 * 128 * 3);
+            for y in 0..128 {
+                for x in 0..128 {
+                    data.extend_from_slice(&[
+                        (request.col * 37 + x) as u8,
+                        (request.row * 29 + y) as u8,
+                        (x + y) as u8,
+                    ]);
+                }
+            }
+            CpuTile::from_u8_interleaved(128, 128, 3, ColorSpace::Rgb, data)
+        }
+    }
+
+    let layouts = [
+        TileLayout::Regular {
+            tile_width: 128,
+            tile_height: 128,
+            tiles_across: 4,
+            tiles_down: 8,
+        },
+        TileLayout::Irregular {
+            tile_advance: (128.0, 128.0),
+            extra_tiles: (0, 0, 0, 0),
+            tiles: (0..8)
+                .flat_map(|row| (0..4).map(move |col| (col, row)))
+                .filter(|position| *position != (1, 3))
+                .map(|position| (position, TileEntry::new((0.0, 0.0), (128, 128))))
+                .collect(),
+        },
+        TileLayout::Irregular {
+            tile_advance: (130.25, 126.5),
+            extra_tiles: (1, 1, 1, 1),
+            tiles: (0..8)
+                .flat_map(|row| (0..4).map(move |col| (col, row)))
+                .filter(|position| *position != (1, 3))
+                .map(|(col, row)| {
+                    (
+                        (col, row),
+                        TileEntry::new(
+                            ((col % 2) as f64 * 0.25, (row % 2) as f64 * 0.5),
+                            (128, 128),
+                        ),
+                    )
+                })
+                .collect(),
+        },
+    ];
+    for layout in layouts {
+        let level = Level::new((530, 1030), 1.0, layout);
+        let dataset = Dataset::new(
+            DatasetId::new(1),
+            vec![Scene::new(
+                "pattern",
+                vec![Series::new(
+                    "rgb",
+                    AxesShape::default(),
+                    vec![level],
+                    SampleType::Uint8,
+                    vec![],
+                )],
+            )],
+        );
+        let slide = Slide::from_source_with_cache_bytes(Box::new(Pattern(dataset)), 0);
+        let level = &slide.dataset().scenes[0].series[0].levels[0];
+        let request = RegionRequest::new(0, 0, 0, (-13, -7), (541, 1047));
+        for offset in [(0.0, 0.0), (0.25, 0.5)] {
+            let tile = slide.read_region_subpixel(&request, offset).unwrap();
+            let opaque = !matches!(tile.color_space(), ColorSpace::Rgba);
+            let mut expected = crate::pixels::tile_to_premultiplied_argb(tile).unwrap();
+            clear_uncovered_pixels(
+                level,
+                request.origin_px,
+                offset,
+                request.size_px,
+                &mut expected,
+                opaque,
+            )
+            .unwrap();
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    scope.spawn(|| {
+                        let mut actual = vec![u32::MAX; expected.len()];
+                        read_region_into(&slide, level, &request, offset, &mut actual).unwrap();
+                        let mismatch = actual.iter().zip(&expected).position(|(a, b)| a != b);
+                        assert_eq!(
+                            mismatch,
+                            None,
+                            "band seams at offset {offset:?}: {:?}",
+                            mismatch.map(|i| (i % 541, i / 541, actual[i], expected[i]))
+                        );
+                    });
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn banding_does_not_bypass_complete_region_limits() {
+    use wsi_rs::{SlideLimits, SlideOpenOptions};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/jp2k/rgb_nomct.j2k");
+    for (limits, resource) in [
+        (
+            SlideLimits::default()
+                .with_region_pixels(256 * 1024)
+                .unwrap(),
+            "region pixels",
+        ),
+        (
+            SlideLimits::default()
+                .with_region_rgba_bytes(1024 * 1024)
+                .unwrap(),
+            "region RGBA output",
+        ),
+    ] {
+        let slide =
+            Slide::open_with_options(&path, SlideOpenOptions::default().with_limits(limits))
+                .unwrap();
+        let level = &slide.dataset().scenes[0].series[0].levels[0];
+        let request = RegionRequest::new(0, 0, 0, (0, 0), (512, 513));
+        let mut pixels = vec![u32::MAX; 512 * 513];
+        let error = read_region_into(&slide, level, &request, (0.0, 0.0), &mut pixels).unwrap_err();
+        assert!(
+            matches!(error, WsiError::ResourceLimit { resource: actual, .. } if actual == resource)
+        );
+    }
+}
+
+#[test]
 fn opaque_irregular_gaps_are_canonical_transparent_argb() {
     let level = Level::new(
         (3, 1),

@@ -73,8 +73,7 @@ pub(super) fn build_mosaic_grid(
                 ),
                 dimensions: (tile_width, tile_height),
                 tiff_tile_index: None,
-                extent: None,
-                cairo_rgb24: false,
+                extent: Default::default(),
             },
         );
     }

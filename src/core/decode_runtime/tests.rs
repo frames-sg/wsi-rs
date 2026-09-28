@@ -538,6 +538,62 @@ fn slow_device_warmup_keeps_cpu_without_more_foreground_probes() {
 }
 
 #[test]
+fn clipped_tiles_reuse_a_strong_cpu_preference_for_full_sized_siblings() {
+    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let full = route_key(915);
+    let mut edge = full.clone();
+    edge.sample_geometry = RouteSampleGeometry::from_dimensions([(129, 139)]);
+    assert!(matches!(
+        runtime.claim_route(full.clone()),
+        RouteClaim::FirstCpu { .. }
+    ));
+    assert!(matches!(
+        runtime.claim_route(edge.clone()),
+        RouteClaim::FirstCpu { .. }
+    ));
+    let RouteClaim::Calibrate(warmup) = runtime.claim_route(full.clone()) else {
+        panic!("warmup pending")
+    };
+    warmup
+        .complete(
+            Some((Duration::from_micros(100), Duration::from_micros(500))),
+            None,
+        )
+        .unwrap();
+    for geometry in [(129, 139), (256, 139), (129, 256)] {
+        edge.sample_geometry = RouteSampleGeometry::from_dimensions([geometry]);
+        let RouteClaim::Ready(decision) = runtime.claim_route(edge.clone()) else {
+            panic!("clipped tile should not repeat a costly device warmup");
+        };
+        assert_eq!(decision.winner, DecodeRoute::Cpu);
+        assert!(!decision.device_failure);
+    }
+    let mut other_level = edge.clone();
+    other_level.level += 1;
+    let mut other_device = edge.clone();
+    other_device.device_identity = "another device".into();
+    let mut other_workers = edge.clone();
+    other_workers.cpu_workers += 1;
+    let mut larger = edge.clone();
+    larger.sample_geometry = RouteSampleGeometry::from_dimensions([(512, 256)]);
+    let mut larger_batch = edge.clone();
+    larger_batch.sample_tile_count = 2;
+    larger_batch.sample_geometry = RouteSampleGeometry::from_dimensions([(129, 256), (129, 256)]);
+    for key in [
+        other_level,
+        other_device,
+        other_workers,
+        larger,
+        larger_batch,
+    ] {
+        assert!(
+            matches!(runtime.claim_route(key), RouteClaim::FirstCpu { .. }),
+            "unmeasured workload must keep its own calibration"
+        );
+    }
+}
+
+#[test]
 fn abandoned_and_cancelled_calibration_release_ownership_without_publishing() {
     let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
     let key = route_key(910);

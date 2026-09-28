@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wsi_rs::{
-    Dataset, FormatRegistry, IccProfileKey, SampleType, SceneId, SeriesId, Slide, TileCache,
-    TileLayout, WsiError,
+    CacheConfig, Dataset, FormatRegistry, IccProfileKey, SampleType, SceneId, SeriesId, Slide,
+    SlideOpenOptions, TileCache, TileLayout, WsiError,
 };
 
 mod geometry;
@@ -78,7 +78,14 @@ impl CStringArray {
 
 impl OpenSlideHandle {
     pub(crate) fn open(path: PathBuf) -> Option<Box<Self>> {
-        match Slide::open(&path)
+        // Match OpenSlide 4.0.1's 32 MiB default decoded cache. Supplemental
+        // format caches scale with this budget instead of the Rust viewer default.
+        let options = SlideOpenOptions::default().with_cache_config(
+            CacheConfig::deterministic()
+                .with_shared_tile_bytes(32 * 1024 * 1024)
+                .with_display_tile_bytes(0),
+        );
+        match Slide::open_with_options(&path, options)
             .and_then(crate::vmu::display_slide)
             .and_then(|slide| require_openslide_dicom_samples(slide, &path))
         {

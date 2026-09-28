@@ -447,7 +447,7 @@ fn associated_record_open_errors_retain_the_missing_path() {
     slide.associated.insert(
         "broken".into(),
         MiraxRecord {
-            path: missing.clone(),
+            path: missing.clone().into(),
             offset: 0,
             len: 1,
         },

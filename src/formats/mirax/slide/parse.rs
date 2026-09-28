@@ -586,7 +586,7 @@ fn assemble_dataset_and_caches(
             },
         });
         levels.push(MiraxLevel {
-            tiles: level.descriptors,
+            tiles: level.descriptors.into_boxed_slice(),
         });
     }
 

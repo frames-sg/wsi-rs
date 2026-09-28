@@ -16,7 +16,7 @@ use std::slice;
 use std::sync::Arc;
 
 use handle::{empty_names, OpenSlideHandle};
-use wsi_rs::{ColorSpace, LevelIdx, RegionRequest, SceneId, SeriesId, TileCache, TileLayout};
+use wsi_rs::{LevelIdx, RegionRequest, SceneId, SeriesId, TileCache};
 
 const VERSION: &str = concat!("OpenSlide 4.0.1+wsi-rs-", env!("CARGO_PKG_VERSION"), "\0");
 
@@ -379,10 +379,8 @@ pub unsafe extern "C" fn openslide_read_region(
     h: i64,
 ) {
     let len = checked_pixel_len(w, h).unwrap_or(0);
+    let mut written = false;
     let result: FfiResult<()> = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: `len` is derived from requested dimensions, and `clear_u32`
-        // checks for null before writing.
-        unsafe { clear_u32(dest, len) };
         // SAFETY: The C ABI permits null, and `handle_ref` validates before
         // borrowing the opaque handle.
         let Some(handle) = (unsafe { handle_ref(osr) }) else {
@@ -439,25 +437,6 @@ pub unsafe extern "C" fn openslide_read_region(
             handle.set_error(format!("level {level} has invalid geometry"));
             return Err(FfiPanic);
         };
-        // Sparse tile maps can contain large empty regions. The destination
-        // is already transparent, so avoid decoding a metadata probe and
-        // allocating/converting an image when no tile can contribute. Include
-        // the extra edge pixel reached by a fractional level origin.
-        if (pixel_len as u64) <= slide.limits().region_pixels()
-            && (pixel_len as u64) <= slide.limits().region_rgba_bytes() / 4
-            && matches!(level_meta.tile_layout, TileLayout::Irregular { .. })
-            && level_meta
-                .tile_layout
-                .tiles_for_region(
-                    level_x,
-                    level_y,
-                    width.saturating_add(1),
-                    height.saturating_add(1),
-                )
-                .is_empty()
-        {
-            return Ok(());
-        }
         let req = RegionRequest::new(
             SceneId::new(0),
             SeriesId::new(0),
@@ -470,21 +449,11 @@ pub unsafe extern "C" fn openslide_read_region(
         // this function exclusive write access to the destination region for
         // the duration of the call.
         let destination = unsafe { slice::from_raw_parts_mut(dest, pixel_len) };
-        match slide
-            .read_region_subpixel(&req, subpixel_offset)
-            .and_then(|tile| {
-                let opaque_output = !matches!(tile.color_space(), ColorSpace::Rgba);
-                pixels::tile_to_premultiplied_argb_into(tile, destination)?;
-                region::clear_uncovered_pixels(
-                    level_meta,
-                    (level_x, level_y),
-                    subpixel_offset,
-                    (width, height),
-                    destination,
-                    opaque_output,
-                )
-            }) {
-            Ok(()) => Ok(()),
+        match region::read_region_into(slide, level_meta, &req, subpixel_offset, destination) {
+            Ok(()) => {
+                written = true;
+                Ok(())
+            }
             Err(err) => {
                 handle.set_error(err.to_string());
                 Err(FfiPanic)
@@ -492,7 +461,9 @@ pub unsafe extern "C" fn openslide_read_region(
         }
     }))
     .unwrap_or(Err(FfiPanic));
-    if result.is_err() {
+    if result.is_err() || !written {
+        // Successful reads overwrite every pixel. Empty reads and failures
+        // still clear the complete destination, including partially written output.
         // SAFETY: `clear_u32` validates null and zero length before writing.
         unsafe { clear_u32(dest, len) };
     }

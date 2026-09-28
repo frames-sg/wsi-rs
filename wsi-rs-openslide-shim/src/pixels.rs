@@ -65,6 +65,15 @@ fn tile_pixel_count(tile: &CpuTile) -> Result<usize, WsiError> {
 }
 
 fn convert_rgba_to_premultiplied_argb(rgba: &[u8], argb: &mut [u32]) {
+    if rgba.chunks_exact(4).all(|pixel| pixel[3] == 255) {
+        for (dest, pixel) in argb.iter_mut().zip(rgba.chunks_exact(4)) {
+            *dest = 0xff00_0000
+                | (u32::from(pixel[0]) << 16)
+                | (u32::from(pixel[1]) << 8)
+                | u32::from(pixel[2]);
+        }
+        return;
+    }
     for (dest, pixel) in argb.iter_mut().zip(rgba.chunks_exact(4)) {
         let a = pixel[3];
         let premultiply = |channel: u8| -> u8 {

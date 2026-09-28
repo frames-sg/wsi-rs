@@ -420,6 +420,19 @@ impl TileCache {
         keys.all(|key| state.lru.entries.contains(&key))
     }
 
+    /// Pin a complete cached region without scheduling or decoding any misses.
+    pub(crate) fn get_complete(
+        &self,
+        keys: impl Iterator<Item = CacheKey>,
+    ) -> Option<Vec<Arc<CpuTile>>> {
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let tiles = keys
+            .map(|key| state.lru.get(&key).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        state.hits += tiles.len() as u64;
+        Some(tiles)
+    }
+
     /// Return an atomic snapshot of cache capacity and activity counters.
     pub fn stats(&self) -> TileCacheStats {
         let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());

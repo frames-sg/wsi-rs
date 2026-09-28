@@ -98,19 +98,26 @@ impl PlannedRegionRead<'_> {
             };
             return Ok(ends);
         }
-        let workers = slide.decode_runtime.cpu_worker_count();
+        let mut workers = None;
         let mut batch_ends = Vec::new();
         let mut start = 0;
         while start < sizes.len() {
             let mut end = start + 1;
             let (mut decoded, mut inputs) = sizes[start];
-            while end < sizes.len() && end - start < workers {
+            while end < sizes.len() {
                 let next_decoded = decoded.saturating_add(sizes[end].0);
                 let next_inputs = inputs.saturating_add(sizes[end].1);
                 // Streaming already retains the composed output. Both decoded
                 // tiles and codec work must fit its remaining staging allowance;
                 // unused encoded capacity never expands decoded concurrency.
                 if next_decoded.saturating_mul(2) > staging || next_inputs > encoded {
+                    break;
+                }
+                // Singleton staging needs no worker count. Querying it starts
+                // the JP2K pool, even for cached reads of ordinary JPEG tiles.
+                if end - start
+                    >= *workers.get_or_insert_with(|| slide.decode_runtime.cpu_worker_count())
+                {
                     break;
                 }
                 decoded = next_decoded;

@@ -81,7 +81,7 @@ impl TiffPixelReader {
             (col % per_tile) as f64 * extent.0,
             (row % per_tile) as f64 * extent.1,
         );
-        let subtile = if entry.extent.is_none() {
+        let subtile = if !entry.has_explicit_extent() {
             // Whole-pixel subtiles are plain crops; clipped stored tiles leave
             // the uncovered remainder to the compositor as transparent.
             let x = origin.0 as u32;

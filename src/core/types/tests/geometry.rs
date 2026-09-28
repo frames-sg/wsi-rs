@@ -152,8 +152,7 @@ fn irregular_tiles_for_region_basic() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     tiles_map.insert(
@@ -162,8 +161,7 @@ fn irregular_tiles_for_region_basic() {
             offset: (5.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
     tiles_map.insert(
@@ -172,8 +170,7 @@ fn irregular_tiles_for_region_basic() {
             offset: (0.0, 3.0),
             dimensions: (256, 256),
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 
@@ -196,8 +193,7 @@ fn irregular_tiles_negative_offset() {
             offset: (-10.0, -5.0),
             dimensions: (256, 256),
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 
@@ -224,8 +220,7 @@ fn irregular_tiles_no_match() {
             offset: (0.0, 0.0),
             dimensions: (256, 256),
             tiff_tile_index: None,
-            extent: None,
-            cairo_rgb24: false,
+            extent: Default::default(),
         },
     );
 

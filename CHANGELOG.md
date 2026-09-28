@@ -42,8 +42,17 @@
 
 ### Fixed
 
+- OpenSlide-compatible region reads bound intermediate color and coverage
+  buffers with row bands. Cached regions retain dense composition, opaque
+  bands avoid redundant alpha reconstruction, and singleton staging avoids
+  initializing an unused JP2K worker pool.
+- MIRAX image records share data-file paths, retain compact source origins,
+  and discard excess descriptor capacity. Tile-map extents and surface flags
+  share one compact representation.
 - Automatic JP2K routing stays on CPU when device warmup takes more than four
   uncached CPU decodes, avoiding repeated costly foreground calibration probes.
+  Clipped tiles reuse that strong CPU preference for the same level, codec,
+  batch count, device and worker budget.
 - MIRAX composition uses Pixman's integer interpolation for fully covered
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
   Integer-position opaque tiles compose directly into RGBA, avoiding separate

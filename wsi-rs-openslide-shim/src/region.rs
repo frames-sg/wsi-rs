@@ -1,4 +1,66 @@
-use wsi_rs::{Level, TileLayout, WsiError};
+use wsi_rs::{ColorSpace, Level, RegionRequest, Slide, TileLayout, WsiError};
+
+/// Bound intermediate color and coverage images while writing the caller's
+/// complete destination. Small viewer reads retain a single composition.
+pub(crate) fn read_region_into(
+    slide: &Slide,
+    level: &Level,
+    request: &RegionRequest,
+    offset: (f64, f64),
+    destination: &mut [u32],
+) -> Result<(), WsiError> {
+    let (width, height) = request.size_px;
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels != destination.len() as u64 || width == 0 || height == 0 {
+        return Err(WsiError::DisplayConversion(
+            "region destination must match positive dimensions".into(),
+        ));
+    }
+    let within_limits = pixels <= slide.limits().region_pixels()
+        && pixels <= slide.limits().region_rgba_bytes() / 4;
+    let irregular = matches!(level.tile_layout, TileLayout::Irregular { .. });
+    if irregular && within_limits {
+        let hits = level.tile_layout.tiles_for_region(
+            request.origin_px.0,
+            request.origin_px.1,
+            width.saturating_add(1),
+            height.saturating_add(1),
+        );
+        if hits.is_empty() {
+            destination.fill(0);
+            return Ok(());
+        }
+    }
+    // Keep coverage images within 32 KiB allocations. Use stable bands across
+    // reads because Pixman's filter selection depends on clipping.
+    let band_pixels: u64 = if irregular { 8 * 1024 } else { 256 * 1024 };
+    // Let Slide report its ordinary validation error for an oversized request;
+    // splitting must not bypass the limit on the complete output.
+    let band_height = if !within_limits {
+        height
+    } else {
+        (band_pixels / u64::from(width.max(1)))
+            .max(1)
+            .min(u64::from(height)) as u32
+    };
+    for (index, rows) in destination
+        .chunks_mut(width as usize * band_height as usize)
+        .enumerate()
+    {
+        let mut band = request.clone();
+        band.origin_px.1 = request
+            .origin_px
+            .1
+            .checked_add(index as i64 * i64::from(band_height))
+            .ok_or_else(|| WsiError::DisplayConversion("region band origin overflows".into()))?;
+        band.size_px.1 = (rows.len() / width as usize) as u32;
+        let tile = slide.read_region_subpixel(&band, offset)?;
+        let opaque = !matches!(tile.color_space(), ColorSpace::Rgba);
+        crate::pixels::tile_to_premultiplied_argb_into(tile, rows)?;
+        clear_uncovered_pixels(level, band.origin_px, offset, band.size_px, rows, opaque)?;
+    }
+    Ok(())
+}
 
 pub(crate) fn clear_uncovered_pixels(
     level: &Level,
@@ -29,17 +91,42 @@ pub(crate) fn clear_uncovered_pixels(
             if !opaque_output {
                 return Ok(());
             }
-            for pixel in pixels.iter_mut() {
-                *pixel &= 0x00ff_ffff;
-            }
             // Hits are placed from the whole-pixel origin; shift them onto the
             // fractional origin, whose region can reach one pixel further.
-            for hit in level.tile_layout.tiles_for_region(
+            let mut hits = level.tile_layout.tiles_for_region(
                 origin.0,
                 origin.1,
                 size.0.saturating_add(1),
                 size.1.saturating_add(1),
-            ) {
+            );
+            // Dense bands often span adjacent tiles. Prove their coverage
+            // from rectangles instead of clearing and restoring every alpha.
+            hits.sort_unstable_by(|a, b| a.dest_x_f64.total_cmp(&b.dest_x_f64));
+            let mut covered = 0;
+            for hit in &hits {
+                let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
+                    continue;
+                };
+                let (x0, y0, x1, y1) = rectangle_bounds(
+                    size,
+                    hit.dest_x_f64 - subpixel_offset.0,
+                    hit.dest_y_f64 - subpixel_offset.1,
+                    entry.dimensions,
+                );
+                if y0 == 0 && y1 == size.1 as usize {
+                    if x0 > covered {
+                        break;
+                    }
+                    covered = covered.max(x1);
+                }
+            }
+            if covered == size.0 as usize {
+                return Ok(());
+            }
+            for pixel in pixels.iter_mut() {
+                *pixel &= 0x00ff_ffff;
+            }
+            for hit in hits {
                 let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
                     continue;
                 };
@@ -78,6 +165,9 @@ fn clear_outside_level(
     let y1 =
         (i128::from(level_size.1) - i128::from(origin.1)).clamp(0, i128::from(size.1)) as usize;
     let width = size.0 as usize;
+    if x0 == 0 && y0 == 0 && x1 == width && y1 == size.1 as usize {
+        return;
+    }
 
     for (row_index, row) in pixels.chunks_exact_mut(width).enumerate() {
         if row_index < y0 || row_index >= y1 || x0 >= x1 {
