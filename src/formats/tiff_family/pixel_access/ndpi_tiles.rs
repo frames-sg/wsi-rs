@@ -9,7 +9,7 @@ impl TiffPixelReader {
         strip_byte_count: u64,
     ) -> Result<Arc<CpuTile>, WsiError> {
         self.full_decode_cache
-            .get_or_try_insert_with(ifd_id, || {
+            .get_or_try_insert_with(FullDecodeKey::Level(ifd_id), || {
                 self.decode_ndpi_full_image(req, ifd_id, strip_offset, strip_byte_count)
                     .map_err(|err| err.to_string())
             })
@@ -70,6 +70,7 @@ impl TiffPixelReader {
             ifd_id,
             col: col as u32,
             native_row: row as u32,
+            scale_denom: 1,
         };
         let strip = self.get_or_decode_ndpi_strip(
             req,
@@ -358,6 +359,7 @@ impl TiffPixelReader {
                 ifd_id,
                 col,
                 native_row: row,
+                scale_denom: 1,
             },
             virtual_tile_width,
             virtual_tile_height,

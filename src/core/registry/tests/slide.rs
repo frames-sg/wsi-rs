@@ -107,6 +107,66 @@ impl SlideReader for IrregularCountingSource {
     }
 }
 
+/// Records whether its region fast path ran on a decode-pool worker.
+struct FastpathThreadProbe {
+    inner: MockSource,
+    on_pool_worker: Arc<std::sync::Mutex<Option<bool>>>,
+}
+
+impl SlideReader for FastpathThreadProbe {
+    fn dataset(&self) -> &Dataset {
+        self.inner.dataset()
+    }
+
+    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        self.inner.read_tile_cpu(req)
+    }
+
+    fn read_region_fastpath(
+        &self,
+        _ctx: &mut SlideReadContext<'_>,
+        _req: &RegionRequest,
+    ) -> Option<Result<CpuTile, WsiError>> {
+        *self.on_pool_worker.lock().unwrap() = Some(rayon::current_thread_index().is_some());
+        None
+    }
+}
+
+fn fastpath_ran_on_pool_worker(
+    wrap: fn(Box<dyn SlideReader>, u64) -> ConservativeManagedReader,
+) -> bool {
+    let on_pool_worker = Arc::new(std::sync::Mutex::new(None));
+    let reader = wrap(
+        Box::new(FastpathThreadProbe {
+            inner: MockSource::new(),
+            on_pool_worker: Arc::clone(&on_pool_worker),
+        }),
+        1_024,
+    );
+    let mut context = SlideReadContext::new(None, crate::SlideLimits::default().region_pixels());
+    let region = RegionRequest::new(0, 0, 0, (0, 0), (16, 16));
+
+    // Call from an ordinary thread, as OpenSlide clients and viewers do.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| assert!(reader.read_region_fastpath(&mut context, &region).is_none()))
+            .join()
+            .unwrap();
+    });
+    let ran_on_pool_worker = on_pool_worker.lock().unwrap().expect("fast path ran");
+    ran_on_pool_worker
+}
+
+#[test]
+fn builtin_region_fastpath_stays_on_caller_while_custom_readers_keep_pool_context() {
+    // A pool round trip for a declined or cached fast path cost MIRAX and VMS
+    // cached single-tile reads 3-4x p50 latency at 12 concurrent handles.
+    assert!(!fastpath_ran_on_pool_worker(
+        ConservativeManagedReader::builtin
+    ));
+    assert!(fastpath_ran_on_pool_worker(ConservativeManagedReader::new));
+}
+
 #[test]
 fn slide_reader_defaults_to_no_associated_images() {
     let error = MockSource::new()

@@ -88,7 +88,7 @@ impl ConfiguredDatasetReader for ZeissZviBackend {
         let encoded_unit_bytes = config.limits.encoded_unit_bytes();
         let slide = Arc::new(ZviSlide::parse_with_config(path, config)?);
         let reader: Box<dyn SlideReader> = Box::new(ZviReader { slide });
-        Ok(Box::new(ConservativeManagedReader::new(
+        Ok(Box::new(ConservativeManagedReader::builtin(
             reader,
             encoded_unit_bytes,
         )))

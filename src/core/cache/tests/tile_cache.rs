@@ -26,6 +26,7 @@ fn make_key(dataset_id: u128, level: u32, col: i64, row: i64) -> CacheKey {
         t: 0,
         tile_col: col,
         tile_row: row,
+        kind: CacheKeyKind::Tile,
     }
 }
 
@@ -57,6 +58,7 @@ fn cache_key_from_tile_request_preserves_every_identity_dimension() {
             t: 16,
             tile_col: -17,
             tile_row: 18,
+            kind: CacheKeyKind::Tile,
         }
     );
 }

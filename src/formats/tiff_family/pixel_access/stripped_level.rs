@@ -101,7 +101,7 @@ impl TiffPixelReader {
             reason,
         };
         self.full_decode_cache.get_or_try_insert_with_error(
-            ifd_id,
+            FullDecodeKey::Level(ifd_id),
             || {
                 self.decode_stripped_level_image(
                     ifd_id,

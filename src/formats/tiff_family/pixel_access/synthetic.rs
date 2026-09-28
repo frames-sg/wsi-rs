@@ -118,6 +118,189 @@ impl TiffPixelReader {
         }
     }
 
+    /// Reads `rect` (`x, y, width, height` in synthetic-level pixels) of a
+    /// synthetic level whose base is a restart-marker NDPI level.
+    ///
+    /// OpenSlide derives these levels by decoding each restart interval with
+    /// libjpeg `scale_denom`, and only when the interval divides evenly by the
+    /// factor. Box-filtering full-resolution pixels differs from that by up to
+    /// 3 levels, so this assembles DCT-scaled strips instead. Other bases and
+    /// layouts return `None` and keep the box-filter path. Strips are shared
+    /// through `cache` under the base level's strip grid.
+    pub(super) fn try_read_synthetic_rect_from_scaled_ndpi_strips(
+        &self,
+        cache: Option<&crate::core::cache::TileCache>,
+        base_tile_req: &TileRequest,
+        factor: u32,
+        rect: (u32, u32, u32, u32),
+    ) -> Result<Option<CpuTile>, WsiError> {
+        let (rect_x, rect_y, rect_w, rect_h) = rect;
+        if !matches!(factor, 2 | 4 | 8) || rect_w == 0 || rect_h == 0 {
+            return Ok(None);
+        }
+        let TileSource::NdpiJpeg {
+            ifd_id,
+            jpeg_header,
+            mcu_starts_tag,
+            tiles_across,
+            tiles_down,
+            strip_offset,
+            strip_byte_count,
+            ..
+        } = self.tile_source_for(base_tile_req)?
+        else {
+            return Ok(None);
+        };
+        let base = &self.layout.dataset.scenes[base_tile_req.scene.get()].series
+            [base_tile_req.series.get()]
+        .levels[base_tile_req.level.get() as usize];
+        let TileLayout::WholeLevel {
+            virtual_tile_width: base_strip_w,
+            virtual_tile_height: base_strip_h,
+            ..
+        } = base.tile_layout
+        else {
+            return Ok(None);
+        };
+        let (Ok(base_w), Ok(base_h)) = (
+            u32::try_from(base.dimensions.0),
+            u32::try_from(base.dimensions.1),
+        ) else {
+            return Ok(None);
+        };
+        if base_strip_w == 0
+            || base_strip_h == 0
+            || !base_strip_w.is_multiple_of(factor)
+            || !base_strip_h.is_multiple_of(factor)
+            || *tiles_across == 0
+            || *tiles_down == 0
+        {
+            return Ok(None);
+        }
+        let (strip_w, strip_h) = (base_strip_w / factor, base_strip_h / factor);
+        let (Some(rect_x1), Some(rect_y1)) =
+            (rect_x.checked_add(rect_w), rect_y.checked_add(rect_h))
+        else {
+            return Ok(None);
+        };
+        let (col_start, row_start) = (rect_x / strip_w, rect_y / strip_h);
+        let col_end = ((rect_x1 - 1) / strip_w).min(tiles_across - 1);
+        let row_end = ((rect_y1 - 1) / strip_h).min(tiles_down - 1);
+        if col_start > col_end || row_start > row_end {
+            return Ok(None);
+        }
+
+        // One task per strip row writes its own band of output rows, so strip
+        // decodes need no batch barrier or intermediate collection.
+        let dst_stride = rect_w as usize * 3;
+        let mut rgb = vec![255u8; checked_rgb_u8_len(rect_w, rect_h)?];
+        let mut bands = Vec::with_capacity((row_end - row_start + 1) as usize);
+        let mut rest = rgb.as_mut_slice();
+        for row in row_start..=row_end {
+            let band_y1 = ((row + 1) * strip_h).min(rect_y1);
+            let band_y0 = (row * strip_h).max(rect_y);
+            let (band, tail) = rest.split_at_mut((band_y1 - band_y0) as usize * dst_stride);
+            bands.push((row, band_y0, band));
+            rest = tail;
+        }
+        bands.into_par_iter().try_for_each(|(row, band_y0, band)| {
+            for col in col_start..=col_end {
+                let strip = self.scaled_ndpi_strip(
+                    cache,
+                    &TileRequest {
+                        col: i64::from(col),
+                        row: i64::from(row),
+                        ..*base_tile_req
+                    },
+                    ScaledNdpiStrip {
+                        ifd_id: *ifd_id,
+                        jpeg_header,
+                        mcu_starts_tag: *mcu_starts_tag,
+                        tiles_across: *tiles_across,
+                        tiles_down: *tiles_down,
+                        strip_offset: *strip_offset,
+                        strip_byte_count: *strip_byte_count,
+                        base_strip: (base_strip_w, base_strip_h),
+                        base_dims: (base_w, base_h),
+                        factor,
+                    },
+                )?;
+                let (CpuTileLayout::Interleaved, 3, CpuTileData::U8(strip_rgb)) =
+                    (strip.layout, strip.channels, &strip.data)
+                else {
+                    return Err(WsiError::TileRead {
+                        col: i64::from(col),
+                        row: i64::from(row),
+                        level: base_tile_req.level.get(),
+                        reason: "scaled NDPI strip must be interleaved U8 RGB".into(),
+                    });
+                };
+                let (origin_x, origin_y) = (col * strip_w, row * strip_h);
+                let x0 = origin_x.max(rect_x);
+                let x1 = (origin_x + strip.width).min(rect_x1);
+                let y1 = (origin_y + strip.height).min(band_y0 + (band.len() / dst_stride) as u32);
+                if x1 <= x0 || y1 <= band_y0 {
+                    continue;
+                }
+                let src_stride = strip.width as usize * 3;
+                let row_bytes = (x1 - x0) as usize * 3;
+                for y in band_y0..y1 {
+                    let src = (y - origin_y) as usize * src_stride + (x0 - origin_x) as usize * 3;
+                    let dst = (y - band_y0) as usize * dst_stride + (x0 - rect_x) as usize * 3;
+                    band[dst..dst + row_bytes].copy_from_slice(&strip_rgb[src..src + row_bytes]);
+                }
+            }
+            Ok(())
+        })?;
+        Ok(Some(cpu_tile_from_rgb_pixels(rect_w, rect_h, rgb)?))
+    }
+
+    /// One DCT-scaled restart-interval strip, shared through `cache`. It skips
+    /// the small single-flight NDPI strip cache: scaled strips are numerous and
+    /// tiny, and churning that LRU would evict full-resolution strips.
+    fn scaled_ndpi_strip(
+        &self,
+        cache: Option<&crate::core::cache::TileCache>,
+        strip_req: &TileRequest,
+        strip: ScaledNdpiStrip<'_>,
+    ) -> Result<Arc<CpuTile>, WsiError> {
+        let cache_key = CacheKey {
+            kind: CacheKeyKind::NdpiScaledStrip {
+                scale_denom: strip.factor,
+            },
+            ..CacheKey::from_tile_request(self.layout.dataset.id, strip_req)
+        };
+        if let Some(cached) = cache.and_then(|cache| cache.get(&cache_key)) {
+            return Ok(cached);
+        }
+        let (col, native_row) =
+            validate_tile_coords(strip_req.col, strip_req.row, strip_req.level.get())?;
+        let decoded = self.decode_ndpi_strip(
+            strip_req,
+            strip.ifd_id,
+            strip.jpeg_header,
+            strip.mcu_starts_tag,
+            strip.tiles_across,
+            strip.tiles_down,
+            strip.strip_offset,
+            strip.strip_byte_count,
+            NdpiStripKey {
+                ifd_id: strip.ifd_id,
+                col,
+                native_row,
+                scale_denom: strip.factor,
+            },
+            strip.base_strip.0,
+            strip.base_strip.1,
+            strip.base_dims.0,
+            strip.base_dims.1,
+        )?;
+        if let Some(cache) = cache {
+            cache.put(cache_key, decoded.clone());
+        }
+        Ok(decoded)
+    }
+
     pub(super) fn decode_synthetic_level(
         &self,
         req: &TileRequest,
@@ -149,6 +332,19 @@ impl TiffPixelReader {
             col: 0,
             row: 0,
         };
+        if let (Ok(target_w), Ok(target_h)) = (
+            u32::try_from(target.dimensions.0),
+            u32::try_from(target.dimensions.1),
+        ) {
+            if let Some(image) = self.try_read_synthetic_rect_from_scaled_ndpi_strips(
+                None,
+                &base_tile_req,
+                factor,
+                (0, 0, target_w, target_h),
+            )? {
+                return Ok(Arc::new(image));
+            }
+        }
         let mut current = if matches!(
             self.tile_source_for(&base_tile_req),
             Ok(TileSource::NdpiFullDecode { .. })
@@ -361,6 +557,16 @@ impl TiffPixelReader {
                 return paste_rgb_interleaved_u8_tile(&cropped, w, h, dst_x, dst_y);
             }
         }
+        if let (Ok(rect_x), Ok(rect_y)) = (u32::try_from(clipped_x0), u32::try_from(clipped_y0)) {
+            if let Some(scaled) = self.try_read_synthetic_rect_from_scaled_ndpi_strips(
+                cache,
+                &base_tile_req,
+                factor,
+                (rect_x, rect_y, valid_w, valid_h),
+            )? {
+                return paste_rgb_interleaved_u8_tile(&scaled, w, h, dst_x, dst_y);
+            }
+        }
 
         let series = self
             .layout
@@ -535,4 +741,19 @@ impl TiffPixelReader {
             })
             .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
+}
+
+/// The base NDPI restart-marker level and scale of one DCT-scaled strip.
+#[derive(Clone, Copy)]
+struct ScaledNdpiStrip<'a> {
+    ifd_id: IfdId,
+    jpeg_header: &'a [u8],
+    mcu_starts_tag: u16,
+    tiles_across: u32,
+    tiles_down: u32,
+    strip_offset: u64,
+    strip_byte_count: u64,
+    base_strip: (u32, u32),
+    base_dims: (u32, u32),
+    factor: u32,
 }

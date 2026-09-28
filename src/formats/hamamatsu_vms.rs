@@ -145,7 +145,7 @@ impl ConfiguredDatasetReader for HamamatsuVmsBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        Ok(Box::new(ConservativeManagedReader::new(
+        Ok(Box::new(ConservativeManagedReader::builtin(
             self.open_cached_or_parse(path, config)?,
             config.limits.encoded_unit_bytes(),
         )))

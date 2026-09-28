@@ -13,6 +13,12 @@ criteria = "safe-to-deploy"
 delta = "0.1.1 -> 0.1.2"
 notes = "Reviewed the exact published package diff. Changes are exact-version bumps of jxr-core, jxr-native, jxr-metal and jxr-cuda, README wording, and test-only Metal availability guards. No library source changed; no unsafe code or new runtime capabilities."
 
+[[audits.jxr]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.2 -> 0.2.0"
+notes = "Reviewed the facade and manifest delta. Metal and CUDA routes reuse the already-validated prepared request instead of preparing twice; coefficient staging, route decisions, and typed error mapping remain enforced. CPU behavior and the unsafe-code prohibition remain intact, with no added runtime capabilities. Exact dependency versions advance to the 0.2.0 JXR release set. Optional GPU implementations remain separate dependencies with their own hardware gates."
+
 [[audits.jxr-core]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
@@ -24,6 +30,12 @@ who = "Claude-assisted source review"
 criteria = "safe-to-deploy"
 delta = "0.1.0 -> 0.1.1"
 notes = "Reviewed the exact published package diff. Adds the doc-hidden device_plan module: host-side word-array planning for the Metal and CUDA adapters. The crate still forbids unsafe code, and the module performs no filesystem, network, process or environment access. Offset, stride and index conversions use checked arithmetic with typed errors. The overlap scheduler relies on caller-validated plane geometry for some unchecked u32 edge arithmetic; pathological geometry can panic in debug builds or build oversized schedules, while out-of-range indices are rejected by checked conversion. Only jxr-metal and jxr-cuda use the module; the CPU decode path does not."
+
+[[audits.jxr-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.1 -> 0.2.0"
+notes = "Reviewed the release source delta and manifests. The library source is unchanged; the public j2k-core types move to the coordinated 0.11.2 dependency. The crate continues to forbid unsafe code and adds no runtime capabilities. Existing geometry and request limits remain in force."
 
 [[audits.jxr-math]]
 who = "Codex-assisted source review"
@@ -42,6 +54,12 @@ who = "Claude-assisted source review"
 criteria = "safe-to-deploy"
 delta = "0.1.0 -> 0.1.1"
 notes = "Reviewed the exact published package diff. Only the package version and the exact jxr-core pin (=0.1.0 -> =0.1.1) changed; no source changes."
+
+[[audits.jxr-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.1 -> 0.2.0"
+notes = "Reviewed all changed CPU decoder source: bounded word-at-a-time packet reads, compile-time prefix tables, hoisted output layout/scaling, and SIMD packing/dequantization through safe fearless_simd 1.0 capability tokens. Reads validate packet length before advancing; partial words are padded from bounded slices. Prefix tables have fixed size and compile-time prefix/length checks. Output slices retain geometry validation, SIMD tails use bounded slices, and fused overflow detection returns an error before reconstructed output is accepted. Quantizer steps remain nonzero. No unsafe code or new runtime filesystem, network, subprocess, or environment access was introduced. Existing boundary/parity tests and the independent T.834/T.835 CPU comparison passed 517 in-scope cases, with 179 explicitly out of scope and no failures; this is not a full conformance claim."
 
 [[audits.sha2-asm]]
 who = "Codex-assisted source review"

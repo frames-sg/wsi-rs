@@ -557,3 +557,173 @@ fn synthetic_ndpi_native_tiles_crop_the_declared_virtual_grid() {
         .read_tile_cpu(&TileRequest::new(0, 0, 1, -1, 0))
         .is_err());
 }
+
+/// 128x32 textured 4:4:4 NDPI base with 8-MCU restart intervals (64x8 strips),
+/// plus synthetic levels at factors 2 and 4 over it.
+fn build_restart_based_synthetic_ndpi_reader() -> (TiffPixelReader, Vec<u8>) {
+    let (width, height) = (128u32, 32u32);
+    let image = image::RgbImage::from_fn(width, height, |x, y| {
+        image::Rgb([
+            ((x * 7 + y * 3) ^ (y * 29)) as u8,
+            ((x * 13) ^ (y * 5)) as u8,
+            ((x + y) * 11) as u8,
+        ])
+    });
+    let mut jpeg = Vec::new();
+    let mut encoder = JpegEncoder::new(&mut jpeg, 90);
+    encoder.set_sampling_factor(JpegSamplingFactor::R_4_4_4);
+    encoder.set_restart_interval(8);
+    encoder
+        .encode(
+            image.as_raw(),
+            width as u16,
+            height as u16,
+            JpegColorType::Rgb,
+        )
+        .unwrap();
+    let jpeg_header = jpeg[..find_test_jpeg_bitstream_start(&jpeg).unwrap()].to_vec();
+    let file = build_ndpi_full_jpeg_tiff(width, height, &jpeg, 8);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = *container.top_ifds().first().unwrap();
+    let layout = single_series_layout(
+        DatasetId::new(101),
+        vec![
+            whole_level((128, 32), 1.0, (64, 8)),
+            whole_level((64, 16), 2.0, (64, 16)),
+            whole_level((32, 8), 4.0, (32, 8)),
+        ],
+        HashMap::from([
+            (
+                tile_source_key(0),
+                TileSource::NdpiJpeg {
+                    ifd_id,
+                    jpeg_header,
+                    mcu_starts_tag: 65426,
+                    tiles_across: 2,
+                    tiles_down: 4,
+                    restart_interval: 8,
+                    strip_offset: 8,
+                    strip_byte_count: jpeg.len() as u64,
+                },
+            ),
+            (
+                tile_source_key(1),
+                TileSource::SyntheticDownsample {
+                    base_level: 0,
+                    factor: 2,
+                },
+            ),
+            (
+                tile_source_key(2),
+                TileSource::SyntheticDownsample {
+                    base_level: 0,
+                    factor: 4,
+                },
+            ),
+        ]),
+    );
+    (TiffPixelReader::new(container, layout), jpeg)
+}
+
+fn j2k_scaled_rgb(jpeg: &[u8], scale: J2kDownscale) -> Vec<u8> {
+    J2kJpegDecoder::new(jpeg)
+        .unwrap()
+        .decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
+        .unwrap()
+        .0
+}
+
+#[test]
+fn synthetic_ndpi_levels_over_restart_base_match_dct_scaled_decode() {
+    // OpenSlide derives these levels by decoding each restart interval with
+    // libjpeg scale_denom. For 4:4:4 that equals a DCT-scaled decode of the whole
+    // image, which box-filtering full-resolution pixels does not reproduce.
+    let (reader, jpeg) = build_restart_based_synthetic_ndpi_reader();
+    let (full, _) = J2kJpegDecoder::new(&jpeg)
+        .unwrap()
+        .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
+        .unwrap();
+    let full = cpu_tile_from_rgb_pixels(128, 32, full).unwrap();
+
+    for (level, factor, scale) in [
+        (1u32, 2u32, J2kDownscale::Half),
+        (2, 4, J2kDownscale::Quarter),
+    ] {
+        let (level_w, level_h) = (128 / factor, 32 / factor);
+        let expected =
+            cpu_tile_from_rgb_pixels(level_w, level_h, j2k_scaled_rgb(&jpeg, scale)).unwrap();
+        let boxed = downsample_rgb_pow2_box(&full, factor).unwrap();
+        assert_ne!(
+            boxed.as_u8(),
+            expected.as_u8(),
+            "fixture must separate DCT scaling from box filtering"
+        );
+
+        // Whole-level tile: the synthetic level cache path.
+        let tile = reader
+            .read_tile_cpu(&TileRequest::new(0, 0, level, 0, 0))
+            .unwrap();
+        assert_tile_eq(&tile, &expected);
+
+        // Offset region crossing strip boundaries: the region fast path.
+        let (x, y, w, h) = (3, 1, level_w - 5, level_h - 2);
+        let region = read_synthetic_ndpi_region_at(&reader, level, x, y, w, h, None);
+        let expected_region = crop_rgb_interleaved_u8_buffer(&expected, x, y, w, h).unwrap();
+        assert_tile_eq(&region, &expected_region);
+    }
+}
+
+#[test]
+fn synthetic_ndpi_scaled_strips_are_shared_through_the_tile_cache() {
+    let (reader, jpeg) = build_restart_based_synthetic_ndpi_reader();
+    let expected =
+        cpu_tile_from_rgb_pixels(64, 16, j2k_scaled_rgb(&jpeg, J2kDownscale::Half)).unwrap();
+    let cache = crate::core::cache::TileCache::new(64 * 1024 * 1024);
+
+    let first = read_synthetic_ndpi_region_at(&reader, 1, 0, 0, 40, 12, Some(&cache));
+    let puts = cache.stats().puts;
+    assert!(
+        puts > 0,
+        "scaled strips should be admitted to the tile cache"
+    );
+    let second = read_synthetic_ndpi_region_at(&reader, 1, 0, 0, 40, 12, Some(&cache));
+
+    let expected = crop_rgb_interleaved_u8_buffer(&expected, 0, 0, 40, 12).unwrap();
+    assert_tile_eq(&first, &expected);
+    assert_tile_eq(&second, &expected);
+    assert_eq!(
+        cache.stats().puts,
+        puts,
+        "second read should be served from the cache"
+    );
+    // Scaled strips must not alias the base level's full-resolution strips.
+    let base_key =
+        CacheKey::from_tile_request(reader.layout.dataset.id, &TileRequest::new(0, 0, 0, 0, 0));
+    assert!(cache.get(&base_key).is_none());
+}
+
+fn read_synthetic_ndpi_region_at(
+    reader: &TiffPixelReader,
+    level: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    cache: Option<&crate::core::cache::TileCache>,
+) -> CpuTile {
+    let req = region_request(
+        0,
+        0,
+        level,
+        PlaneSelection::default(),
+        i64::from(x),
+        i64::from(y),
+        w,
+        h,
+    );
+    let mut ctx = crate::core::registry::SlideReadContext::new(cache, 256 * 1024 * 1024);
+    reader
+        .read_region_fastpath(&mut ctx, &req)
+        .expect("synthetic level should have a region fast path")
+        .expect("synthetic region fast path should produce pixels")
+}

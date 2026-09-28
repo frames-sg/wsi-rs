@@ -51,6 +51,10 @@ fn precomputed_fractional_sampling_matches_reference_pixels_and_alpha() {
                 (-0.00390625, 0.5),
                 (0.25, 0.75),
                 (9.9, 10.125),
+                // Integral placements take the exact saturating copy path.
+                (0.0, 0.0),
+                (-3.0, 2.0),
+                (4.0, -5.0),
             ] {
                 let mut actual = vec![0; shape.width * shape.height * shape.channels];
                 let mut expected = actual.clone();

@@ -459,6 +459,7 @@ pub unsafe extern "C" fn openslide_read_region(
                 region::clear_uncovered_pixels(
                     level_meta,
                     (level_x, level_y),
+                    subpixel_offset,
                     (width, height),
                     destination,
                     opaque_output,

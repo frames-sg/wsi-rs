@@ -95,7 +95,7 @@ impl ConfiguredDatasetReader for ZeissBackend {
         let slide = Arc::new(ZeissSlide::parse_with_config(path, config)?);
         slide.validate_wsi_pixels()?;
         let reader: Box<dyn SlideReader> = Box::new(ZeissReader { slide });
-        Ok(Box::new(ConservativeManagedReader::new(
+        Ok(Box::new(ConservativeManagedReader::builtin(
             reader,
             encoded_unit_bytes,
         )))

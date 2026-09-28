@@ -96,14 +96,16 @@ impl AdaptiveDecodeReader {
             }
             return Ok(tiles);
         }
+        // Without an admission context, a calibration opportunity or optional
+        // memory, the router keeps this batch on CPU and says so.
         let Some(context) = context else {
-            return self.read_inner_cpu(reqs, control);
+            return self.read_adaptive_cpu(reqs, control);
         };
         if matches!(&claim, RouteClaim::Calibrate(_)) && !context.claim_calibration() {
-            return self.read_inner_cpu(reqs, control);
+            return self.read_adaptive_cpu(reqs, control);
         }
         let Some((prepared, _extra)) = self.prepare_optional(reqs, &key, context)? else {
-            return self.read_inner_cpu(reqs, control);
+            return self.read_adaptive_cpu(reqs, control);
         };
         Self::check_control(control)?;
         let Some(device) = self.preferred_device() else {
@@ -165,15 +167,25 @@ impl AdaptiveDecodeReader {
     ) -> Result<Vec<CpuTile>, WsiError> {
         lease.bind_device(self.device_identity(device)?);
         if lease.step == CalibrationStep::Warmup {
-            match read_device() {
-                Ok(_) => lease.complete(None, control)?,
+            let warmed = match read_device() {
+                Ok(_) => {
+                    lease.complete(None, control)?;
+                    true
+                }
                 Err(error) => {
                     Self::check_control(control)?;
                     tracing::debug!(%error, "JP2K device warmup failed");
                     lease.fail(control)?;
+                    false
                 }
+            };
+            let tiles = self.read_inner_cpu(reqs, control)?;
+            if warmed {
+                record_adaptive_cpu_route(device, tiles.len());
+            } else {
+                record_device_failure_fallback(device, tiles.len());
             }
-            return self.read_inner_cpu(reqs, control);
+            return Ok(tiles);
         }
         let CalibrationStep::Sample { cpu_first } = lease.step else {
             unreachable!()
@@ -214,6 +226,18 @@ impl AdaptiveDecodeReader {
                 self.read_inner_cpu(reqs, control)
             }
         }
+    }
+
+    fn read_adaptive_cpu(
+        &self,
+        reqs: &[TileRequest],
+        control: Option<&crate::ReadControl>,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        let tiles = self.read_inner_cpu(reqs, control)?;
+        if let Some(device) = self.configured_device() {
+            record_adaptive_cpu_route(device, tiles.len());
+        }
+        Ok(tiles)
     }
 
     fn prepare_optional<'a>(

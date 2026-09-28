@@ -246,6 +246,57 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
     )
 }
 
+/// DCT-scaled decode of a JPEG whose SOF is forced to `image_width` x
+/// `image_height`. Like libjpeg's `scale_denom`, the output keeps partial MCUs:
+/// each dimension is `ceil(image_dim / denominator)`.
+pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
+    data: &[u8],
+    image_width: u32,
+    image_height: u32,
+    scale: J2kDownscale,
+    color_transform: J2kColorTransform,
+) -> Result<DecodedJpegRgb, WsiError> {
+    if image_width == 0
+        || image_height == 0
+        || image_width > u32::from(u16::MAX)
+        || image_height > u32::from(u16::MAX)
+    {
+        return Err(WsiError::Jpeg(
+            "JPEG size override requires nonzero u16 dimensions".into(),
+        ));
+    }
+    let input = prepare_jpeg_input(data, None, image_width, image_height, true)?;
+    let view = parse_jpeg_view(input.as_ref(), color_transform)?;
+    let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
+    let decoder = J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let pixel_format = if grayscale {
+        J2kPixelFormat::Gray8
+    } else {
+        J2kPixelFormat::Rgb8
+    };
+    let (pixels, _outcome) = decoder
+        .decode_request(J2kJpegDecodeRequest::scaled(pixel_format, scale))
+        .map_err(|err| WsiError::Jpeg(err.to_string()))?;
+    let pixels = if grayscale {
+        expand_grayscale_to_rgb(pixels)?
+    } else {
+        pixels
+    };
+    let width = image_width.div_ceil(scale.denominator());
+    let height = image_height.div_ceil(scale.denominator());
+    if pixels.len() != checked_jpeg_rgb_len(width, height)? {
+        return Err(WsiError::Jpeg(format!(
+            "scaled JPEG decode produced {} bytes, expected {width}x{height} RGB",
+            pixels.len()
+        )));
+    }
+    Ok(DecodedJpegRgb {
+        width,
+        height,
+        pixels,
+    })
+}
+
 pub(super) fn j2k_downscale_for_dimensions(
     expected_width: u32,
     expected_height: u32,

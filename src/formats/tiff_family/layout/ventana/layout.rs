@@ -149,8 +149,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             ));
         }
 
-        // Phase 4: Build level 0 from the XML-driven irregular tile grid,
-        // then keep the lower pyramid levels on the regular overview IFDs.
+        // Phase 4: Build every level from the XML-driven irregular tile grid.
         let tile_advance_x = bif.tile_advance_x;
         let tile_advance_y = bif.tile_advance_y;
         if !tile_advance_x.is_finite()
@@ -164,66 +163,12 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             )));
         }
 
-        let mut level0_tiles: HashMap<(i64, i64), TileEntry> =
-            HashMap::with_capacity(bif.tiles.len());
-        let mut extra_top = 0u32;
-        let mut extra_bottom = 0u32;
-        let mut extra_left = 0u32;
-        let mut extra_right = 0u32;
-        for area in &bif.areas {
-            let offset_x = area.x as f64 - area.start_col as f64 * bif.tile_advance_x;
-            let offset_y = area.y as f64 - area.start_row as f64 * bif.tile_advance_y;
-            let (area_extra_top, area_extra_bottom, area_extra_left, area_extra_right) =
-                irregular_extra_tiles(
-                    offset_x,
-                    offset_y,
-                    tile_advance_x,
-                    tile_advance_y,
-                    level0_tile_width as f64,
-                    level0_tile_height as f64,
-                );
-            extra_top = extra_top.max(area_extra_top);
-            extra_bottom = extra_bottom.max(area_extra_bottom);
-            extra_left = extra_left.max(area_extra_left);
-            extra_right = extra_right.max(area_extra_right);
-        }
-
-        for area in &bif.areas {
-            let offset_x = area.x as f64 - area.start_col as f64 * bif.tile_advance_x;
-            let offset_y = area.y as f64 - area.start_row as f64 * bif.tile_advance_y;
-            let end_row = area.start_row.checked_add(area.tiles_down).ok_or_else(|| {
-                TiffParseError::Structure("Ventana BIF: tile row range overflows".into())
-            })?;
-            let end_col = area
-                .start_col
-                .checked_add(area.tiles_across)
-                .ok_or_else(|| {
-                    TiffParseError::Structure("Ventana BIF: tile column range overflows".into())
-                })?;
-            for row in area.start_row..end_row {
-                for col in area.start_col..end_col {
-                    level0_tiles.insert(
-                        (col, row),
-                        TileEntry {
-                            offset: (offset_x, offset_y),
-                            dimensions: (pyramid_ifds[0].tile_width, pyramid_ifds[0].tile_height),
-                            tiff_tile_index: None,
-                        },
-                    );
-                }
-            }
-        }
         let level0_dims = ventana_level0_dimensions(&bif, level0_tile_width, level0_tile_height)?;
-
         let mut levels = Vec::with_capacity(pyramid_ifds.len());
         levels.push(Level {
             dimensions: level0_dims,
             downsample: 1.0,
-            tile_layout: TileLayout::Irregular {
-                tile_advance: (tile_advance_x, tile_advance_y),
-                extra_tiles: (extra_top, extra_bottom, extra_left, extra_right),
-                tiles: level0_tiles,
-            },
+            tile_layout: ventana_tilemap_layout(&bif, 1, &pyramid_ifds[0].stored_level())?,
         });
 
         let mut tile_sources = HashMap::with_capacity(pyramid_ifds.len());
@@ -243,27 +188,34 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             },
         );
 
+        // OpenSlide paints every reduced level from the level-0 tilemap, one
+        // stored-tile subtile per level-0 cell, so the overview directories'
+        // unstitched layout and blank filler are never shown.
         for (level_idx, info) in pyramid_ifds.iter().enumerate().skip(1) {
             let level_idx = u32::try_from(level_idx).map_err(|_| {
                 TiffParseError::Structure("Ventana BIF: level index overflows u32".into())
             })?;
+            if (info.tile_width, info.tile_height)
+                != (pyramid_ifds[0].tile_width, pyramid_ifds[0].tile_height)
+            {
+                return Err(TiffParseError::Structure(format!(
+                    "Ventana BIF: level {level_idx} tile size {}x{} differs from level 0 {}x{}",
+                    info.tile_width,
+                    info.tile_height,
+                    pyramid_ifds[0].tile_width,
+                    pyramid_ifds[0].tile_height
+                )));
+            }
             let dims = ventana_public_level_dimensions(level0_dims, level_idx)?;
-            let downsample = 1u64.checked_shl(level_idx).ok_or_else(|| {
+            let downsample = 1u32.checked_shl(level_idx).ok_or_else(|| {
                 TiffParseError::Structure(format!(
                     "Ventana BIF: level {level_idx} downsample overflows"
                 ))
             })?;
-            let tiles_across = info.width.div_ceil(info.tile_width as u64);
-            let tiles_down = info.height.div_ceil(info.tile_height as u64);
             levels.push(Level {
                 dimensions: dims,
-                downsample: downsample as f64,
-                tile_layout: TileLayout::Regular {
-                    tile_width: info.tile_width,
-                    tile_height: info.tile_height,
-                    tiles_across,
-                    tiles_down,
-                },
+                downsample: f64::from(downsample),
+                tile_layout: ventana_tilemap_layout(&bif, downsample, &info.stored_level())?,
             });
             tile_sources.insert(
                 TileSourceKey {
@@ -274,10 +226,11 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
                     c: 0,
                     t: 0,
                 },
-                TileSource::TiledIfd {
+                TileSource::TiledIfdSubtiles {
                     ifd_id: info.ifd_id,
                     jpeg_tables: info.jpeg_tables.clone(),
                     compression: info.compression,
+                    subtiles_per_tile: downsample,
                 },
             );
         }
@@ -323,6 +276,17 @@ struct VentanaPyramidIfdInfo {
     compression: Compression,
     jpeg_tables: Option<Vec<u8>>,
     description: String,
+}
+
+impl VentanaPyramidIfdInfo {
+    fn stored_level(&self) -> VentanaStoredLevel {
+        VentanaStoredLevel {
+            width: self.width,
+            height: self.height,
+            tile_width: self.tile_width,
+            tile_height: self.tile_height,
+        }
+    }
 }
 
 fn classify_associated_image(desc: &str) -> Option<String> {

@@ -3,6 +3,7 @@ use wsi_rs::{Level, TileLayout, WsiError};
 pub(crate) fn clear_uncovered_pixels(
     level: &Level,
     origin: (i64, i64),
+    subpixel_offset: (f64, f64),
     size: (u32, u32),
     pixels: &mut [u32],
     opaque_output: bool,
@@ -23,51 +24,36 @@ pub(crate) fn clear_uncovered_pixels(
             Ok(())
         }
         TileLayout::Irregular { tiles, .. } => {
-            if opaque_output {
-                for pixel in pixels.iter_mut() {
-                    *pixel &= 0x00ff_ffff;
-                }
-                for hit in level
-                    .tile_layout
-                    .tiles_for_region(origin.0, origin.1, size.0, size.1)
-                {
-                    let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
-                        continue;
-                    };
-                    mark_opaque_rectangle(
-                        pixels,
-                        size,
-                        hit.dest_x_f64,
-                        hit.dest_y_f64,
-                        entry.dimensions,
-                    );
-                }
-                for pixel in pixels.iter_mut() {
-                    if *pixel & 0xff00_0000 == 0 {
-                        *pixel = 0;
-                    }
-                }
-            } else {
-                let mut covered = vec![false; expected];
-                for hit in level
-                    .tile_layout
-                    .tiles_for_region(origin.0, origin.1, size.0, size.1)
-                {
-                    let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
-                        continue;
-                    };
-                    mark_covered_rectangle(
-                        &mut covered,
-                        size,
-                        hit.dest_x_f64,
-                        hit.dest_y_f64,
-                        entry.dimensions,
-                    );
-                }
-                for (pixel, covered) in pixels.iter_mut().zip(covered) {
-                    if !covered {
-                        *pixel = 0;
-                    }
+            // Tilemap composition keeps OpenSlide's coverage in its alpha, so
+            // only an opaque single-tile copy needs its footprint marked.
+            if !opaque_output {
+                return Ok(());
+            }
+            for pixel in pixels.iter_mut() {
+                *pixel &= 0x00ff_ffff;
+            }
+            // Hits are placed from the whole-pixel origin; shift them onto the
+            // fractional origin, whose region can reach one pixel further.
+            for hit in level.tile_layout.tiles_for_region(
+                origin.0,
+                origin.1,
+                size.0.saturating_add(1),
+                size.1.saturating_add(1),
+            ) {
+                let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
+                    continue;
+                };
+                mark_opaque_rectangle(
+                    pixels,
+                    size,
+                    hit.dest_x_f64 - subpixel_offset.0,
+                    hit.dest_y_f64 - subpixel_offset.1,
+                    entry.dimensions,
+                );
+            }
+            for pixel in pixels.iter_mut() {
+                if *pixel & 0xff00_0000 == 0 {
+                    *pixel = 0;
                 }
             }
             Ok(())
@@ -135,20 +121,6 @@ fn mark_opaque_rectangle(
         for pixel in &mut row[x0..x1] {
             *pixel |= 0xff00_0000;
         }
-    }
-}
-
-fn mark_covered_rectangle(
-    covered: &mut [bool],
-    size: (u32, u32),
-    dest_x: f64,
-    dest_y: f64,
-    tile_size: (u32, u32),
-) {
-    let (x0, y0, x1, y1) = rectangle_bounds(size, dest_x, dest_y, tile_size);
-    let width = size.0 as usize;
-    for row in covered.chunks_exact_mut(width).take(y1).skip(y0) {
-        row[x0..x1].fill(true);
     }
 }
 

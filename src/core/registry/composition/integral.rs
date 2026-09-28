@@ -58,8 +58,17 @@ pub(super) fn is_integral_hit(hit: &TileHit) -> bool {
         && (hit.dest_y_f64 - hit.dest_y as f64).abs() <= 1e-6
 }
 
-pub(super) fn hit_covers_output(hit: &TileHit, tile: &CpuTile, width: u32, height: u32) -> bool {
+/// Whether the hit lands on whole pixels, including Pixman-placed hits whose
+/// raster position is integral. Copying such a hit is exact when nothing else
+/// covers its pixels.
+fn has_integral_position(hit: &TileHit) -> bool {
     is_integral_hit(hit)
+        || hit.cairo_fixed_dest == Some((hit.dest_x as f64, hit.dest_y as f64))
+            && (hit.dest_x_f64, hit.dest_y_f64) == (hit.dest_x as f64, hit.dest_y as f64)
+}
+
+pub(super) fn hit_covers_output(hit: &TileHit, tile: &CpuTile, width: u32, height: u32) -> bool {
+    has_integral_position(hit)
         && hit.dest_x == 0
         && hit.dest_y == 0
         && tile.width == width
@@ -132,7 +141,8 @@ fn collect_dense_integral_u8_hits<'a>(
 ) -> Result<Option<Vec<DenseIntegralU8Hit<'a>>>, WsiError> {
     let mut dense_hits = Vec::with_capacity(hits.len());
     for (hit, tile) in hits.iter().zip(hit_tiles) {
-        if !is_integral_hit(hit)
+        // Dense rows reject overlaps and gaps, so integral placements copy exactly.
+        if !has_integral_position(hit)
             || tile.layout != layout
             || tile.channels != channels
             || tile.color_space != *color_space

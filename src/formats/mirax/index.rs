@@ -261,8 +261,8 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                         };
                         let pos_x = f64::from(pos0_x) / f64::from(params_level.image_concat);
                         let pos_y = f64::from(pos0_y) / f64::from(params_level.image_concat);
-                        let src_x = (level.tile_width * f64::from(xi)).round() as u32;
-                        let src_y = (level.tile_height * f64::from(yi)).round() as u32;
+                        let src_x = level.tile_width * f64::from(xi);
+                        let src_y = level.tile_height * f64::from(yi);
                         let tile_x = x / params_level.tile_count_divisor + xi;
                         let tile_y = y / params_level.tile_count_divisor + yi;
                         insert_tile(
@@ -303,29 +303,51 @@ pub(super) fn insert_tile(
     image: Arc<MiraxImage>,
     pos_x: f64,
     pos_y: f64,
-    src_x: u32,
-    src_y: u32,
+    src_x: f64,
+    src_y: f64,
     tile_x: i64,
     tile_y: i64,
 ) {
     let offset_x = pos_x - tile_x as f64 * params.tile_advance_x;
     let offset_y = pos_y - tile_y as f64 * params.tile_advance_y;
-    let width = (level.tile_width.ceil() as u32).min(level.raw_image_width.saturating_sub(src_x));
-    let height =
-        (level.tile_height.ceil() as u32).min(level.raw_image_height.saturating_sub(src_y));
     let descriptor_index = level.descriptors.len();
-    level.descriptors.push(MiraxTile {
-        image,
-        src_x,
-        src_y,
-    });
+    let fractional = level.tile_width.fract() != 0.0 || level.tile_height.fract() != 0.0;
+    let entry = if fractional {
+        // OpenSlide resamples a fractional subtile onto a ceil-sized surface
+        // and places it by its exact extent.
+        level.descriptors.push(MiraxTile {
+            image,
+            src_x: 0,
+            src_y: 0,
+            resample_origin: Some((src_x, src_y)),
+        });
+        TileEntry::new(
+            (offset_x, offset_y),
+            (
+                level.tile_width.ceil() as u32,
+                level.tile_height.ceil() as u32,
+            ),
+        )
+        .with_extent((level.tile_width, level.tile_height))
+    } else {
+        let (src_x, src_y) = (src_x as u32, src_y as u32);
+        level.descriptors.push(MiraxTile {
+            image,
+            src_x,
+            src_y,
+            resample_origin: None,
+        });
+        TileEntry::new(
+            (offset_x, offset_y),
+            (
+                (level.tile_width as u32).min(level.raw_image_width.saturating_sub(src_x)),
+                (level.tile_height as u32).min(level.raw_image_height.saturating_sub(src_y)),
+            ),
+        )
+    };
     level.tiles.insert(
         (tile_x, tile_y),
-        TileEntry {
-            offset: (offset_x, offset_y),
-            dimensions: (width, height),
-            tiff_tile_index: Some(descriptor_index),
-        },
+        entry.with_tiff_tile_index(descriptor_index),
     );
     let extras = irregular_extra_tiles(
         offset_x,

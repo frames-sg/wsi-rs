@@ -10,6 +10,9 @@ const OPENSLIDE_LIBRARY_FALLBACK_ENV: &str = "OPENSLIDE_LIB_PATH";
 const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
 const WSI_RS_LIBRARY_ENV: &str = "WSI_RS_BENCH_WSI_RS_LIBRARY";
 pub(super) const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
+/// wsi-rs 0.6 shims read this per-handle JP2K pool width and otherwise use
+/// every core, ignoring RAYON_NUM_THREADS. Later shims ignore it.
+pub(super) const LEGACY_SHIM_JP2K_THREADS_ENV: &str = "WSI_RS_SHIM_JP2K_CPU_THREADS";
 
 pub(super) const DEFAULT_CACHE_BYTES: usize = 256 * 1024 * 1024;
 pub(super) const PINNED_OPENSLIDE_VERSION: &str = "4.0.1";
@@ -119,9 +122,13 @@ fn configure_worker_environment(
     match library {
         BenchLibrary::WsiRs => {
             command.env(RAYON_NUM_THREADS_ENV, workers.to_string());
+            // Keep a previous-release baseline on the same budget: N handles
+            // with one JP2K thread each, as the 0.6 harness configured it.
+            command.env(LEGACY_SHIM_JP2K_THREADS_ENV, "1");
         }
         BenchLibrary::OpenSlide => {
             command.env_remove(RAYON_NUM_THREADS_ENV);
+            command.env_remove(LEGACY_SHIM_JP2K_THREADS_ENV);
         }
     }
     decode_cpu_concurrency(library, workers)
@@ -135,6 +142,7 @@ pub(super) fn decode_cpu_concurrency(library: BenchLibrary, workers: usize) -> V
             "active_jp2k_thread_budget": workers,
             "enforced": true,
             "method": "RAYON_NUM_THREADS=N process-wide JP2K pool shared by N client handles",
+            "legacy_per_handle_jp2k_threads": 1,
         }),
         BenchLibrary::OpenSlide => json!({
             "client_handles": workers,

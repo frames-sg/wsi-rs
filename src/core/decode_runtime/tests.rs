@@ -570,6 +570,18 @@ fn admitted_auto_reads_warm_once_then_collect_three_complete_comparisons() {
     .unwrap();
     let slide = crate::Slide::open(&path).unwrap();
     let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    let routed = || {
+        use RouteTileOutcome::*;
+        [
+            DeviceAttempt,
+            Device,
+            AdaptiveCpu,
+            DeviceFailureFallback,
+            UnavailableFallback,
+        ]
+        .map(test_route_tiles)
+    };
+    let routed_before = routed();
     let before = test_count(Event::MetalBatchSubmissions);
     let oracle = slide.read_tile(&request).unwrap();
     assert_eq!(test_count(Event::MetalBatchSubmissions), before);
@@ -580,6 +592,14 @@ fn admitted_auto_reads_warm_once_then_collect_three_complete_comparisons() {
         assert_eq!(actual.as_u8(), oracle.as_u8());
         assert_eq!(test_count(Event::MetalBatchSubmissions), before + index);
     }
+    // Warmup and comparison reads return CPU pixels. Every returned tile is
+    // accounted, so device attempts never appear without a matching outcome.
+    let delta = std::array::from_fn::<_, 5, _>(|i| routed()[i] - routed_before[i]);
+    assert_eq!(
+        delta,
+        [4, 0, 5, 0, 0],
+        "attempt, device, cpu, failure, unavailable"
+    );
     let runtime = DecodeRuntime::default_arc();
     let identity = runtime.metal_sessions().unwrap().device_identity();
     let key = route_key_for_batch(slide.source(), &[request], &identity).unwrap();

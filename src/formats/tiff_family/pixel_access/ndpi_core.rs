@@ -307,6 +307,7 @@ impl TiffPixelReader {
                     ifd_id,
                     col: native_col,
                     native_row,
+                    scale_denom: 1,
                 };
                 let dest_x = strip_origin_x
                     .saturating_add(copy_start_x)
@@ -624,16 +625,39 @@ impl TiffPixelReader {
             level_width,
             level_height,
         )?;
-        let decoded = decode_jpeg_rgb_with_size_override(
-            &payload.jpeg,
-            None,
-            payload.width,
-            payload.height,
-            None,
-            None,
-            self.tiff_jpeg_decode_options_for_data(ifd_id, false, &payload.jpeg, None)
-                .color_transform,
-        )?;
+        let color_transform = self
+            .tiff_jpeg_decode_options_for_data(ifd_id, false, &payload.jpeg, None)
+            .color_transform;
+        let decoded = if strip_key.scale_denom == 1 {
+            decode_jpeg_rgb_with_size_override(
+                &payload.jpeg,
+                None,
+                payload.width,
+                payload.height,
+                None,
+                None,
+                color_transform,
+            )?
+        } else {
+            let scale = j2k_downscale_for_factor(strip_key.scale_denom).ok_or_else(|| {
+                WsiError::TileRead {
+                    col: req.col,
+                    row: req.row,
+                    level: req.level.get(),
+                    reason: format!(
+                        "invalid NDPI strip scale denominator {}",
+                        strip_key.scale_denom
+                    ),
+                }
+            })?;
+            decode_jpeg_rgb_downscaled_with_size_override(
+                &payload.jpeg,
+                payload.width,
+                payload.height,
+                scale,
+                color_transform,
+            )?
+        };
         let decoded = cpu_tile_from_rgb_pixels(decoded.width, decoded.height, decoded.pixels)?;
 
         Ok(Arc::new(decoded))

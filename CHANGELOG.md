@@ -2,7 +2,7 @@
 
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-09-27
 
 ### Added
 
@@ -16,7 +16,22 @@
 - Olympus VSI supports raw JP2K tile passthrough and strict Metal/CUDA tile reads
   for stored ETS tiles.
 
+- Added ARGOS and Huron TIFF readers backed by real public-corpus fixtures,
+  including ARGOS sparse tiles and Z planes and associated images for both vendors.
+- Added single-plane brightfield CZI reading with uncompressed, JPEG and JPEG XR
+  subblocks, plus JPEG XR tiled-TIFF decoding through the external JXR crate.
+  BGR48 embedded CZI preview images preserve 16-bit samples.
+- Added exact raw JPEG access for eligible CZI, MIRAX, full-resolution VMS and
+  ordinary tiled-TIFF native/display tiles.
+- Added DICOM JPEG Extended, progressive Huffman and lossless transfer-syntax
+  routing through the external JPEG decoder, with SOF-process and predictor checks.
+- Added per-slide resource limits, associated-image ICC metadata and OpenSlide
+  ABI access, and strict JP2K/HTJ2K Metal and CUDA resident tile APIs.
+
 ### Fixed
+
+- Updates J2K to 0.11.2 to fix subsampled nonzero-origin decoding found by the
+  raw-codestream fuzz target, and JXR to 0.2.0 for the current codec release set.
 
 - Raw JP2K datasets publish `openslide.vendor` and `openslide.quickhash-1` like other
   formats, with unchanged dataset IDs, instead of relying on the OpenSlide shim.
@@ -31,6 +46,50 @@
   cursors, preventing reads from interfering with one another.
 - Metal YCbCr conversion uses the canonical CPU lookup tables, correcting
   non-neutral colors and clipping to match CPU/OpenSlide-compatible RGB8 output.
+
+- Rejected short TIFF decoded payloads, malformed CZI raw payload lengths and
+  invalid CZI segment/directory geometry before dependency processing.
+- Preserved per-IFD JPEG tables for generic TIFF and Philips associated-image
+  strips, and decoded compressed associated images one strip at a time.
+- Honored DICOM RGB/YBR color-transform metadata and retained the grayscale
+  lossless JPEG batch path.
+- Preserved CZI plane separation, resource limits and mosaic overlap ordering;
+  requests for missing native levels return errors.
+- Hardened Aperio, Ventana, DICOM, NDPI and MIRAX geometry, sparse-data and
+  large-offset handling, and rejected non-finite physical metadata.
+- Matched OpenSlide edge semantics for invalid levels, missing associated images,
+  sticky-error output clearing, zero-length ICC reads, Leica barcodes and bounds.
+- Kept recognizable corrupt MIRAX bundles detectable so opening reports the
+  error, and stopped installing incorrect OpenSlide `.4` library aliases.
+- Restored 0.6 fractional-composition speed for Aperio reduced-level, zoom and
+  thumbnail reads by selecting the sampling mode once per blit instead of mapping
+  optional taps per channel. Output pixels and alpha are unchanged.
+- MIRAX, VMS, CZI and ZVI region reads no longer enter the decode pool only to
+  try a region fast path they do not implement, restoring cached-read latency
+  under concurrent handles.
+- Irregular tile maps (Ventana level 0, MIRAX) paint overlapping tiles in
+  OpenSlide's bottom-right-first order with its translation and saturation
+  arithmetic, so overlapping areas keep the lower tile like OpenSlide.
+- Ventana BIF reduced levels are painted from the stitched level-0 tilemap, one
+  stored-tile subtile per level-0 cell, as OpenSlide does. They previously showed
+  the unstitched overview directories, placing tissue 36–60 µm off level 0 and
+  exposing blank filler. Fractional subtiles use OpenSlide's intermediate
+  surface, and reduced-level reads match OpenSlide 4.0.1 within one level.
+- MIRAX levels whose images split into fractional subtiles (for example 42.5
+  pixels from 340-pixel images) resample each subtile at its exact source offset
+  as OpenSlide does, instead of cropping rounded whole-pixel windows.
+- The OpenSlide shim keeps partially covered edge pixels of tilemap levels read
+  at fractional level origins instead of clearing them from whole-pixel tile
+  bounds (Ventana and MIRAX reduced levels).
+- NDPI and VMS levels that OpenSlide derives by libjpeg DCT scaling (1/2, 1/4
+  and 1/8) now match OpenSlide 4.0.1 exactly; they differed by up to 3 levels.
+  J2K's reduced-size IDCTs now round like libjpeg-turbo, and NDPI levels derived
+  from restart-marker levels decode each restart interval at reduced scale,
+  shared through the tile cache, instead of box-filtering full-resolution pixels.
+  J2K 0.11.2 also decodes scaled JPEG like libjpeg-turbo when the JPEG stores
+  subsampled color (4:2:0, 4:2:2 and other layouts), so NDPI/VMS slides with
+  subsampled chroma match as well; earlier builds differed there by up to about
+  160 levels.
 
 ### Changed
 
@@ -59,24 +118,17 @@
   work while preserving pixel, overlap and alpha semantics.
 - Optional performance diagnostics separate reader-active time from verification
   and retain existing wall-clock throughput and acceptance fields.
-
-## [0.7.0] - 2026-09-05
-
-### Added
-
-- Added ARGOS and Huron TIFF readers backed by real public-corpus fixtures,
-  including ARGOS sparse tiles and Z planes and associated images for both vendors.
-- Added single-plane brightfield CZI reading with uncompressed, JPEG and JPEG XR
-  subblocks, plus JPEG XR tiled-TIFF decoding through the external JXR crate.
-  BGR48 embedded CZI preview images preserve 16-bit samples.
-- Added exact raw JPEG access for eligible CZI, MIRAX, full-resolution VMS and
-  ordinary tiled-TIFF native/display tiles.
-- Added DICOM JPEG Extended, progressive Huffman and lossless transfer-syntax
-  routing through the external JPEG decoder, with SOF-process and predictor checks.
-- Added per-slide resource limits, associated-image ICC metadata and OpenSlide
-  ABI access, and strict JP2K/HTJ2K Metal and CUDA resident tile APIs.
-
-### Changed
+- Route telemetry accounts every routed JP2K tile, including warmup reads and
+  reads that skip calibration, and reports a failed device warmup as a fallback.
+  GPU performance acceptance requires each JP2K benchmark process to measure the
+  device route with zero fallback, rather than device-selected tiles in every cell.
+- Performance captures cap pre-0.7 shims to one JP2K thread per handle, so
+  previous-release baselines keep the equalized decode thread budget.
+- Tilemap composition treats straight-alpha RGBA source tiles as coverage under
+  OpenSlide's saturating paint, and composes interior pixels of each placed
+  tile with constant bilinear weights. Stitched Ventana reduced-level reads
+  resample every level-0 cell, so they cost more than 0.6's unstitched reads
+  but remain faster than OpenSlide.
 
 - Normal tile, batch, controlled, region, display and associated reads return
   `CpuTile`. `SlideReader` requires one CPU tile method and preserves batch order
@@ -101,23 +153,6 @@
   hardware backend on macOS/aarch64 with its software fallback.
 - Delegated JPEG 2000 header/coding validation to J2K, retaining WSI limits and
   pixel contracts for multi-tile and multi-part codestreams.
-
-### Fixed
-
-- Rejected short TIFF decoded payloads, malformed CZI raw payload lengths and
-  invalid CZI segment/directory geometry before dependency processing.
-- Preserved per-IFD JPEG tables for generic TIFF and Philips associated-image
-  strips, and decoded compressed associated images one strip at a time.
-- Honored DICOM RGB/YBR color-transform metadata and retained the grayscale
-  lossless JPEG batch path.
-- Preserved CZI plane separation, resource limits and mosaic overlap ordering;
-  requests for missing native levels return errors.
-- Hardened Aperio, Ventana, DICOM, NDPI and MIRAX geometry, sparse-data and
-  large-offset handling, and rejected non-finite physical metadata.
-- Matched OpenSlide edge semantics for invalid levels, missing associated images,
-  sticky-error output clearing, zero-length ICC reads, Leica barcodes and bounds.
-- Kept recognizable corrupt MIRAX bundles detectable so opening reports the
-  error, and stopped installing incorrect OpenSlide `.4` library aliases.
 
 ### Removed
 

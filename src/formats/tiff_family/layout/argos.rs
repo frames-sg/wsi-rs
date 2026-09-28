@@ -402,6 +402,7 @@ fn sparse_level(
                 offset: (0.0, 0.0),
                 dimensions: (ifd.tile_width, ifd.tile_height),
                 tiff_tile_index: Some(index),
+                extent: None,
             },
         );
     }

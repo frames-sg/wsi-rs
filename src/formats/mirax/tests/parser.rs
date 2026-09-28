@@ -361,9 +361,17 @@ fn fractional_edge_tile_dimensions_stay_within_the_backing_image() {
         tile_advance_y: 32.0,
     };
 
-    insert_tile(&mut level, &params, image, 297.5, 0.0, 298, 0, 7, 0);
+    insert_tile(&mut level, &params, image, 297.5, 0.0, 297.5, 0.0, 7, 0);
 
-    assert_eq!(level.tiles[&(7, 0)].dimensions, (42, 32));
+    // The last 42.5-pixel subtile of a 340-pixel image is resampled from
+    // x = 297.5 onto a 43x32 surface and placed by its exact extent.
+    let entry = &level.tiles[&(7, 0)];
+    assert_eq!(entry.dimensions, (43, 32));
+    assert_eq!(entry.extent(), (42.5, 32.0));
+    assert_eq!(
+        level.descriptors[entry.tiff_tile_index.unwrap()].resample_origin,
+        Some((297.5, 0.0))
+    );
 }
 
 #[test]

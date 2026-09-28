@@ -19,7 +19,7 @@ use j2k_jpeg::{
 use j2k_tilecodec::{DeflateCodec, DeflatePool, TileDecompress, ZstdCodec, ZstdPool};
 use rayon::prelude::*;
 
-use crate::core::cache::{CacheKey, WeightedLru};
+use crate::core::cache::{CacheKey, CacheKeyKind, WeightedLru};
 use crate::core::limits::{
     checked_product_to_usize, read_file_bounded, MAX_COMPRESSED_INPUT_BYTES,
     MAX_DECODED_IMAGE_BYTES,
@@ -30,7 +30,10 @@ use crate::core::registry::{
 };
 use crate::core::types::*;
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kColorSpace, Jp2kDecodeJob};
-use crate::decode::jpeg::{decode_batch_jpeg, decode_jpeg_rgb_with_size_override, JpegDecodeJob};
+use crate::decode::jpeg::{
+    decode_batch_jpeg, decode_jpeg_rgb_downscaled_with_size_override,
+    decode_jpeg_rgb_with_size_override, JpegDecodeJob,
+};
 use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::IfdId;
@@ -51,6 +54,7 @@ mod ndpi_retile;
 mod ndpi_tiles;
 mod reader;
 mod stripped_level;
+mod subtiles;
 mod synthetic;
 mod tiled_ifd;
 

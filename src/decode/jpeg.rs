@@ -8,7 +8,10 @@ use input::{
     effective_jpeg_color_transform, expand_grayscale_to_rgb, j2k_downscale_for_dimensions,
     prepare_jpeg_input, resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
 };
-pub(crate) use input::{decode_jpeg_rgb_with_color_transform, jpeg_dimensions};
+pub(crate) use input::{
+    decode_jpeg_rgb_downscaled_with_size_override, decode_jpeg_rgb_with_color_transform,
+    jpeg_dimensions,
+};
 
 use std::borrow::Cow;
 

@@ -275,6 +275,17 @@ pub(crate) struct CacheKey {
     pub(crate) t: u32,
     pub(crate) tile_col: i64,
     pub(crate) tile_row: i64,
+    pub(crate) kind: CacheKeyKind,
+}
+
+/// What a cached entry holds at its level and grid position.
+#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+pub(crate) enum CacheKeyKind {
+    /// A tile of the level's own tile grid.
+    Tile,
+    /// A restart-interval strip of an NDPI level decoded with a DCT scale
+    /// denominator of 2, 4, or 8; it keys the base level's strip grid.
+    NdpiScaledStrip { scale_denom: u32 },
 }
 
 impl CacheKey {
@@ -290,6 +301,7 @@ impl CacheKey {
             t: plane.t,
             tile_col: request.col,
             tile_row: request.row,
+            kind: CacheKeyKind::Tile,
         }
     }
 

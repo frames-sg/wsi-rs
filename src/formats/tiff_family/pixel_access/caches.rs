@@ -302,7 +302,16 @@ where
 /// image to extract a single tile. This cache stores the decoded image
 /// so subsequent tile requests from the same level are satisfied from
 /// memory instead of re-decoding.
-pub(super) type FullDecodeCache = SingleFlightTileCache<IfdId>;
+pub(super) type FullDecodeCache = SingleFlightTileCache<FullDecodeKey>;
+
+/// A decoded source image that several logical tiles read from: a whole NDPI
+/// or stripped level, or one stored TIFF tile that Ventana reduced-level
+/// subtiles crop.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum FullDecodeKey {
+    Level(IfdId),
+    StoredTile { ifd_id: IfdId, index: usize },
+}
 pub(super) type NdpiStripCache = SingleFlightTileCache<NdpiStripKey>;
 pub(super) type SyntheticLevelCache = SingleFlightTileCache<SyntheticLevelKey>;
 pub(super) type SyntheticRegionCache = ByteSizedTileCache<SyntheticLevelKey>;
@@ -312,6 +321,9 @@ pub(super) struct NdpiStripKey {
     pub(super) ifd_id: IfdId,
     pub(super) col: u32,
     pub(super) native_row: u32,
+    /// 1 for full resolution; 2, 4, or 8 for a DCT-scaled decode of the same
+    /// restart interval (OpenSlide's `scale_denom` levels).
+    pub(super) scale_denom: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

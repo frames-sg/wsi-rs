@@ -70,6 +70,7 @@ fn read_region_uses_cache() {
         t: 0,
         tile_col: 0,
         tile_row: 0,
+        kind: crate::core::cache::CacheKeyKind::Tile,
     };
     assert!(cache.get(&key).is_some());
 
