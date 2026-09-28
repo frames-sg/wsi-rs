@@ -10,6 +10,7 @@ pub(super) fn test_dicom_image_with_transfer_syntax(
         photometric_interpretation: "RGB".into(),
         samples_per_pixel: 3,
         planar_configuration: Some(0),
+        bit_depth: DicomBitDepth::Eight,
         width: 4096,
         height: 4096,
         tile_width: 512,

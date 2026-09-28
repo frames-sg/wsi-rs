@@ -2,6 +2,20 @@
 
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- DICOM VL WSI with 12-bit JPEG frames (BitsAllocated 16, BitsStored 12,
+  HighBit 11) under the JPEG Extended, spectral-selection and full-progression
+  transfer syntaxes. Native reads return interleaved RGB `Uint16` tiles with the
+  12-bit samples unchanged, and MONOCHROME2 expands to R=G=B as for 8-bit.
+  12-bit associated images report `Uint16`. Raw frame passthrough reports 16 bits
+  allocated. Each frame's SOF precision must match BitsStored, and pyramid levels
+  must share one bit depth. 12-bit decoding stays on the CPU. Other transfer
+  syntaxes still require 8-bit samples, and the OpenSlide shim still rejects
+  12-bit DICOM with its previous error.
+
 ## [0.7.0] - 2026-09-27
 
 ### Added

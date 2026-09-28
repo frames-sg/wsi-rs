@@ -6,18 +6,19 @@ use j2k_core::BackendRequest;
 
 use crate::core::types::{CpuTile, TileRequest};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
-use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
+use crate::decode::jpeg::JpegDecodeJob;
 use crate::error::WsiError;
 
 use super::batch_plan::{
     attach_encapsulated_frame_bytes, check_read_control, DicomBatchPlanMode, DicomBatchPlanner,
-    DicomFrameBatchKind, DicomResolvedBatchPlanEntry,
+    DicomFrameBatchKind, DicomFrameBytes, DicomResolvedBatchPlanEntry,
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::{
-    crop_or_keep_sample_buffer_rgb, decode_rle_lossless_frame, dicom_jpeg_color_transform,
-    jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
+    crop_or_keep_sample_buffer_rgb, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
+    dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
+use crate::formats::dicom::metadata::DicomBitDepth;
 use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
 
 impl DicomReader {
@@ -84,55 +85,17 @@ impl DicomReader {
 
         let jpeg_jobs =
             attach_encapsulated_frame_bytes(jpeg_metas, false, control, DicomFrameBatchKind::Cpu)?;
-        let jpeg_decode_jobs = jpeg_jobs
-            .iter()
-            .map(|(meta, bytes)| {
-                validate_jpeg_transfer_syntax_frame(
-                    &meta.image.transfer_syntax_uid,
-                    bytes.as_slice(),
-                )
-                .map_err(|err| WsiError::TileRead {
-                    col: meta.req.col,
-                    row: meta.req.row,
-                    level: meta.req.level.get(),
-                    reason: err.to_string(),
-                })?;
-                Ok(JpegDecodeJob {
-                    data: Cow::Borrowed(bytes.as_slice()),
-                    tables: None,
-                    expected_width: meta.image.tile_width,
-                    expected_height: meta.image.tile_height,
-                    color_transform: dicom_jpeg_color_transform(
-                        &meta.image.photometric_interpretation,
-                    ),
-                    force_dimensions: false,
-                    requested_size: None,
-                })
-            })
-            .collect::<Result<Vec<_>, WsiError>>()?;
-        check_read_control(control)?;
-        let jpeg_decoded = crate::core::batch::expect_exact_count(
-            decode_batch_jpeg(&jpeg_decode_jobs),
-            jpeg_decode_jobs.len(),
-            "DICOM JPEG batch decode",
-        )?;
-        check_read_control(control)?;
-        for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
-            let tile = decoded.map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
-            if meta.cache_decoded_frame {
-                meta.image
-                    .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
+        // Pyramid levels share one precision, so one of these groups is empty.
+        let (jpeg12_jobs, jpeg8_jobs) = jpeg_jobs
+            .into_iter()
+            .partition::<Vec<_>, _>(|(meta, _)| meta.image.bit_depth == DicomBitDepth::Twelve);
+        for (bit_depth, jobs) in [
+            (DicomBitDepth::Eight, jpeg8_jobs),
+            (DicomBitDepth::Twelve, jpeg12_jobs),
+        ] {
+            if !jobs.is_empty() {
+                decode_jpeg_frames_into(bit_depth, jobs, control, &mut results)?;
             }
-            results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
-                tile,
-                meta.actual_width,
-                meta.actual_height,
-            )?);
         }
 
         let jp2k_jobs =
@@ -236,4 +199,64 @@ impl DicomReader {
                 })?;
         image.read_tile(req.col, req.row, req.level.get(), backend)
     }
+}
+
+/// Decode JPEG frames of one precision and store the cropped tiles in their
+/// request slots.
+fn decode_jpeg_frames_into(
+    bit_depth: DicomBitDepth,
+    jpeg_jobs: Vec<DicomFrameBytes>,
+    control: Option<&crate::ReadControl>,
+    results: &mut [Option<CpuTile>],
+) -> Result<(), WsiError> {
+    let jpeg_decode_jobs = jpeg_jobs
+        .iter()
+        .map(|(meta, bytes)| {
+            validate_jpeg_transfer_syntax_frame(
+                &meta.image.transfer_syntax_uid,
+                bit_depth,
+                bytes.as_slice(),
+            )
+            .map_err(|err| WsiError::TileRead {
+                col: meta.req.col,
+                row: meta.req.row,
+                level: meta.req.level.get(),
+                reason: err.to_string(),
+            })?;
+            Ok(JpegDecodeJob {
+                data: Cow::Borrowed(bytes.as_slice()),
+                tables: None,
+                expected_width: meta.image.tile_width,
+                expected_height: meta.image.tile_height,
+                color_transform: dicom_jpeg_color_transform(&meta.image.photometric_interpretation),
+                force_dimensions: false,
+                requested_size: None,
+            })
+        })
+        .collect::<Result<Vec<_>, WsiError>>()?;
+    check_read_control(control)?;
+    let jpeg_decoded = crate::core::batch::expect_exact_count(
+        decode_dicom_jpeg_batch(bit_depth, &jpeg_decode_jobs),
+        jpeg_decode_jobs.len(),
+        "DICOM JPEG batch decode",
+    )?;
+    check_read_control(control)?;
+    for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
+        let tile = decoded.map_err(|err| WsiError::TileRead {
+            col: meta.req.col,
+            row: meta.req.row,
+            level: meta.req.level.get(),
+            reason: err.to_string(),
+        })?;
+        if meta.cache_decoded_frame {
+            meta.image
+                .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
+        }
+        results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
+            tile,
+            meta.actual_width,
+            meta.actual_height,
+        )?);
+    }
+    Ok(())
 }

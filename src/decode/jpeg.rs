@@ -4,9 +4,10 @@ mod input;
 mod tests;
 
 use input::{
-    checked_jpeg_rgb_len, decode_jpeg_rgb_with_color_transform_and_patch,
-    effective_jpeg_color_transform, expand_grayscale_to_rgb, j2k_downscale_for_dimensions,
-    prepare_jpeg_input, resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
+    checked_jpeg_rgb_len, decode_jpeg_rgb16_with_color_transform,
+    decode_jpeg_rgb_with_color_transform_and_patch, effective_jpeg_color_transform,
+    expand_grayscale_to_rgb, j2k_downscale_for_dimensions, prepare_jpeg_input,
+    resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
 };
 pub(crate) use input::{
     decode_jpeg_rgb_downscaled_with_size_override, decode_jpeg_rgb_with_color_transform,
@@ -16,7 +17,8 @@ pub(crate) use input::{
 use std::borrow::Cow;
 
 use crate::core::types::{
-    ColorSpace, Compression, CpuTile, EncodedTilePhotometricInterpretation, RawCompressedTile,
+    ColorSpace, Compression, CpuTile, CpuTileData, CpuTileLayout,
+    EncodedTilePhotometricInterpretation, RawCompressedTile,
 };
 use crate::error::WsiError;
 use j2k_jpeg::{
@@ -42,10 +44,11 @@ pub(crate) const fn is_sof_marker(marker: u8) -> bool {
     )
 }
 
-pub(crate) struct DecodedJpegRgb {
+/// Interleaved RGB samples: `u8` for 8-bit JPEG, `u16` for 12-bit JPEG.
+pub(crate) struct DecodedJpegRgb<T = u8> {
     pub width: u32,
     pub height: u32,
-    pub pixels: Vec<u8>,
+    pub pixels: Vec<T>,
 }
 
 pub(crate) fn standalone_raw_jpeg_tile(data: Vec<u8>) -> Result<RawCompressedTile, WsiError> {
@@ -364,6 +367,48 @@ fn prepare_j2k_batch_jpeg_job<'j, 'a>(job: &'j JpegDecodeJob<'a>) -> Option<Prep
         grayscale,
         effective_color_transform,
     })
+}
+
+/// Decode 12-bit JPEG jobs to interleaved RGB `U16` tiles.
+///
+/// Samples keep their 12-bit range and are never shifted to 8 bits. Grayscale
+/// frames are projected to R=G=B, like the 8-bit grayscale expansion. Only
+/// full-size decodes without SOF dimension overrides are supported.
+pub(crate) fn decode_batch_jpeg_rgb16<'a>(
+    jobs: &[JpegDecodeJob<'a>],
+) -> Vec<Result<CpuTile, WsiError>> {
+    if jobs.len() <= 1 {
+        return jobs.iter().map(decode_one_jpeg_job_rgb16).collect();
+    }
+    jobs.par_iter().map(decode_one_jpeg_job_rgb16).collect()
+}
+
+fn decode_one_jpeg_job_rgb16(job: &JpegDecodeJob<'_>) -> Result<CpuTile, WsiError> {
+    if job.force_dimensions || job.requested_size.is_some() {
+        return Err(WsiError::Unsupported {
+            reason: "12-bit JPEG decode supports only full-size frames without dimension overrides"
+                .into(),
+        });
+    }
+    let decoded = decode_jpeg_rgb16_with_color_transform(
+        job.data.as_ref(),
+        job.tables.as_deref(),
+        job.expected_width,
+        job.expected_height,
+        job.color_transform,
+    )
+    .map_err(|err| WsiError::Codec {
+        codec: "jpeg",
+        source: Box::new(err),
+    })?;
+    CpuTile::new(
+        decoded.width,
+        decoded.height,
+        3,
+        ColorSpace::Rgb,
+        CpuTileLayout::Interleaved,
+        CpuTileData::u16(decoded.pixels),
+    )
 }
 
 pub(super) fn decode_one_jpeg_job(job: &JpegDecodeJob<'_>) -> Result<CpuTile, WsiError> {

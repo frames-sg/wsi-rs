@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wsi_rs::{
-    FormatRegistry, IccProfileKey, SceneId, SeriesId, Slide, TileCache, TileLayout, WsiError,
+    Dataset, FormatRegistry, IccProfileKey, SampleType, SceneId, SeriesId, Slide, TileCache,
+    TileLayout, WsiError,
 };
 
 mod geometry;
@@ -77,7 +78,10 @@ impl CStringArray {
 
 impl OpenSlideHandle {
     pub(crate) fn open(path: PathBuf) -> Option<Box<Self>> {
-        match Slide::open(&path).and_then(crate::vmu::display_slide) {
+        match Slide::open(&path)
+            .and_then(crate::vmu::display_slide)
+            .and_then(|slide| require_openslide_dicom_samples(slide, &path))
+        {
             Ok(slide) => Some(Box::new(Self::from_slide(slide))),
             Err(err) if should_open_return_null(&err) => None,
             Err(err) => Some(Box::new(Self::from_error(err.to_string()))),
@@ -85,10 +89,20 @@ impl OpenSlideHandle {
     }
 
     pub(crate) fn detect_vendor(path: PathBuf) -> *const c_char {
-        let Ok(Some(probe)) = FormatRegistry::builtin().detect_vendor(&path) else {
+        let registry = FormatRegistry::builtin();
+        let Ok(Some(probe)) = registry.detect_vendor(&path) else {
             return std::ptr::null();
         };
         if probe.vendor.is_empty() {
+            return std::ptr::null();
+        }
+        // The DICOM probe has parsed the series; this registry's open reuses
+        // that parse.
+        if probe.vendor == DICOM_VENDOR
+            && !registry
+                .open(&path)
+                .is_ok_and(|reader| has_openslide_dicom_samples(reader.dataset()))
+        {
             return std::ptr::null();
         }
         intern_detected_vendor(&probe.vendor)
@@ -321,6 +335,37 @@ fn intern_detected_vendor(vendor: &str) -> *const c_char {
         .last()
         .map(|stored| stored.as_ptr())
         .unwrap_or(std::ptr::null())
+}
+
+const DICOM_VENDOR: &str = "dicom";
+
+/// OpenSlide's DICOM driver requires BitsAllocated 8, BitsStored 8 and HighBit 7.
+/// wsi-rs decodes 12-bit JPEG DICOM to U16, so any other sample type here is
+/// outside OpenSlide's contract.
+fn has_openslide_dicom_samples(dataset: &Dataset) -> bool {
+    dataset
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.series)
+        .all(|series| series.sample_type == SampleType::Uint8)
+        && dataset
+            .associated_images
+            .values()
+            .all(|image| image.sample_type == SampleType::Uint8)
+}
+
+fn require_openslide_dicom_samples(slide: Slide, path: &Path) -> Result<Slide, WsiError> {
+    if slide.dataset().properties.vendor() != Some(DICOM_VENDOR)
+        || has_openslide_dicom_samples(slide.dataset())
+    {
+        return Ok(slide);
+    }
+    // Keep the rejection wsi-rs reported before it decoded 12-bit DICOM: only
+    // 12-bit JPEG (BitsAllocated 16) reaches this point.
+    Err(WsiError::InvalidSlide {
+        path: path.to_path_buf(),
+        message: "Attribute BitsAllocated value 16 != 8".into(),
+    })
 }
 
 fn should_open_return_null(err: &WsiError) -> bool {

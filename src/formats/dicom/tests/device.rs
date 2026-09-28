@@ -183,6 +183,40 @@ fn strict_device_rejects_dicom_jpeg() {
 }
 
 #[test]
+fn twelve_bit_dicom_jpeg_stays_on_cpu_with_device_acceleration() {
+    let Some(sessions) = test_device_sessions() else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("jpeg-12bit-device.dcm");
+    let frame = twelve_bit_fixture_frames("ybr422-extended").swap_remove(0);
+    write_test_dicom(&path, TestDicomOptions::jpeg_12bit(frame, "YBR_FULL_422"));
+    let slide = Slide::open(&path).expect("open 12-bit JPEG DICOM");
+
+    let error = read_slide_device(&slide, &[tile_request(0, 0)], &sessions)
+        .expect_err("12-bit JPEG has no device decode route");
+    assert!(matches!(error, WsiError::Unsupported { .. }));
+
+    let cpu = Slide::open_with_options(
+        &path,
+        crate::SlideOpenOptions::default().with_decode_execution_options(
+            crate::DecodeExecutionOptions::default()
+                .with_acceleration(crate::DecodeAcceleration::CpuOnly),
+        ),
+    )
+    .unwrap();
+    let region = crate::RegionRequest::new(0, 0, 0, (0, 0), (16, 16));
+    let expected = cpu.read_region(&region).unwrap();
+    assert!(expected.data.as_u16().is_some(), "12-bit decodes to U16");
+    assert_eq!(
+        slide.read_region(&region).unwrap().data.as_u16(),
+        expected.data.as_u16()
+    );
+    let tiles = slide.read_tiles(&[tile_request(0, 0)]).unwrap();
+    assert_eq!(tiles[0].data.as_u16(), expected.data.as_u16());
+}
+
+#[test]
 fn local_htj2k_device_pixels_match_cpu() {
     let Some(path) = local_htj2k_dicom_fixture() else {
         return;

@@ -24,8 +24,8 @@ pub use crate::core::limits::{SlideLimitError, SlideLimits};
 use composition::composite_fractional_region_from_source;
 pub(crate) use composition::{
     cairo_subtile_surface_u8, composite_region_from_source,
-    composite_region_from_source_in_batches, crop_rgb_interleaved_u8_buffer,
-    read_display_tile_from_source,
+    composite_region_from_source_in_batches, crop_rgb_interleaved_buffer,
+    crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
 };
 pub(crate) use open_config::{BackendOpenConfig, OpenBudget};
 pub use open_options::SlideOpenOptions;

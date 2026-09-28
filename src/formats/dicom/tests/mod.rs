@@ -22,3 +22,4 @@ mod manifest_building;
 mod metadata_parsing;
 mod preflight_levels;
 mod runtime;
+mod twelve_bit;

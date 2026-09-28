@@ -128,7 +128,7 @@ impl<'a> DicomBatchPlanner<'a> {
             let (width, height) = level.actual_tile_dimensions(col, row);
             Ok(DicomResolvedBatchPlanEntry::Black(
                 slot,
-                black_sample_buffer(width, height)?,
+                black_sample_buffer(width, height, level.bit_depth())?,
             ))
         };
         let Some(image) = level.image_for_tile(col, row) else {
