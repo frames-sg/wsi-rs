@@ -21,12 +21,25 @@ produce black or partial pixels.
 
 ## Install
 
+The latest published crate is [0.6.0](https://crates.io/crates/wsi-rs/0.6.0):
+
 ```sh
 cargo add wsi-rs
 ```
 
+This checkout and the examples below describe the unreleased 0.7.0 API. It uses
+published J2K 0.11.2 and JXR 0.2.0 packages; sibling codec checkouts are not
+required. To use the current source API before wsi-rs 0.7.0 is published, point
+your application at this checkout:
+
+```toml
+[dependencies]
+wsi-rs = { path = "../wsi-rs" }
+```
+
+For the published 0.6.0 API, use its [versioned documentation](https://docs.rs/wsi-rs/0.6.0).
 Supported architectures are x86_64 and aarch64. The JPEG backend in the
-required j2k 0.10 series does not support 32-bit targets.
+required J2K 0.11 series does not support 32-bit targets.
 
 ## Quick Start
 

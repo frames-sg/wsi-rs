@@ -18,6 +18,9 @@
 
 ## [0.7.0] - 2026-09-27
 
+This section records an unreleased source baseline. The latest published crate
+is still 0.6.0.
+
 ### Added
 
 - Hamamatsu VMU base/map NGR reading with native RGB16 samples, bounded positional
