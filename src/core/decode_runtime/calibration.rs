@@ -189,6 +189,15 @@ impl CalibrationLease<'_> {
             match self.step {
                 CalibrationStep::Warmup => {
                     entry.warmed = true;
+                    // Foreground calibration is optional. A device warmup
+                    // costing more than four uncached CPU decodes is already
+                    // too expensive for this route; avoid three more probes.
+                    // This is deliberately conservative about cold GPU costs.
+                    if let Some((cpu, device)) = sample {
+                        if !cpu.is_zero() && device > cpu.saturating_mul(4) {
+                            entry.decision = Some(DecodeRouteDecision::measured(cpu, device));
+                        }
+                    }
                 }
                 CalibrationStep::Sample { .. } => {
                     entry

@@ -468,7 +468,12 @@ fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
     };
     assert_eq!(warmup.step, CalibrationStep::Warmup);
     assert!(matches!(runtime.claim_route(key.clone()), RouteClaim::Cpu));
-    warmup.complete(None, None).unwrap();
+    warmup
+        .complete(
+            Some((Duration::from_millis(100), Duration::from_millis(200))),
+            None,
+        )
+        .unwrap();
     for (index, device_ms) in [80, 200, 70].into_iter().enumerate() {
         let RouteClaim::Calibrate(sample) = runtime.claim_route(key.clone()) else {
             panic!("sample pending")
@@ -497,6 +502,39 @@ fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
         panic!("completed decision missing")
     };
     assert_eq!(decision.winner, DecodeRoute::Device);
+}
+
+#[test]
+fn slow_device_warmup_keeps_cpu_without_more_foreground_probes() {
+    for (device_us, selects_cpu) in [(400, false), (401, true)] {
+        let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+        let key = route_key(914);
+        assert!(matches!(
+            runtime.claim_route(key.clone()),
+            RouteClaim::FirstCpu { .. }
+        ));
+        let RouteClaim::Calibrate(warmup) = runtime.claim_route(key.clone()) else {
+            panic!("warmup pending")
+        };
+        warmup
+            .complete(
+                Some((Duration::from_micros(100), Duration::from_micros(device_us))),
+                None,
+            )
+            .unwrap();
+        if selects_cpu {
+            let RouteClaim::Ready(decision) = runtime.claim_route(key) else {
+                panic!("slow warmup must not schedule another device probe")
+            };
+            assert_eq!(decision.winner, DecodeRoute::Cpu);
+            assert!(!decision.device_failure);
+        } else {
+            let RouteClaim::Calibrate(sample) = runtime.claim_route(key) else {
+                panic!("moderate warmup should retain median calibration")
+            };
+            assert_eq!(sample.step, CalibrationStep::Sample { cpu_first: true });
+        }
+    }
 }
 
 #[test]
@@ -559,7 +597,7 @@ fn busy_routes_cannot_be_evicted_into_duplicate_calibration() {
 
 #[cfg(feature = "metal")]
 #[test]
-fn admitted_auto_reads_warm_once_then_collect_three_complete_comparisons() {
+fn admitted_auto_reads_stop_probing_after_a_complete_route_decision() {
     use crate::core::execution_telemetry::{test_count, Event};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("prepared.j2k");
@@ -585,25 +623,71 @@ fn admitted_auto_reads_warm_once_then_collect_three_complete_comparisons() {
     let before = test_count(Event::MetalBatchSubmissions);
     let oracle = slide.read_tile(&request).unwrap();
     assert_eq!(test_count(Event::MetalBatchSubmissions), before);
-    // Warmup and each comparison are on distinct reads. A selected CPU route
-    // does no more optional device work after the third complete comparison.
+    // Warmup and comparisons are on distinct reads. A slow warmup may finish
+    // immediately; otherwise all three comparisons must finish before selection.
+    let runtime = DecodeRuntime::default_arc();
+    let mut completed = None;
     for index in 1..=4 {
         let actual = slide.read_tile(&request).unwrap();
         assert_eq!(actual.as_u8(), oracle.as_u8());
         assert_eq!(test_count(Event::MetalBatchSubmissions), before + index);
+        let identity = runtime.metal_sessions().unwrap().device_identity();
+        let key =
+            route_key_for_batch(slide.source(), std::slice::from_ref(&request), &identity).unwrap();
+        if let Some(decision) = runtime.cached_route(&key) {
+            completed = Some((index, decision));
+            break;
+        }
+    }
+    let (trials, decision) = completed.expect("calibration must select a route");
+    assert!(matches!(trials, 1 | 4));
+    assert!(!decision.device_failure);
+    if trials == 1 {
+        assert_eq!(decision.winner, DecodeRoute::Cpu);
+        assert!(decision.device_elapsed > decision.cpu_elapsed.saturating_mul(4));
     }
     // Warmup and comparison reads return CPU pixels. Every returned tile is
     // accounted, so device attempts never appear without a matching outcome.
     let delta = std::array::from_fn::<_, 5, _>(|i| routed()[i] - routed_before[i]);
     assert_eq!(
         delta,
-        [4, 0, 5, 0, 0],
+        [trials, 0, trials + 1, 0, 0],
         "attempt, device, cpu, failure, unavailable"
     );
-    let runtime = DecodeRuntime::default_arc();
-    let identity = runtime.metal_sessions().unwrap().device_identity();
-    let key = route_key_for_batch(slide.source(), &[request], &identity).unwrap();
-    assert!(runtime.cached_route(&key).is_some());
+    if decision.winner == DecodeRoute::Cpu {
+        for _ in 0..3 {
+            assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
+        }
+        assert_eq!(test_count(Event::MetalBatchSubmissions), before + trials);
+    }
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn auto_keeps_subsampled_inputs_on_cpu_without_strict_metal_probes() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let dir = tempfile::tempdir().unwrap();
+    for (name, bytes) in [
+        (
+            "420",
+            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_420.j2k").as_slice(),
+        ),
+        (
+            "422",
+            include_bytes!("../../../tests/fixtures/jp2k/ycbcr_422.j2k").as_slice(),
+        ),
+    ] {
+        let path = dir.path().join(format!("{name}.j2k"));
+        std::fs::write(&path, bytes).unwrap();
+        let slide = crate::Slide::open(&path).unwrap();
+        let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+        let before = test_count(Event::MetalBatchSubmissions);
+        let oracle = slide.read_tile(&request).unwrap();
+        for _ in 0..6 {
+            assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
+        }
+        assert_eq!(test_count(Event::MetalBatchSubmissions), before, "{name}");
+    }
 }
 
 #[cfg(feature = "metal")]

@@ -91,11 +91,19 @@ strict device APIs retain their separate scheduling; individually larger images
 retain existing admission. Automatic routing is foreground and bounded to 1,024
 decisions:
 
+Automatic Metal calibration requires native batch-compatible output. Inputs
+requiring the strict single-image fallback, including subsampled color, stay on
+CPU. Explicit Metal reads retain that fallback.
+
 1. A new eligible route returns CPU output and marks calibration pending without
    initializing the device.
-2. A later eligible read warms the device once, outside route timing.
-3. Three subsequent reads each measure one CPU/device pair from the same prepared
-   inputs. Measurement order alternates; the entire execution window is measured.
+2. A later eligible read warms the device and times an uncached CPU decode of
+   the same prepared input. If device warmup takes more than four CPU decodes,
+   the route stays on CPU without further foreground probes. This conservative
+   guard can prefer CPU even when later device reads would amortize startup.
+3. Otherwise, three subsequent reads each measure one CPU/device pair from the
+   same prepared inputs. Measurement order alternates; the entire execution
+   window is measured.
 4. The median device/CPU ratio must be at most 0.85 to select the device.
 
 The key includes dataset, scene, series, level, codec, the full logical geometry

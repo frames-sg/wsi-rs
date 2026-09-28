@@ -108,6 +108,20 @@ impl AdaptiveDecodeReader {
             return self.read_adaptive_cpu(reqs, control);
         };
         Self::check_control(control)?;
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        if self.configured_device() == Some(DeviceKind::Metal) && !prepared.can_calibrate_metal() {
+            self.runtime.store_route(
+                key,
+                DecodeRouteDecision {
+                    winner: DecodeRoute::Cpu,
+                    cpu_elapsed: Duration::ZERO,
+                    device_elapsed: Duration::ZERO,
+                    device_failure: false,
+                },
+                control,
+            )?;
+            return self.read_adaptive_cpu(reqs, control);
+        }
         let Some(device) = self.preferred_device() else {
             if let RouteClaim::Calibrate(lease) = claim {
                 lease.fail(control)?;
@@ -167,24 +181,27 @@ impl AdaptiveDecodeReader {
     ) -> Result<Vec<CpuTile>, WsiError> {
         lease.bind_device(self.device_identity(device)?);
         if lease.step == CalibrationStep::Warmup {
-            let warmed = match read_device() {
-                Ok(_) => {
-                    lease.complete(None, control)?;
-                    true
-                }
+            let device_started = Instant::now();
+            let device_elapsed = match read_device() {
+                Ok(_) => device_started.elapsed(),
                 Err(error) => {
                     Self::check_control(control)?;
                     tracing::debug!(%error, "JP2K device warmup failed");
                     lease.fail(control)?;
-                    false
+                    let tiles = self.read_inner_cpu(reqs, control)?;
+                    record_device_failure_fallback(device, tiles.len());
+                    return Ok(tiles);
                 }
             };
-            let tiles = self.read_inner_cpu(reqs, control)?;
-            if warmed {
-                record_adaptive_cpu_route(device, tiles.len());
-            } else {
-                record_device_failure_fallback(device, tiles.len());
-            }
+            // Time uncached CPU work over the same prepared inputs so a cache
+            // hit cannot prematurely reject a useful device route.
+            Self::check_control(control)?;
+            let cpu_started = Instant::now();
+            let tiles = self.runtime.install_jp2k_cpu(|| prepared.read_cpu())?;
+            let cpu_elapsed = cpu_started.elapsed();
+            Self::check_control(control)?;
+            lease.complete(Some((cpu_elapsed, device_elapsed)), control)?;
+            record_adaptive_cpu_route(device, tiles.len());
             return Ok(tiles);
         }
         let CalibrationStep::Sample { cpu_first } = lease.step else {
