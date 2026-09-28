@@ -59,15 +59,40 @@ pub fn compare_pixels(config: &WorkerConfig) -> Result<PixelComparison, String> 
         return Err("pixel comparison requires matching slide geometry".into());
     }
     let plan = WorkloadPlan::with_level0_bounds(levels, bounds)?;
+    let workloads = compare_read_plan(&plan, config.only.as_deref(), |spec, actual, expected| {
+        candidate.read_region_argb_into(
+            spec.x,
+            spec.y,
+            spec.level,
+            spec.width,
+            spec.height,
+            actual,
+        )?;
+        reference.read_region_argb_into(
+            spec.x,
+            spec.y,
+            spec.level,
+            spec.width,
+            spec.height,
+            expected,
+        )
+    })?;
+    Ok(PixelComparison {
+        reference_version,
+        workloads,
+    })
+}
+
+fn compare_read_plan(
+    plan: &WorkloadPlan,
+    only: Option<&str>,
+    mut read: impl FnMut(ReadSpec, &mut Vec<u32>, &mut Vec<u32>) -> Result<(), String>,
+) -> Result<Vec<WorkloadPixelComparison>, String> {
     let mut workloads = Vec::new();
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for workload in plan.viewer_workloads() {
-        if config
-            .only
-            .as_deref()
-            .is_some_and(|name| name != workload.name)
-        {
+        if only.is_some_and(|name| name != workload.name) {
             continue;
         }
         let mut result = WorkloadPixelComparison {
@@ -82,22 +107,7 @@ pub fn compare_pixels(config: &WorkerConfig) -> Result<PixelComparison, String> 
         let mut candidate_digest = Sha256::new();
         let mut reference_digest = Sha256::new();
         for spec in workload.reads {
-            candidate.read_region_argb_into(
-                spec.x,
-                spec.y,
-                spec.level,
-                spec.width,
-                spec.height,
-                &mut actual,
-            )?;
-            reference.read_region_argb_into(
-                spec.x,
-                spec.y,
-                spec.level,
-                spec.width,
-                spec.height,
-                &mut expected,
-            )?;
+            read(spec, &mut actual, &mut expected)?;
             if actual.len() != expected.len() || actual.is_empty() {
                 return Err("pixel comparison returned empty or unequal region buffers".into());
             }
@@ -113,10 +123,7 @@ pub fn compare_pixels(config: &WorkerConfig) -> Result<PixelComparison, String> 
         result.reference_checksum_sha256 = format!("{:x}", reference_digest.finalize());
         workloads.push(result);
     }
-    Ok(PixelComparison {
-        reference_version,
-        workloads,
-    })
+    Ok(workloads)
 }
 
 fn pixel_difference(actual: &[u32], expected: &[u32]) -> (u8, f64, bool) {
@@ -141,6 +148,115 @@ fn pixel_difference(actual: &[u32], expected: &[u32]) -> (u8, f64, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_reports_every_region_and_binds_the_timed_pixels() {
+        let plan = WorkloadPlan::with_level0_bounds(
+            vec![LevelInfo {
+                width: 4,
+                height: 2,
+                downsample: 1.0,
+            }],
+            Level0Bounds {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 2,
+            },
+        )
+        .unwrap();
+        let mut read_count = 0usize;
+        let reports = compare_read_plan(&plan, None, |spec, actual, expected| {
+            assert_eq!((spec.width, spec.height), (4, 2));
+            expected.clear();
+            expected.resize(8, 0xff03_0201);
+            actual.clone_from(expected);
+            actual[0] ^= 0x0100_0001;
+            read_count += 1;
+            Ok(())
+        })
+        .unwrap();
+        let workloads = plan.viewer_workloads();
+        assert_eq!(reports.len(), workloads.len());
+        assert_eq!(
+            read_count,
+            workloads.iter().map(|w| w.reads.len()).sum::<usize>()
+        );
+        for (report, workload) in reports.iter().zip(workloads) {
+            assert_eq!(report.name, workload.name);
+            assert_eq!(report.regions as usize, workload.reads.len());
+            assert_eq!(report.max_abs, 1);
+            assert_eq!(report.max_mean_abs, 1.0 / 24.0);
+            assert!(!report.alpha_exact);
+            let mut digest = Sha256::new();
+            for spec in workload.reads {
+                digest.update(read_digest(spec, &[0xff03_0201; 8]));
+            }
+            assert_eq!(
+                report.reference_checksum_sha256,
+                format!("{:x}", digest.finalize())
+            );
+            assert_ne!(
+                report.candidate_checksum_sha256,
+                report.reference_checksum_sha256
+            );
+        }
+
+        let mut first = true;
+        let only = compare_read_plan(&plan, Some("pan_trace_l0"), |_, actual, expected| {
+            *actual = vec![0xff00_0000; 8];
+            *expected = actual.clone();
+            // A mismatch in the first region must not be hidden by the
+            // remaining matching regions in the selected workload.
+            if first {
+                actual[0] ^= 0x0100_0001;
+                first = false;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].name, "pan_trace_l0");
+        assert_eq!(
+            (only[0].max_abs, only[0].max_mean_abs, only[0].alpha_exact),
+            (1, 1.0 / 24.0, false)
+        );
+        assert_ne!(
+            only[0].candidate_checksum_sha256,
+            only[0].reference_checksum_sha256
+        );
+    }
+
+    #[test]
+    fn comparison_rejects_failed_empty_and_unequal_reads() {
+        let plan = WorkloadPlan::with_level0_bounds(
+            vec![LevelInfo {
+                width: 1,
+                height: 1,
+                downsample: 1.0,
+            }],
+            Level0Bounds {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            compare_read_plan(&plan, None, |_, _, _| Err("decode failed".into())).unwrap_err(),
+            "decode failed"
+        );
+        for lengths in [(0, 0), (1, 0), (1, 2)] {
+            assert!(compare_read_plan(&plan, None, |_, actual, expected| {
+                actual.resize(lengths.0, 0);
+                expected.resize(lengths.1, 0);
+                Ok(())
+            })
+            .unwrap_err()
+            .contains("empty or unequal"));
+        }
+    }
 
     #[test]
     fn numerical_difference_keeps_alpha_exact_and_out_of_the_rgb_mean() {

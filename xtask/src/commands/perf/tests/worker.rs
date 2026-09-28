@@ -189,3 +189,71 @@ fn worker_process_failure_reports_engine_slide_and_repeat() {
     assert!(error.contains("fixture.svs"));
     assert!(error.contains("repeat 7"));
 }
+
+#[cfg(unix)]
+#[test]
+fn pixel_worker_protocol_preserves_the_reference_and_reports_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let worker = dir.path().join("pixel-worker");
+    let candidate = BenchInvocation {
+        worker: worker.clone(),
+        library: PathBuf::from("candidate library"),
+    };
+    let reference = BenchInvocation {
+        worker: worker.clone(),
+        library: PathBuf::from("reference library"),
+    };
+    let report = serde_json::json!({
+        "reference_version": "4.0.1",
+        "workloads": [{
+            "name": "pan_trace_l0", "regions": 128,
+            "candidate_checksum_sha256": "candidate pixels",
+            "reference_checksum_sha256": "reference pixels",
+            "max_abs": 1, "max_mean_abs": 0.01, "alpha_exact": true
+        }]
+    });
+    std::fs::write(
+        &worker,
+        format!(
+            r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --compare-library) reference="$2" ;;
+        --library) candidate="$2" ;;
+        --only) workload="$2" ;;
+    esac
+    shift 2
+done
+[ "$reference" = 'reference library' ] || exit 21
+[ "$candidate" = 'candidate library' ] || exit 22
+[ "$workload" = pan_trace_l0 ] || exit 23
+[ "$RAYON_NUM_THREADS" = 1 ] || exit 24
+cat <<'JSON'
+{report}
+JSON
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let run = || {
+        run_pixel_comparison(
+            &candidate,
+            &reference,
+            Path::new("slide.svs"),
+            1024,
+            Some("pan_trace_l0"),
+        )
+    };
+    let actual = run().unwrap();
+    assert_eq!(serde_json::to_value(actual).unwrap(), report);
+
+    std::fs::write(&worker, "#!/bin/sh\necho 'decode failed' >&2\nexit 2\n").unwrap();
+    let error = run().unwrap_err();
+    assert!(error.contains("slide.svs"));
+    assert!(error.contains("decode failed"));
+    std::fs::write(&worker, "#!/bin/sh\necho '{}'\n").unwrap();
+    assert!(run().unwrap_err().contains("invalid pixel comparison"));
+}

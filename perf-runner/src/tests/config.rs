@@ -29,6 +29,8 @@ fn parses_required_and_optional_worker_arguments() {
             "2",
             "--require-version-prefix",
             "4.0.1",
+            "--compare-library",
+            "/tmp/libopenslide.dylib",
         ]
         .into_iter()
         .map(str::to_string),
@@ -42,6 +44,10 @@ fn parses_required_and_optional_worker_arguments() {
     assert_eq!(config.workers, 2);
     assert_eq!(config.only.as_deref(), Some("zoom_trace"));
     assert_eq!(config.required_version_prefix.as_deref(), Some("4.0.1"));
+    assert_eq!(
+        config.comparison_library.as_deref(),
+        Some(std::path::Path::new("/tmp/libopenslide.dylib"))
+    );
 }
 
 #[test]
