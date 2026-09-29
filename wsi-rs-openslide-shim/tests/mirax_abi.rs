@@ -65,6 +65,20 @@ fn mirax_coarse_levels_resample_fractional_subtiles_like_openslide() {
             );
             assert_eq!(fnv1a_argb(&pixels), checksum, "level {level} checksum");
         }
+        // Vertical bands must retain the complete source clip's Pixman
+        // filter. These interior RGB values come from OpenSlide 4.0.1.
+        let mut pixels = vec![0u32; 256 * 256];
+        openslide_read_region(osr, pixels.as_mut_ptr(), 18_395, 101_252, 2, 256, 256);
+        assert!(openslide_get_error(osr).is_null());
+        for (x, y, expected) in [
+            (49, 0, 0xffbc_6cbc),
+            (88, 45, 0xff81_4c84),
+            (109, 89, 0xfff5_f4f1),
+            (250, 130, 0xffdd_78ca),
+            (153, 173, 0xfff1_f7f1),
+        ] {
+            assert_eq!(pixels[y * 256 + x], expected, "pixel ({x}, {y})");
+        }
         openslide_close(osr);
     }
 }

@@ -79,6 +79,38 @@ fn ventana_reduced_levels_paint_level0_subtiles_like_openslide() {
             );
             assert_eq!(fnv1a_argb(&pixels), checksum, "level {level} checksum");
         }
+        // Coarse subtiles still contribute bilinear coverage past their
+        // nominal extent at internal row-band boundaries. Values come from
+        // pinned OpenSlide 4.0.1 reads of the same public fixture.
+        for ((x, y, level, width, height), samples) in [
+            (
+                (20_480, 10_880, 6, 512, 512),
+                vec![(121, 320, 0x5e52_5252), (121, 496, 0x504b_4b4b)],
+            ),
+            (
+                (12_288, 2_688, 7, 512, 512),
+                vec![(124, 224, 0x2520_2020), (124, 400, 0x1e1c_1c1b)],
+            ),
+            (
+                (0, 0, 8, 448, 298),
+                vec![
+                    (110, 108, 0xd8cc_cccc),
+                    (39, 162, 0xd5c9_c9c9),
+                    (110, 162, 0xaea3_a3a3),
+                ],
+            ),
+        ] {
+            let mut pixels = vec![0; (width * height) as usize];
+            openslide_read_region(osr, pixels.as_mut_ptr(), x, y, level, width, height);
+            assert!(openslide_get_error(osr).is_null());
+            for (col, row, expected) in samples {
+                assert_eq!(
+                    pixels[row * width as usize + col],
+                    expected,
+                    "level {level} pixel ({col}, {row})"
+                );
+            }
+        }
         openslide_close(osr);
     }
 }

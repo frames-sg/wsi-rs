@@ -43,7 +43,8 @@
 ### Fixed
 
 - OpenSlide-compatible region reads bound intermediate color and coverage
-  buffers with row bands. Cached regions retain dense composition, opaque
+  buffers with row bands where splitting preserves source coverage and Pixman
+  filtering. Cached regions retain dense composition, opaque
   bands avoid redundant alpha reconstruction, and singleton staging avoids
   initializing an unused JP2K worker pool.
 - MIRAX image records share data-file paths, retain compact source origins,
@@ -55,8 +56,9 @@
   batch count, device and worker budget.
 - MIRAX composition uses Pixman's integer interpolation for fully covered
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
-  Integer-position opaque tiles compose directly into RGBA, avoiding separate
-  color and coverage images while preserving gaps and overlap order.
+  RGB and RGBA tiles compose directly into one premultiplied RGBA image,
+  avoiding full-size color and coverage copies while preserving fractional
+  filtering, gaps, partial coverage and overlap order.
 - VMS reads retain complete optimization records when the file ends with an
   incomplete row, and reuse restart markers already found in a scan chunk.
   Missing offsets still fall back to scanning the JPEG.

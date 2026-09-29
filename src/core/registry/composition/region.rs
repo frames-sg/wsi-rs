@@ -339,7 +339,8 @@ struct RegionComposer {
     alpha_buffer: Option<Vec<f32>>,
     preserve_alpha: bool,
     pixman_compatible: bool,
-    integral_rgba: bool,
+    direct_rgba: bool,
+    rgba_needs_unpremultiply: bool,
 }
 
 impl RegionComposer {
@@ -357,17 +358,14 @@ impl RegionComposer {
             ));
         }
         let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
-        let integral_rgba = pixman_compatible
+        let direct_rgba = pixman_compatible
             && preserve_alpha
-            && template.channels == 3
-            && template.color_space == ColorSpace::Rgb
-            && matches!(template.data, CpuTileData::U8(_))
-            && hits.iter().all(|hit| {
-                hit.cairo_fixed_dest
-                    .is_some_and(|(x, y)| x.fract() == 0.0 && y.fract() == 0.0)
-            });
+            && hits.iter().all(|hit| hit.cairo_fixed_dest.is_some())
+            && ((template.channels == 3 && template.color_space == ColorSpace::Rgb)
+                || is_alpha_source(template))
+            && matches!(template.data, CpuTileData::U8(_));
         // An alpha-source template still composes RGB color plus coverage.
-        let (channels, color_space) = if integral_rgba {
+        let (channels, color_space) = if direct_rgba {
             (4, ColorSpace::Rgba)
         } else if pixman_compatible && is_alpha_source(template) {
             (3, ColorSpace::Rgb)
@@ -385,7 +383,7 @@ impl RegionComposer {
             CpuTileData::U16(_) => CpuTileData::u16(vec![0u16; total_samples]),
             CpuTileData::F32(_) => CpuTileData::f32(vec![0.0f32; total_samples]),
         };
-        let alpha_buffer = if !integral_rgba
+        let alpha_buffer = if !direct_rgba
             && matches!(&out_data, CpuTileData::U8(_))
             && hits.iter().any(needs_fractional_blit)
         {
@@ -404,20 +402,25 @@ impl RegionComposer {
             alpha_buffer,
             preserve_alpha,
             pixman_compatible,
-            integral_rgba,
+            direct_rgba,
+            rgba_needs_unpremultiply: false,
         })
     }
 
     fn blit(&mut self, hit: &TileHit, tile: &CpuTile) -> Result<(), WsiError> {
         tile.validate_invariants()?;
-        if self.integral_rgba {
+        if self.direct_rgba {
             let CpuTileData::U8(out) = &mut self.out_data else {
                 unreachable!()
             };
             let out = Arc::make_mut(out);
-            if tile.channels == 3
+            if !self.rgba_needs_unpremultiply
+                && tile.channels == 3
                 && tile.color_space == ColorSpace::Rgb
                 && tile.layout == CpuTileLayout::Interleaved
+                && hit
+                    .cairo_fixed_dest
+                    .is_some_and(|(x, y)| x.fract() == 0.0 && y.fract() == 0.0)
             {
                 if let Some(source) = tile.as_u8() {
                     // Integral opaque SATURATE needs only one RGBA image:
@@ -461,22 +464,8 @@ impl RegionComposer {
                     return Ok(());
                 }
             }
-            // A later alpha source requires the general float compositor.
-            // Unpack existing opaque/empty coverage without retaining another
-            // color image. Its reserved RGBA capacity remains sufficient.
-            let alpha = out
-                .chunks_exact(4)
-                .map(|pixel| f32::from(pixel[3]) / 255.0)
-                .collect();
-            for pixel in 0..out.len() / 4 {
-                out.copy_within(pixel * 4..pixel * 4 + 3, pixel * 3);
-            }
-            out.truncate(self.width as usize * self.height as usize * 3);
-            self.alpha_buffer = Some(alpha);
-            self.channels = 3;
-            self.shape.channels = 3;
-            self.color_space = ColorSpace::Rgb;
-            self.integral_rgba = false;
+            self.rgba_needs_unpremultiply = true;
+            return super::fractional_u8::blit_premultiplied_rgba(out, tile, hit, self.shape);
         }
         if self.pixman_compatible
             && self.channels == 3
@@ -512,7 +501,13 @@ impl RegionComposer {
     }
 
     fn finish(mut self) -> Result<CpuTile, WsiError> {
-        if self.pixman_compatible && !self.integral_rgba {
+        if self.rgba_needs_unpremultiply {
+            let CpuTileData::U8(out) = &mut self.out_data else {
+                unreachable!()
+            };
+            super::fractional_u8::unpremultiply_rgba(Arc::make_mut(out).as_mut_slice());
+        }
+        if self.pixman_compatible && !self.direct_rgba {
             let (CpuTileData::U8(out), Some(alpha)) =
                 (&mut self.out_data, self.alpha_buffer.as_deref())
             else {
@@ -550,7 +545,7 @@ impl RegionComposer {
             layout: self.layout,
             data: self.out_data,
         };
-        if !self.preserve_alpha || !self.pixman_compatible || self.integral_rgba {
+        if !self.preserve_alpha || !self.pixman_compatible || self.direct_rgba {
             return Ok(tile);
         }
 

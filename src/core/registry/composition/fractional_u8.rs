@@ -28,6 +28,124 @@ pub(super) fn is_alpha_source(tile: &CpuTile) -> bool {
         && matches!(tile.data, CpuTileData::U8(_))
 }
 
+/// Paint a Pixman-compatible canvas directly into premultiplied RGBA. Pixman
+/// contracts coverage to unorm8 after every source, so a byte retains the exact
+/// state. Row scratch reuses the existing float arithmetic without a full
+/// coverage image or another full-size image at completion.
+pub(super) fn blit_premultiplied_rgba(
+    out: &mut [u8],
+    tile: &CpuTile,
+    hit: &TileHit,
+    shape: CompositionShape,
+) -> Result<(), WsiError> {
+    let mut premultiplied = Vec::new();
+    let mut coverage = Vec::new();
+    let bytes = tile
+        .as_u8()
+        .ok_or_else(|| WsiError::DisplayConversion("RGBA composition requires u8 source".into()))?;
+    let alpha_source = is_alpha_source(tile);
+    let color = if alpha_source {
+        premultiplied.reserve_exact(bytes.len() / 4 * 3);
+        coverage.reserve_exact(bytes.len() / 4);
+        for pixel in bytes.chunks_exact(4) {
+            let alpha = u16::from(pixel[3]);
+            premultiplied.extend(
+                pixel[..3]
+                    .iter()
+                    .map(|&c| ((u16::from(c) * alpha + 127) / 255) as u8),
+            );
+            coverage.push(pixel[3]);
+        }
+        premultiplied.as_slice()
+    } else if tile.channels == 3
+        && tile.color_space == ColorSpace::Rgb
+        && tile.layout == CpuTileLayout::Interleaved
+    {
+        bytes
+    } else {
+        return Err(WsiError::DisplayConversion(
+            "RGBA composition requires RGB8 or RGBA8 source".into(),
+        ));
+    };
+    let (x, y) = hit.cairo_fixed_dest.expect("Pixman placement");
+    let start_x = x.floor().max(0.0) as usize;
+    let start_y = y.floor().max(0.0) as usize;
+    let end_x = (x + f64::from(tile.width)).ceil().min(shape.width as f64) as usize;
+    let end_y = (y + f64::from(tile.height)).ceil().min(shape.height as f64) as usize;
+    if start_x >= end_x || start_y >= end_y {
+        return Ok(());
+    }
+    let mut row_hit = hit.clone();
+    // Preserve the complete paint's filter selection when clipping to rows.
+    row_hit.cairo_rgb24 &= (start_x as f64 - x).floor() >= 0.0
+        && (start_y as f64 - y).floor() >= 0.0
+        && (end_x as f64 - 1.0 - x).floor() + 1.0 < f64::from(tile.width)
+        && (end_y as f64 - 1.0 - y).floor() + 1.0 < f64::from(tile.height);
+    let mut row_color = vec![0; shape.width * 3];
+    let mut row_alpha = vec![0.0; shape.width];
+    let row_shape = CompositionShape {
+        width: shape.width,
+        height: 1,
+        channels: 3,
+    };
+    for row in start_y..end_y {
+        let destination =
+            &mut out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
+        for ((pixel, rgb), alpha) in destination
+            .chunks_exact(4)
+            .zip(row_color[start_x * 3..end_x * 3].chunks_exact_mut(3))
+            .zip(&mut row_alpha[start_x..end_x])
+        {
+            rgb.copy_from_slice(&pixel[..3]);
+            *alpha = unorm8_to_float(pixel[3], true);
+        }
+        row_hit.cairo_fixed_dest = Some((x, y - row as f64));
+        if alpha_source {
+            blit_fractional::<true, true>(
+                &mut row_color,
+                &mut row_alpha,
+                color,
+                &coverage,
+                tile,
+                &row_hit,
+                row_shape,
+            );
+        } else {
+            blit_fractional::<true, false>(
+                &mut row_color,
+                &mut row_alpha,
+                color,
+                &[],
+                tile,
+                &row_hit,
+                row_shape,
+            );
+        }
+        for ((pixel, rgb), &alpha) in destination
+            .chunks_exact_mut(4)
+            .zip(row_color[start_x * 3..end_x * 3].chunks_exact(3))
+            .zip(&row_alpha[start_x..end_x])
+        {
+            pixel[..3].copy_from_slice(rgb);
+            pixel[3] = contract_pixman_unorm8(alpha);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn unpremultiply_rgba(pixels: &mut [u8]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 {
+            pixel.fill(0);
+        } else if alpha < 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+}
+
 /// SATURATE-composites a straight-alpha RGBA tile into RGB output with the
 /// source alpha as coverage. Cairo samples the premultiplied surface, so the
 /// color is premultiplied once here with exact unorm8 rounding.

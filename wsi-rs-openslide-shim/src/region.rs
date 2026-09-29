@@ -19,6 +19,7 @@ pub(crate) fn read_region_into(
     let within_limits = pixels <= slide.limits().region_pixels()
         && pixels <= slide.limits().region_rgba_bytes() / 4;
     let irregular = matches!(level.tile_layout, TileLayout::Irregular { .. });
+    let mut bandable = !irregular;
     if irregular && within_limits {
         let hits = level.tile_layout.tiles_for_region(
             request.origin_px.0,
@@ -30,13 +31,27 @@ pub(crate) fn read_region_into(
             destination.fill(0);
             return Ok(());
         }
+        // A rounded-up source can paint beyond its fractional placement
+        // extent. Keep that complete clip so a band cannot cull its coverage.
+        if let TileLayout::Irregular { tiles, .. } = &level.tile_layout {
+            bandable = hits.iter().all(|hit| {
+                tiles.get(&(hit.col, hit.row)).is_some_and(|entry| {
+                    entry.extent() == (f64::from(entry.dimensions.0), f64::from(entry.dimensions.1))
+                        && banding_preserves_filter(
+                            (hit.dest_x_f64 - offset.0, hit.dest_y_f64 - offset.1),
+                            entry.dimensions,
+                            (width, height),
+                        )
+                })
+            });
+        }
     }
-    // Keep coverage images within 32 KiB allocations. Use stable bands across
-    // reads because Pixman's filter selection depends on clipping.
+    // Keep eligible irregular composition buffers within 32 KiB allocations.
+    // The complete clip is retained when it affects Pixman's sampling.
     let band_pixels: u64 = if irregular { 8 * 1024 } else { 256 * 1024 };
     // Let Slide report its ordinary validation error for an oversized request;
     // splitting must not bypass the limit on the complete output.
-    let band_height = if !within_limits {
+    let band_height = if !within_limits || !bandable {
         height
     } else {
         (band_pixels / u64::from(width.max(1)))
@@ -60,6 +75,32 @@ pub(crate) fn read_region_into(
         clear_uncovered_pixels(level, band.origin_px, offset, band.size_px, rows, opaque)?;
     }
     Ok(())
+}
+
+fn banding_preserves_filter(
+    destination: (f64, f64),
+    source: (u32, u32),
+    output: (u32, u32),
+) -> bool {
+    // Match Cairo's integer offset plus 16.16 transform decomposition.
+    let raster = |value: f64| {
+        let integer = (value / 2.0).floor();
+        integer - ((-value + integer) * 65_536.0).round_ties_even() / 65_536.0
+    };
+    let (x, y) = (raster(destination.0), raster(destination.1));
+    if x.fract() == 0.0 && y.fract() == 0.0 {
+        return true;
+    }
+    let covered = |dest: f64, source: u32, output: u32| {
+        let first = dest.floor().max(0.0);
+        let end = (dest + f64::from(source)).ceil().min(f64::from(output));
+        first < end
+            && (first - dest).floor() >= 0.0
+            && (end - 1.0 - dest).floor() + 1.0 < f64::from(source)
+    };
+    // Vertical cuts must not turn a wide RGB24 filter into Pixman's narrow
+    // opaque filter. Horizontal clipping stays fixed in every row band.
+    !covered(x, source.0, output.0) || covered(y, source.1, output.1)
 }
 
 pub(crate) fn clear_uncovered_pixels(
