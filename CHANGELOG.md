@@ -86,7 +86,12 @@
   fully opaque output without per-pixel alpha arithmetic.
 - Fixes a deadlock when concurrent NDPI display-tile reads share a generated
   level. The decode that other readers wait on processes strip bands on its
-  calling thread; independent region reads retain parallel strip decoding.
+  calling thread.
+- NDPI region reads no longer fan their strips out to the shared worker
+  pool. An incomplete level-0 region decodes its strips in order on one
+  worker, and generated levels decode scaled strips on the calling thread.
+  Concurrent readers no longer queue behind each other's strip work, which
+  had set their tail latency.
 - Updates J2K to 0.11.3 to fix subsampled nonzero-origin decoding and excessive
   tag-tree construction found by the raw-codestream fuzz target, and JXR to
   0.2.1 for the current codec release set.

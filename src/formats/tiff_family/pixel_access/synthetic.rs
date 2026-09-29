@@ -128,17 +128,15 @@ impl TiffPixelReader {
     /// layouts return `None` and keep the box-filter path. Strips are shared
     /// through `cache` under the base level's strip grid.
     ///
-    /// Callers that hold a single-flight claim must pass
-    /// [`StripBandExecution::Serial`]. Reads run inside the shared JP2K rayon
-    /// pool, so a parallel band that another worker steals can end up beneath a
-    /// waiter blocked on that same claim, and the claim then never completes.
+    /// Bands decode on the calling thread. A caller holding a single-flight
+    /// claim therefore never waits on stolen work that sits beneath another
+    /// waiter, and concurrent region reads do not queue in the shared pool.
     pub(super) fn try_read_synthetic_rect_from_scaled_ndpi_strips(
         &self,
         cache: Option<&crate::core::cache::TileCache>,
         base_tile_req: &TileRequest,
         factor: u32,
         rect: (u32, u32, u32, u32),
-        execution: StripBandExecution,
     ) -> Result<Option<CpuTile>, WsiError> {
         let (rect_x, rect_y, rect_w, rect_h) = rect;
         if !matches!(factor, 2 | 4 | 8) || rect_w == 0 || rect_h == 0 {
@@ -258,10 +256,7 @@ impl TiffPixelReader {
             }
             Ok(())
         };
-        match execution {
-            StripBandExecution::Parallel => bands.into_par_iter().try_for_each(decode_band)?,
-            StripBandExecution::Serial => bands.into_iter().try_for_each(decode_band)?,
-        }
+        bands.into_iter().try_for_each(decode_band)?;
         Ok(Some(cpu_tile_from_rgb_pixels(rect_w, rect_h, rgb)?))
     }
 
@@ -353,7 +348,6 @@ impl TiffPixelReader {
                 &base_tile_req,
                 factor,
                 (0, 0, target_w, target_h),
-                StripBandExecution::Serial,
             )? {
                 return Ok(Arc::new(image));
             }
@@ -576,7 +570,6 @@ impl TiffPixelReader {
                 &base_tile_req,
                 factor,
                 (rect_x, rect_y, valid_w, valid_h),
-                StripBandExecution::Parallel,
             )? {
                 return paste_rgb_interleaved_u8_tile(&scaled, w, h, dst_x, dst_y);
             }
@@ -755,16 +748,6 @@ impl TiffPixelReader {
             })
             .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
-}
-
-/// How [`TiffPixelReader::try_read_synthetic_rect_from_scaled_ndpi_strips`]
-/// schedules its strip-row bands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StripBandExecution {
-    /// Decode bands on the current rayon pool.
-    Parallel,
-    /// Decode bands on the calling thread, never waiting on stolen work.
-    Serial,
 }
 
 /// The base NDPI restart-marker level and scale of one DCT-scaled strip.

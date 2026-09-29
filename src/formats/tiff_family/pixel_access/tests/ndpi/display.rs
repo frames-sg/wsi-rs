@@ -274,6 +274,53 @@ fn cancelled_ndpi_batch_does_not_start_source_decodes() {
 }
 
 #[test]
+fn uncached_ndpi_regions_decode_their_strips_on_one_worker() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let request = RegionRequest::new(0, 0, 0, (-7, -2), (77, 19));
+    // Compose a cold region inside a pool, as the process pool would, and
+    // count the strips decoded on the composing thread itself.
+    let read_in_pool = |threads| {
+        let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let cache = crate::TileCache::new(1024 * 1024);
+            let mut context = crate::core::registry::SlideReadContext::new(Some(&cache), 8192);
+            let decoded =
+                || super::super::super::ndpi_core::NDPI_STRIP_DECODES.with(|count| count.get());
+            let before = decoded();
+            let tile = reader
+                .read_region_fastpath(&mut context, &request)
+                .unwrap()
+                .unwrap();
+            (decoded() - before, tile)
+        })
+    };
+    // A one-thread pool necessarily decodes every strip on that thread.
+    let (all_strips, expected) = read_in_pool(1);
+    let (on_composer, actual) = read_in_pool(4);
+    assert!(all_strips > 1, "the region spans several strips");
+    assert_eq!(
+        on_composer, all_strips,
+        "strips fanned out to other workers"
+    );
+    assert_eq!(actual.as_u8(), expected.as_u8());
+
+    // From an ordinary thread, the cold region makes one pool handoff.
+    let reader = super::fixtures::build_test_ndpi_restart_reader(false);
+    let cache = crate::TileCache::new(1024 * 1024);
+    let mut context = crate::core::registry::SlideReadContext::new(Some(&cache), 8192);
+    let before = test_count(Event::CpuPoolDispatches);
+    reader
+        .read_region_fastpath(&mut context, &request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(test_count(Event::CpuPoolDispatches) - before, 1);
+}
+
+#[test]
 fn cached_ndpi_region_avoids_decoder_worker_dispatch() {
     use crate::core::execution_telemetry::{test_count, Event};
     let reader = super::fixtures::build_test_ndpi_restart_reader(false);

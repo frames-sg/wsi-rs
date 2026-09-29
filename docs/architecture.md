@@ -38,11 +38,13 @@ batches preserve hit order. Built-in readers reject unavailable region fast path
 on the caller thread. Custom readers retain their existing worker context. Cached
 ordinary tiled regions avoid an otherwise empty worker dispatch. NDPI restart
 regions also compose fully cached strips on the caller. A non-mutating cache
-presence hint selects one worker handoff for incomplete regions; ordinary
-resolution still handles eviction and sends late misses to the same pool. The
-hint neither pins tiles nor changes admission, recency or cache counters. The
-worker limit, when needed, is queried from that same pool. Synthetic NDPI fast paths retain their previous
-worker context.
+presence hint selects one worker handoff for incomplete regions; that worker
+decodes the region's strips in order, and ordinary resolution still handles
+eviction. The hint neither pins tiles nor changes admission, recency or cache
+counters. Synthetic NDPI region fast paths decode their scaled strips on the
+calling thread. When each read fanned its strips out to the shared pool,
+concurrent readers queued behind each other's strips, and that queueing, not
+decoding, set their tail latency.
 
 The OpenSlide shim writes the caller's destination in row bands, bounded to
 262,144 pixels for regular grids and 8,192 pixels for coverage-carrying tile maps.
@@ -265,8 +267,8 @@ changed.
 NDPI integral region reads batch small restart strips inside the existing region
 staging reservation. The batch is limited by output-to-strip geometry, existing
 NDPI batch caps, and the current Rayon pool. Large strips retain one-at-a-time
-streaming. NDPI region batches run in the existing pool and collect results in
-request order before selecting the first error. Codec algorithms remain external.
+streaming. NDPI region batches decode in request order on the composing thread
+and stop at the first error. Codec algorithms remain external.
 
 `core::cache::flights` coordinates active shared region-cache misses by the full
 tile key. It permits at most 128 producer records (fewer for small caches), keeps

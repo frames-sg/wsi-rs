@@ -20,6 +20,13 @@ impl NdpiMcuStarts<'_> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// NDPI strips decoded on this thread; tests use it to prove where
+    /// region strips decode.
+    pub(super) static NDPI_STRIP_DECODES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl TiffPixelReader {
     pub(super) fn get_cached_ndpi_strip(&self, strip_key: NdpiStripKey) -> Option<Arc<CpuTile>> {
         self.ndpi_strip_cache.get(&strip_key)
@@ -341,66 +348,25 @@ impl TiffPixelReader {
             .enumerate()
             .filter_map(|(idx, needed)| needed.strip.is_none().then_some(idx))
             .collect();
-        if !missing_indices.is_empty() {
-            let decode_batch = if vtw > NDPI_DISPLAY_WIDE_STRIP_WIDTH {
-                NDPI_DISPLAY_WIDE_STRIP_BATCH
-            } else {
-                NDPI_DISPLAY_NARROW_STRIP_BATCH
-            };
-            let decoded_missing: Result<Vec<(usize, Arc<CpuTile>)>, WsiError> =
-                if missing_indices.len() == 1 {
-                    let idx = missing_indices[0];
-                    let needed = &needed_strips[idx];
-                    Ok(vec![(
-                        idx,
-                        self.get_or_decode_ndpi_strip(
-                            &needed.strip_req,
-                            ifd_id,
-                            jpeg_header,
-                            mcu_starts_tag,
-                            tiles_across,
-                            tiles_down,
-                            strip_offset,
-                            strip_byte_count,
-                            needed.strip_key,
-                            vtw,
-                            vth,
-                            level_w as u32,
-                            level_h as u32,
-                        )?,
-                    )])
-                } else {
-                    let mut decoded = Vec::with_capacity(missing_indices.len());
-                    for batch in missing_indices.chunks(decode_batch) {
-                        let mut decoded_batch: Vec<(usize, Arc<CpuTile>)> = batch
-                            .par_iter()
-                            .map(|idx| {
-                                let needed = &needed_strips[*idx];
-                                let strip = self.get_or_decode_ndpi_strip(
-                                    &needed.strip_req,
-                                    ifd_id,
-                                    jpeg_header,
-                                    mcu_starts_tag,
-                                    tiles_across,
-                                    tiles_down,
-                                    strip_offset,
-                                    strip_byte_count,
-                                    needed.strip_key,
-                                    vtw,
-                                    vth,
-                                    level_w as u32,
-                                    level_h as u32,
-                                )?;
-                                Ok::<(usize, Arc<CpuTile>), WsiError>((*idx, strip))
-                            })
-                            .collect::<Result<_, _>>()?;
-                        decoded.append(&mut decoded_batch);
-                    }
-                    Ok(decoded)
-                };
-            for (idx, strip) in decoded_missing? {
-                needed_strips[idx].strip = Some(strip);
-            }
+        // Decode in order on this thread; see `NdpiRegionReader`.
+        for idx in missing_indices {
+            let needed = &needed_strips[idx];
+            let strip = self.get_or_decode_ndpi_strip(
+                &needed.strip_req,
+                ifd_id,
+                jpeg_header,
+                mcu_starts_tag,
+                tiles_across,
+                tiles_down,
+                strip_offset,
+                strip_byte_count,
+                needed.strip_key,
+                vtw,
+                vth,
+                level_w as u32,
+                level_h as u32,
+            )?;
+            needed_strips[idx].strip = Some(strip);
         }
 
         let mut tile_data = vec![255u8; (content_width * content_height * 3) as usize];
@@ -610,6 +576,8 @@ impl TiffPixelReader {
         level_width: u32,
         level_height: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
+        #[cfg(test)]
+        NDPI_STRIP_DECODES.with(|count| count.set(count.get() + 1));
         let payload = self.ndpi_jpeg_tile_payload(
             req,
             ifd_id,

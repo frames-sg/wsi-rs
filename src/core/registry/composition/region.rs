@@ -50,6 +50,9 @@ pub(crate) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
 
 /// Compose small source units in bounded batches. The caller must fit every
 /// batch's source buffers within its admitted region staging reservation.
+/// An incomplete region composes on one pool worker, and its source decodes
+/// units in order there, so concurrent regions each occupy one worker rather
+/// than queueing behind each other's units.
 pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
@@ -69,7 +72,7 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     let compose = || compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1));
     if cached {
         // The hint changes scheduling only. Normal resolution still handles
-        // eviction; the NDPI source dispatches any late miss into the same pool.
+        // eviction and decodes a late miss on this thread.
         compose()
     } else {
         crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(compose)

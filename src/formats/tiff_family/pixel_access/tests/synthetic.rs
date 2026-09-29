@@ -369,6 +369,19 @@ fn synthetic_ndpi_subregion_fastpath_matches_center_roi_without_materializing_le
 }
 
 #[test]
+fn synthetic_ndpi_region_fastpath_decodes_on_the_calling_thread() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
+    let before = test_count(Event::CpuPoolDispatches);
+    let tile = read_synthetic_ndpi_region(&reader, 1, 1, 2, 2);
+    assert_eq!(test_count(Event::CpuPoolDispatches) - before, 0);
+    assert_tile_eq(
+        &tile,
+        &expected_synthetic_ndpi_region(&reader, 2, 1, 1, 2, 2),
+    );
+}
+
+#[test]
 fn synthetic_ndpi_display_tile_materializes_cacheable_level_for_reuse() {
     let reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
     let tile = reader

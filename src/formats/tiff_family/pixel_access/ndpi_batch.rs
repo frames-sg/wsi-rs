@@ -1,7 +1,9 @@
 use super::*;
 
-/// Batch orchestration is local to the admitted NDPI region path. Other NDPI
-/// callers, including synthetic-level cache loaders, keep their existing policy.
+/// Batch orchestration is local to the admitted NDPI region path. Region
+/// tiles decode in request order on the thread composing the region. When
+/// each read fanned its strips out to the shared pool, concurrent readers
+/// queued behind each other's strips, and that queueing set their tail latency.
 pub(super) struct NdpiRegionReader<'a>(pub(super) &'a TiffPixelReader);
 
 impl SlideReader for NdpiRegionReader<'_> {
@@ -10,19 +12,7 @@ impl SlideReader for NdpiRegionReader<'_> {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        crate::core::decode_runtime::DecodeRuntime::default_arc()
-            .install_jp2k_cpu(|| self.0.read_tile_cpu(req))
-    }
-
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        // Select errors in request order, independent of decode completion order.
-        crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
-            reqs.par_iter()
-                .map(|req| self.0.read_tile_cpu(req))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .collect()
-        })
+        self.0.read_tile_cpu(req)
     }
 }
 
