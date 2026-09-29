@@ -2,6 +2,46 @@ use super::*;
 use crate::core::registry::cairo_subtile_surface_u8;
 
 impl TiffPixelReader {
+    /// Reads a batch of Ventana reduced-level cells grouped by stored tile.
+    /// Region hits arrive in row-major cell order, which alternates between
+    /// neighbouring stored tiles; grouping decodes each stored tile once per
+    /// batch even when the private cache holds only one of them.
+    pub(super) fn read_tiled_ifd_subtiles_grouped(
+        &self,
+        reqs: &[TileRequest],
+        backend: BackendRequest,
+    ) -> Result<Vec<CpuTile>, WsiError> {
+        let groups = reqs
+            .iter()
+            .map(|req| self.stored_tile_group(req))
+            .collect::<Result<Vec<_>, WsiError>>()?;
+        let mut order: Vec<usize> = (0..reqs.len()).collect();
+        order.sort_by_key(|&index| groups[index]);
+        let mut tiles: Vec<Option<CpuTile>> = vec![None; reqs.len()];
+        for index in order {
+            tiles[index] = Some(self.read_tile_cpu_with_backend_request(&reqs[index], backend)?);
+        }
+        Ok(tiles.into_iter().flatten().collect())
+    }
+
+    /// The `(IFD, stored row, stored column)` a subtile request crops, or
+    /// `None` for requests of any other source.
+    fn stored_tile_group(&self, req: &TileRequest) -> Result<Option<(u64, u64, u64)>, WsiError> {
+        let TileSource::TiledIfdSubtiles {
+            ifd_id,
+            subtiles_per_tile,
+            ..
+        } = self.tile_source_for(req)?
+        else {
+            return Ok(None);
+        };
+        let per_tile = u64::from(*subtiles_per_tile).max(1);
+        Ok(u64::try_from(req.col)
+            .ok()
+            .zip(u64::try_from(req.row).ok())
+            .map(|(col, row)| (ifd_id.0, row / per_tile, col / per_tile)))
+    }
+
     /// Reads one Ventana reduced-level cell as OpenSlide paints it: the
     /// `1 / subtiles_per_tile` share of a stored TIFF tile. The stored tile is
     /// decoded once into the private cache because a thumbnail touches every

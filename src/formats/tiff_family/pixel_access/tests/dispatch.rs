@@ -268,6 +268,70 @@ fn repeated_tiff_cpu_requests_share_decoded_pixels_in_request_order() {
 }
 
 #[test]
+fn subtile_batches_decode_each_stored_tile_once_with_a_one_tile_cache() {
+    // Two 8x8 stored tiles side by side, each painted as 2x2 cells of 4x4.
+    let mut reader = build_tiled_jpeg_reader(
+        16,
+        8,
+        8,
+        8,
+        &[
+            encode_solid_rgb_jpeg(8, 8, [200, 10, 10]),
+            encode_solid_rgb_jpeg(8, 8, [10, 200, 10]),
+        ],
+    );
+    let ifd_id = reader.container.top_ifds()[0];
+    reader.layout.tile_sources.insert(
+        tile_source_key(0),
+        TileSource::TiledIfdSubtiles {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::Jpeg,
+            subtiles_per_tile: 2,
+        },
+    );
+    reader.layout.dataset.scenes[0].series[0].levels[0].tile_layout = TileLayout::Irregular {
+        tile_advance: (4.0, 4.0),
+        extra_tiles: (0, 0, 0, 0),
+        tiles: (0..4)
+            .flat_map(|col| (0..2).map(move |row| ((col, row), TileEntry::new((0.0, 0.0), (4, 4)))))
+            .collect(),
+    };
+    // The private cache holds one stored tile. Seed stored tile 0 with a
+    // stand-in decode; decoding it again after an eviction yields red cells.
+    reader.full_decode_cache = FullDecodeCache::new(8 * 8 * 3);
+    let stand_in = [10, 10, 200];
+    reader.full_decode_cache.put(
+        FullDecodeKey::StoredTile { ifd_id, index: 0 },
+        Arc::new(
+            CpuTile::from_u8_interleaved(8, 8, 3, ColorSpace::Rgb, stand_in.repeat(64)).unwrap(),
+        ),
+    );
+
+    // Row-major cells alternate between the two stored tiles.
+    let requests: Vec<_> = (0..2)
+        .flat_map(|row| (0..4).map(move |col| TileRequest::new(0, 0, 0, col, row)))
+        .collect();
+    let tiles = reader.read_tiles_cpu(&requests).unwrap();
+
+    assert_eq!(tiles.len(), requests.len());
+    for (tile, request) in tiles.iter().zip(&requests) {
+        let pixels = tile.as_u8().unwrap();
+        assert_eq!((tile.width, tile.height), (4, 4));
+        if request.col < 2 {
+            assert_eq!(pixels, stand_in.repeat(16), "cell {request:?}");
+        } else {
+            assert!(
+                pixels
+                    .chunks_exact(3)
+                    .all(|rgb| rgb[1] > 150 && rgb[0] < 60),
+                "cell {request:?} is not the green stored tile"
+            );
+        }
+    }
+}
+
+#[test]
 fn malformed_jp2k_batch_preserves_tile_request_context() {
     let reader = build_tiled_encoded_reader(
         8,

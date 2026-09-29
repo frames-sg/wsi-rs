@@ -26,8 +26,16 @@ impl TiffPixelReader {
         layout: DatasetLayout,
         cache_config: crate::CacheConfig,
     ) -> Self {
+        let uses_ndpi_caches = layout.tile_sources.values().any(|source| {
+            matches!(
+                source,
+                TileSource::NdpiJpeg { .. }
+                    | TileSource::NdpiFullDecode { .. }
+                    | TileSource::SyntheticDownsample { .. }
+            )
+        });
         let (full_decode_bytes, ndpi_strip_bytes, ndpi_mcu_bytes, synthetic_bytes) =
-            private_cache_budgets(cache_config);
+            private_cache_budgets(cache_config, uses_ndpi_caches);
         Self {
             container,
             layout,
@@ -40,7 +48,12 @@ impl TiffPixelReader {
     }
 }
 
-pub(super) fn private_cache_budgets(cache_config: crate::CacheConfig) -> (u64, u64, u64, u64) {
+/// Splits the private cache budget between the full-decode, NDPI strip, NDPI
+/// MCU-start and synthetic-level caches. Only NDPI layouts use the last three.
+pub(super) fn private_cache_budgets(
+    cache_config: crate::CacheConfig,
+    uses_ndpi_caches: bool,
+) -> (u64, u64, u64, u64) {
     let aggregate = cache_config.private_cache_budget_bytes();
     let requested = if cache_config.shared_tile_bytes.is_none() {
         [
@@ -58,6 +71,10 @@ pub(super) fn private_cache_budgets(cache_config: crate::CacheConfig) -> (u64, u
                 DEFAULT_SYNTHETIC_LEVEL_CACHE_BYTES,
             ),
         ]
+    } else if !uses_ndpi_caches {
+        // Stored Ventana tiles and stripped levels are the only users, and a
+        // region spans several of them.
+        [aggregate, 0, 0, 0]
     } else {
         let full = aggregate / 2;
         let strip = (aggregate / 32).min(1024 * 1024);

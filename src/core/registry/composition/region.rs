@@ -1,6 +1,7 @@
 use super::fractional_u8::{
-    blit_alpha_source_saturating_u8, blit_fractional_saturating_u8, contract_pixman_unorm8,
-    is_alpha_source, unpremultiplied_rgba_u8, unpremultiply_u8,
+    blit_alpha_source_saturating_u8, blit_fractional_saturating_u8, blit_premultiplied_rgba,
+    contract_pixman_unorm8, is_alpha_source, unpremultiplied_rgba_u8, unpremultiply_u8,
+    RgbaBandScratch,
 };
 use super::integral::{
     blit_integral_samples, hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
@@ -341,6 +342,7 @@ struct RegionComposer {
     pixman_compatible: bool,
     direct_rgba: bool,
     rgba_needs_unpremultiply: bool,
+    rgba_scratch: RgbaBandScratch,
 }
 
 impl RegionComposer {
@@ -404,6 +406,7 @@ impl RegionComposer {
             pixman_compatible,
             direct_rgba,
             rgba_needs_unpremultiply: false,
+            rgba_scratch: RgbaBandScratch::default(),
         })
     }
 
@@ -465,7 +468,7 @@ impl RegionComposer {
                 }
             }
             self.rgba_needs_unpremultiply = true;
-            return super::fractional_u8::blit_premultiplied_rgba(out, tile, hit, self.shape);
+            return blit_premultiplied_rgba(out, tile, hit, self.shape, &mut self.rgba_scratch);
         }
         if self.pixman_compatible
             && self.channels == 3

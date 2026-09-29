@@ -111,6 +111,9 @@ impl TiffPixelReader {
         }
 
         let first_source = self.tile_source_for(&reqs[0])?;
+        if matches!(first_source, TileSource::TiledIfdSubtiles { .. }) {
+            return self.read_tiled_ifd_subtiles_grouped(reqs, backend);
+        }
         if matches!(
             first_source,
             TileSource::TiledIfd {

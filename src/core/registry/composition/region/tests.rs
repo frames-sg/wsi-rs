@@ -164,6 +164,101 @@ fn integral_rgba_composition_preserves_gaps_overlap_and_later_alpha_sources() {
 }
 
 #[test]
+fn direct_rgba_bands_match_complete_float_composition() {
+    use crate::core::registry::composition::fractional_u8::{
+        blit_premultiplied_rgba_in_bands, unpremultiply_rgba, RgbaBandScratch,
+    };
+
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    let (width, height) = (41usize, 57usize);
+    let shape = CompositionShape {
+        width,
+        height,
+        channels: 3,
+    };
+    for _ in 0..48 {
+        let tiles: Vec<(TileHit, CpuTile)> = (0..6)
+            .map(|_| {
+                // Small tiles, and large ones whose opaque clips select
+                // Pixman's narrow filter.
+                let (tile_width, tile_height) = if next(2) == 0 {
+                    (1 + next(33) as u32, 1 + next(47) as u32)
+                } else {
+                    (48 + next(24) as u32, 64 + next(24) as u32)
+                };
+                let pixels = (tile_width * tile_height) as usize;
+                let tile = if next(3) == 0 {
+                    let alpha = [0, 255, 1 + next(254) as u8][next(3) as usize];
+                    let data = (0..pixels * 4)
+                        .map(|i| if i % 4 == 3 { alpha } else { next(256) as u8 })
+                        .collect();
+                    CpuTile::from_u8_interleaved(tile_width, tile_height, 4, ColorSpace::Rgba, data)
+                } else {
+                    let data = (0..pixels * 3).map(|_| next(256) as u8).collect();
+                    CpuTile::from_u8_interleaved(tile_width, tile_height, 3, ColorSpace::Rgb, data)
+                }
+                .unwrap();
+                // Whole and fractional placements, including off-canvas origins.
+                let position = |extent: usize, next: &mut dyn FnMut(u64) -> u64| {
+                    let whole = next(extent as u64 + 24) as f64 - 20.0;
+                    whole + [0.0, next(64) as f64 / 64.0][next(2) as usize]
+                };
+                let (x, y) = (position(width, &mut next), position(height, &mut next));
+                let mut hit = hit_at(x.floor() as i64, y.floor() as i64, x, y);
+                hit.cairo_fixed_dest = Some((x, y));
+                hit.cairo_rgb24 = next(2) == 0;
+                (hit, tile)
+            })
+            .collect();
+
+        let mut reference = vec![0; width * height * 3];
+        let mut coverage = vec![0.0; width * height];
+        for (hit, tile) in &tiles {
+            if is_alpha_source(tile) {
+                blit_alpha_source_saturating_u8(&mut reference, &mut coverage, tile, hit, shape)
+                    .unwrap();
+            } else {
+                let data = tile.as_u8().unwrap();
+                blit_fractional_saturating_u8(
+                    &mut reference,
+                    &mut coverage,
+                    data,
+                    tile,
+                    hit,
+                    shape,
+                );
+            }
+        }
+        let expected = unpremultiplied_rgba_u8(&reference, &coverage);
+
+        // One-row, odd, table-sized and complete-clip bands.
+        for bands in [(0, 1), (100, 1), (0, 16), (usize::MAX, 1)] {
+            let mut actual = vec![0; width * height * 4];
+            let mut scratch = RgbaBandScratch::default();
+            for (hit, tile) in &tiles {
+                blit_premultiplied_rgba_in_bands(
+                    &mut actual,
+                    tile,
+                    hit,
+                    shape,
+                    &mut scratch,
+                    bands,
+                )
+                .unwrap();
+            }
+            unpremultiply_rgba(&mut actual);
+            assert_eq!(actual, expected, "bands {bands:?}");
+        }
+    }
+}
+
+#[test]
 fn direct_rgba_preserves_fractional_filtering_and_partial_coverage() {
     let rgb = CpuTile::from_u8_interleaved(
         5,

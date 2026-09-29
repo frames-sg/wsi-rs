@@ -58,7 +58,13 @@
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
   RGB and RGBA tiles compose directly into one premultiplied RGBA image,
   avoiding full-size color and coverage copies while preserving fractional
-  filtering, gaps, partial coverage and overlap order.
+  filtering, gaps, partial coverage and overlap order. Fractional tiles paint
+  through bounded multi-row bands that keep vectorized bilinear sampling
+  instead of one row at a time.
+- Ventana reduced levels decode each stored tile once per tile batch. TIFF
+  layouts without NDPI sources give stored-tile decodes the complete private
+  cache budget instead of reserving shares for unused NDPI caches, so reduced
+  levels no longer re-decode stored tiles while panning.
 - VMS reads retain complete optimization records when the file ends with an
   incomplete row, and reuse restart markers already found in a scan chunk.
   Missing offsets still fall back to scanning the JPEG.

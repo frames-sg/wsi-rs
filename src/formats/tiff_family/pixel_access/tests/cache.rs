@@ -100,10 +100,28 @@ fn synthetic_level_cache_default_budget_holds_common_tail_overview_level() {
 
 #[test]
 fn tiff_private_cache_defaults_sum_to_thirty_two_mib() {
-    let (full, strips, mcu, synthetic) =
-        super::super::reader::private_cache_budgets(crate::CacheConfig::deterministic());
+    for uses_ndpi_caches in [false, true] {
+        let (full, strips, mcu, synthetic) = super::super::reader::private_cache_budgets(
+            crate::CacheConfig::deterministic(),
+            uses_ndpi_caches,
+        );
 
-    assert_eq!(full + strips + mcu + synthetic * 2, 32 * 1024 * 1024);
+        assert_eq!(full + strips + mcu + synthetic * 2, 32 * 1024 * 1024);
+    }
+}
+
+#[test]
+fn configured_private_budgets_stay_within_the_aggregate_and_skip_unused_ndpi_caches() {
+    let config = crate::CacheConfig::deterministic().with_shared_tile_bytes(32 * 1024 * 1024);
+    let aggregate = config.private_cache_budget_bytes();
+
+    let ndpi = super::super::reader::private_cache_budgets(config, true);
+    assert!(ndpi.0 + ndpi.1 + ndpi.2 + ndpi.3 * 2 <= aggregate);
+    assert!(ndpi.1 > 0 && ndpi.2 > 0 && ndpi.3 > 0);
+
+    // Stored-tile decodes get the whole budget when no NDPI cache has users.
+    let other = super::super::reader::private_cache_budgets(config, false);
+    assert_eq!(other, (aggregate, 0, 0, 0));
 }
 
 #[test]

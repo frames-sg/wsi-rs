@@ -28,15 +28,52 @@ pub(super) fn is_alpha_source(tile: &CpuTile) -> bool {
         && matches!(tile.data, CpuTileData::U8(_))
 }
 
+/// Color and coverage scratch for [`blit_premultiplied_rgba`], reused across
+/// the tiles of one region.
+#[derive(Default)]
+pub(super) struct RgbaBandScratch {
+    color: Vec<u8>,
+    coverage: Vec<f32>,
+}
+
+/// Unpacked pixels per band of [`blit_premultiplied_rgba`] (112 KiB scratch).
+const RGBA_BAND_PIXELS: usize = 16 * 1024;
+/// Bands of at least this many rows leave `blit_fractional` room for its
+/// horizontal sampling table, which keeps interior runs vectorized.
+const RGBA_MIN_BAND_ROWS: usize = 16;
+
 /// Paint a Pixman-compatible canvas directly into premultiplied RGBA. Pixman
 /// contracts coverage to unorm8 after every source, so a byte retains the exact
-/// state. Row scratch reuses the existing float arithmetic without a full
-/// coverage image or another full-size image at completion.
+/// state. Bounded bands of the tile's clip reuse the existing float arithmetic
+/// without a full coverage image or another full-size image at completion.
 pub(super) fn blit_premultiplied_rgba(
     out: &mut [u8],
     tile: &CpuTile,
     hit: &TileHit,
     shape: CompositionShape,
+    scratch: &mut RgbaBandScratch,
+) -> Result<(), WsiError> {
+    blit_premultiplied_rgba_in_bands(
+        out,
+        tile,
+        hit,
+        shape,
+        scratch,
+        (RGBA_BAND_PIXELS, RGBA_MIN_BAND_ROWS),
+    )
+}
+
+/// [`blit_premultiplied_rgba`] with bands of about `band_pixels` clipped
+/// pixels and at least `min_rows` rows. Band placement shifts by whole pixels,
+/// so every output pixel keeps its source taps, weights and the complete
+/// clip's filter selection.
+pub(super) fn blit_premultiplied_rgba_in_bands(
+    out: &mut [u8],
+    tile: &CpuTile,
+    hit: &TileHit,
+    shape: CompositionShape,
+    scratch: &mut RgbaBandScratch,
+    (band_pixels, min_rows): (usize, usize),
 ) -> Result<(), WsiError> {
     let mut premultiplied = Vec::new();
     let mut coverage = Vec::new();
@@ -75,59 +112,85 @@ pub(super) fn blit_premultiplied_rgba(
     if start_x >= end_x || start_y >= end_y {
         return Ok(());
     }
-    let mut row_hit = hit.clone();
-    // Preserve the complete paint's filter selection when clipping to rows.
-    row_hit.cairo_rgb24 &= (start_x as f64 - x).floor() >= 0.0
+    let mut band_hit = hit.clone();
+    // Preserve the complete paint's filter selection when clipping to bands.
+    band_hit.cairo_rgb24 &= (start_x as f64 - x).floor() >= 0.0
         && (start_y as f64 - y).floor() >= 0.0
         && (end_x as f64 - 1.0 - x).floor() + 1.0 < f64::from(tile.width)
         && (end_y as f64 - 1.0 - y).floor() + 1.0 < f64::from(tile.height);
-    let mut row_color = vec![0; shape.width * 3];
-    let mut row_alpha = vec![0.0; shape.width];
-    let row_shape = CompositionShape {
-        width: shape.width,
-        height: 1,
-        channels: 3,
-    };
-    for row in start_y..end_y {
-        let destination =
-            &mut out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
-        for ((pixel, rgb), alpha) in destination
-            .chunks_exact(4)
-            .zip(row_color[start_x * 3..end_x * 3].chunks_exact_mut(3))
-            .zip(&mut row_alpha[start_x..end_x])
-        {
-            rgb.copy_from_slice(&pixel[..3]);
-            *alpha = unorm8_to_float(pixel[3], true);
+    let band_width = end_x - start_x;
+    let band_rows = (band_pixels / band_width).max(min_rows).max(1);
+    // Even bands keep the last one as tall as the others.
+    let bands = (end_y - start_y).div_ceil(band_rows);
+    let band_rows = (end_y - start_y).div_ceil(bands);
+    let RgbaBandScratch {
+        color: band_color,
+        coverage: band_alpha,
+    } = scratch;
+    for band_start in (start_y..end_y).step_by(band_rows) {
+        let band_end = (band_start + band_rows).min(end_y);
+        let pixels = band_width * (band_end - band_start);
+        band_color.resize(pixels * 3, 0);
+        band_alpha.resize(pixels, 0.0);
+        for (row, (rgb, alpha)) in (band_start..band_end).zip(
+            band_color[..pixels * 3]
+                .chunks_exact_mut(band_width * 3)
+                .zip(band_alpha[..pixels].chunks_exact_mut(band_width)),
+        ) {
+            let destination =
+                &out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
+            // Rows no earlier tile reached are empty premultiplied pixels.
+            if destination.chunks_exact(4).all(|pixel| pixel == [0; 4]) {
+                rgb.fill(0);
+                alpha.fill(0.0);
+                continue;
+            }
+            for ((pixel, rgb), alpha) in destination
+                .chunks_exact(4)
+                .zip(rgb.chunks_exact_mut(3))
+                .zip(alpha)
+            {
+                rgb.copy_from_slice(&pixel[..3]);
+                *alpha = unorm8_to_float(pixel[3], true);
+            }
         }
-        row_hit.cairo_fixed_dest = Some((x, y - row as f64));
+        let (band_color, band_alpha) = (&mut band_color[..pixels * 3], &mut band_alpha[..pixels]);
+        let band_shape = CompositionShape {
+            width: band_width,
+            height: band_end - band_start,
+            channels: 3,
+        };
+        band_hit.cairo_fixed_dest = Some((x - start_x as f64, y - band_start as f64));
         if alpha_source {
             blit_fractional::<true, true>(
-                &mut row_color,
-                &mut row_alpha,
-                color,
-                &coverage,
-                tile,
-                &row_hit,
-                row_shape,
+                band_color, band_alpha, color, &coverage, tile, &band_hit, band_shape,
             );
         } else {
             blit_fractional::<true, false>(
-                &mut row_color,
-                &mut row_alpha,
+                band_color,
+                band_alpha,
                 color,
                 &[],
                 tile,
-                &row_hit,
-                row_shape,
+                &band_hit,
+                band_shape,
             );
         }
-        for ((pixel, rgb), &alpha) in destination
-            .chunks_exact_mut(4)
-            .zip(row_color[start_x * 3..end_x * 3].chunks_exact(3))
-            .zip(&row_alpha[start_x..end_x])
-        {
-            pixel[..3].copy_from_slice(rgb);
-            pixel[3] = contract_pixman_unorm8(alpha);
+        for (row, (rgb, alpha)) in (band_start..band_end).zip(
+            band_color
+                .chunks_exact(band_width * 3)
+                .zip(band_alpha.chunks_exact(band_width)),
+        ) {
+            let destination =
+                &mut out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
+            for ((pixel, rgb), &alpha) in destination
+                .chunks_exact_mut(4)
+                .zip(rgb.chunks_exact(3))
+                .zip(alpha)
+            {
+                pixel[..3].copy_from_slice(rgb);
+                pixel[3] = contract_pixman_unorm8(alpha);
+            }
         }
     }
     Ok(())
