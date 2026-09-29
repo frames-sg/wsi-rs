@@ -1,7 +1,75 @@
 use super::helpers::*;
 use super::*;
+use crate::core::file_identity::FileIdentity;
+use std::sync::Weak;
 
 mod parse;
+
+/// Indexes held by open MIRAX handles. Entries are few and `SlideLimits` is
+/// not `Hash`, so lookup is linear.
+static SHARED_INDEXES: Mutex<Vec<(MiraxShareKey, Weak<MiraxShared>)>> = Mutex::new(Vec::new());
+
+/// The files a MIRAX index was parsed from and the limits it was validated
+/// under. Keying on the complete limits means an index parsed under looser
+/// limits never serves a stricter open.
+#[derive(PartialEq, Eq)]
+struct MiraxShareKey {
+    limits: crate::SlideLimits,
+    /// Data file paths as Slidedat.ini resolved them, which records retain.
+    datafile_paths: Vec<PathBuf>,
+    /// Slidedat.ini, the index and every data file.
+    identities: Vec<FileIdentity>,
+}
+
+impl MiraxShareKey {
+    /// `None` when a file cannot be identified. That open parses without
+    /// sharing and reports any error the parse itself meets.
+    fn new(
+        slidedat: &Path,
+        index: &Path,
+        datafiles: &[PathBuf],
+        limits: crate::SlideLimits,
+    ) -> Option<Self> {
+        let identities = [slidedat, index]
+            .into_iter()
+            .chain(datafiles.iter().map(PathBuf::as_path))
+            .map(|path| FileIdentity::from_path(path).ok())
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            limits,
+            datafile_paths: datafiles.to_vec(),
+            identities,
+        })
+    }
+}
+
+fn shared_index(key: &MiraxShareKey) -> Option<Arc<MiraxShared>> {
+    SHARED_INDEXES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(entry, _)| entry == key)
+        .and_then(|(_, shared)| shared.upgrade())
+}
+
+/// Registers a freshly parsed index. When a concurrent open registered the
+/// same key first, returns that one so only one copy stays alive.
+fn register_shared_index(key: MiraxShareKey, shared: MiraxShared) -> Arc<MiraxShared> {
+    let mut registry = SHARED_INDEXES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|(_, shared)| shared.strong_count() > 0);
+    if let Some(existing) = registry
+        .iter()
+        .find(|(entry, _)| *entry == key)
+        .and_then(|(_, shared)| shared.upgrade())
+    {
+        return existing;
+    }
+    let shared = Arc::new(shared);
+    registry.push((key, Arc::downgrade(&shared)));
+    shared
+}
 
 impl MiraxSlide {
     #[cfg(test)]
@@ -73,6 +141,7 @@ impl MiraxSlide {
 
     pub(super) fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         let record = self
+            .shared
             .associated
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;

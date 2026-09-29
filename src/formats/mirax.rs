@@ -178,7 +178,7 @@ struct MiraxReader {
 
 impl SlideReader for MiraxReader {
     fn dataset(&self) -> &Dataset {
-        &self.slide.dataset
+        &self.slide.shared.dataset
     }
 
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
@@ -245,14 +245,15 @@ impl MiraxReader {
         &'a self,
         req: &TileRequest,
     ) -> Result<(&'a TileEntry, &'a MiraxTile), WsiError> {
+        let shared = &self.slide.shared;
         let scene =
-            self.slide
+            shared
                 .dataset
                 .scenes
                 .get(req.scene.get())
                 .ok_or(WsiError::SceneOutOfRange {
                     index: req.scene.get(),
-                    count: self.slide.dataset.scenes.len(),
+                    count: shared.dataset.scenes.len(),
                 })?;
         let series = scene
             .series
@@ -290,12 +291,12 @@ impl MiraxReader {
             reason: "MIRAX tile is missing backing descriptor".into(),
         })?;
         let level_state =
-            self.slide
+            shared
                 .levels
                 .get(req.level.get() as usize)
                 .ok_or(WsiError::LevelOutOfRange {
                     level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
+                    count: shared.levels.len() as u32,
                 })?;
         let tile = level_state
             .tiles
@@ -353,14 +354,25 @@ struct MiraxSlide {
     #[cfg(test)]
     source_miss_barrier: Option<Arc<std::sync::Barrier>>,
     limits: crate::SlideLimits,
-    dataset: Dataset,
-    levels: Vec<MiraxLevel>,
-    associated: HashMap<String, MiraxRecord>,
+    shared: Arc<MiraxShared>,
     decoded_images: Mutex<PrivateCache<u32, Arc<CpuTile>>>,
     source_flights: crate::core::cache::TileFlights<u32>,
     associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     open_files: Mutex<HashMap<PathBuf, Arc<crate::core::positioned_file::PositionedFile>>>,
     encoded_unit_bytes: u64,
+}
+
+/// Metadata parsed from Slidedat.ini, the index and the data files. Handles
+/// opened on the same unchanged files under the same limits share one copy;
+/// caches and open files stay per handle.
+struct MiraxShared {
+    dataset: Dataset,
+    levels: Vec<MiraxLevel>,
+    associated: HashMap<String, MiraxRecord>,
+    /// Largest decoded source image, which sizes the decoded-image cache.
+    decoded_image_bytes: u64,
+    /// Largest associated image, which sizes the associated-image cache.
+    associated_image_bytes: u64,
 }
 
 struct MiraxLevel {

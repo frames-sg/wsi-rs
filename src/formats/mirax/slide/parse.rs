@@ -1,6 +1,7 @@
 use super::super::helpers::*;
 use super::super::index::*;
 use super::super::*;
+use super::{register_shared_index, shared_index, MiraxShareKey};
 
 const MAX_MIRAX_BASE_IMAGES: u64 = 16 * 1024 * 1024;
 const MAX_MIRAX_HIERARCHIES: i32 = 1_024;
@@ -54,126 +55,180 @@ impl MiraxSlide {
         config: BackendOpenConfig,
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
-        let slide_dir = slide_dir_from_entry(path)?;
-        let slidedat_path = slide_dir.join(SLIDEDAT_INI);
-        let slidedat = parse_mirax_ini_with_budget(&slidedat_path, budget.as_ref())?;
-
-        let general = slidedat
-            .groups
-            .get(GROUP_GENERAL)
-            .ok_or_else(|| invalid_slide(path, "missing [GENERAL] group"))?;
-        let hierarchical = slidedat
-            .groups
-            .get(GROUP_HIERARCHICAL)
-            .ok_or_else(|| invalid_slide(path, "missing [HIERARCHICAL] group"))?;
-        let datafile_group = slidedat
-            .groups
-            .get(GROUP_DATAFILE)
-            .ok_or_else(|| invalid_slide(path, "missing [DATAFILE] group"))?;
-
-        let slide_id = required_ini_string(path, general, KEY_SLIDE_ID)?;
-        let images_x = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_X)?;
-        let images_y = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_Y)?;
-        let objective_magnification =
-            parse_optional_objective_magnification(path, general, KEY_OBJECTIVE_MAGNIFICATION)?;
-        let image_divisions = general
-            .get(KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE)
-            .map(|value| parse_u32_value(path, KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE, value))
-            .transpose()?
-            .unwrap_or(1);
-        if images_x == 0 || images_y == 0 || image_divisions == 0 {
-            return Err(invalid_slide(path, "MIRAX image counts must be positive"));
+        let ini = preflight_slidedat(path, budget.as_ref())?;
+        // Slidedat.ini names every file the index walk reads, so an unchanged
+        // set of them can reuse an index another open handle already parsed.
+        let key = MiraxShareKey::new(
+            &ini.slidedat_path,
+            &ini.index_path,
+            &ini.datafile_paths,
+            config.limits,
+        );
+        if let Some(shared) = key.as_ref().and_then(shared_index) {
+            return Ok(Self::with_shared(config, shared, HashMap::new()));
         }
-        if images_x < image_divisions
-            || images_y < image_divisions
-            || u64::from(images_x)
-                .checked_mul(u64::from(images_y))
-                .is_none_or(|count| count > MAX_MIRAX_BASE_IMAGES)
-        {
-            return Err(invalid_slide(
-                path,
-                "MIRAX image grid exceeds supported safety limits",
-            ));
-        }
-
-        let hier_count = parse_ini_i32(path, hierarchical, KEY_HIER_COUNT)?;
-        let nonhier_count = parse_ini_i32(path, hierarchical, KEY_NONHIER_COUNT)?;
-        if hier_count <= 0
-            || hier_count > MAX_MIRAX_HIERARCHIES
-            || !(0..=MAX_MIRAX_NONHIERARCHIES).contains(&nonhier_count)
-        {
-            return Err(invalid_slide(
-                path,
-                "MIRAX hierarchy counts must be positive/non-negative",
-            ));
-        }
-
-        let slide_zoom_level_value = (0..hier_count)
-            .find(|idx| {
-                hierarchical
-                    .get(&fmt_key(KEY_HIER_NAME, *idx))
-                    .map(|value| value == VALUE_SLIDE_ZOOM_LEVEL)
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| invalid_slide(path, "cannot find Slide zoom level hierarchy"))?;
-        if slide_zoom_level_value != 0 {
-            return Err(invalid_slide(path, "Slide zoom level not HIER_0"));
-        }
-
-        let index_filename = required_ini_string(path, hierarchical, KEY_INDEXFILE)?;
-        let index_path = resolve_companion_file(path, &slide_dir, &index_filename)?;
-        let zoom_levels = parse_ini_i32(path, hierarchical, &fmt_key(KEY_HIER_COUNT_FMT, 0))?;
-        if zoom_levels <= 0 || zoom_levels > MAX_MIRAX_ZOOM_LEVELS {
-            return Err(invalid_slide(path, "MIRAX slide has no zoom levels"));
-        }
-        let zoom_sections = (0..zoom_levels)
-            .map(|idx| {
-                required_ini_string(
-                    path,
-                    hierarchical,
-                    &fmt_key2(KEY_HIER_VAL_SECTION_FMT, 0, idx),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let datafile_count = parse_ini_i32(path, datafile_group, KEY_FILE_COUNT)?;
-        if datafile_count <= 0 || datafile_count > MAX_MIRAX_DATA_FILES {
-            return Err(invalid_slide(path, "MIRAX slide has no data files"));
-        }
-        let datafile_paths = (0..datafile_count)
-            .map(|idx| {
-                required_ini_string(path, datafile_group, &fmt_key(KEY_FILE_FMT, idx))
-                    .and_then(|name| resolve_companion_file(path, &slide_dir, &name))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if datafile_paths.iter().collect::<HashSet<_>>().len() != datafile_paths.len() {
-            return Err(invalid_slide(path, "duplicate MIRAX data file path"));
-        }
-
-        let ini = MiraxIniPreflight {
-            slidedat_path,
-            slidedat,
-            slide_id,
-            images: (images_x, images_y),
-            objective_magnification,
-            image_divisions,
-            index_path,
-            zoom_sections,
-            nonhier_count,
-            datafile_paths,
-        };
         let (hierarchy, quickhash) = build_hierarchy_geometry(path, ini)?;
         let mut sources = load_data_index_sources(path, hierarchy, quickhash, budget.as_ref())?;
         let (properties, associated_metadata) =
             build_associated_images_and_properties(path, &mut sources)?;
-        Ok(assemble_dataset_and_caches(
-            config.cache_config,
-            config.limits,
-            sources,
-            properties,
-            associated_metadata,
-        ))
+        let (shared, quickhash_files) = assemble_shared(sources, properties, associated_metadata);
+        let shared = match key {
+            Some(key) => register_shared_index(key, shared),
+            None => Arc::new(shared),
+        };
+        Ok(Self::with_shared(config, shared, quickhash_files))
     }
+
+    /// A handle over `shared` with its own caches. `open_files` seeds the
+    /// data files a fresh parse already opened; the rest open lazily.
+    fn with_shared(
+        config: BackendOpenConfig,
+        shared: Arc<MiraxShared>,
+        open_files: HashMap<PathBuf, CachedMiraxFile>,
+    ) -> Self {
+        let mut private_cache_budget = config.cache_config.private_cache_budget(2);
+        let decoded_cache =
+            PrivateCache::new(private_cache_budget.allocate(shared.decoded_image_bytes));
+        let associated_cache =
+            PrivateCache::new(private_cache_budget.allocate(shared.associated_image_bytes));
+        Self {
+            #[cfg(test)]
+            source_decodes: AtomicU64::new(0),
+            #[cfg(test)]
+            prepared_source_peak_bytes: AtomicU64::new(0),
+            #[cfg(test)]
+            source_miss_barrier: None,
+            limits: config.limits,
+            shared,
+            source_flights: crate::core::cache::TileFlights::new(decoded_cache.capacity_bytes()),
+            decoded_images: Mutex::new(decoded_cache),
+            associated_cache: Mutex::new(associated_cache),
+            open_files: Mutex::new(
+                open_files
+                    .into_iter()
+                    .map(|(path, file)| {
+                        (
+                            path,
+                            Arc::new(crate::core::positioned_file::PositionedFile::new(file.file)),
+                        )
+                    })
+                    .collect(),
+            ),
+            encoded_unit_bytes: config.limits.encoded_unit_bytes(),
+        }
+    }
+}
+
+/// Parses and validates Slidedat.ini, resolving the index and data files.
+fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPreflight, WsiError> {
+    let slide_dir = slide_dir_from_entry(path)?;
+    let slidedat_path = slide_dir.join(SLIDEDAT_INI);
+    let slidedat = parse_mirax_ini_with_budget(&slidedat_path, budget)?;
+
+    let general = slidedat
+        .groups
+        .get(GROUP_GENERAL)
+        .ok_or_else(|| invalid_slide(path, "missing [GENERAL] group"))?;
+    let hierarchical = slidedat
+        .groups
+        .get(GROUP_HIERARCHICAL)
+        .ok_or_else(|| invalid_slide(path, "missing [HIERARCHICAL] group"))?;
+    let datafile_group = slidedat
+        .groups
+        .get(GROUP_DATAFILE)
+        .ok_or_else(|| invalid_slide(path, "missing [DATAFILE] group"))?;
+
+    let slide_id = required_ini_string(path, general, KEY_SLIDE_ID)?;
+    let images_x = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_X)?;
+    let images_y = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_Y)?;
+    let objective_magnification =
+        parse_optional_objective_magnification(path, general, KEY_OBJECTIVE_MAGNIFICATION)?;
+    let image_divisions = general
+        .get(KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE)
+        .map(|value| parse_u32_value(path, KEY_CAMERA_IMAGE_DIVISIONS_PER_SIDE, value))
+        .transpose()?
+        .unwrap_or(1);
+    if images_x == 0 || images_y == 0 || image_divisions == 0 {
+        return Err(invalid_slide(path, "MIRAX image counts must be positive"));
+    }
+    if images_x < image_divisions
+        || images_y < image_divisions
+        || u64::from(images_x)
+            .checked_mul(u64::from(images_y))
+            .is_none_or(|count| count > MAX_MIRAX_BASE_IMAGES)
+    {
+        return Err(invalid_slide(
+            path,
+            "MIRAX image grid exceeds supported safety limits",
+        ));
+    }
+
+    let hier_count = parse_ini_i32(path, hierarchical, KEY_HIER_COUNT)?;
+    let nonhier_count = parse_ini_i32(path, hierarchical, KEY_NONHIER_COUNT)?;
+    if hier_count <= 0
+        || hier_count > MAX_MIRAX_HIERARCHIES
+        || !(0..=MAX_MIRAX_NONHIERARCHIES).contains(&nonhier_count)
+    {
+        return Err(invalid_slide(
+            path,
+            "MIRAX hierarchy counts must be positive/non-negative",
+        ));
+    }
+
+    let slide_zoom_level_value = (0..hier_count)
+        .find(|idx| {
+            hierarchical
+                .get(&fmt_key(KEY_HIER_NAME, *idx))
+                .map(|value| value == VALUE_SLIDE_ZOOM_LEVEL)
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| invalid_slide(path, "cannot find Slide zoom level hierarchy"))?;
+    if slide_zoom_level_value != 0 {
+        return Err(invalid_slide(path, "Slide zoom level not HIER_0"));
+    }
+
+    let index_filename = required_ini_string(path, hierarchical, KEY_INDEXFILE)?;
+    let index_path = resolve_companion_file(path, &slide_dir, &index_filename)?;
+    let zoom_levels = parse_ini_i32(path, hierarchical, &fmt_key(KEY_HIER_COUNT_FMT, 0))?;
+    if zoom_levels <= 0 || zoom_levels > MAX_MIRAX_ZOOM_LEVELS {
+        return Err(invalid_slide(path, "MIRAX slide has no zoom levels"));
+    }
+    let zoom_sections = (0..zoom_levels)
+        .map(|idx| {
+            required_ini_string(
+                path,
+                hierarchical,
+                &fmt_key2(KEY_HIER_VAL_SECTION_FMT, 0, idx),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let datafile_count = parse_ini_i32(path, datafile_group, KEY_FILE_COUNT)?;
+    if datafile_count <= 0 || datafile_count > MAX_MIRAX_DATA_FILES {
+        return Err(invalid_slide(path, "MIRAX slide has no data files"));
+    }
+    let datafile_paths = (0..datafile_count)
+        .map(|idx| {
+            required_ini_string(path, datafile_group, &fmt_key(KEY_FILE_FMT, idx))
+                .and_then(|name| resolve_companion_file(path, &slide_dir, &name))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if datafile_paths.iter().collect::<HashSet<_>>().len() != datafile_paths.len() {
+        return Err(invalid_slide(path, "duplicate MIRAX data file path"));
+    }
+
+    Ok(MiraxIniPreflight {
+        slidedat_path,
+        slidedat,
+        slide_id,
+        images: (images_x, images_y),
+        objective_magnification,
+        image_divisions,
+        index_path,
+        zoom_sections,
+        nonhier_count,
+        datafile_paths,
+    })
 }
 
 fn build_hierarchy_geometry(
@@ -565,13 +620,12 @@ fn occupied_level_bounds(
     Ok(Some((x, y, width, height)))
 }
 
-fn assemble_dataset_and_caches(
-    cache_config: CacheConfig,
-    limits: crate::SlideLimits,
+/// The shareable slide metadata, plus the data files the parse opened.
+fn assemble_shared(
     sources: MiraxIndexSources,
     properties: Properties,
     associated_metadata: HashMap<String, AssociatedImage>,
-) -> MiraxSlide {
+) -> (MiraxShared, HashMap<PathBuf, CachedMiraxFile>) {
     let level_builders = sources.hierarchy.level_builders;
     let mut dataset_levels = Vec::with_capacity(level_builders.len());
     let mut levels = Vec::with_capacity(level_builders.len());
@@ -609,9 +663,6 @@ fn assemble_dataset_and_caches(
         })
         .max()
         .unwrap_or(1);
-    let mut private_cache_budget = cache_config.private_cache_budget(2);
-    let decoded_cache = PrivateCache::new(private_cache_budget.allocate(decoded_image_bytes));
-    let associated_cache = PrivateCache::new(private_cache_budget.allocate(associated_image_bytes));
 
     let dataset = Dataset {
         id: sources.dataset_id,
@@ -632,32 +683,14 @@ fn assemble_dataset_and_caches(
         source_icc_profiles: Vec::new(),
     };
 
-    MiraxSlide {
-        #[cfg(test)]
-        source_decodes: AtomicU64::new(0),
-        #[cfg(test)]
-        prepared_source_peak_bytes: AtomicU64::new(0),
-        #[cfg(test)]
-        source_miss_barrier: None,
-        limits,
-        dataset,
-        levels,
-        associated: sources.associated,
-        source_flights: crate::core::cache::TileFlights::new(decoded_cache.capacity_bytes()),
-        decoded_images: Mutex::new(decoded_cache),
-        associated_cache: Mutex::new(associated_cache),
-        open_files: Mutex::new(
-            sources
-                .quickhash_files
-                .into_iter()
-                .map(|(path, file)| {
-                    (
-                        path,
-                        Arc::new(crate::core::positioned_file::PositionedFile::new(file.file)),
-                    )
-                })
-                .collect(),
-        ),
-        encoded_unit_bytes: limits.encoded_unit_bytes(),
-    }
+    (
+        MiraxShared {
+            dataset,
+            levels,
+            associated: sources.associated,
+            decoded_image_bytes,
+            associated_image_bytes,
+        },
+        sources.quickhash_files,
+    )
 }

@@ -50,6 +50,10 @@
 - MIRAX image records share data-file paths, retain compact source origins,
   and discard excess descriptor capacity. Tile-map extents and surface flags
   share one compact representation.
+- MIRAX handles opened on the same unchanged files under the same resource
+  limits share one parsed index instead of each walking and retaining it.
+  Caches and open files stay per handle, and a changed Slidedat.ini, index or
+  data file, or any difference in limits, parses a separate index.
 - Automatic JP2K routing stays on CPU when device warmup takes more than four
   uncached CPU decodes, avoiding repeated costly foreground calibration probes.
   Clipped tiles reuse that strong CPU preference for the same level, codec,

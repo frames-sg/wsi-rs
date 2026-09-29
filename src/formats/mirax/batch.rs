@@ -70,8 +70,10 @@ impl MiraxReader {
                 {
                     break;
                 }
+                // Borrow rather than clone: handles share these images, and
+                // concurrent refcount updates would contend on them.
                 let index = *indices.entry(tile.image.id).or_insert_with(|| {
-                    images.push(tile.image.clone());
+                    images.push(tile.image.as_ref());
                     images.len() - 1
                 });
                 plan.push((index, tile, entry.dimensions));
@@ -101,11 +103,7 @@ impl MiraxReader {
                 .into_iter()
                 .partition(|(_, claim)| matches!(claim, crate::core::cache::TileClaim::Waiter(_)));
             let resolve = |(index, claim): (usize, crate::core::cache::TileClaim<'_, u32>)| {
-                (
-                    index,
-                    self.slide
-                        .resolve_image_claim(images[index].as_ref(), claim),
-                )
+                (index, self.slide.resolve_image_claim(images[index], claim))
             };
             let mut results = if owned
                 .iter()
@@ -118,7 +116,7 @@ impl MiraxReader {
                 runtime.install_jp2k_cpu(|| owned.into_par_iter().map(resolve).collect::<Vec<_>>())
             };
             results.extend(waiting.into_iter().map(|(index, claim)| {
-                (index, self.slide.resolve_image_claim(&images[index], claim))
+                (index, self.slide.resolve_image_claim(images[index], claim))
             }));
             results.sort_unstable_by_key(|(index, _)| *index);
             let decoded = results

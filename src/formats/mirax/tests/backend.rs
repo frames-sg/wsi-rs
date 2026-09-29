@@ -442,21 +442,106 @@ fn poisoned_private_caches_recover_without_changing_output() {
 #[test]
 fn associated_record_open_errors_retain_the_missing_path() {
     let fixture = MiraxFixture::complete();
-    let mut slide = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
-    let missing = fixture.slide_dir.join("removed-associated.jpg");
-    slide.associated.insert(
-        "broken".into(),
-        MiraxRecord {
-            path: missing.clone().into(),
-            offset: 0,
-            len: 1,
-        },
-    );
+    let _parsed = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
+    // A handle reusing the parsed index opens data files on first read.
+    let reused = MiraxSlide::parse(&fixture.path).expect("reuse synthetic MIRAX index");
+    let missing = std::fs::canonicalize(&fixture.data_path).expect("resolve MIRAX data file");
+    std::fs::remove_file(&missing).expect("remove MIRAX data file");
 
     assert!(matches!(
-        slide.read_associated("broken"),
+        reused.read_associated("macro"),
         Err(WsiError::IoWithPath { path, .. }) if path == missing
     ));
+}
+
+fn parse_with_limits(path: &Path, limits: crate::SlideLimits) -> Result<MiraxSlide, WsiError> {
+    MiraxSlide::parse_with_config(
+        path,
+        BackendOpenConfig::new(CacheConfig::deterministic(), limits),
+    )
+}
+
+#[test]
+fn reopened_mirax_shares_one_parsed_index() {
+    let fixture = MiraxFixture::complete();
+    let first = MiraxSlide::parse(&fixture.path).unwrap();
+    let second = MiraxSlide::parse(&fixture.path).unwrap();
+
+    assert!(Arc::ptr_eq(&first.shared, &second.shared));
+    assert_eq!(first.shared.dataset.id, second.shared.dataset.id);
+}
+
+#[test]
+fn changed_mirax_files_reparse_the_index() {
+    let fixture = MiraxFixture::complete();
+    for changed in [
+        &fixture.slidedat_path,
+        &fixture.index_path,
+        &fixture.data_path,
+    ] {
+        let before = MiraxSlide::parse(&fixture.path).unwrap();
+        let modified = std::fs::metadata(changed).unwrap().modified().unwrap();
+        File::options()
+            .write(true)
+            .open(changed)
+            .unwrap()
+            .set_modified(modified + std::time::Duration::from_secs(1))
+            .unwrap();
+        let after = MiraxSlide::parse(&fixture.path).unwrap();
+
+        assert!(
+            !Arc::ptr_eq(&before.shared, &after.shared),
+            "{} changed",
+            changed.display()
+        );
+    }
+}
+
+#[test]
+fn mirax_opens_under_different_limits_parse_separately() {
+    let fixture = MiraxFixture::complete();
+    let default = MiraxSlide::parse(&fixture.path).unwrap();
+    let smaller_regions = parse_with_limits(
+        &fixture.path,
+        crate::SlideLimits::default()
+            .with_region_pixels(1024)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!Arc::ptr_eq(&default.shared, &smaller_regions.shared));
+
+    // An index parsed under looser limits must not admit a stricter open.
+    let strict = crate::SlideLimits::default()
+        .with_tile_index_bytes(1)
+        .unwrap();
+    assert!(matches!(
+        parse_with_limits(&fixture.path, strict),
+        Err(WsiError::ResourceLimit {
+            resource: "tile/frame index",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn handles_sharing_an_index_keep_their_own_decoded_caches() {
+    let fixture = MiraxFixture::complete();
+    let first = MiraxReader {
+        slide: Arc::new(MiraxSlide::parse(&fixture.path).unwrap()),
+    };
+    let second = MiraxReader {
+        slide: Arc::new(MiraxSlide::parse(&fixture.path).unwrap()),
+    };
+    assert!(Arc::ptr_eq(&first.slide.shared, &second.slide.shared));
+    let req = TileRequest::new(0, 0, 1, 0, 0);
+
+    let expected = first.read_tile_cpu(&req).unwrap();
+    first.read_tile_cpu(&req).unwrap();
+    let actual = second.read_tile_cpu(&req).unwrap();
+
+    assert_eq!(actual.as_u8(), expected.as_u8());
+    assert_eq!(first.slide.source_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(second.slide.source_decodes.load(Ordering::Relaxed), 1);
 }
 
 #[test]
