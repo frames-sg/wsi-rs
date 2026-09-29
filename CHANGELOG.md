@@ -58,6 +58,11 @@
   uncached CPU decodes, avoiding repeated costly foreground calibration probes.
   Clipped tiles reuse that strong CPU preference for the same level, codec,
   batch count, device and worker budget.
+- JP2K route calibration no longer delays reads with device work. The read
+  that needs the tiles times their uncached CPU decode, and one background
+  thread per runtime times the device decode, including one-time Metal setup
+  and kernel compilation. Batches too large to retain after their read keep
+  the foreground comparison.
 - MIRAX composition uses Pixman's integer interpolation for fully covered
   RGB24 source clips, preserving the distinct rounding of ARGB32 surfaces.
   RGB and RGBA tiles compose directly into one premultiplied RGBA image,

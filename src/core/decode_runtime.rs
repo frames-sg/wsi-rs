@@ -194,6 +194,8 @@ pub(crate) struct DecodeRuntime {
     options: DecodeExecutionOptions,
     #[cfg(any(test, feature = "metal", feature = "cuda"))]
     route_cache: Mutex<DecodeRouteCache>,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    background_calibration: BackgroundCalibrationSlot,
     #[cfg(feature = "metal")]
     metal_sessions: OnceLock<Result<crate::output::metal::MetalBackendSessions, String>>,
     #[cfg(feature = "cuda")]
@@ -223,6 +225,8 @@ impl DecodeRuntime {
             options,
             #[cfg(any(test, feature = "metal", feature = "cuda"))]
             route_cache: Mutex::new(new_decode_route_cache()),
+            #[cfg(any(feature = "metal", feature = "cuda"))]
+            background_calibration: BackgroundCalibrationSlot::default(),
             #[cfg(feature = "metal")]
             metal_sessions: OnceLock::new(),
             #[cfg(feature = "cuda")]

@@ -68,6 +68,27 @@ impl Slide {
         )
     }
 
+    /// Opens `path` like [`Self::open_with_options`] on a caller-owned decode
+    /// runtime, so a test's calibrations are isolated from other tests.
+    #[cfg(all(test, feature = "metal"))]
+    pub(crate) fn open_with_options_and_runtime(
+        path: impl AsRef<Path>,
+        options: SlideOpenOptions,
+        decode_runtime: Arc<DecodeRuntime>,
+    ) -> Result<Self, WsiError> {
+        let source = options.registry.open_with_config(
+            path.as_ref(),
+            BackendOpenConfig::new(options.cache_config, options.limits),
+        )?;
+        validate_dataset_limits(source.dataset(), options.limits)?;
+        Ok(Self::from_managed_source_with_config_and_runtime(
+            source,
+            options.cache_config,
+            options.limits,
+            decode_runtime,
+        ))
+    }
+
     fn from_managed_source_with_config_and_runtime(
         source: Box<dyn ManagedSlideReader>,
         cache_config: CacheConfig,

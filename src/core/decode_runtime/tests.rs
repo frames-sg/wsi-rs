@@ -652,41 +652,56 @@ fn busy_routes_cannot_be_evicted_into_duplicate_calibration() {
 }
 
 #[cfg(feature = "metal")]
-#[test]
-fn admitted_auto_reads_stop_probing_after_a_complete_route_decision() {
-    use crate::core::execution_telemetry::{test_count, Event};
-    let dir = tempfile::tempdir().unwrap();
+fn open_jp2k_fixture_with_runtime(
+    dir: &tempfile::TempDir,
+    runtime: &Arc<DecodeRuntime>,
+) -> crate::Slide {
     let path = dir.path().join("prepared.j2k");
     std::fs::write(
         &path,
         include_bytes!("../../../tests/fixtures/jp2k/rgb_nomct.j2k"),
     )
     .unwrap();
-    let slide = crate::Slide::open(&path).unwrap();
+    crate::Slide::open_with_options_and_runtime(
+        &path,
+        crate::SlideOpenOptions::default(),
+        Arc::clone(runtime),
+    )
+    .unwrap()
+}
+
+#[cfg(feature = "metal")]
+fn routed_tiles() -> [u64; 5] {
+    use RouteTileOutcome::*;
+    [
+        DeviceAttempt,
+        Device,
+        AdaptiveCpu,
+        DeviceFailureFallback,
+        UnavailableFallback,
+    ]
+    .map(test_route_tiles)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn admitted_auto_reads_stop_probing_after_a_complete_route_decision() {
+    use crate::core::execution_telemetry::{test_count, Event};
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
+    let slide = open_jp2k_fixture_with_runtime(&dir, &runtime);
     let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
-    let routed = || {
-        use RouteTileOutcome::*;
-        [
-            DeviceAttempt,
-            Device,
-            AdaptiveCpu,
-            DeviceFailureFallback,
-            UnavailableFallback,
-        ]
-        .map(test_route_tiles)
-    };
-    let routed_before = routed();
+    let routed_before = routed_tiles();
     let before = test_count(Event::MetalBatchSubmissions);
     let oracle = slide.read_tile(&request).unwrap();
-    assert_eq!(test_count(Event::MetalBatchSubmissions), before);
-    // Warmup and comparisons are on distinct reads. A slow warmup may finish
+    // Warmup and comparisons start on distinct reads. A slow warmup may finish
     // immediately; otherwise all three comparisons must finish before selection.
-    let runtime = DecodeRuntime::default_arc();
     let mut completed = None;
     for index in 1..=4 {
         let actual = slide.read_tile(&request).unwrap();
         assert_eq!(actual.as_u8(), oracle.as_u8());
-        assert_eq!(test_count(Event::MetalBatchSubmissions), before + index);
+        runtime.wait_for_background_calibration();
+        assert_eq!(runtime.background_calibrations_started(), index);
         let identity = runtime.metal_sessions().unwrap().device_identity();
         let key =
             route_key_for_batch(slide.source(), std::slice::from_ref(&request), &identity).unwrap();
@@ -702,20 +717,58 @@ fn admitted_auto_reads_stop_probing_after_a_complete_route_decision() {
         assert_eq!(decision.winner, DecodeRoute::Cpu);
         assert!(decision.device_elapsed > decision.cpu_elapsed.saturating_mul(4));
     }
-    // Warmup and comparison reads return CPU pixels. Every returned tile is
-    // accounted, so device attempts never appear without a matching outcome.
-    let delta = std::array::from_fn::<_, 5, _>(|i| routed()[i] - routed_before[i]);
+    // Calibration reads return CPU pixels. Every returned tile is accounted
+    // once, and device probes never run on the reading thread.
+    assert_eq!(test_count(Event::MetalBatchSubmissions), before);
+    let delta = std::array::from_fn::<_, 5, _>(|i| routed_tiles()[i] - routed_before[i]);
     assert_eq!(
         delta,
-        [trials, 0, trials + 1, 0, 0],
+        [0, 0, trials as u64 + 1, 0, 0],
         "attempt, device, cpu, failure, unavailable"
     );
     if decision.winner == DecodeRoute::Cpu {
         for _ in 0..3 {
             assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
         }
-        assert_eq!(test_count(Event::MetalBatchSubmissions), before + trials);
+        runtime.wait_for_background_calibration();
+        assert_eq!(runtime.background_calibrations_started(), trials);
     }
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn calibrating_reads_return_before_background_device_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
+    let slide = open_jp2k_fixture_with_runtime(&dir, &runtime);
+    let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    let oracle = slide.read_tile(&request).unwrap();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    runtime.hold_next_background_calibration(Arc::clone(&release));
+
+    // The warmup read returns CPU pixels while its device half is held.
+    assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
+    assert_eq!(runtime.background_calibrations_started(), 1);
+    assert!(
+        runtime.metal_sessions.get().is_none(),
+        "the calibrating read initialized the device"
+    );
+    // The pending route keeps its single owner: later reads stay on CPU.
+    assert_eq!(slide.read_tile(&request).unwrap().as_u8(), oracle.as_u8());
+    assert_eq!(runtime.background_calibrations_started(), 1);
+
+    release.wait();
+    runtime.wait_for_background_calibration();
+    let identity = runtime.metal_sessions().unwrap().device_identity();
+    let key =
+        route_key_for_batch(slide.source(), std::slice::from_ref(&request), &identity).unwrap();
+    match runtime.claim_route(key) {
+        RouteClaim::Ready(decision) => assert!(!decision.device_failure),
+        RouteClaim::Calibrate(sample) => {
+            assert!(matches!(sample.step, CalibrationStep::Sample { .. }))
+        }
+        _ => panic!("background calibration must publish its warmup and release the route"),
+    };
 }
 
 #[cfg(feature = "metal")]

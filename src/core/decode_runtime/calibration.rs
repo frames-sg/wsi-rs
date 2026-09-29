@@ -1,5 +1,13 @@
 //! FIFO-bounded route decisions with one nonblocking calibration owner per key.
 use super::*;
+use std::ops::Deref;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use std::sync::Condvar;
+
+/// Largest prepared batch a background calibration may retain after its
+/// foreground read returns and releases that read's admission.
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(super) const BACKGROUND_CALIBRATION_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub(super) struct RouteEntry {
@@ -18,24 +26,73 @@ pub(super) fn new_decode_route_cache() -> DecodeRouteCache {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CalibrationStep {
     Warmup,
-    Sample { cpu_first: bool },
+    /// A foreground comparison alternates which route runs first. Background
+    /// calibration always times CPU on the read and the device afterwards.
+    Sample {
+        cpu_first: bool,
+    },
 }
 
-pub(super) enum RouteClaim<'a> {
+/// `R` is how the lease reaches its runtime: a borrow for work on the calling
+/// thread, or an `Arc` that a background calibration can own.
+pub(super) enum RouteClaim<R: Deref<Target = DecodeRuntime>> {
     Cpu,
-    FirstCpu { _lease: CalibrationLease<'a> },
+    FirstCpu { _lease: CalibrationLease<R> },
     Ready(DecodeRouteDecision),
-    Calibrate(CalibrationLease<'a>),
+    Calibrate(CalibrationLease<R>),
 }
 
-pub(super) struct CalibrationLease<'a> {
-    runtime: &'a DecodeRuntime,
+pub(super) struct CalibrationLease<R: Deref<Target = DecodeRuntime>> {
+    runtime: R,
     key: DecodeRouteKey,
     pub(super) step: CalibrationStep,
 }
 
+enum ClaimState {
+    Cpu,
+    FirstCpu,
+    Ready(DecodeRouteDecision),
+    Calibrate(CalibrationStep),
+}
+
+fn claim_route_with<R: Deref<Target = DecodeRuntime>>(
+    runtime: R,
+    key: DecodeRouteKey,
+) -> RouteClaim<R> {
+    match runtime.claim_route_state(&key) {
+        ClaimState::Cpu => RouteClaim::Cpu,
+        ClaimState::Ready(decision) => RouteClaim::Ready(decision),
+        ClaimState::FirstCpu => RouteClaim::FirstCpu {
+            _lease: CalibrationLease {
+                runtime,
+                key,
+                step: CalibrationStep::Warmup,
+            },
+        },
+        ClaimState::Calibrate(step) => {
+            RouteClaim::Calibrate(CalibrationLease { runtime, key, step })
+        }
+    }
+}
+
 impl DecodeRuntime {
-    pub(super) fn claim_route(&self, key: DecodeRouteKey) -> RouteClaim<'_> {
+    #[cfg(test)]
+    pub(super) fn claim_route(&self, key: DecodeRouteKey) -> RouteClaim<&Self> {
+        claim_route_with(self, key)
+    }
+
+    /// [`Self::claim_route`] with leases that can move to another thread.
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    pub(super) fn claim_owned_route(
+        self: &Arc<Self>,
+        key: DecodeRouteKey,
+    ) -> RouteClaim<Arc<Self>> {
+        claim_route_with(Arc::clone(self), key)
+    }
+
+    /// Marks the route busy for the lease the caller constructs.
+    fn claim_route_state(&self, key: &DecodeRouteKey) -> ClaimState {
+        let key = key.clone();
         let mut cache = self.route_cache.lock().unwrap_or_else(|e| e.into_inner());
         if !cache.contains(&key) && !key.device_identity.is_empty() {
             let mut pending = key.clone();
@@ -44,7 +101,7 @@ impl DecodeRuntime {
                 // Device initialization can finish while a warmup owns the
                 // unresolved key. It alone performs the identity migration.
                 if entry.busy {
-                    return RouteClaim::Cpu;
+                    return ClaimState::Cpu;
                 }
                 let entry = cache.pop(&pending).expect("pending entry exists");
                 cache.put(key.clone(), entry);
@@ -57,7 +114,7 @@ impl DecodeRuntime {
             if let Some(decision) = clipped_cpu_preference(&cache, &key) {
                 // Keep the measured full-tile route as the evidence owner.
                 // No new decision is published by this optional shortcut.
-                return RouteClaim::Ready(decision);
+                return ClaimState::Ready(decision);
             }
         }
         let Some(entry) = cache.peek_mut(&key) else {
@@ -72,35 +129,24 @@ impl DecodeRuntime {
             return if cache.contains(&key) {
                 // Protect startup until CPU output is ready, just as later
                 // calibration protects its pending route from other callers.
-                RouteClaim::FirstCpu {
-                    _lease: CalibrationLease {
-                        runtime: self,
-                        key,
-                        step: CalibrationStep::Warmup,
-                    },
-                }
+                ClaimState::FirstCpu
             } else {
-                RouteClaim::Cpu
+                ClaimState::Cpu
             };
         };
         if let Some(decision) = &entry.decision {
-            return RouteClaim::Ready(decision.clone());
+            return ClaimState::Ready(decision.clone());
         }
         if entry.busy {
-            return RouteClaim::Cpu;
+            return ClaimState::Cpu;
         }
         entry.busy = true;
-        let step = if entry.warmed {
+        ClaimState::Calibrate(if entry.warmed {
             CalibrationStep::Sample {
                 cpu_first: entry.samples.len() % 2 == 0,
             }
         } else {
             CalibrationStep::Warmup
-        };
-        RouteClaim::Calibrate(CalibrationLease {
-            runtime: self,
-            key,
-            step,
         })
     }
 
@@ -192,7 +238,7 @@ fn clipped_cpu_preference(
     })
 }
 
-impl CalibrationLease<'_> {
+impl<R: Deref<Target = DecodeRuntime>> CalibrationLease<R> {
     pub(super) fn bind_device(&mut self, identity: String) {
         if self.key.device_identity == identity {
             return;
@@ -277,7 +323,7 @@ fn ratio((cpu, device): (Duration, Duration)) -> f64 {
     }
 }
 
-impl Drop for CalibrationLease<'_> {
+impl<R: Deref<Target = DecodeRuntime>> Drop for CalibrationLease<R> {
     fn drop(&mut self) {
         if let Some(entry) = self
             .runtime
@@ -288,5 +334,82 @@ impl Drop for CalibrationLease<'_> {
         {
             entry.busy = false;
         }
+    }
+}
+
+/// Admits one background device calibration per runtime at a time.
+#[cfg(any(feature = "metal", feature = "cuda"))]
+#[derive(Debug, Default)]
+pub(super) struct BackgroundCalibrationSlot {
+    busy: Mutex<bool>,
+    idle: Condvar,
+    #[cfg(test)]
+    started: std::sync::atomic::AtomicUsize,
+    /// Holds the next background calibration before its device work.
+    #[cfg(test)]
+    hold: Mutex<Option<Arc<std::sync::Barrier>>>,
+}
+
+/// Owns the runtime's background calibration slot until dropped.
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(super) struct BackgroundCalibration {
+    runtime: Arc<DecodeRuntime>,
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl DecodeRuntime {
+    /// Claims the background slot, or `None` while another calibration runs.
+    pub(super) fn claim_background_calibration(self: &Arc<Self>) -> Option<BackgroundCalibration> {
+        let slot = &self.background_calibration;
+        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
+        if *busy {
+            return None;
+        }
+        *busy = true;
+        #[cfg(test)]
+        slot.started
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(BackgroundCalibration {
+            runtime: Arc::clone(self),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn background_calibrations_started(&self) -> usize {
+        self.background_calibration
+            .started
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(super) fn hold_next_background_calibration(&self, barrier: Arc<std::sync::Barrier>) {
+        *self.background_calibration.hold.lock().unwrap() = Some(barrier);
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_at_background_hold(&self) {
+        let hold = self.background_calibration.hold.lock().unwrap().take();
+        if let Some(barrier) = hold {
+            barrier.wait();
+        }
+    }
+
+    /// Blocks until no background calibration is running.
+    #[cfg(test)]
+    pub(crate) fn wait_for_background_calibration(&self) {
+        let slot = &self.background_calibration;
+        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
+        while *busy {
+            busy = slot.idle.wait(busy).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl Drop for BackgroundCalibration {
+    fn drop(&mut self) {
+        let slot = &self.runtime.background_calibration;
+        *slot.busy.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        slot.idle.notify_all();
     }
 }
