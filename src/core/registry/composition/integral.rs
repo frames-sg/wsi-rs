@@ -61,7 +61,7 @@ pub(super) fn is_integral_hit(hit: &TileHit) -> bool {
 /// Whether the hit lands on whole pixels, including Pixman-placed hits whose
 /// raster position is integral. Copying such a hit is exact when nothing else
 /// covers its pixels.
-fn has_integral_position(hit: &TileHit) -> bool {
+pub(super) fn has_integral_position(hit: &TileHit) -> bool {
     is_integral_hit(hit)
         || hit.cairo_fixed_dest == Some((hit.dest_x as f64, hit.dest_y as f64))
             && (hit.dest_x_f64, hit.dest_y_f64) == (hit.dest_x as f64, hit.dest_y as f64)
@@ -172,17 +172,64 @@ pub(super) fn compose_dense_integral_u8_rows(
     shape: CompositionShape,
     total_samples: usize,
 ) -> Result<Option<Vec<u8>>, WsiError> {
-    struct Span<'a> {
-        data: &'a [u8],
-        top: i64,
-        bottom: i64,
-        source_y: i64,
-        start: usize,
-        end: usize,
-        source_x: usize,
-        row_stride: usize,
-        len: usize,
+    let Some(spans) = dense_row_spans(dense_hits, shape)? else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(total_samples);
+    for y in 0..shape.height as i64 {
+        for span in spans.iter().filter(|span| span.covers_row(y)) {
+            out.extend_from_slice(span.source_row(y)?);
+        }
     }
+    if out.len() != total_samples {
+        return Err(WsiError::DisplayConversion(format!(
+            "dense compositor produced {} samples, expected {}",
+            out.len(),
+            total_samples
+        )));
+    }
+    Ok(Some(out))
+}
+
+/// One integral tile's clipped rectangle in a dense composition.
+struct DenseSpan<'a> {
+    data: &'a [u8],
+    top: i64,
+    bottom: i64,
+    source_y: i64,
+    start: usize,
+    end: usize,
+    source_x: usize,
+    row_stride: usize,
+    len: usize,
+}
+
+impl<'a> DenseSpan<'a> {
+    fn covers_row(&self, y: i64) -> bool {
+        (self.top..self.bottom).contains(&y)
+    }
+
+    /// Source samples this span contributes to output row `y`.
+    fn source_row(&self, y: i64) -> Result<&'a [u8], WsiError> {
+        let start = ((y - self.source_y) as usize)
+            .checked_mul(self.row_stride)
+            .and_then(|offset| offset.checked_add(self.source_x))
+            .ok_or_else(|| WsiError::DisplayConversion("tile source offset overflow".into()))?;
+        let end = start
+            .checked_add(self.len)
+            .ok_or_else(|| WsiError::DisplayConversion("tile source end overflow".into()))?;
+        self.data.get(start..end).ok_or_else(|| {
+            WsiError::DisplayConversion("tile source row exceeds decoded buffer".into())
+        })
+    }
+}
+
+/// Clipped spans that cover every output row exactly once, left to right in
+/// `dense_hits` order, or `None` when rows have gaps or overlaps.
+fn dense_row_spans<'a>(
+    dense_hits: &[DenseIntegralU8Hit<'a>],
+    shape: CompositionShape,
+) -> Result<Option<Vec<DenseSpan<'a>>>, WsiError> {
     let mut spans = Vec::with_capacity(dense_hits.len());
     for entry in dense_hits {
         let bottom = entry
@@ -211,7 +258,7 @@ pub(super) fn compose_dense_integral_u8_rows(
         let len = ((end - start) as usize)
             .checked_mul(shape.channels)
             .ok_or_else(|| WsiError::DisplayConversion("tile copy length overflow".into()))?;
-        spans.push(Span {
+        spans.push(DenseSpan {
             data: entry.data,
             top: entry.hit.dest_y.max(0),
             bottom: bottom.min(shape.height as i64),
@@ -223,40 +270,74 @@ pub(super) fn compose_dense_integral_u8_rows(
             len,
         });
     }
-    let mut out = Vec::with_capacity(total_samples);
     for y in 0..shape.height as i64 {
         let mut cursor = 0;
-        for span in &spans {
-            if y < span.top || y >= span.bottom {
-                continue;
-            }
+        for span in spans.iter().filter(|span| span.covers_row(y)) {
             if span.start != cursor {
                 return Ok(None);
             }
-            let start = ((y - span.source_y) as usize)
-                .checked_mul(span.row_stride)
-                .and_then(|offset| offset.checked_add(span.source_x))
-                .ok_or_else(|| WsiError::DisplayConversion("tile source offset overflow".into()))?;
-            let end = start
-                .checked_add(span.len)
-                .ok_or_else(|| WsiError::DisplayConversion("tile source end overflow".into()))?;
-            out.extend_from_slice(span.data.get(start..end).ok_or_else(|| {
-                WsiError::DisplayConversion("tile source row exceeds decoded buffer".into())
-            })?);
             cursor = span.end;
         }
         if cursor != shape.width {
             return Ok(None);
         }
     }
-    if out.len() != total_samples {
+    Ok(Some(spans))
+}
+
+/// Writes cached opaque RGB tiles that densely cover a region straight into
+/// premultiplied ARGB32 pixels, the layout OpenSlide and Cairo use. Returns
+/// `false` without writing when the tiles are not integral, dense, 8-bit RGB.
+pub(super) fn compose_dense_integral_rgb_argb32(
+    hits: &[TileHit],
+    hit_tiles: &[Arc<CpuTile>],
+    width: u32,
+    height: u32,
+    destination: &mut [u32],
+) -> Result<bool, WsiError> {
+    if hits.len() != hit_tiles.len() || hits.is_empty() {
+        return Ok(false);
+    }
+    let shape = CompositionShape {
+        width: width as usize,
+        height: height as usize,
+        channels: 3,
+    };
+    if shape.width.checked_mul(shape.height) != Some(destination.len()) {
         return Err(WsiError::DisplayConversion(format!(
-            "dense compositor produced {} samples, expected {}",
-            out.len(),
-            total_samples
+            "ARGB destination has {} pixels, expected {width}x{height}",
+            destination.len()
         )));
     }
-    Ok(Some(out))
+    let Some(dense_hits) = collect_dense_integral_u8_hits(
+        hits,
+        hit_tiles,
+        3,
+        &ColorSpace::Rgb,
+        CpuTileLayout::Interleaved,
+        3,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some(spans) = dense_row_spans(&dense_hits, shape)? else {
+        return Ok(false);
+    };
+    for (y, row) in destination.chunks_exact_mut(shape.width).enumerate() {
+        let y = y as i64;
+        for span in spans.iter().filter(|span| span.covers_row(y)) {
+            rgb_to_opaque_argb32(span.source_row(y)?, &mut row[span.start..span.end]);
+        }
+    }
+    Ok(true)
+}
+
+fn rgb_to_opaque_argb32(rgb: &[u8], argb: &mut [u32]) {
+    // Whole-pixel arrays carry no bounds checks, so the loop vectorizes.
+    let (pixels, _) = rgb.as_chunks::<3>();
+    for (dest, &[r, g, b]) in argb.iter_mut().zip(pixels) {
+        *dest = 0xff00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
+    }
 }
 
 #[cfg(test)]

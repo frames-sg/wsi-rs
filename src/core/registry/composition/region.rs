@@ -4,7 +4,8 @@ use super::fractional_u8::{
     RgbaBandScratch,
 };
 use super::integral::{
-    blit_integral_samples, hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
+    blit_integral_samples, compose_dense_integral_rgb_argb32, has_integral_position,
+    hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
     try_compose_dense_integral_u8_region,
 };
 use super::output::{
@@ -105,6 +106,39 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
         plan.output_width,
         plan.output_height,
         plan.preserve_alpha,
+    )
+}
+
+/// Writes a planned region whose tiles are all cached, opaque 8-bit RGB and
+/// densely integral straight into premultiplied ARGB32. Returns `false`,
+/// leaving `destination` untouched, for any other region.
+pub(in crate::core::registry) fn compose_cached_region_argb32<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: &TileCache,
+    req: &RegionRequest,
+    plan: &RegionReadPlan<'_>,
+    destination: &mut [u32],
+) -> Result<bool, WsiError> {
+    // Placement is known before any cache lookup.
+    if plan.hits.is_empty() || !plan.hits.iter().all(has_integral_position) {
+        return Ok(false);
+    }
+    let Some(tiles) = cache.get_complete(
+        plan.hits
+            .iter()
+            .map(|hit| CacheKey::from_region_tile(source.dataset().id, req, hit.col, hit.row)),
+    ) else {
+        return Ok(false);
+    };
+    for tile in &tiles {
+        tile.validate_invariants()?;
+    }
+    compose_dense_integral_rgb_argb32(
+        &plan.hits,
+        &tiles,
+        plan.output_width,
+        plan.output_height,
+        destination,
     )
 }
 

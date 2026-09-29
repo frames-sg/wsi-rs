@@ -113,6 +113,96 @@ fn banded_reads_preserve_fractional_pixels_gaps_and_edges() {
 }
 
 #[test]
+fn cached_dense_irregular_reads_match_the_composed_path() {
+    use wsi_rs::{
+        AxesShape, CpuTile, Dataset, DatasetId, SampleType, Scene, Series, SlideReader, TileRequest,
+    };
+
+    struct Pattern(Dataset);
+    impl SlideReader for Pattern {
+        fn dataset(&self) -> &Dataset {
+            &self.0
+        }
+        fn read_tile_cpu(&self, request: &TileRequest) -> Result<CpuTile, WsiError> {
+            let mut data = Vec::with_capacity(128 * 128 * 3);
+            for y in 0..128 {
+                for x in 0..128 {
+                    data.extend_from_slice(&[
+                        (request.col * 37 + x) as u8,
+                        (request.row * 29 + y) as u8,
+                        (x ^ y) as u8,
+                    ]);
+                }
+            }
+            CpuTile::from_u8_interleaved(128, 128, 3, ColorSpace::Rgb, data)
+        }
+    }
+
+    let open = |cache_bytes| {
+        let layout = TileLayout::Irregular {
+            tile_advance: (128.0, 128.0),
+            extra_tiles: (0, 0, 0, 0),
+            tiles: (0..8)
+                .flat_map(|row| (0..4).map(move |col| (col, row)))
+                .filter(|position| *position != (1, 3))
+                .map(|position| (position, TileEntry::new((0.0, 0.0), (128, 128))))
+                .collect(),
+        };
+        let dataset = Dataset::new(
+            DatasetId::new(2),
+            vec![Scene::new(
+                "pattern",
+                vec![Series::new(
+                    "rgb",
+                    AxesShape::default(),
+                    vec![Level::new((512, 1024), 1.0, layout)],
+                    SampleType::Uint8,
+                    vec![],
+                )],
+            )],
+        );
+        Slide::from_source_with_cache_bytes(Box::new(Pattern(dataset)), cache_bytes)
+    };
+    let reference = open(0);
+    let cached = open(64 << 20);
+    let level = &cached.dataset().scenes[0].series[0].levels[0];
+    let dense = RegionRequest::new(0, 0, 0, (5, 9), (250, 300));
+    let gap = RegionRequest::new(0, 0, 0, (100, 350), (200, 100));
+    for (request, offset, dense_hits) in [
+        (&dense, (0.0, 0.0), true),
+        (&gap, (0.0, 0.0), false),
+        (&dense, (0.25, 0.5), false),
+    ] {
+        let tile = reference.read_region_subpixel(request, offset).unwrap();
+        let opaque = !matches!(tile.color_space(), ColorSpace::Rgba);
+        let mut expected = crate::pixels::tile_to_premultiplied_argb(tile).unwrap();
+        clear_uncovered_pixels(
+            level,
+            request.origin_px,
+            offset,
+            request.size_px,
+            &mut expected,
+            opaque,
+        )
+        .unwrap();
+        // The first read decodes and caches; the second reuses cached tiles.
+        for _ in 0..2 {
+            let mut actual = vec![u32::MAX; expected.len()];
+            read_region_into(&cached, level, request, offset, &mut actual).unwrap();
+            assert!(actual == expected, "{request:?} at {offset:?}");
+        }
+        let mut probe = vec![u32::MAX; expected.len()];
+        assert_eq!(
+            cached
+                .read_cached_region_argb32_into(request, offset, &mut probe)
+                .unwrap(),
+            dense_hits,
+            "{request:?} at {offset:?}"
+        );
+    }
+}
+
+#[test]
 fn banding_does_not_bypass_complete_region_limits() {
     use wsi_rs::{SlideLimits, SlideOpenOptions};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -1,4 +1,5 @@
-use wsi_rs::{ColorSpace, Level, RegionRequest, Slide, TileLayout, WsiError};
+use std::collections::HashMap;
+use wsi_rs::{ColorSpace, Level, RegionRequest, Slide, TileEntry, TileHit, TileLayout, WsiError};
 
 /// Bound intermediate color and coverage images while writing the caller's
 /// complete destination. Small viewer reads retain a single composition.
@@ -34,6 +35,14 @@ pub(crate) fn read_region_into(
         // A rounded-up source can paint beyond its fractional placement
         // extent. Keep that complete clip so a band cannot cull its coverage.
         if let TileLayout::Irregular { tiles, .. } = &level.tile_layout {
+            // Resident opaque tiles compose straight into the caller's pixels,
+            // without banded intermediate images or a conversion pass. Only
+            // whole-pixel hits whose area can cover the region qualify.
+            if may_cover_at_whole_pixels(tiles, &hits, offset, (width, height))
+                && slide.read_cached_region_argb32_into(request, offset, destination)?
+            {
+                return Ok(());
+            }
             bandable = hits.iter().all(|hit| {
                 tiles.get(&(hit.col, hit.row)).is_some_and(|entry| {
                     entry.extent() == (f64::from(entry.dimensions.0), f64::from(entry.dimensions.1))
@@ -75,6 +84,29 @@ pub(crate) fn read_region_into(
         clear_uncovered_pixels(level, band.origin_px, offset, band.size_px, rows, opaque)?;
     }
     Ok(())
+}
+
+/// A necessary condition for a dense whole-pixel composition, checked from
+/// tile-map geometry before the slide plans the region and probes its cache.
+fn may_cover_at_whole_pixels(
+    tiles: &HashMap<(i64, i64), TileEntry>,
+    hits: &[TileHit],
+    offset: (f64, f64),
+    size: (u32, u32),
+) -> bool {
+    let mut area = 0_u64;
+    for hit in hits {
+        let (x, y) = (hit.dest_x_f64 - offset.0, hit.dest_y_f64 - offset.1);
+        let Some(entry) = tiles.get(&(hit.col, hit.row)) else {
+            return false;
+        };
+        if x.fract() != 0.0 || y.fract() != 0.0 {
+            return false;
+        }
+        let (x0, y0, x1, y1) = rectangle_bounds(size, x, y, entry.dimensions);
+        area += (x1 - x0) as u64 * (y1 - y0) as u64;
+    }
+    area >= u64::from(size.0) * u64::from(size.1)
 }
 
 fn banding_preserves_filter(

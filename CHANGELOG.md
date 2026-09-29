@@ -70,6 +70,10 @@
   filtering, gaps, partial coverage and overlap order. Fractional tiles paint
   through bounded multi-row bands that keep vectorized bilinear sampling
   instead of one row at a time.
+- OpenSlide-compatible reads of cached, opaque, densely tiled irregular
+  regions, such as revisited MIRAX level 0 views, compose straight into the
+  caller's premultiplied ARGB pixels. They no longer build banded intermediate
+  images or run a separate conversion pass.
 - Ventana reduced levels decode each stored tile once per tile batch. TIFF
   layouts without NDPI sources give stored-tile decodes the complete private
   cache budget instead of reserving shares for unused NDPI caches, so reduced

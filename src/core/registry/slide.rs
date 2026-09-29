@@ -459,6 +459,55 @@ impl Slide {
         Ok(tile)
     }
 
+    /// Writes a cached irregular-level region straight into premultiplied
+    /// ARGB32 pixels, as [`Self::read_region_subpixel`] followed by an ARGB32
+    /// conversion would. Returns `Ok(false)`, leaving `destination` untouched,
+    /// unless every tile is cached, opaque 8-bit RGB and densely covers the
+    /// region at whole-pixel positions. Used by the OpenSlide shim.
+    #[doc(hidden)]
+    pub fn read_cached_region_argb32_into(
+        &self,
+        req: &RegionRequest,
+        offset_px: (f64, f64),
+        destination: &mut [u32],
+    ) -> Result<bool, WsiError> {
+        if !valid_subpixel_offset(offset_px.0) || !valid_subpixel_offset(offset_px.1) {
+            return Err(WsiError::DisplayConversion(format!(
+                "subpixel offset must be finite and in [0, 1), got ({}, {})",
+                offset_px.0, offset_px.1
+            )));
+        }
+        let irregular = self
+            .source
+            .dataset()
+            .scenes
+            .get(req.scene.get())
+            .and_then(|scene| scene.series.get(req.series.get()))
+            .and_then(|series| series.levels.get(req.level.get() as usize))
+            .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
+        if !irregular {
+            return Ok(false);
+        }
+        self.check_region_output(req)?;
+        let origin = (
+            req.origin_px.0 as f64 + offset_px.0,
+            req.origin_px.1 as f64 + offset_px.1,
+        );
+        let plan = composition::RegionReadPlan::fractional(
+            self.dataset(),
+            req,
+            origin,
+            self.limits.region_pixels(),
+        )?;
+        composition::compose_cached_region_argb32(
+            self.source.as_ref(),
+            self.shared_tile_cache().as_ref(),
+            req,
+            &plan,
+            destination,
+        )
+    }
+
     pub fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
         self.read_display_tile_impl(req)
     }
