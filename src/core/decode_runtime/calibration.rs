@@ -374,14 +374,14 @@ impl DecodeRuntime {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "metal"))]
     pub(crate) fn background_calibrations_started(&self) -> usize {
         self.background_calibration
             .started
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "metal"))]
     pub(super) fn hold_next_background_calibration(&self, barrier: Arc<std::sync::Barrier>) {
         *self.background_calibration.hold.lock().unwrap() = Some(barrier);
     }
@@ -395,7 +395,7 @@ impl DecodeRuntime {
     }
 
     /// Blocks until no background calibration is running.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "metal"))]
     pub(crate) fn wait_for_background_calibration(&self) {
         let slot = &self.background_calibration;
         let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
