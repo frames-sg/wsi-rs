@@ -308,7 +308,6 @@ impl Drop for TransientReservation {
 }
 
 mod execution;
-#[cfg(any(feature = "metal", feature = "cuda"))]
 pub(crate) use execution::OptionalWork;
 pub(crate) use execution::ReadExecutionContext;
 

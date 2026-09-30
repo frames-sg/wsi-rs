@@ -27,12 +27,19 @@ reservation retains dense composition even with one CPU worker. Streamed
 consecutive batches fit decoded tiles plus codec work within the remaining staging
 allowance, with separate encoded bounds and the CPU worker limit. Streaming targets
 half the output allowance, capped at 1 MiB, for decoded/codec staging (or one
-larger source); wider windows regressed measured RSS. This target changes execution granularity, not public resource or
+larger source); wider windows regressed measured RSS. When cores are idle and the
+read's admission grants optional memory for their staging, a streamed batch may
+hold one tile per idle core, so tiles larger than the region no longer decode
+one after another. This target changes execution granularity, not public resource or
 cache limits. Singleton windows use direct tile resolution without batch vectors
 and query no worker count unless a second tile can fit. Fully cached regions pin
 their existing tiles under one cache lock and reuse dense composition without
 decoder staging.
-A source without sufficiently precise bounds streams single tiles. Whole-batch
+A source without sufficiently precise bounds streams single tiles. Tiled TIFF
+JPEG batches read their tiles on the caller, which then decodes them in order
+while helpers on otherwise idle cores claim the remaining tiles. The caller never
+waits for a helper that has not started, so a batch cannot queue behind other
+readers' tiles. Whole-batch
 integral composition keeps the exact-tile return and dense row-copy path; streamed
 batches preserve hit order. Built-in readers reject unavailable region fast paths
 on the caller thread. Custom readers retain their existing worker context. Cached

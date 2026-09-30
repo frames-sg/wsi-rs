@@ -47,6 +47,12 @@
   filtering. Cached regions retain dense composition, opaque
   bands avoid redundant alpha reconstruction, and singleton staging avoids
   initializing an unused JP2K worker pool.
+- Tiled TIFF JPEG reads (SVS, Leica and similar) decode a read's tiles in
+  parallel again when cores are idle. The calling thread decodes tiles in
+  order while otherwise idle cores help, and it never waits on queued work.
+  Streamed batches of tiles larger than the region widen only when the read's
+  admission grants optional staging memory. A single viewer no longer decodes
+  the tiles of a multi-tile read one after another.
 - MIRAX image records share data-file paths, retain compact source origins,
   and discard excess descriptor capacity. Tile-map extents and surface flags
   share one compact representation.

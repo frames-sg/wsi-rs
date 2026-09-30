@@ -304,7 +304,7 @@ mod calibration;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use calibration::*;
 
-fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
+pub(crate) fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
     static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         // Rayon's default sizing honors RAYON_NUM_THREADS; leaving it unset

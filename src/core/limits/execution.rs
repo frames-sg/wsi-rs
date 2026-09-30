@@ -5,11 +5,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 pub(crate) struct ReadExecutionContext<'a> {
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     reservation: &'a TransientReservation,
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     operation_limit: u64,
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     extra: Mutex<u64>,
     #[cfg(any(feature = "metal", feature = "cuda"))]
     calibration: &'a AtomicBool,
@@ -23,13 +20,10 @@ impl<'a> ReadExecutionContext<'a> {
         control: Option<&'a ReadControl>,
         calibration: &'a AtomicBool,
     ) -> Self {
-        let _ = (reservation, operation_limit, calibration);
+        let _ = calibration;
         Self {
-            #[cfg(any(test, feature = "metal", feature = "cuda"))]
             reservation,
-            #[cfg(any(test, feature = "metal", feature = "cuda"))]
             operation_limit,
-            #[cfg(any(test, feature = "metal", feature = "cuda"))]
             extra: Mutex::new(0),
             #[cfg(any(feature = "metal", feature = "cuda"))]
             calibration,
@@ -45,7 +39,6 @@ impl<'a> ReadExecutionContext<'a> {
         !self.calibration.swap(true, Ordering::Relaxed)
     }
 
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
     pub(crate) fn try_extra(&self, bytes: u64) -> Result<Option<OptionalWork<'_>>, WsiError> {
         if let Some(control) = self.control {
             control.check_cancelled()?;
@@ -88,13 +81,11 @@ impl<'a> ReadExecutionContext<'a> {
     }
 }
 
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
 pub(crate) struct OptionalWork<'a> {
     reservation: TransientReservation,
     extra: &'a Mutex<u64>,
 }
 
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
 impl Drop for OptionalWork<'_> {
     fn drop(&mut self) {
         let mut extra = self.extra.lock().unwrap_or_else(|error| error.into_inner());

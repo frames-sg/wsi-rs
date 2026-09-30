@@ -382,7 +382,8 @@ impl Slide {
             self.validate_decoded_output(&tile, "decoded region")?;
             return Ok(tile);
         }
-        let batch_ends = planned.batch_ends(self, req, output_bytes)?;
+        let (batch_ends, _parallel_staging) =
+            planned.batch_ends(self, req, output_bytes, &execution)?;
         let tile = composition::composite_region_from_plan(
             &admitted,
             Some(cache.as_ref()),
@@ -447,7 +448,8 @@ impl Slide {
             execution: &execution,
         };
         let cache = self.shared_tile_cache();
-        let batch_ends = planned.batch_ends(self, req, output_bytes)?;
+        let (batch_ends, _parallel_staging) =
+            planned.batch_ends(self, req, output_bytes, &execution)?;
         let tile = composition::composite_region_from_plan(
             &admitted,
             Some(cache.as_ref()),

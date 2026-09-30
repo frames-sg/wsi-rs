@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::limits::{OptionalWork, ReadExecutionContext};
 use crate::core::registry::composition::RegionReadPlan;
 
 pub(super) struct PlannedRegionRead<'a> {
@@ -52,12 +53,16 @@ impl Slide {
 }
 
 impl PlannedRegionRead<'_> {
-    pub(super) fn batch_ends(
+    /// Batch boundaries, plus any optional staging that lets streamed batches
+    /// decode several tiles at once. Hold the returned work until composition
+    /// completes.
+    pub(super) fn batch_ends<'e>(
         &mut self,
         slide: &Slide,
         req: &RegionRequest,
         output_bytes: u64,
-    ) -> Result<Vec<usize>, WsiError> {
+        execution: &'e ReadExecutionContext<'_>,
+    ) -> Result<(Vec<usize>, Option<OptionalWork<'e>>), WsiError> {
         // A handled format fast path needs only its own encoded bound. Query
         // generic tile inputs only when generic composition will execute them.
         for ((_, encoded), hit) in self.sizes.iter_mut().zip(&self.plan.hits) {
@@ -96,9 +101,26 @@ impl PlannedRegionRead<'_> {
             } else {
                 vec![sizes.len()]
             };
-            return Ok(ends);
+            return Ok((ends, None));
         }
-        let mut workers = None;
+        // A tile larger than the staging allowance otherwise streams alone and
+        // decodes serially. Idle cores may decode several such tiles at once
+        // when optional memory covers their decoded and codec staging.
+        let width = (1 + crate::core::batch::idle_cores()).min(sizes.len());
+        // Each batched tile needs its decoded bytes twice: output and codec work.
+        let extra = largest
+            .saturating_mul(2 * width as u64)
+            .saturating_sub(staging);
+        let parallel = if width > 1 && extra > 0 {
+            execution.try_extra(extra)?
+        } else {
+            None
+        };
+        let (staging, width) = match parallel {
+            Some(_) => (staging.saturating_add(extra), Some(width)),
+            None => (staging, None),
+        };
+        let mut workers = width;
         let mut batch_ends = Vec::new();
         let mut start = 0;
         while start < sizes.len() {
@@ -127,6 +149,6 @@ impl PlannedRegionRead<'_> {
             batch_ends.push(end);
             start = end;
         }
-        Ok(batch_ends)
+        Ok((batch_ends, parallel))
     }
 }

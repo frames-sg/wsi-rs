@@ -107,56 +107,7 @@ impl TiffPixelReader {
         _backend: BackendRequest,
     ) -> Result<Vec<CpuTile>, WsiError> {
         let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
-        let result: Result<Vec<CpuTile>, WsiError> = reqs
-            .par_iter()
-            .map(|req| {
-                let source = self.tile_source_for(req)?;
-                let TileSource::TiledIfd {
-                    ifd_id,
-                    jpeg_tables,
-                    compression: Compression::Jpeg,
-                } = source
-                else {
-                    return Err(WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "JPEG tiled batch received a non-JPEG tile source".into(),
-                    });
-                };
-
-                let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
-                if span.byte_count == 0 {
-                    return self.empty_tiled_ifd_tile(span.width, span.height);
-                }
-
-                let tile_data = self.read_tiled_ifd_tile_span(span)?;
-                let options = self.tiff_jpeg_decode_options_for_data(
-                    *ifd_id,
-                    false,
-                    &tile_data,
-                    jpeg_tables.as_deref(),
-                );
-                decode_one_jpeg(JpegDecodeJob {
-                    data: Cow::Borrowed(&tile_data),
-                    tables: jpeg_tables.as_deref().map(Cow::Borrowed),
-                    expected_width: span.width,
-                    expected_height: span.height,
-                    color_transform: options.color_transform,
-                    force_dimensions: options.force_dimensions,
-                    requested_size: None,
-                })
-                .map_err(|err| match err {
-                    WsiError::TileRead { .. } => err,
-                    other => WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: other.to_string(),
-                    },
-                })
-            })
-            .collect();
+        let result = self.decode_tiled_ifd_jpeg_jobs(reqs);
         if let Some(started) = started.as_ref() {
             match &result {
                 Ok(tiles) => {
@@ -178,6 +129,59 @@ impl TiffPixelReader {
             }
         }
         result
+    }
+
+    /// Reads each tile on the caller, then decodes the batch there while idle
+    /// cores help. A batch never queues behind other readers' tiles.
+    fn decode_tiled_ifd_jpeg_jobs(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        let mut tiles: Vec<Option<CpuTile>> = Vec::with_capacity(reqs.len());
+        let mut jobs = Vec::new();
+        for req in reqs {
+            let source = self.tile_source_for(req)?;
+            let TileSource::TiledIfd {
+                ifd_id,
+                jpeg_tables,
+                compression: Compression::Jpeg,
+            } = source
+            else {
+                return Err(WsiError::TileRead {
+                    col: req.col,
+                    row: req.row,
+                    level: req.level.get(),
+                    reason: "JPEG tiled batch received a non-JPEG tile source".into(),
+                });
+            };
+            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
+            if span.byte_count == 0 {
+                tiles.push(Some(self.empty_tiled_ifd_tile(span.width, span.height)?));
+                continue;
+            }
+            let data = self.read_tiled_ifd_tile_span(span)?;
+            let options = self.tiff_jpeg_decode_options_for_data(
+                *ifd_id,
+                false,
+                &data,
+                jpeg_tables.as_deref(),
+            );
+            tiles.push(None);
+            jobs.push(TiledJpegJob {
+                data,
+                tables: jpeg_tables.clone(),
+                width: span.width,
+                height: span.height,
+                options,
+                position: (req.col, req.row, req.level.get()),
+            });
+        }
+        let mut decoded =
+            crate::core::batch::share_cpu_work(jobs, TiledJpegJob::decode).into_iter();
+        tiles
+            .into_iter()
+            .map(|tile| match tile {
+                Some(tile) => Ok(tile),
+                None => decoded.next().expect("one result per decode job"),
+            })
+            .collect()
     }
 
     #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -276,5 +280,39 @@ impl TiffPixelReader {
                 })
             })
             .collect()
+    }
+}
+
+/// One tiled-IFD JPEG tile with its encoded bytes already read.
+struct TiledJpegJob {
+    data: Vec<u8>,
+    tables: Option<Vec<u8>>,
+    width: u32,
+    height: u32,
+    options: TiffJpegDecodeOptions,
+    position: (i64, i64, u32),
+}
+
+impl TiledJpegJob {
+    fn decode(&self) -> Result<CpuTile, WsiError> {
+        let (col, row, level) = self.position;
+        decode_one_jpeg(JpegDecodeJob {
+            data: Cow::Borrowed(&self.data),
+            tables: self.tables.as_deref().map(Cow::Borrowed),
+            expected_width: self.width,
+            expected_height: self.height,
+            color_transform: self.options.color_transform,
+            force_dimensions: self.options.force_dimensions,
+            requested_size: None,
+        })
+        .map_err(|err| match err {
+            WsiError::TileRead { .. } => err,
+            other => WsiError::TileRead {
+                col,
+                row,
+                level,
+                reason: other.to_string(),
+            },
+        })
     }
 }

@@ -227,8 +227,13 @@ fn region_batches_preserve_pixels_and_fit_staging_and_encoded_bounds() {
                     .unwrap(),
                 ),
             );
+            // No idle cores: streamed batches keep their bounded structure.
             let actual = pool
-                .install(|| slide.read_region_subpixel(&req, offset))
+                .install(|| {
+                    crate::core::batch::with_idle_cores(0, || {
+                        slide.read_region_subpixel(&req, offset)
+                    })
+                })
                 .unwrap();
             assert_eq!(actual.to_rgba().unwrap(), expected.to_rgba().unwrap());
             let calls = calls.lock().unwrap();
@@ -352,7 +357,11 @@ fn streamed_batches_do_not_repurpose_encoded_allowance_as_decoded_staging() {
         .build()
         .unwrap();
     let tile = pool
-        .install(|| slide.read_region(&RegionRequest::new(0, 0, 0, (1, 1), (8, 8))))
+        .install(|| {
+            crate::core::batch::with_idle_cores(0, || {
+                slide.read_region(&RegionRequest::new(0, 0, 0, (1, 1), (8, 8)))
+            })
+        })
         .unwrap();
     assert_eq!((tile.width(), tile.height()), (8, 8));
     assert_eq!(
@@ -404,7 +413,9 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
             .num_threads(8)
             .build()
             .unwrap();
-        let actual = pool.install(|| slide.read_region(&req)).unwrap();
+        let actual = pool
+            .install(|| crate::core::batch::with_idle_cores(0, || slide.read_region(&req)))
+            .unwrap();
         assert_eq!(actual.as_u8(), expected.as_u8());
         let lengths = calls
             .lock()
@@ -426,6 +437,109 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
             "cached regions must not decode again"
         );
     }
+}
+
+#[test]
+fn streamed_batches_decode_several_tiles_on_idle_cores_when_admission_allows() {
+    let read = |idle, limits: SlideLimits| {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = RegionBatchSource {
+            dataset: regular_rgb_dataset_for_test(
+                DatasetId::new(96),
+                "scene",
+                "series",
+                RegularLevelForTest {
+                    dimensions: (12, 12),
+                    tile_width: 4,
+                    tile_height: 4,
+                    tiles_across: 3,
+                    tiles_down: 3,
+                },
+            ),
+            calls: calls.clone(),
+        };
+        let req = RegionRequest::new(0, 0, 0, (1, 1), (8, 8));
+        let expected = composite_region_from_source(&source, None, &req, 1024).unwrap();
+        calls.lock().unwrap().clear();
+        let slide = Slide::from_managed_source_with_config_and_runtime(
+            Box::new(source),
+            CacheConfig::deterministic().with_shared_tile_bytes(0),
+            limits,
+            Arc::new(
+                DecodeRuntime::new(
+                    DecodeExecutionOptions::default()
+                        .with_acceleration(crate::DecodeAcceleration::CpuOnly),
+                )
+                .unwrap(),
+            ),
+        );
+        let tile = crate::core::batch::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
+        assert_eq!(tile.as_u8(), expected.as_u8());
+        let lengths = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>();
+        lengths
+    };
+    // Three idle cores let each streamed batch hold four tiles.
+    assert_eq!(read(3, SlideLimits::default()), [4, 4, 1]);
+    // Without optional headroom beyond the read's own work, tiles stream alone.
+    let ordinary = SlideLimits::default()
+        .with_operation_transient_bytes(1536)
+        .unwrap();
+    assert_eq!(read(3, ordinary), [1; 9]);
+}
+
+#[test]
+fn streamed_tiles_larger_than_the_region_share_a_batch_on_idle_cores() {
+    // 64-pixel tiles under a 32-pixel read: one decoded tile exceeds the
+    // region's own staging, as a 512-pixel tile does under a 256-pixel read.
+    let read = |idle| {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = RegionBatchSource {
+            dataset: regular_rgb_dataset_for_test(
+                DatasetId::new(97),
+                "scene",
+                "series",
+                RegularLevelForTest {
+                    dimensions: (128, 128),
+                    tile_width: 64,
+                    tile_height: 64,
+                    tiles_across: 2,
+                    tiles_down: 2,
+                },
+            ),
+            calls: calls.clone(),
+        };
+        let req = RegionRequest::new(0, 0, 0, (48, 48), (32, 32));
+        let expected = composite_region_from_source(&source, None, &req, 1 << 20).unwrap();
+        calls.lock().unwrap().clear();
+        let slide = Slide::from_managed_source_with_config_and_runtime(
+            Box::new(source),
+            CacheConfig::deterministic().with_shared_tile_bytes(0),
+            SlideLimits::default(),
+            Arc::new(
+                DecodeRuntime::new(
+                    DecodeExecutionOptions::default()
+                        .with_acceleration(crate::DecodeAcceleration::CpuOnly),
+                )
+                .unwrap(),
+            ),
+        );
+        let tile = crate::core::batch::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
+        assert_eq!(tile.as_u8(), expected.as_u8());
+        let lengths = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>();
+        lengths
+    };
+    assert_eq!(read(0), [1; 4]);
+    assert_eq!(read(3), [4]);
 }
 
 struct RegionFastpathOnly(TinySource);
