@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- `MetalBackendSessions::prewarm` builds a session's JPEG 2000 decode kernels
+  before the first read, so applications can compile shaders off the first
+  slide's critical path.
+
+### Fixed
+
+- DICOM reads reserve each frame's indexed encoded length instead of the whole
+  per-unit encoded limit. Concurrent single-tile reads of one slide no longer
+  queue three at a time under default limits, and Metal reads keep their grouped
+  batches instead of falling back to one submission per frame. Frames read
+  before the lazy frame index exists keep the previous bound.
+- DICOM lossy JPEG frames decode by their own DCT process when their precision
+  matches BitsStored. 3DHISTECH slides that store progressive frames under the
+  JPEG Baseline transfer syntax now read in full. Lossless syntaxes still require
+  lossless frames.
+- Shared CPU work recruits cores that become idle while a batch runs, not only
+  those idle when it starts. Concurrent multi-tile JPEG reads no longer finish
+  later batches on their calling thread alone.
+
 ## [0.7.0] - 2026-09-28
 
 ### Added
