@@ -32,7 +32,7 @@ at build time and adds no persistent runtime cache.
 
 | Dependency | Surface and control | Owner | Review or expiry |
 | --- | --- | --- | --- |
-| `encoding 0.2.33` | Unmaintained transitive dependency of `dicom-encoding 0.9.1`. DICOM text parsing remains bounded by the format parsers and all known RustSec vulnerabilities are denied. | wsi-rs maintainers | 2026-10-01 or the next dicom-rs release, whichever is first |
+| `encoding 0.2.33` | Unmaintained transitive dependency of `dicom-encoding 0.9.1`. DICOM text parsing remains bounded by the format parsers and all known RustSec vulnerabilities are denied. Reviewed 2026-10-01: dicom-rs 0.10.0 still requires `encoding 0.2.33`. | wsi-rs maintainers | 2027-01-01 or the next dicom-rs release, whichever is first |
 
 ## JPEG XR release gate
 
