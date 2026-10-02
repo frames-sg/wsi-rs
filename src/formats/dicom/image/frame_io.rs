@@ -283,7 +283,9 @@ impl DicomImage {
 
     /// Encoded bytes a read of `frame_index` holds, when known without I/O:
     /// the native frame size, or the indexed fragment lengths once the lazy
-    /// frame index exists. Never waits for a thread building that index.
+    /// frame index exists. Every frame read takes the index lock briefly, so
+    /// this waits for it rather than falling back under concurrency. The only
+    /// long hold is the first index build, which the planned read needs anyway.
     pub(in super::super) fn known_encoded_frame_bytes(&self, frame_index: u32) -> Option<u64> {
         if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
             return Some(
@@ -293,11 +295,12 @@ impl DicomImage {
                     .saturating_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8)),
             );
         }
-        let frames = match self.frame_store.encapsulated_frames.try_lock() {
-            Ok(frames) => frames.clone(),
-            Err(std::sync::TryLockError::Poisoned(frames)) => frames.into_inner().clone(),
-            Err(std::sync::TryLockError::WouldBlock) => None,
-        }?;
+        let frames = self
+            .frame_store
+            .encapsulated_frames
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()?;
         let range = frames.frame_ranges.get(frame_index as usize)?;
         Some(
             frames
