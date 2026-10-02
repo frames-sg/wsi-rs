@@ -88,10 +88,16 @@ impl TestDicomOptions {
 /// The reader's frame index extracts them because the DICOM object parser does
 /// not register the retired progressive transfer syntaxes.
 pub(super) fn twelve_bit_fixture_frames(name: &str) -> Vec<Vec<u8>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/dicom_12bit")
-        .join(format!("{name}.dcm"));
-    let slide = DicomSlide::parse(&path).expect("open 12-bit fixture");
+    fixture_frames(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dicom_12bit")
+            .join(format!("{name}.dcm")),
+    )
+}
+
+/// Encoded frames of the first image in a committed DICOM fixture.
+pub(super) fn fixture_frames(path: &Path) -> Vec<Vec<u8>> {
+    let slide = DicomSlide::parse(path).expect("open DICOM fixture");
     let image = &slide.levels[0].parts[0];
     (0..image.number_of_frames)
         .map(|frame_index| {

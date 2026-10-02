@@ -8,19 +8,13 @@ pub(super) fn validate_jpeg_transfer_syntax_frame(
 ) -> Result<(), WsiError> {
     let (sof, precision, lossless_predictor) = jpeg_process_header(frame)?;
     let valid = match transfer_syntax_uid {
-        uids::JPEG_BASELINE8_BIT => sof == j2k_jpeg::SofKind::Baseline8,
-        uids::JPEG_EXTENDED12_BIT => {
-            matches!(
-                sof,
-                j2k_jpeg::SofKind::Extended8 | j2k_jpeg::SofKind::Extended12
-            )
-        }
-        JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX => {
-            matches!(
-                sof,
-                j2k_jpeg::SofKind::Progressive8 | j2k_jpeg::SofKind::Progressive12
-            )
-        }
+        // Scanners such as 3DHISTECH store progressive frames under the
+        // baseline syntax. The decoder follows each frame's own DCT process,
+        // and the precision check below keeps the declared sample type.
+        uids::JPEG_BASELINE8_BIT
+        | uids::JPEG_EXTENDED12_BIT
+        | JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX
+        | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX => sof != j2k_jpeg::SofKind::Lossless,
         uids::JPEG_LOSSLESS => sof == j2k_jpeg::SofKind::Lossless,
         uids::JPEG_LOSSLESS_SV1 => {
             sof == j2k_jpeg::SofKind::Lossless && lossless_predictor == Some(1)

@@ -19,9 +19,12 @@ not re-encoded. The reference images were visually reviewed: the progressive
 frame is background, and the JPEG 2000 frames contain tissue without labels.
 
 The scanner's source object mixes SOF0 and SOF2 JPEG frames under the baseline
-transfer syntax. The derived SOF2 fixture correctly declares JPEG Full Progression
-(1.2.840.10008.1.2.4.55). It tests the real process/container boundary, not varied
-progressive color content; generated JPEG tests cover that separately.
+transfer syntax. The reader decodes any lossy JPEG frame by its own DCT process
+when its precision matches BitsStored, so that source slide reads in full. The
+derived SOF2 fixture declares JPEG Full Progression (1.2.840.10008.1.2.4.55), and
+a DICOM unit test relabels its frame as baseline to cover the scanner's layout.
+It tests the real process/container boundary, not varied progressive color
+content; generated JPEG tests cover that separately.
 
 The `.ppm` files are independent decoded references. The ordinary
 `public_dicom_frames_match_independent_decoder_pixels` integration test compares

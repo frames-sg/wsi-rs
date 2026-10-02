@@ -202,6 +202,45 @@ fn decodes_jpeg_extended_sequential_frame() {
 }
 
 #[test]
+fn decodes_progressive_frames_stored_under_the_baseline_syntax() {
+    // 3DHISTECH-1 writes SOF2 frames under JPEG Baseline. The committed
+    // fixture holds one such frame, relabelled as JPEG Full Progression.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/public_dicom/progressive-sof2.dcm");
+    let slide = DicomSlide::parse(&fixture).expect("open progressive fixture");
+    let image = &slide.levels[0].parts[0];
+    let photometric_interpretation: &'static str =
+        Box::leak(image.photometric_interpretation.clone().into_boxed_str());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("progressive-under-baseline.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::JPEG_BASELINE8_BIT,
+            photometric_interpretation,
+            rows: image.tile_height as u16,
+            columns: image.tile_width as u16,
+            total_pixel_matrix_rows: image.tile_height,
+            total_pixel_matrix_columns: image.tile_width,
+            pixel_data: TestPixelData::Encapsulated(fixture_frames(&fixture).swap_remove(0)),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+
+    let relabelled = read_first_tile(&path);
+    let declared = read_first_tile(&fixture);
+    assert_eq!(
+        (relabelled.width, relabelled.height),
+        (declared.width, declared.height)
+    );
+    assert_eq!(relabelled.data.as_u8(), declared.data.as_u8());
+    assert_eq!(
+        read_first_raw_compressed_tile(&path).compression(),
+        Compression::Jpeg
+    );
+}
+
+#[test]
 fn decodes_rle_lossless_rgb_frame() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rle.dcm");
