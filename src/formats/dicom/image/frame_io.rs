@@ -281,6 +281,34 @@ impl DicomImage {
         Ok(results)
     }
 
+    /// Encoded bytes a read of `frame_index` holds, when known without I/O:
+    /// the native frame size, or the indexed fragment lengths once the lazy
+    /// frame index exists. Never waits for a thread building that index.
+    pub(in super::super) fn known_encoded_frame_bytes(&self, frame_index: u32) -> Option<u64> {
+        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+            return Some(
+                u64::from(self.tile_width)
+                    .saturating_mul(u64::from(self.tile_height))
+                    .saturating_mul(u64::from(self.samples_per_pixel))
+                    .saturating_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8)),
+            );
+        }
+        let frames = match self.frame_store.encapsulated_frames.try_lock() {
+            Ok(frames) => frames.clone(),
+            Err(std::sync::TryLockError::Poisoned(frames)) => frames.into_inner().clone(),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }?;
+        let range = frames.frame_ranges.get(frame_index as usize)?;
+        Some(
+            frames
+                .fragments
+                .get(range.clone())?
+                .iter()
+                .map(|fragment| u64::from(fragment.len))
+                .sum(),
+        )
+    }
+
     pub(in super::super) fn ensure_encapsulated_frames(
         &self,
     ) -> Result<Arc<DicomEncapsulatedFrames>, WsiError> {

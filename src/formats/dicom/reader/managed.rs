@@ -68,14 +68,29 @@ impl ManagedSlideReader for DicomReader {
         })())
     }
 
-    fn tile_encoded_upper_bound(&self, _: &TileRequest) -> Result<u64, WsiError> {
-        Ok(self.slide.encoded_unit_bytes)
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(self
+            .known_frame_encoded_bytes(req)
+            .unwrap_or(self.slide.encoded_unit_bytes))
     }
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
-        Ok(if reqs.is_empty() {
-            0
+        let mut frames = std::collections::HashSet::with_capacity(reqs.len());
+        let mut known = 0_u64;
+        let mut unknown = false;
+        for req in reqs {
+            if !frames.insert((req.level.get(), req.col, req.row)) {
+                continue;
+            }
+            match self.known_frame_encoded_bytes(req) {
+                Some(bytes) => known = known.saturating_add(bytes),
+                None => unknown = true,
+            }
+        }
+        // Frames not indexed yet share the one-unit bound batches always had.
+        Ok(if unknown {
+            known.max(self.slide.encoded_unit_bytes)
         } else {
-            self.slide.encoded_unit_bytes
+            known
         })
     }
     fn display_tile_encoded_upper_bound(&self, _: &TileViewRequest) -> Result<u64, WsiError> {
@@ -86,5 +101,30 @@ impl ManagedSlideReader for DicomReader {
     }
     fn region_fastpath_encoded_upper_bound(&self, _: &RegionRequest) -> Result<u64, WsiError> {
         Ok(self.slide.encoded_unit_bytes)
+    }
+}
+
+impl DicomReader {
+    /// Encoded bytes a read of `req`'s frame holds, when known. Admission
+    /// reserves this per read, so a frame's indexed length lets concurrent
+    /// single-tile reads proceed together instead of each reserving the whole
+    /// per-unit limit. Sparse gaps decode no encoded bytes. `None` covers
+    /// frames not indexed yet and requests the read will reject.
+    fn known_frame_encoded_bytes(&self, req: &TileRequest) -> Option<u64> {
+        let level = self.slide.levels.get(req.level.get() as usize)?;
+        let col = u32::try_from(req.col).ok()?;
+        let row = u32::try_from(req.row).ok()?;
+        if col >= level.tiles_across || row >= level.tiles_down {
+            return None;
+        }
+        let Some((image, frame_index)) = level
+            .image_for_tile(col, row)
+            .and_then(|image| image.frame_index(col, row).map(|index| (image, index)))
+        else {
+            return Some(0);
+        };
+        image
+            .known_encoded_frame_bytes(frame_index)
+            .map(|bytes| bytes.min(self.slide.encoded_unit_bytes))
     }
 }

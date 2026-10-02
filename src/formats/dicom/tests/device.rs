@@ -418,6 +418,17 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
         );
         let slide =
             Slide::open_with_options_and_runtime(&path, open(), Arc::clone(&runtime)).unwrap();
+        // Index the frames before the measured reads. Their known lengths
+        // tighten the encoded bounds, which turns streamed region batches into
+        // one dense batch; every read below then shares one route key.
+        slide
+            .prepare_level_controlled(
+                SceneId::new(0),
+                SeriesId::new(0),
+                LevelIdx::new(0),
+                &crate::ReadControl::default(),
+            )
+            .unwrap();
         let read = |slide: &Slide| {
             if region {
                 vec![slide

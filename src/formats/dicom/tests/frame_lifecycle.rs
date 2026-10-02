@@ -33,6 +33,59 @@ fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
 }
 
 #[test]
+fn read_admission_reserves_indexed_frame_lengths() {
+    use crate::core::registry::ManagedSlideReader;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("admission-bounds.dcm");
+    let frame = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            pixel_data: TestPixelData::Encapsulated(frame.clone()),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let image = slide.levels[0].parts[0].clone();
+    let unit = slide.encoded_unit_bytes;
+    let reader = DicomReader { slide };
+    let tile = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+
+    // Until the lazy index exists, a frame's length is unknown.
+    assert_eq!(reader.tile_encoded_upper_bound(&tile).unwrap(), unit);
+    assert_eq!(
+        reader
+            .tile_batch_encoded_upper_bound(&[tile.clone(), tile.clone()])
+            .unwrap(),
+        unit
+    );
+
+    image.ensure_encapsulated_frames().expect("index frames");
+    let bound = reader.tile_encoded_upper_bound(&tile).unwrap();
+    // DICOM pads odd fragment lengths to even.
+    assert!(
+        (frame.len() as u64..=frame.len() as u64 + 1).contains(&bound),
+        "bound {bound} should be the indexed frame length"
+    );
+    assert_eq!(
+        reader
+            .tile_batch_encoded_upper_bound(&[tile.clone(), tile.clone()])
+            .unwrap(),
+        bound,
+        "a repeated frame is read once"
+    );
+    assert_eq!(reader.tile_batch_encoded_upper_bound(&[]).unwrap(), 0);
+    assert_eq!(
+        reader
+            .tile_encoded_upper_bound(&TileRequest::new(0usize, 0usize, 0u32, 9, 9))
+            .unwrap(),
+        unit,
+        "out-of-range requests keep the conservative bound"
+    );
+}
+
+#[test]
 fn prepare_level_controlled_builds_the_lazy_frame_index() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("prepare-level.dcm");
