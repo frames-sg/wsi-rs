@@ -34,6 +34,27 @@ impl MetalBackendSessions {
         }
     }
 
+    /// Builds this session's JPEG 2000 decode kernels now, so the first slide
+    /// read does not wait for shader compilation. Call it from a background
+    /// thread at startup. Sessions on the same device share the kernels while
+    /// this session lives.
+    pub fn prewarm(&self) -> Result<(), WsiError> {
+        // A 16x12 RGB codestream: the smallest decode that builds every kernel.
+        const CODESTREAM: &[u8] = include_bytes!("prewarm.j2k");
+        let job = crate::decode::jp2k::Jp2kDecodeJob {
+            data: std::borrow::Cow::Borrowed(CODESTREAM),
+            expected_width: 16,
+            expected_height: 12,
+            rgb_color_space: true,
+            backend: j2k_core::BackendRequest::Metal,
+        };
+        crate::core::batch::exactly_one(
+            crate::decode::jp2k::decode_batch_jp2k_metal(std::slice::from_ref(&job), self),
+            "Metal prewarm decode",
+        )?
+        .map(drop)
+    }
+
     pub(crate) fn j2k(&self) -> &j2k_metal::MetalBackendSession {
         &self.j2k
     }
