@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jpeg_decoder::{Decoder as ReferenceJpegDecoder, PixelFormat as ReferenceJpegPixelFormat};
-use wsi_rs::{CpuTile, FormatRegistry, PlaneSelection, Slide, TileLayout, TileRequest};
+use wsi_rs::{
+    CpuTile, DisplayWindow, FormatRegistry, PlaneSelection, Slide, TileLayout, TileRequest,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TileBuffer {
@@ -302,9 +304,15 @@ fn sparse_layout_probe(level: u32, tile_layout: &TileLayout) -> Option<ProbeRequ
 pub(crate) fn sample_buffer_to_rgba(buf: CpuTile) -> Result<TileBuffer, String> {
     let width = buf.width();
     let height = buf.height();
-    let rgba = buf
-        .into_rgba()
-        .map_err(|e| format!("oracle: convert tile to RGBA: {e}"))?;
+    // Corpus display probes use the complete U16 storage range. Native U16
+    // precision is checked separately against the vendor reference pixels.
+    let rgba = if matches!(buf.data(), wsi_rs::CpuTileData::U16(_)) {
+        let window = DisplayWindow::new(0.0, f64::from(u16::MAX)).expect("valid U16 window");
+        buf.to_rgba_windowed(&window)
+    } else {
+        buf.into_rgba()
+    }
+    .map_err(|e| format!("oracle: convert tile to RGBA: {e}"))?;
     Ok(TileBuffer {
         pixels_rgba: rgba.into_raw(),
         width,

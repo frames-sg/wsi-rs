@@ -2,6 +2,11 @@ name: RC Preflight
 
 on:
   workflow_dispatch:
+    inputs:
+      artifacts_only:
+        description: "Build C artifacts only; source preflight must pass separately"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,6 +18,7 @@ env:
 
 jobs:
   source-preflight:
+    if: ${{ !inputs.artifacts_only }}
     strategy:
       fail-fast: false
       matrix:

@@ -419,3 +419,43 @@ phi_reviewed = true
 sha256 = "312c20a2d2a2e75c314bcd6fb13ccbe26ccd1347d6ee54de2da16f5b5c8c2990"
 citation = "tests/fixtures/public_dicom/README.md; OpenSlide CMU-1-JP2K-RCT-v2 source"
 url = ""
+
+[[slide]]
+name = "olympus_vsi_brightfield_he"
+alias = "olympus-vsi-001"
+path = ""
+format = "olympus_vsi"
+codecs = ["j2k"]
+must_decode = ["base", "level1", "level2"]
+required_properties = ["openslide.vendor"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 does not support Olympus VSI. Native level-0 probes are compared with SlideIO 2.9.0 by vendor_reference; this row also exercises the declared reduced levels.",
+]
+source = "openslide-testdata"
+license = "distributable"
+redistributable = true
+sha256 = "a273c82158b97554f1286146a841998ff1e05fd0dcb987a9feb81a18c9f3e1be"
+citation = "OpenSlide testdata, Olympus OS-1 H&E brightfield sample."
+phi_reviewed = true
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Olympus/OS-1.zip"
+
+[[slide]]
+name = "zeiss_zvi_merged_fluorescence"
+alias = "zeiss-zvi-001"
+path = ""
+format = "zeiss_zvi"
+codecs = ["uncompressed"]
+must_decode = ["base", "thumbnail"]
+required_properties = ["openslide.vendor", "zeiss.format"]
+openslide_required = false
+oracle_divergences = [
+  "OpenSlide 4.0.1 does not support Zeiss ZVI. Native U16 probes across all three channels are compared byte-for-byte with SlideIO 2.9.0 by vendor_reference.",
+]
+source = "openslide-testdata"
+license = "distributable"
+redistributable = true
+sha256 = "507a59a0a22e7a51ee8f19f82bdfe9291e10f49dd73d2f552a6d9b5b516fc72a"
+citation = "OpenSlide testdata, Zeiss-1-Merged HER2 FISH sample, contributed by Yves Sucaet."
+phi_reviewed = true
+url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Zeiss/Zeiss-1-Merged.zvi"
