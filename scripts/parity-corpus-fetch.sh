@@ -17,7 +17,7 @@ USAGE
   exit 0
 fi
 
-python3 - "$repo_root" "$@" <<'PY'
+python3 -u - "$repo_root" "$@" <<'PY'
 from __future__ import annotations
 
 import hashlib
