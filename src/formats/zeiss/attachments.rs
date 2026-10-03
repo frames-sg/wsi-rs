@@ -2,13 +2,9 @@ use super::preflight::{preflight_czi_file_with_limits, preflight_czi_subblock_wi
 use super::raster::{bitmap_to_sample_buffer, blit_tile};
 use super::subblock::bitmap_from_raw_subblock;
 use super::*;
+use crate::core::execution_telemetry::{record, Event};
 
 const ASSOCIATED_JPEG_PROBE_BYTES: u64 = 256 << 10;
-
-#[cfg(test)]
-thread_local! {
-    pub(super) static EMBEDDED_COMPOSED_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
 
 pub(super) fn associated_name(name: &str) -> Option<&'static str> {
     match name {
@@ -174,10 +170,10 @@ fn read_embedded_czi_plane(
     let height = u32::try_from(plane_rect.h)
         .map_err(|_| WsiError::DisplayConversion("embedded CZI plane height is invalid".into()))?;
     let mut bitmap = if compose {
-        #[cfg(test)]
-        EMBEDDED_COMPOSED_PIXELS.with(|count| {
-            count.set(count.get() + u64::from(width) * u64::from(height));
-        });
+        record(
+            Event::ZeissEmbeddedComposedPixels,
+            width as usize * height as usize,
+        );
         Some(
             czi_rs::Bitmap::zeros(pixel_type, width, height)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?,
@@ -219,18 +215,6 @@ fn read_embedded_czi_plane(
         icc_profile: Vec::new(),
     };
     Ok((metadata, bitmap.map(bitmap_to_sample_buffer).transpose()?))
-}
-
-#[cfg(test)]
-fn ensure_embedded_czi_plane_budget(
-    dimensions: (i32, i32),
-    bytes_per_pixel: usize,
-) -> Result<(), WsiError> {
-    ensure_embedded_czi_plane_budget_with_limit(
-        dimensions,
-        bytes_per_pixel,
-        MAX_DECODED_IMAGE_BYTES,
-    )
 }
 
 fn ensure_embedded_czi_plane_budget_with_limit(

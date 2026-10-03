@@ -184,7 +184,7 @@ pub(crate) struct DatasetIdentity {
 /// Implementations map raw IFDs into the normalized Dataset model.
 pub(crate) trait TiffLayoutInterpreter: Send + Sync {
     /// Returns true if this interpreter can handle the given container.
-    /// Must be cheap — only inspect tags already loaded into `container`.
+    /// Must be cheap: only inspect tags already loaded into `container`.
     fn detect(&self, container: &TiffContainer) -> bool;
 
     /// Interpret the container, producing a `DatasetLayout`.
@@ -265,13 +265,13 @@ pub(crate) enum TileSource {
         tiles_down: u32,
         /// Restart interval in MCUs (from DRI marker).
         restart_interval: u16,
-        /// Strip byte offset — used to compute last-tile end boundary.
+        /// Strip byte offset, used to compute the last tile's end boundary.
         strip_offset: u64,
-        /// Strip byte count — used to compute last-tile end boundary.
+        /// Strip byte count, used to compute the last tile's end boundary.
         strip_byte_count: u64,
     },
 
-    /// NDPI level without restart markers — full decode required.
+    /// NDPI level without restart markers; requires a full decode.
     ///
     /// The pixel reader decodes the entire JPEG once, caches it in
     /// `FullDecodeCache`, and extracts virtual tile regions on demand.

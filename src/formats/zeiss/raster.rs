@@ -178,7 +178,12 @@ pub(super) fn blit_raw_uncompressed_rgb_subblock(
                 let src_row = &source_bytes[src_offset..src_offset + intersection.w as usize * 3];
                 let dst_row =
                     &mut destination[dst_offset..dst_offset + intersection.w as usize * 3];
-                for (src_px, dst_px) in src_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(3)) {
+                for (src_px, dst_px) in src_row
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .zip(dst_row.as_chunks_mut::<3>().0)
+                {
                     dst_px[0] = src_px[2];
                     dst_px[1] = src_px[1];
                     dst_px[2] = src_px[0];
@@ -188,7 +193,12 @@ pub(super) fn blit_raw_uncompressed_rgb_subblock(
                 let src_row = &source_bytes[src_offset..src_offset + intersection.w as usize * 4];
                 let dst_row =
                     &mut destination[dst_offset..dst_offset + intersection.w as usize * 3];
-                for (src_px, dst_px) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
+                for (src_px, dst_px) in src_row
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst_row.as_chunks_mut::<3>().0)
+                {
                     dst_px[0] = src_px[2];
                     dst_px[1] = src_px[1];
                     dst_px[2] = src_px[0];
@@ -209,7 +219,7 @@ pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile,
     match bitmap.pixel_type {
         CziPixelType::Bgr24 => {
             let mut rgb = Vec::with_capacity(bitmap.data.len());
-            for chunk in bitmap.data.chunks_exact(3) {
+            for chunk in bitmap.data.as_chunks::<3>().0 {
                 rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
             }
             rgb_u8_tile(bitmap.width, bitmap.height, rgb)
@@ -217,7 +227,7 @@ pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile,
         CziPixelType::Bgra32 => {
             let mut rgb =
                 Vec::with_capacity((bitmap.width as usize) * (bitmap.height as usize) * 3);
-            for chunk in bitmap.data.chunks_exact(4) {
+            for chunk in bitmap.data.as_chunks::<4>().0 {
                 rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
             }
             rgb_u8_tile(bitmap.width, bitmap.height, rgb)
@@ -227,7 +237,7 @@ pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile,
                 .to_u16_vec()
                 .expect("Bgr48 samples always have an even byte width");
             let mut rgb = Vec::with_capacity(values.len());
-            for chunk in values.chunks_exact(3) {
+            for chunk in values.as_chunks::<3>().0 {
                 rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
             }
             CpuTile::new(

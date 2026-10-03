@@ -287,7 +287,7 @@ pub(super) fn build_planar_stripped_rgb_tiff(
     file
 }
 
-// ── Review finding tests ─────────────────────────────────────
+// ── Additional TIFF regression fixtures ──────────────────────
 
 /// Build a tiled TIFF with uncompressed RGB data (compression=1).
 pub(super) fn build_uncompressed_tiled_tiff(

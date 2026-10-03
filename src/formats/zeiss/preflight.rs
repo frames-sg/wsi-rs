@@ -18,11 +18,6 @@ const METADATA_MAGIC: &[u8; 16] = b"ZISRAWMETADATA\0\0";
 const ATTACHMENT_DIRECTORY_MAGIC: &[u8; 16] = b"ZISRAWATTDIR\0\0\0\0";
 const SUBBLOCK_MAGIC: &[u8; 16] = b"ZISRAWSUBBLOCK\0\0";
 
-#[cfg(test)]
-pub(super) fn preflight_czi_file(path: &Path) -> Result<FileIdentity, WsiError> {
-    preflight_czi_file_with_limits(path, crate::SlideLimits::default())
-}
-
 pub(super) fn preflight_czi_file_with_limits(
     path: &Path,
     limits: crate::SlideLimits,
@@ -41,11 +36,6 @@ pub(super) fn preflight_czi_file_with_limits(
         },
     })?;
     Ok(identity)
-}
-
-#[cfg(test)]
-pub(super) fn preflight_czi_subblock(path: &Path, offset: u64) -> Result<FileIdentity, WsiError> {
-    preflight_czi_subblock_with_limits(path, offset, crate::SlideLimits::default())
 }
 
 pub(super) fn preflight_czi_subblock_with_limits(
@@ -87,11 +77,6 @@ pub(super) fn preflight_czi_open_subblock_bounds(
         },
     )?;
     Ok((identity, bytes))
-}
-
-#[cfg(test)]
-fn preflight_czi_reader(reader: &mut (impl Read + Seek), file_len: u64) -> Result<(), WsiError> {
-    preflight_czi_reader_with_limits(reader, file_len, crate::SlideLimits::default())
 }
 
 fn preflight_czi_reader_with_limits(
@@ -263,21 +248,6 @@ fn preflight_attachment_directory(
         ));
     }
     Ok(())
-}
-
-#[cfg(test)]
-fn preflight_czi_subblock_reader(
-    reader: &mut (impl Read + Seek),
-    file_len: u64,
-    offset: u64,
-) -> Result<(), WsiError> {
-    preflight_czi_subblock_reader_with_limits(
-        reader,
-        file_len,
-        offset,
-        crate::SlideLimits::default(),
-    )
-    .map(|_| ())
 }
 
 fn preflight_czi_subblock_reader_with_limits(

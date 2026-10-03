@@ -12,31 +12,24 @@ pydicom 3.0.2, Pillow 12.1.1 (libjpeg), and OpenJPEG 2.5.4.
 | ybr-rct | CMU-1-JP2K-RCT-v2.zip / DCM_0.dcm | 836 | OpenJPEG |
 | ybr-ict | CMU-1-JP2K-ICT-v2.zip / img_0.dcm | 1194 | OpenJPEG |
 
-The DICOM containers have synthetic allowlisted metadata, identifiers, one-frame
-matrix geometry, and synthetic pixel spacing. Patient, specimen, institution,
-private metadata and original identifiers are not copied. Compressed pixels are
-not re-encoded. The reference images were visually reviewed: the progressive
-frame is background, and the JPEG 2000 frames contain tissue without labels.
+Each DICOM container holds one frame with made-up metadata, identifiers and
+pixel spacing. No patient, specimen, institution or private metadata and no
+original identifiers are copied. The compressed pixels are copied unchanged.
+The progressive frame shows background; the JPEG 2000 frames show tissue and
+no slide label.
 
-The scanner's source object mixes SOF0 and SOF2 JPEG frames under the baseline
-transfer syntax. The reader decodes any lossy JPEG frame by its own DCT process
-when its precision matches BitsStored, so that source slide reads in full. The
-derived SOF2 fixture declares JPEG Full Progression (1.2.840.10008.1.2.4.55), and
-a DICOM unit test relabels its frame as baseline to cover the scanner's layout.
-It tests the real process/container boundary, not varied progressive color
-content; generated JPEG tests cover that separately.
+The source scanner stores progressive (SOF2) JPEG frames under the baseline
+transfer syntax. The SOF2 fixture declares JPEG Full Progression
+(1.2.840.10008.1.2.4.55), and a DICOM unit test relabels it as baseline to
+cover that scanner's layout.
 
-The `.ppm` files are independent decoded references. The ordinary
-`public_dicom_frames_match_independent_decoder_pixels` integration test compares
-all pixels: lossless YBR_RCT is byte-exact, while progressive JPEG and irreversible
-YBR_ICT use the established decoder tolerances. These small codec fixtures do not
-replace full-slide geometry, pyramid, or performance coverage.
+The `.ppm` files are decoded with independent decoders.
+`public_dicom_frames_match_independent_decoder_pixels` compares every pixel:
+lossless YBR_RCT must match exactly; progressive JPEG and irreversible YBR_ICT
+must match within the decoder tolerances.
 
-`ybr-rct.svcache` is a complete schema-4 cache made by the workspace's 0.7.0
-candidate writer from a temporary copy of the deidentified RCT fixture. Its
-source is removed before pixel validation, demonstrating that the complete
-cache is independently readable. The same integration test compares all cache
-pixels with the OpenJPEG PPM exactly. The cache retains its temporary source
-path and modification time as diagnostic identity, so rebuilding changes the
-container bytes and requires updating the corpus manifest digest; expected
-image samples remain identical. The generator requires Cargo for this step.
+`ybr-rct.svcache` is a `.svcache` file built from the RCT fixture. The test
+reads it with the source file absent and compares every pixel with the OpenJPEG
+reference exactly. Rebuilding it changes the file's bytes (it records the source
+path and modification time), so update its digest in the corpus manifest after
+rebuilding. Rebuilding needs Cargo.

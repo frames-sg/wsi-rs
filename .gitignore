@@ -60,3 +60,4 @@ lcov*.info
 *.docx
 *.pptx
 *.pdf
+/tests/fixtures/parity_corpus.private.toml

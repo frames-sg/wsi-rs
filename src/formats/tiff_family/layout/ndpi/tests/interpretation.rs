@@ -1,7 +1,7 @@
 use super::super::*;
 use super::fixtures::*;
 
-// ── Task 4: Detection + IFD classification tests ──────────────────
+// ── Detection and IFD classification ──────────────────────────────
 
 #[test]
 fn detect_ndpi_container() {
@@ -89,7 +89,7 @@ fn interpret_no_pyramid_levels_returns_error() {
     );
 }
 
-// ── Task 5: Full interpret() tests with embedded JPEG ──────────────
+// ── Full interpret() with embedded JPEG ───────────────────────────
 
 #[test]
 fn interpret_single_level() {

@@ -235,7 +235,9 @@ fn downscaled_size_override_keeps_partial_mcus_like_libjpeg() {
     assert_eq!((partial.width, partial.height), (11, 7));
     let cropped: Vec<u8> = aligned
         .pixels
-        .chunks_exact(12 * 3)
+        .as_chunks::<{ 12 * 3 }>()
+        .0
+        .iter()
         .take(7)
         .flat_map(|row| row[..11 * 3].iter().copied())
         .collect();

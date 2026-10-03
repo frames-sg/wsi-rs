@@ -1,8 +1,64 @@
+use super::batch::{
+    materialize_jp2k_batch_outputs, try_decode_prepared_batch_jp2k_with_j2k, PreparedJp2kBatchJob,
+};
+use super::cpu::decode_one_jp2k_job_with_parallelism;
+use super::prepare::prepare_jp2k_job;
 use super::*;
+use crate::core::types::CpuTile;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use crate::core::types::PixelFormat;
 use crate::decode::jp2k_codestream::parse_codestream_header;
+use crate::error::WsiError;
 use crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance;
 use image::{DynamicImage, ImageFormat, RgbaImage};
+use j2k::CpuDecodeParallelism;
 use std::io::Cursor;
+
+pub(super) fn decode_jp2k_tile_batch_to_sample_buffers(
+    reqs: &[Jp2kDecodeJob<'_>],
+) -> Result<Vec<CpuTile>, WsiError> {
+    if reqs.is_empty() {
+        return Ok(Vec::new());
+    }
+    decode_jp2k_tile_batch_with_j2k(reqs)
+}
+
+pub(super) fn try_decode_batch_jp2k_with_j2k(jobs: &[Jp2kDecodeJob<'_>]) -> Option<Vec<CpuTile>> {
+    let prepared = jobs
+        .iter()
+        .map(prepare_jp2k_job)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    try_decode_prepared_batch_jp2k_with_j2k(&prepared)
+}
+
+pub(super) fn decode_jp2k_tile_batch_with_j2k(
+    reqs: &[Jp2kDecodeJob<'_>],
+) -> Result<Vec<CpuTile>, WsiError> {
+    reqs.iter().map(decode_one_jp2k_job).collect()
+}
+
+pub(super) fn decode_one_jp2k_job(job: &Jp2kDecodeJob<'_>) -> Result<CpuTile, WsiError> {
+    decode_one_jp2k_job_with_parallelism(job, CpuDecodeParallelism::Auto)
+}
+
+#[cfg(feature = "metal")]
+pub(super) fn decode_one_jp2k_metal(
+    job: &Jp2kDecodeJob<'_>,
+    sessions: &crate::output::metal::MetalBackendSessions,
+) -> Result<crate::output::metal::MetalDeviceTile, WsiError> {
+    let prepared = prepare_jp2k_job(job)?;
+    super::metal_backend::decode_prepared_jp2k_metal(&prepared, sessions)
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn decode_one_jp2k_cuda(
+    job: &Jp2kDecodeJob<'_>,
+    sessions: &crate::output::cuda::CudaBackendSessions,
+) -> Result<crate::output::cuda::CudaDeviceTile, WsiError> {
+    let prepared = prepare_jp2k_job(job)?;
+    super::cuda::decode_prepared_jp2k_cuda(&prepared, sessions)
+}
 
 fn load_fixture_rgb(ppm_bytes: &[u8]) -> image::RgbImage {
     match image::load(Cursor::new(ppm_bytes), ImageFormat::Pnm).unwrap() {
@@ -56,7 +112,12 @@ fn sample_buffer_to_rgba(buffer: CpuTile) -> Result<RgbaImage, WsiError> {
         )));
     }
     let mut rgba = vec![255u8; pixel_count * 4];
-    for (src, dst) in rgb.chunks_exact(3).zip(rgba.chunks_exact_mut(4)) {
+    for (src, dst) in rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(rgba.as_chunks_mut::<4>().0)
+    {
         dst[0] = src[0];
         dst[1] = src[1];
         dst[2] = src[2];

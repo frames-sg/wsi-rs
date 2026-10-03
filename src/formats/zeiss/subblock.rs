@@ -48,11 +48,15 @@ pub(super) fn bitmap_from_raw_subblock(
     let tile = tile_from_raw_subblock(raw, limits)?;
     let bgr = match &tile.data {
         CpuTileData::U8(values) => values
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[2], p[1], p[0]])
             .collect(),
         CpuTileData::U16(values) => values
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[2], p[1], p[0]])
             .flat_map(u16::to_le_bytes)
             .collect(),

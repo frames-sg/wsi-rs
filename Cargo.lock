@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "wsi-rs"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "byteorder",
@@ -1546,7 +1546,7 @@ dependencies = [
 
 [[package]]
 name = "wsi-rs-openslide-shim"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libloading 0.8.9",
  "tempfile",

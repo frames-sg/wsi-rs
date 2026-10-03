@@ -139,7 +139,9 @@ fn vmu_matches_openslide_geometry_metadata_and_rgb12_rendering() {
             panic!("expected RGB16")
         };
         let rgba: Vec<_> = values
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [(p[0] >> 4) as u8, (p[1] >> 4) as u8, (p[2] >> 4) as u8, 255])
             .collect();
         assert_eq!(

@@ -31,11 +31,6 @@ pub(super) struct EtsScene {
 }
 
 impl EtsScene {
-    #[cfg(test)]
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
-        Self::parse_with_budget(path, &OpenBudget::new(crate::SlideLimits::default()))
-    }
-
     pub(super) fn parse_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
         let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
             source: Arc::new(source),

@@ -20,8 +20,6 @@ mod slide;
 mod traits;
 
 pub use crate::core::limits::{SlideLimitError, SlideLimits};
-#[cfg(test)]
-use composition::composite_fractional_region_from_source;
 pub(crate) use composition::{
     cairo_subtile_surface_u8, composite_region_from_source,
     composite_region_from_source_in_batches, crop_rgb_interleaved_buffer,

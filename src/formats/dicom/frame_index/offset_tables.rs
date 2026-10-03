@@ -444,13 +444,13 @@ fn read_u64_table_controlled<R: Read + Seek>(
             .ok_or_else(|| invalid_slide(path, "DICOM extended offset table offset overflow"))?;
         read_exact_at(reader, path, chunk_offset, &mut buffer[..chunk_len])?;
         check_index_control(control)?;
-        values.extend(buffer[..chunk_len].chunks_exact(8).map(|chunk| {
-            u64::from_le_bytes(
-                chunk
-                    .try_into()
-                    .expect("DICOM extended offset table chunk is 8 bytes"),
-            )
-        }));
+        values.extend(
+            buffer[..chunk_len]
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|chunk| u64::from_le_bytes(*chunk)),
+        );
         bytes_read += u32::try_from(chunk_len).expect("bounded table read chunk fits u32");
     }
     Ok(values)
@@ -482,13 +482,13 @@ pub(in super::super) fn read_basic_offset_table_at(
             .ok_or_else(|| invalid_slide(path, "DICOM basic offset table offset overflow"))?;
         read_exact_at(file, path, chunk_offset, &mut buffer[..chunk_len])?;
         check_index_control(control)?;
-        values.extend(buffer[..chunk_len].chunks_exact(4).map(|chunk| {
-            u32::from_le_bytes(
-                chunk
-                    .try_into()
-                    .expect("DICOM basic offset table chunk is 4 bytes"),
-            )
-        }));
+        values.extend(
+            buffer[..chunk_len]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| u32::from_le_bytes(*chunk)),
+        );
         bytes_read += u32::try_from(chunk_len).expect("bounded table read chunk fits u32");
     }
     Ok(values)

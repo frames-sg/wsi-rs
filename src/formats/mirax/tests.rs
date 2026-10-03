@@ -1,13 +1,16 @@
 use super::*;
 use std::io::Write;
-use std::sync::atomic::Ordering;
+
+impl MiraxSlide {
+    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, CacheConfig::deterministic())
+    }
+}
 
 mod backend;
 mod errors;
 pub(super) mod fixtures;
 mod parser;
-
-static MIRAX_ASSOCIATED_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(unix)]
 #[test]
@@ -49,7 +52,7 @@ fn mirax_sentinel_path() -> PathBuf {
             std::env::var_os("HOME").map(|home| {
                 PathBuf::from(home)
                     .join(".cache")
-                    .join("slideviewer")
+                    .join("wsi-rs")
                     .join("parity-corpus")
             })
         });
@@ -60,9 +63,6 @@ fn mirax_sentinel_path() -> PathBuf {
 
 #[test]
 fn associated_thumbnail_is_cached_after_first_read() {
-    let _serial = MIRAX_ASSOCIATED_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let sentinel_path = mirax_sentinel_path();
     if !sentinel_path.is_file() {
         eprintln!(
@@ -71,18 +71,23 @@ fn associated_thumbnail_is_cached_after_first_read() {
         );
         return;
     }
-    MIRAX_ASSOCIATED_CACHE_HITS.store(0, Ordering::Relaxed);
+    let cache_hits = || {
+        crate::core::execution_telemetry::test_count(
+            crate::core::execution_telemetry::Event::MiraxAssociatedCacheHits,
+        )
+    };
     let slide = MiraxSlide::parse(&sentinel_path).expect("parse MIRAX sentinel");
     let first = slide
         .read_associated("thumbnail")
         .expect("read thumbnail once");
+    let hits_before_second_read = cache_hits();
     let second = slide
         .read_associated("thumbnail")
         .expect("read thumbnail twice");
     assert_eq!(first.width, second.width);
     assert_eq!(first.height, second.height);
     assert_eq!(
-        MIRAX_ASSOCIATED_CACHE_HITS.load(Ordering::Relaxed),
+        cache_hits() - hits_before_second_read,
         1,
         "second thumbnail read should hit the cache"
     );

@@ -18,7 +18,7 @@ fn clamp_ndpi_strip_crop_limits_edge_requests_to_strip_bounds() {
 
 fn make_ndpi_strip(width: u32, height: u32, rgb: [u8; 3]) -> Arc<CpuTile> {
     let mut data = vec![0u8; width as usize * height as usize * 3];
-    for pixel in data.chunks_exact_mut(3) {
+    for pixel in data.as_chunks_mut::<3>().0 {
         pixel.copy_from_slice(&rgb);
     }
     Arc::new(CpuTile {
@@ -288,8 +288,11 @@ fn uncached_ndpi_regions_decode_their_strips_on_one_worker() {
         pool.install(|| {
             let cache = crate::TileCache::new(1024 * 1024);
             let mut context = crate::core::registry::SlideReadContext::new(Some(&cache), 8192);
-            let decoded =
-                || super::super::super::ndpi_core::NDPI_STRIP_DECODES.with(|count| count.get());
+            let decoded = || {
+                crate::core::execution_telemetry::test_count(
+                    crate::core::execution_telemetry::Event::NdpiStripDecodes,
+                )
+            };
             let before = decoded();
             let tile = reader
                 .read_region_fastpath(&mut context, &request)

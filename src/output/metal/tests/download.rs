@@ -7,14 +7,14 @@ fn mixed_readback_batches_stage_once_and_preserve_duplicate_cropped_rows() {
         return;
     };
     let sessions = MetalBackendSessions::new(device.clone());
-    let a = MetalDeviceTile::from_resident(interop::resident_private_test_image(
+    let a = MetalDeviceTile::from_resident(interop::test_fixtures::resident_private_test_image(
         &device,
         &[1, 2, 3, 4, 5, 6],
         (2, 1),
         6,
     ))
     .unwrap();
-    let b = MetalDeviceTile::from_resident(interop::resident_private_test_image(
+    let b = MetalDeviceTile::from_resident(interop::test_fixtures::resident_private_test_image(
         &device,
         &[9, 8, 7, 6, 5, 4, 0xaa, 0xbb, 3, 2, 1, 5, 6, 7, 0xcc, 0xdd],
         (2, 2),
@@ -58,14 +58,18 @@ fn completed_shared_readback_copies_only_logical_rows_without_staging() {
         j2k_metal_support::MetalImageLayout::new(2, (1, 2), 4, j2k_core::PixelFormat::Rgb8)
             .unwrap();
     let tile = MetalDeviceTile::from_resident(image.view(layout).unwrap()).unwrap();
-    interop::READBACK_STAGING_BYTES.with(|bytes| bytes.set(0));
+    let staged_before = crate::core::execution_telemetry::test_count(
+        crate::core::execution_telemetry::Event::ReadbackStagingBytes,
+    );
     assert_eq!(
         tile.download_cpu().unwrap().as_u8().unwrap(),
         &[1, 2, 3, 4, 5, 6]
     );
     assert_eq!(
-        interop::READBACK_STAGING_BYTES.with(std::cell::Cell::get),
-        0,
+        crate::core::execution_telemetry::test_count(
+            crate::core::execution_telemetry::Event::ReadbackStagingBytes
+        ),
+        staged_before,
         "completed shared storage needs no GPU staging allocation"
     );
 }
@@ -113,7 +117,7 @@ fn private_readback_reuses_the_queue_after_session_drop_and_crop() {
         return;
     };
     let session = MetalBackendSessions::new(device.clone());
-    let tile = MetalDeviceTile::from_resident(interop::resident_private_test_image(
+    let tile = MetalDeviceTile::from_resident(interop::test_fixtures::resident_private_test_image(
         &device,
         &[1, 2, 3, 4, 5, 6, 8, 9, 7, 6, 5, 4],
         (2, 2),

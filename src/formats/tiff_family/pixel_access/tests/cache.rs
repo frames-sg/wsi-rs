@@ -33,11 +33,11 @@ fn full_decode_cache_eviction() {
         FullDecodeKey::Level(IfdId(200)),
         Arc::new(make_sample_buffer(100)),
     );
-    // 200 bytes used — both fit
+    // 200 bytes used: both fit
     assert!(cache.get(&FullDecodeKey::Level(IfdId(100))).is_some());
     assert!(cache.get(&FullDecodeKey::Level(IfdId(200))).is_some());
 
-    // Third entry pushes over 250 — LRU (FullDecodeKey::Level(IfdId(100))) should be evicted
+    // Third entry pushes over 250, evicting the LRU FullDecodeKey::Level(IfdId(100))
     // Note: after the two gets above, access order is 100 then 200,
     // so FullDecodeKey::Level(IfdId(100)) is older. But LruCache.get() promotes, so after
     // get(100) then get(200), 100 was accessed first, then 200.

@@ -58,11 +58,6 @@ pub(super) struct ReadbackRows<'a> {
     pub(super) byte_len: usize,
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(super) static READBACK_STAGING_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 // SAFETY: the converter owns retained Metal queue, library, and immutable
 // pipeline objects, all documented by Metal as cross-thread resources. Lazy
 // pipeline initialization is serialized by `OnceLock`.
@@ -127,19 +122,6 @@ pub(super) fn bind_ycbcr_params(
             index,
         )
     };
-}
-
-#[cfg(test)]
-pub(super) fn bind_probe_coordinate(
-    encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
-    index: usize,
-    coordinate: &[u32; 2],
-) {
-    assert!(index < 31, "Metal byte index exceeds the binding table");
-    let pointer = std::ptr::NonNull::from(coordinate).cast();
-    // SAFETY: the two initialized `u32` values exactly match the probe
-    // shader's `uint2` value binding and Metal copies them synchronously.
-    unsafe { encoder.setBytes_length_atIndex(pointer, core::mem::size_of_val(coordinate), index) };
 }
 
 pub(super) fn submit_ycbcr_images(
@@ -279,8 +261,6 @@ fn download_staged_rows(
     record(Event::ReadbackSubmissions, 1);
     record(Event::ReadbackStagingBytes, byte_len);
     record(Event::MetalCompletionWaits, 1);
-    #[cfg(test)]
-    READBACK_STAGING_BYTES.with(|bytes| bytes.set(bytes.get() + byte_len));
     let output = crate::core::batch::exactly_one(
         submitted
             .wait()
@@ -417,79 +397,6 @@ fn copy_completed_shared_rows(
     Ok(bytes)
 }
 
-#[cfg(test)]
-pub(super) fn resident_test_image(
-    device: &ProtocolObject<dyn MTLDevice>,
-    bytes: &[u8],
-    dimensions: (u32, u32),
-    pitch_bytes: usize,
-) -> ResidentMetalImage {
-    let buffer = j2k_metal_support::checked_shared_buffer_with_slice(device, bytes)
-        .expect("test Metal upload");
-    let layout = MetalImageLayout::new(0, dimensions, pitch_bytes, j2k_core::PixelFormat::Rgb8)
-        .expect("test resident layout");
-    // SAFETY: the synchronous upload is complete and the owned buffer has no
-    // surviving writable alias.
-    unsafe { ResidentMetalImage::from_completed_buffer(buffer, layout) }
-        .expect("test resident image")
-}
-
-#[cfg(test)]
-pub(crate) fn resident_bytes(image: &ResidentMetalImage) -> Vec<u8> {
-    // SAFETY: test output is complete and the immutable resident allocation is
-    // read only for the duration of this snapshot.
-    unsafe {
-        j2k_metal_support::checked_buffer_read_vec::<u8>(
-            image.raw_buffer(),
-            image.byte_offset(),
-            image.byte_len(),
-        )
-    }
-    .expect("resident test readback")
-}
-
-#[cfg(test)]
-pub(super) fn resident_private_test_image(
-    device: &ProtocolObject<dyn MTLDevice>,
-    bytes: &[u8],
-    dimensions: (u32, u32),
-    pitch: usize,
-) -> ResidentMetalImage {
-    let input = resident_test_image(device, bytes, dimensions, pitch);
-    let buffer = j2k_metal_support::checked_private_buffer(device, bytes.len()).unwrap();
-    let queue = j2k_metal_support::checked_command_queue(device).unwrap();
-    let command = j2k_metal_support::checked_command_buffer(&queue).unwrap();
-    let blit = j2k_metal_support::checked_blit_command_encoder(&command).unwrap();
-    // SAFETY: the upload initialized all `bytes.len()` source bytes, including
-    // padding. The private destination is fresh and exclusively written here.
-    unsafe {
-        blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
-            input.raw_buffer(),
-            0,
-            &buffer,
-            0,
-            bytes.len(),
-        );
-    }
-    blit.endEncoding();
-    let layout = MetalImageLayout::new(0, dimensions, pitch, j2k_core::PixelFormat::Rgb8).unwrap();
-    // SAFETY: this command is the destination's only writer and retains its
-    // immutable upload source until the submitted copy has completed.
-    let submitted = unsafe {
-        SubmittedMetalImages::from_uncommitted(device, command, vec![(buffer, layout)], vec![input])
-    }
-    .unwrap();
-    submitted.wait().unwrap().pop().unwrap()
-}
-
-#[cfg(test)]
-pub(super) fn u64_buffer_values(buffer: &ProtocolObject<dyn MTLBuffer>, len: usize) -> Vec<u64> {
-    // SAFETY: the test command buffer has completed and the shared output is
-    // read only while this snapshot is created.
-    unsafe { j2k_metal_support::checked_buffer_read_vec::<u64>(buffer, 0, len) }
-        .expect("test u64 Metal readback")
-}
-
 impl MetalDeviceTile {
     /// Adopt a completed, uniquely controlled Metal buffer as a device tile.
     ///
@@ -549,5 +456,103 @@ impl MetalDeviceTile {
                 (unsafe { image.raw_buffer() }, image.byte_offset())
             }
         }
+    }
+}
+
+/// Test fixtures that need unsafe Metal calls, kept in this audited module.
+#[cfg(test)]
+pub(super) mod test_fixtures {
+    use super::*;
+
+    pub(in super::super) fn bind_probe_coordinate(
+        encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+        index: usize,
+        coordinate: &[u32; 2],
+    ) {
+        assert!(index < 31, "Metal byte index exceeds the binding table");
+        let pointer = std::ptr::NonNull::from(coordinate).cast();
+        // SAFETY: the two initialized `u32` values exactly match the probe
+        // shader's `uint2` value binding and Metal copies them synchronously.
+        unsafe {
+            encoder.setBytes_length_atIndex(pointer, core::mem::size_of_val(coordinate), index)
+        };
+    }
+
+    pub(in super::super) fn resident_test_image(
+        device: &ProtocolObject<dyn MTLDevice>,
+        bytes: &[u8],
+        dimensions: (u32, u32),
+        pitch_bytes: usize,
+    ) -> ResidentMetalImage {
+        let buffer = j2k_metal_support::checked_shared_buffer_with_slice(device, bytes)
+            .expect("test Metal upload");
+        let layout = MetalImageLayout::new(0, dimensions, pitch_bytes, j2k_core::PixelFormat::Rgb8)
+            .expect("test resident layout");
+        // SAFETY: the synchronous upload is complete and the owned buffer has no
+        // surviving writable alias.
+        unsafe { ResidentMetalImage::from_completed_buffer(buffer, layout) }
+            .expect("test resident image")
+    }
+
+    pub(crate) fn resident_bytes(image: &ResidentMetalImage) -> Vec<u8> {
+        // SAFETY: test output is complete and the immutable resident allocation is
+        // read only for the duration of this snapshot.
+        unsafe {
+            j2k_metal_support::checked_buffer_read_vec::<u8>(
+                image.raw_buffer(),
+                image.byte_offset(),
+                image.byte_len(),
+            )
+        }
+        .expect("resident test readback")
+    }
+
+    pub(in super::super) fn resident_private_test_image(
+        device: &ProtocolObject<dyn MTLDevice>,
+        bytes: &[u8],
+        dimensions: (u32, u32),
+        pitch: usize,
+    ) -> ResidentMetalImage {
+        let input = resident_test_image(device, bytes, dimensions, pitch);
+        let buffer = j2k_metal_support::checked_private_buffer(device, bytes.len()).unwrap();
+        let queue = j2k_metal_support::checked_command_queue(device).unwrap();
+        let command = j2k_metal_support::checked_command_buffer(&queue).unwrap();
+        let blit = j2k_metal_support::checked_blit_command_encoder(&command).unwrap();
+        // SAFETY: the upload initialized all `bytes.len()` source bytes, including
+        // padding. The private destination is fresh and exclusively written here.
+        unsafe {
+            blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                input.raw_buffer(),
+                0,
+                &buffer,
+                0,
+                bytes.len(),
+            );
+        }
+        blit.endEncoding();
+        let layout =
+            MetalImageLayout::new(0, dimensions, pitch, j2k_core::PixelFormat::Rgb8).unwrap();
+        // SAFETY: this command is the destination's only writer and retains its
+        // immutable upload source until the submitted copy has completed.
+        let submitted = unsafe {
+            SubmittedMetalImages::from_uncommitted(
+                device,
+                command,
+                vec![(buffer, layout)],
+                vec![input],
+            )
+        }
+        .unwrap();
+        submitted.wait().unwrap().pop().unwrap()
+    }
+
+    pub(in super::super) fn u64_buffer_values(
+        buffer: &ProtocolObject<dyn MTLBuffer>,
+        len: usize,
+    ) -> Vec<u64> {
+        // SAFETY: the test command buffer has completed and the shared output is
+        // read only while this snapshot is created.
+        unsafe { j2k_metal_support::checked_buffer_read_vec::<u64>(buffer, 0, len) }
+            .expect("test u64 Metal readback")
     }
 }

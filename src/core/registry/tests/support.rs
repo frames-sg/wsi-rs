@@ -43,7 +43,7 @@ impl SlideReader for MockSource {
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         let [r, g, b] = MockSource::tile_color(req.col, req.row);
         let mut data = vec![0u8; 256 * 256 * 3];
-        for pixel in data.chunks_exact_mut(3) {
+        for pixel in data.as_chunks_mut::<3>().0 {
             pixel[0] = r;
             pixel[1] = g;
             pixel[2] = b;

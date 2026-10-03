@@ -143,7 +143,7 @@ fn format_registry_empty_returns_unsupported() {
 
 #[test]
 fn probe_confidence_definite_beats_likely() {
-    // Definite should beat Likely — tested via ProbeConfidence ordering
+    // Definite should beat Likely, via ProbeConfidence ordering
     assert!(matches!(
         ProbeConfidence::Definite,
         ProbeConfidence::Definite
@@ -310,24 +310,25 @@ fn probe_result_constructors_set_stable_public_fields() {
 
 #[test]
 fn builtin_registry_has_tiff_backend() {
-    let reg = FormatRegistry::builtin();
-    // The builtin registry should have at least one backend registered.
-    // Probing a nonexistent path should produce an error (not panic).
-    let result = reg.open(Path::new("/nonexistent/test.ndpi"));
-    assert!(result.is_err());
-    // The backend was registered and tried to probe. Whether we get
-    // UnsupportedFormat (probe returned detected=false) or another
-    // error variant, the backend was exercised.
-    match result {
-        Err(WsiError::UnsupportedFormat(_)) => {
-            // The TIFF backend's probe returns detected=false for non-existent
-            // files (the TiffContainer::open fails, so it returns detected=false).
-            // With no backends matching, registry falls through to UnsupportedFormat.
-            // This is acceptable — it proves the backend was registered and probed.
-        }
-        Err(_) => {} // Any other error also proves the backend tried
-        Ok(_) => panic!("expected error for nonexistent file"),
-    }
+    use crate::formats::tiff_family::container::tags;
+    use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
+
+    let file = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 1024),
+        SyntheticTag::long(tags::IMAGE_LENGTH, 768),
+        SyntheticTag::long(tags::TILE_WIDTH, 256),
+        SyntheticTag::long(tags::TILE_LENGTH, 256),
+    ]]);
+    let detected = FormatRegistry::builtin()
+        .detect_vendor(file.path())
+        .expect("probe tiled TIFF fixture");
+    assert_eq!(
+        detected.map(|probe| probe.vendor),
+        Some("generic-tiff".into())
+    );
+
+    let missing = FormatRegistry::builtin().open(Path::new("/nonexistent/test.ndpi"));
+    assert!(missing.is_err());
 }
 
 #[test]

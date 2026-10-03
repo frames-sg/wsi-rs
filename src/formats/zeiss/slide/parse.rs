@@ -473,12 +473,7 @@ fn assemble_slide(
     let associated_cache = PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
 
     ZeissSlide {
-        #[cfg(test)]
-        subblock_decodes: AtomicU64::new(0),
-        #[cfg(test)]
-        source_miss_barrier: None,
-        #[cfg(test)]
-        prepared_source_peak_bytes: AtomicU64::new(0),
+        probe: Default::default(),
         limits: crate::SlideLimits::default(),
         source_path: path.to_path_buf(),
         source_identity: parts.source_identity,

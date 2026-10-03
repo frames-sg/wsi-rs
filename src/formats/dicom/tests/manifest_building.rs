@@ -373,18 +373,14 @@ fn opens_directory_containing_one_dicom_series() {
 
 #[test]
 fn opens_public_dicom_folder_and_member_with_matching_levels_when_available() {
-    let bench_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let candidates = [
-        bench_root
-            .join("SlideViewer")
-            .join("downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005"),
-        bench_root.join("downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005"),
-    ];
-    let Some(folder) = candidates.iter().find(|path| path.is_dir()) else {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005");
+    if !folder.is_dir() {
         eprintln!("skipping public DICOM folder test; CMU-1-JP2K-33005 not found");
         return;
-    };
-    let member = std::fs::read_dir(folder)
+    }
+    let member = std::fs::read_dir(&folder)
         .expect("read DICOM folder")
         .filter_map(Result::ok)
         .map(|entry| entry.path())
@@ -395,7 +391,7 @@ fn opens_public_dicom_folder_and_member_with_matching_levels_when_available() {
         })
         .expect("public DICOM folder contains a .dcm member");
 
-    let from_folder = Slide::open(folder).expect("open public DICOM folder");
+    let from_folder = Slide::open(&folder).expect("open public DICOM folder");
     let from_member = Slide::open(&member).expect("open public DICOM member");
 
     assert!(

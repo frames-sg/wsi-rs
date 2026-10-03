@@ -175,11 +175,6 @@ pub(super) fn decode_prepared_jp2k_job(
     }
 }
 
-#[cfg(test)]
-pub(super) fn decode_one_jp2k_job(job: &Jp2kDecodeJob<'_>) -> Result<CpuTile, WsiError> {
-    decode_one_jp2k_job_with_parallelism(job, CpuDecodeParallelism::Auto)
-}
-
 pub(super) fn decode_one_jp2k_job_with_parallelism(
     job: &Jp2kDecodeJob<'_>,
     parallelism: CpuDecodeParallelism,

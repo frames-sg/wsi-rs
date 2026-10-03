@@ -1,4 +1,4 @@
-//! Layer 3: Pixel access — TiffPixelReader and decode helpers.
+//! Layer 3: pixel access through TiffPixelReader and decode helpers.
 //!
 //! TiffPixelReader implements SlideReader by dispatching tile reads to focused
 //! helper modules based on the `TileSource` variant.

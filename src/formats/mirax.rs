@@ -13,8 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::core::cache::{CacheConfig, PrivateCache};
@@ -84,9 +82,6 @@ const KEY_IMAGE_FILL_COLOR_BGR: &str = "IMAGE_FILL_COLOR_BGR";
 const KEY_DIGITIZER_WIDTH: &str = "DIGITIZER_WIDTH";
 const KEY_DIGITIZER_HEIGHT: &str = "DIGITIZER_HEIGHT";
 const KEY_IMAGE_CONCAT_FACTOR: &str = "IMAGE_CONCAT_FACTOR";
-
-#[cfg(test)]
-static MIRAX_ASSOCIATED_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct MiraxBackend;
 
@@ -347,12 +342,7 @@ fn validate_mirax_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), Ws
 }
 
 struct MiraxSlide {
-    #[cfg(test)]
-    source_decodes: AtomicU64,
-    #[cfg(test)]
-    prepared_source_peak_bytes: AtomicU64,
-    #[cfg(test)]
-    source_miss_barrier: Option<Arc<std::sync::Barrier>>,
+    probe: crate::core::test_hooks::SourceProbe,
     limits: crate::SlideLimits,
     shared: Arc<MiraxShared>,
     decoded_images: Mutex<PrivateCache<u32, Arc<CpuTile>>>,

@@ -4,39 +4,18 @@ use dicom_object::DefaultDicomObject;
 
 use crate::error::WsiError;
 
-mod batch_io;
-mod model;
-mod offset_tables;
-mod raw_little_endian;
+pub(super) mod batch_io;
+pub(super) mod model;
+pub(super) mod offset_tables;
+pub(super) mod raw_little_endian;
 mod token_stream;
-mod validation;
+pub(super) mod validation;
 
-#[cfg(test)]
-pub(super) use batch_io::{copy_fragments_from_window, DicomFrameReadGroup, DicomFrameReadSpan};
 pub(super) use batch_io::{
     frame_read_span, group_frame_read_spans, read_encapsulated_fragments,
     read_encapsulated_frame_group,
 };
 pub(super) use model::DicomEncapsulatedFrames;
-#[cfg(test)]
-pub(super) use model::{DicomExtendedOffsetTables, DicomFragmentRef};
-
-#[cfg(test)]
-pub(super) use offset_tables::frame_ranges_from_extended_offsets;
-#[cfg(test)]
-pub(super) use offset_tables::{
-    build_encapsulated_frame_index, checked_padded_fragment_len, read_basic_offset_table_at,
-    read_extended_offset_tables_le, read_extended_offset_tables_with_reader,
-    validate_basic_offset_table_len,
-};
-#[cfg(test)]
-pub(super) use raw_little_endian::read_exact_at;
-#[cfg(test)]
-pub(super) use raw_little_endian::scan_encapsulated_frames_raw_little_endian;
-#[cfg(test)]
-pub(super) use raw_little_endian::scan_raw_encapsulated_pixel_sequence_with_reader_controlled;
-#[cfg(test)]
-pub(super) use validation::preflight_compressed_frame;
 pub(super) use validation::{
     preflight_compressed_frame_with_limit, preflight_compressed_lengths_with_limit,
 };
@@ -156,6 +135,4 @@ pub(super) const EXTENDED_OFFSET_TABLE_TAG_LE: [u8; 4] = [0xE0, 0x7F, 0x01, 0x00
 pub(super) const EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE: [u8; 4] = [0xE0, 0x7F, 0x02, 0x00];
 pub(super) const DICOM_ITEM_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0x00, 0xE0];
 pub(super) const DICOM_SEQUENCE_DELIMITER_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0xDD, 0xE0];
-#[cfg(test)]
-pub(super) const UNDEFINED_LENGTH_LE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 pub(super) const EXPLICIT_VR_LONG_HEADER_LEN: usize = 12;

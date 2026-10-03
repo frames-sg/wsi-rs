@@ -2,8 +2,6 @@ use super::helpers::*;
 use super::*;
 use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
 use crate::formats::geometry::irregular_extra_tiles;
-#[cfg(test)]
-use crate::formats::ini::parse_ini_file;
 use crate::formats::ini::parse_ini_file_with_budget;
 
 const MAX_MIRAX_INDEX_PAGES: usize = 1_000_000;
@@ -60,20 +58,6 @@ impl<'a> MiraxIndexBudget<'a> {
         self.open_budget.retain_index(retained)?;
         Ok(records)
     }
-}
-
-#[cfg(test)]
-pub(super) fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
-    let mut parsed = parse_ini_file(
-        path,
-        SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE),
-        |path| invalid_slide(path, "MIRAX key file too large"),
-        true,
-    )?;
-    for group in parsed.groups.values_mut() {
-        group.remove("");
-    }
-    Ok(parsed)
 }
 
 pub(super) fn parse_mirax_ini_with_budget(

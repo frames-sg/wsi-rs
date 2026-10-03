@@ -115,7 +115,7 @@ fn find_sof_position(header: &[u8]) -> Option<usize> {
     None
 }
 
-fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
+pub(super) fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
     if sof_offset + 9 > header.len() {
         return;
     }
@@ -137,7 +137,7 @@ fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height
     header[sof_offset + 7..sof_offset + 9].copy_from_slice(&new_x.to_be_bytes());
 }
 
-fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
+pub(super) fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
     if sof_offset + 9 > header.len() {
         return;
     }
@@ -274,7 +274,9 @@ pub(super) fn decode_jpeg_rgb16_with_color_transform(
     }
     // The codec writes 16-bit samples little-endian.
     let pixels = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
         .collect();
     crop_jpeg_rgb_to_expected(
@@ -460,18 +462,7 @@ pub(crate) fn jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), WsiError> {
     Ok(info.dimensions)
 }
 
-#[cfg(test)]
-pub(super) fn ensure_jpeg_eoi<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
-    if input.len() >= 2 && input[input.len() - 2..] == [0xFF, 0xD9] {
-        return Cow::Borrowed(input);
-    }
-
-    let mut repaired = input.to_vec();
-    repair_jpeg_eoi(&mut repaired);
-    Cow::Owned(repaired)
-}
-
-fn repair_jpeg_eoi(input: &mut Vec<u8>) {
+pub(super) fn repair_jpeg_eoi(input: &mut Vec<u8>) {
     if input.len() >= 2 && input[input.len() - 2] == 0xFF {
         let last = input.len() - 1;
         input[last] = 0xD9;
@@ -574,29 +565,7 @@ pub(super) fn resize_jpeg_rgb_nearest(
     })
 }
 
-#[cfg(test)]
-pub(super) fn patch_jpeg_dimensions<'a>(
-    input: &'a [u8],
-    expected_width: u32,
-    expected_height: u32,
-    force_dimensions: bool,
-) -> Cow<'a, [u8]> {
-    let Some((sof_offset, width, height, force)) =
-        planned_dimension_patch(input, expected_width, expected_height, force_dimensions)
-    else {
-        return Cow::Borrowed(input);
-    };
-
-    let mut patched = input.to_vec();
-    if force {
-        set_sof_dimensions(&mut patched, sof_offset, width, height);
-    } else {
-        patch_sof_dimensions(&mut patched, sof_offset, width, height);
-    }
-    Cow::Owned(patched)
-}
-
-fn planned_dimension_patch(
+pub(super) fn planned_dimension_patch(
     input: &[u8],
     expected_width: u32,
     expected_height: u32,

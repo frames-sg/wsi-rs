@@ -1,8 +1,9 @@
 use super::slide::*;
 use super::*;
+use crate::core::execution_telemetry::{test_count, Event};
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 mod attachment_cases;
@@ -16,19 +17,9 @@ mod tile_cases;
 static ZEISS_TEST_GUARD: Mutex<()> = Mutex::new(());
 
 fn zeiss_uncompressed_fixture() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("WSI_RS_ZEISS_CZI_PATH").map(PathBuf::from) {
-        return path.is_file().then_some(path);
-    }
-
-    let local = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("SlideViewer")
-        .join("downloads")
-        .join("openslide-testdata")
-        .join("Zeiss")
-        .join("Zeiss-5-Uncompressed.czi");
-    local.is_file().then_some(local)
+    env::var_os("WSI_RS_ZEISS_CZI_PATH")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
 }
 
 fn zeiss_fixture_or_skip() -> Option<PathBuf> {
@@ -42,8 +33,8 @@ fn zeiss_fixture_or_skip() -> Option<PathBuf> {
 #[test]
 fn uncompressed_sentinel_hits_local_tile_path() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    ZEISS_LOCAL_TILE_HITS.store(0, Ordering::Relaxed);
-    ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.store(0, Ordering::Relaxed);
+    let local_hits_before = test_count(Event::ZeissLocalTileHits);
+    let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
     let Some(path) = zeiss_fixture_or_skip() else {
         return;
     };
@@ -84,8 +75,8 @@ fn uncompressed_sentinel_hits_local_tile_path() {
     let _ = handle
         .read_display_tile(&req)
         .expect("read Zeiss display tile");
-    assert!(ZEISS_LOCAL_TILE_HITS.load(Ordering::Relaxed) > 0);
-    assert!(ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.load(Ordering::Relaxed) > 0);
+    assert!(test_count(Event::ZeissLocalTileHits) > local_hits_before);
+    assert!(test_count(Event::ZeissDirectUncompressedBlits) > direct_blits_before);
 }
 
 #[test]
@@ -153,7 +144,7 @@ fn uncompressed_sentinel_gap_tile_is_blank() {
 #[test]
 fn uncompressed_sentinel_top_left_tile_is_not_blank() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.store(0, Ordering::Relaxed);
+    let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
     let Some(path) = zeiss_fixture_or_skip() else {
         return;
     };
@@ -181,14 +172,14 @@ fn uncompressed_sentinel_top_left_tile_is_not_blank() {
         tile.data.as_u8().unwrap().iter().any(|&byte| byte != 0),
         "expected the top-left tile on the shared Zeiss canvas to contain visible pixels"
     );
-    assert!(ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.load(Ordering::Relaxed) > 0);
+    assert!(test_count(Event::ZeissDirectUncompressedBlits) > direct_blits_before);
 }
 
 #[test]
 fn uncompressed_sentinel_levels_use_direct_composition() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    ZEISS_DIRECT_LEVEL_COMPOSE_HITS.store(0, Ordering::Relaxed);
-    ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.store(0, Ordering::Relaxed);
+    let level_composes_before = test_count(Event::ZeissDirectLevelComposes);
+    let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
     let Some(path) = zeiss_fixture_or_skip() else {
         return;
     };
@@ -202,6 +193,9 @@ fn uncompressed_sentinel_levels_use_direct_composition() {
 
     assert_eq!(image.width, expected.0 as u32);
     assert_eq!(image.height, expected.1 as u32);
-    assert_eq!(ZEISS_DIRECT_LEVEL_COMPOSE_HITS.load(Ordering::Relaxed), 1);
-    assert!(ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.load(Ordering::Relaxed) > 0);
+    assert_eq!(
+        test_count(Event::ZeissDirectLevelComposes) - level_composes_before,
+        1
+    );
+    assert!(test_count(Event::ZeissDirectUncompressedBlits) > direct_blits_before);
 }

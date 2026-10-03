@@ -25,7 +25,6 @@ struct ColorCase {
     alias: Option<&'static str>,
     env_path: Option<&'static str>,
     relative_paths: &'static [&'static str],
-    absolute_paths: &'static [&'static str],
     threshold: ColorThreshold,
 }
 
@@ -143,7 +142,6 @@ fn color_cases() -> Vec<ColorCase> {
             alias: Some("svs-001"),
             env_path: Some("WSI_RS_COLOR_SVS_PATH"),
             relative_paths: &["downloads/openslide-testdata/Aperio/CMU-1.svs"],
-            absolute_paths: &[],
             threshold: ColorThreshold {
                 min_tissue_fraction: 0.005,
                 min_tissue_chroma: 18.0,
@@ -155,7 +153,6 @@ fn color_cases() -> Vec<ColorCase> {
             alias: Some("ndpi-001"),
             env_path: Some("WSI_RS_COLOR_NDPI_PATH"),
             relative_paths: &["downloads/openslide-testdata/Hamamatsu/CMU-1.ndpi"],
-            absolute_paths: &[],
             threshold: ColorThreshold {
                 min_tissue_fraction: 0.02,
                 min_tissue_chroma: 25.0,
@@ -170,7 +167,6 @@ fn color_cases() -> Vec<ColorCase> {
                 "downloads/openslide-testdata-extracted/dicom/dicom-cmu1-jp2k/DCM_0.dcm",
                 "downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005/DCM_0.dcm",
             ],
-            absolute_paths: &[],
             threshold: ColorThreshold {
                 min_tissue_fraction: 0.005,
                 min_tissue_chroma: 14.0,
@@ -182,10 +178,6 @@ fn color_cases() -> Vec<ColorCase> {
             alias: None,
             env_path: Some("WSI_RS_COLOR_HTJ2K_PATH"),
             relative_paths: &[],
-            absolute_paths: &[
-                "/private/tmp/wsi-dicom-htj2k-cmu1-full/level-0000-z0000-c0000-t0000.dcm",
-                "/private/tmp/wsi-dicom-htj2k-test-cmu-small-20260505115912/level-0000-z0000-c0000-t0000.dcm",
-            ],
             threshold: ColorThreshold {
                 min_tissue_fraction: 0.005,
                 min_tissue_chroma: 14.0,
@@ -219,21 +211,13 @@ fn resolve_case_path(case: &ColorCase) -> Option<PathBuf> {
         }
     }
 
-    for absolute in case.absolute_paths {
-        let path = PathBuf::from(absolute);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
     None
 }
 
 fn candidate_roots() -> Vec<PathBuf> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bench = manifest_dir.parent().unwrap_or(manifest_dir);
-    let slideviewer = bench.join("SlideViewer");
-    vec![manifest_dir.to_path_buf(), bench.to_path_buf(), slideviewer]
+    let workspace_parent = manifest_dir.parent().unwrap_or(manifest_dir);
+    vec![manifest_dir.to_path_buf(), workspace_parent.to_path_buf()]
 }
 
 fn read_overview_region(path: &Path) -> Result<RgbaRegion, String> {
@@ -278,7 +262,7 @@ fn color_stats(rgba: &[u8]) -> ColorStats {
     let mut tissue_rgb_sum = [0f64; 3];
     let mut tissue_chroma_sum = 0f64;
 
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         if pixel[3] == 0 {
             continue;
         }

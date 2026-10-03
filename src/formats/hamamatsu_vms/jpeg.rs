@@ -6,26 +6,6 @@ const JPEG_HEADER_MAX_BYTES: usize = 1 << 20;
 const JPEG_SCAN_CHUNK_BYTES: usize = 64 << 10;
 const MAX_VMS_TILE_INDEX_BYTES: u64 = 128 * 1024 * 1024;
 impl VmsJpeg {
-    #[cfg(test)]
-    pub(super) fn parse(path: &Path, row_starts: Vec<Option<u64>>) -> Result<Self, WsiError> {
-        Self::parse_with_cache_config(path, row_starts, CacheConfig::deterministic())
-    }
-
-    #[cfg(test)]
-    pub(super) fn parse_with_cache_config(
-        path: &Path,
-        row_starts: Vec<Option<u64>>,
-        cache_config: CacheConfig,
-    ) -> Result<Self, WsiError> {
-        let mut private_cache_budget = cache_config.private_cache_budget(1);
-        Self::parse_with_private_cache_budget(
-            path,
-            row_starts,
-            &mut private_cache_budget,
-            MAX_COMPRESSED_INPUT_BYTES,
-        )
-    }
-
     pub(super) fn parse_with_private_cache_budget(
         path: &Path,
         row_starts: Vec<Option<u64>>,
@@ -392,11 +372,6 @@ fn checked_vms_tile_count(
     }
     // The byte budget above bounds this well below usize::MAX even on 32-bit.
     Ok(tile_count as usize)
-}
-
-#[cfg(test)]
-fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize, WsiError> {
-    checked_vms_entropy_len_with_limit(segment_len, header_len, MAX_COMPRESSED_INPUT_BYTES)
 }
 
 fn checked_vms_entropy_len_with_limit(

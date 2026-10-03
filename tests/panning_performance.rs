@@ -67,7 +67,9 @@ fn panning_matrix() {
                         .data()
                         .as_u8()
                         .unwrap()
-                        .chunks_exact(3)
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
                         .filter(|p| p.iter().max().unwrap() - p.iter().min().unwrap() > 20)
                         .count();
                     (score, origin)
@@ -217,7 +219,9 @@ fn panning_matrix() {
                             let bytes = tile.data().as_u8().unwrap();
                             digest.update(bytes);
                             colored_pixels += bytes
-                                .chunks_exact(3)
+                                .as_chunks::<3>()
+                                .0
+                                .iter()
                                 .filter(|p| p.iter().max().unwrap() - p.iter().min().unwrap() > 20)
                                 .count();
                         }

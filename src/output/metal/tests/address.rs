@@ -52,7 +52,7 @@ fn metal_address_probe_returns_the_checked_64_bit_indices() {
     encoder.setComputePipelineState(&pipeline);
     interop::bind_compute_buffer(&encoder, 0, &output);
     interop::bind_ycbcr_params(&encoder, 1, &params);
-    interop::bind_probe_coordinate(&encoder, 2, &coordinate);
+    interop::test_fixtures::bind_probe_coordinate(&encoder, 2, &coordinate);
     j2k_metal_support::dispatch_single_thread(&encoder);
     encoder.endEncoding();
     j2k_metal_support::commit_and_wait(&command_buffer).expect("address probe completion");

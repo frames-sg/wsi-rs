@@ -21,12 +21,6 @@ pub(super) fn read_tags_if_present(
     parse_zvi_tags_with_budget(&data, budget)
 }
 
-#[cfg(test)]
-fn parse_zvi_tags(data: &[u8]) -> Result<HashMap<i32, String>, WsiError> {
-    let budget = OpenBudget::new(crate::SlideLimits::default());
-    parse_zvi_tags_with_budget(data, &budget)
-}
-
 fn parse_zvi_tags_with_budget(
     data: &[u8],
     budget: &OpenBudget,

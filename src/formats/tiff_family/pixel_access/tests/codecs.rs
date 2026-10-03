@@ -67,7 +67,7 @@ fn jpeg_rgb_component_ids_zero_one_two_follow_tiff_photometric() {
 
 #[test]
 fn jpeg_rgb_component_ids_ascii_force_rgb() {
-    let jpeg = jpeg_sof([b'R', b'G', b'B'], [(1, 1), (1, 1), (1, 1)]);
+    let jpeg = jpeg_sof(*b"RGB", [(1, 1), (1, 1), (1, 1)]);
 
     assert_eq!(
         jpeg_bitstream_color_hint(&jpeg, None),

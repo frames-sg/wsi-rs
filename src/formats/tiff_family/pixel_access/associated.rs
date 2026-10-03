@@ -442,8 +442,10 @@ impl TiffPixelReader {
                         let src_pixels = &tile_rgba_raw[src_row..src_row + tile_src_stride];
                         let dst_pixels = &mut composed[dst_row..dst_row + job.tile_w as usize * 3];
                         for (src_px, dst_px) in src_pixels
-                            .chunks_exact(4)
-                            .zip(dst_pixels.chunks_exact_mut(3))
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(dst_pixels.as_chunks_mut::<3>().0)
                         {
                             dst_px.copy_from_slice(&src_px[..3]);
                         }

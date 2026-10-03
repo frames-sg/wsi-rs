@@ -3,7 +3,7 @@
 
 Run with uv run --with pydicom==3.0.2 --with pillow==12.1.1
 scripts/prepare-public-dicom-fixtures.py. Requires opj_decompress 2.5.4.
-The source ZIPs belong in ~/.cache/slideviewer/parity-corpus. DICOM compressed
+The source ZIPs belong in ~/.cache/wsi-rs/parity-corpus. DICOM compressed
 frames are not re-encoded. Their metadata is synthetic; in particular,
 the 3DHISTECH source's incorrect baseline transfer syntax is corrected to JPEG
 Full Progression. Reference pixels come from libjpeg/Pillow or OpenJPEG, never
@@ -86,7 +86,7 @@ def make_fixture(name, header, frame, transfer_syntax, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path,
-                        default=Path.home() / ".cache/slideviewer/parity-corpus")
+                        default=Path.home() / ".cache/wsi-rs/parity-corpus")
     parser.add_argument("--output", type=Path,
                         default=Path(__file__).resolve().parents[1] / "tests/fixtures/public_dicom")
     args = parser.parse_args()

@@ -5,6 +5,7 @@ use super::raster::{
 };
 use super::subblock::bitmap_from_raw_subblock;
 use super::*;
+use crate::core::execution_telemetry::{record, Event};
 
 impl ZeissSlide {
     pub(super) fn compose_subblocks(
@@ -28,11 +29,6 @@ impl ZeissSlide {
         let first = subblocks.first().ok_or_else(|| {
             WsiError::DisplayConversion("CZI composition has no source subblocks".into())
         })?;
-        #[cfg(test)]
-        let direct = subblocks.iter().all(|info| {
-            info.compression == CziCompressionMode::UnCompressed
-                && matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
-        });
         let rgb_output = subblocks
             .iter()
             .all(|info| matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32));
@@ -73,17 +69,18 @@ impl ZeissSlide {
             let y = offset(info.rect.y, self.subblock_origin.1, origin.1)?;
             if let Some(destination) = &mut destination {
                 let raw = self.read_source_subblock(info)?;
-                #[cfg(test)]
-                self.subblock_decodes.fetch_add(1, Ordering::Relaxed);
+                self.probe.record_decode();
                 let bitmap = bitmap_from_raw_subblock(&raw, self.limits)?;
                 blit_tile(destination, &bitmap, x, y)?;
             } else if let Some(super::batch::PreparedSubblock::Raw(raw)) =
                 sources.and_then(|sources| sources.get(&info.file_position))
             {
                 blit_raw_uncompressed_rgb_subblock(&mut rgb, size.0, size.1, raw, x, y)?;
+                record(Event::ZeissDirectUncompressedBlits, 1);
             } else if info.compression == CziCompressionMode::UnCompressed {
                 let raw = self.read_source_subblock(info)?;
                 blit_raw_uncompressed_rgb_subblock(&mut rgb, size.0, size.1, &raw, x, y)?;
+                record(Event::ZeissDirectUncompressedBlits, 1);
             } else {
                 let tile = match sources.and_then(|sources| sources.get(&info.file_position)) {
                     Some(super::batch::PreparedSubblock::Decoded(tile)) => tile.clone(),
@@ -107,10 +104,6 @@ impl ZeissSlide {
         if let Some(destination) = destination {
             bitmap_to_sample_buffer(destination)
         } else {
-            #[cfg(test)]
-            if direct {
-                super::slide::ZEISS_DIRECT_UNCOMPRESSED_BLIT_HITS.fetch_add(1, Ordering::Relaxed);
-            }
             rgb_u8_tile(size.0, size.1, rgb)
         }
     }

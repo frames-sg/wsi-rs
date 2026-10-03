@@ -1,9 +1,10 @@
 use super::fixtures::{jpeg_rgb, main_fixture, metadata_xml, write_fixture, SubblockSpec};
-use crate::formats::zeiss::slide::ZeissSlide;
-use crate::formats::zeiss::tiles::{
-    bitmap_from_raw_uncompressed_subblock, bitmap_to_sample_buffer,
-    blit_raw_uncompressed_rgb_subblock, blit_rgb_sample, blit_tile, RgbSample,
+use crate::formats::zeiss::raster::{
+    bitmap_to_sample_buffer, blit_raw_uncompressed_rgb_subblock, blit_rgb_sample, blit_tile,
+    RgbSample,
 };
+use crate::formats::zeiss::slide::ZeissSlide;
+use crate::formats::zeiss::subblock::bitmap_from_raw_uncompressed_subblock;
 use crate::TileLayout;
 use czi_rs::{
     Bitmap, CompressionMode, Coordinate, DirectorySubBlockInfo, IntRect, IntSize, PixelType,

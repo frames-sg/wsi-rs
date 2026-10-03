@@ -159,23 +159,8 @@ impl<K: Hash + Eq, V> PrivateCache<K, V> {
         self.lru.put(key, value, retained_bytes);
     }
 
-    #[cfg(test)]
-    pub(crate) fn accounted_capacity_bytes(&self) -> u64 {
-        self.capacity.accounted_bytes
-    }
-
-    #[cfg(test)]
-    pub(crate) fn current_bytes(&self) -> u64 {
-        self.lru.current_bytes()
-    }
-
     pub(crate) fn capacity_bytes(&self) -> u64 {
         self.capacity.accounted_bytes
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.lru.len()
     }
 }
 
@@ -252,11 +237,6 @@ impl<K: Hash + Eq, V> WeightedLru<K, V> {
 
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn lru_key(&self) -> Option<&K> {
-        self.entries.peek_lru().map(|(key, _)| key)
     }
 }
 

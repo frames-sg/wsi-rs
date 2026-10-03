@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use super::super::ini::{parse_image_key_suffix, parse_u32, parse_vms_ini, parse_vms_opt_offsets};
+use super::super::ini::{
+    parse_image_key_suffix, parse_u32, parse_vms_ini_with_budget, parse_vms_opt_offsets,
+};
 use super::super::jpeg::read_vms_jpeg_header;
 use super::super::*;
 use super::fixtures::VmsFixture;
+use crate::core::limits::SlideLimits;
+use crate::core::registry::OpenBudget;
 
 fn expect_wsi_error<T>(result: Result<T, WsiError>, context: &str) -> WsiError {
     match result {
@@ -180,7 +184,7 @@ fn vms_key_file_enforces_its_bounded_input_limit() {
     let path = temp.path().join("oversized.vms");
     fs::write(&path, vec![b'x'; (64 << 10) + 1]).expect("write oversized VMS key");
     assert!(matches!(
-        parse_vms_ini(&path),
+        parse_vms_ini_with_budget(&path, &OpenBudget::new(SlideLimits::default())),
         Err(WsiError::InvalidSlide { message, .. }) if message == "VMS key file too large"
     ));
 }

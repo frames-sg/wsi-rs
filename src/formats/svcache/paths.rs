@@ -19,7 +19,7 @@ pub fn cache_dir_svcache_path(source_path: &Path) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     home.join(".cache")
-        .join("slideviewer")
+        .join("wsi-rs")
         .join("svcache")
         .join(format!("{hash}.svcache"))
 }

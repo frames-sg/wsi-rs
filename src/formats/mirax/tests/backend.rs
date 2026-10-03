@@ -7,7 +7,9 @@ fn concurrent_mirax_batches_share_one_source_miss() {
     let fixture = MiraxFixture::complete();
     let mut slide = MiraxSlide::parse(&fixture.path).unwrap();
     if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
-        slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+        slide
+            .probe
+            .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
     }
     let reader = MiraxReader {
         slide: Arc::new(slide),
@@ -23,7 +25,7 @@ fn concurrent_mirax_batches_share_one_source_miss() {
             assert_eq!(a.as_u8(), b.as_u8());
         }
     });
-    assert_eq!(reader.slide.source_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reader.slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -42,7 +44,9 @@ fn concurrent_mirax_neighbors_share_one_source_miss() {
         .iter()
         .map(|req| reference.read_tile_cpu(req).unwrap())
         .collect();
-    slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    slide
+        .probe
+        .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
     let reader = MiraxReader {
         slide: Arc::new(slide),
     };
@@ -55,7 +59,7 @@ fn concurrent_mirax_neighbors_share_one_source_miss() {
             assert_eq!(handle.join().unwrap().as_u8(), expected.as_u8());
         }
     });
-    assert_eq!(reader.slide.source_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reader.slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -80,12 +84,9 @@ fn mirax_batch_decodes_each_source_once_without_persistent_cache() {
         .iter()
         .map(|req| reader.read_tile_cpu(req).unwrap())
         .collect();
-    let before = reader.slide.source_decodes.load(Ordering::Relaxed);
+    let before = reader.slide.probe.decodes();
     let actual = reader.read_tiles_cpu(&reqs).unwrap();
-    assert_eq!(
-        reader.slide.source_decodes.load(Ordering::Relaxed) - before,
-        2
-    );
+    assert_eq!(reader.slide.probe.decodes() - before, 2);
     assert_eq!(
         reader.slide.decoded_images.lock().unwrap().current_bytes(),
         0
@@ -282,13 +283,15 @@ fn reader_decodes_jpeg_png_bmp_crops_batches_and_caches() {
 
 #[test]
 fn associated_images_decode_cache_and_report_missing_names() {
-    let _serial = super::MIRAX_ASSOCIATED_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let fixture = MiraxFixture::complete();
     let slide = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
 
-    MIRAX_ASSOCIATED_CACHE_HITS.store(0, Ordering::Relaxed);
+    let cache_hits = || {
+        crate::core::execution_telemetry::test_count(
+            crate::core::execution_telemetry::Event::MiraxAssociatedCacheHits,
+        )
+    };
+    let hits_before = cache_hits();
     for (name, dimensions) in [
         ("macro", (12, 8)),
         ("label", (10, 6)),
@@ -306,7 +309,7 @@ fn associated_images_decode_cache_and_report_missing_names() {
         .read_associated("thumbnail")
         .expect("repeat cached associated image");
     assert_eq!(first.as_u8(), second.as_u8());
-    assert_eq!(MIRAX_ASSOCIATED_CACHE_HITS.load(Ordering::Relaxed), 2);
+    assert_eq!(cache_hits() - hits_before, 2);
     assert!(matches!(
         slide.read_associated("overview"),
         Err(WsiError::AssociatedImageNotFound(name)) if name == "overview"
@@ -403,9 +406,6 @@ fn public_slide_rejects_invalid_mirax_plane() {
 fn poisoned_private_caches_recover_without_changing_output() {
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
-    let _serial = super::MIRAX_ASSOCIATED_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let fixture = MiraxFixture::complete();
     let slide = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
     let expected = slide
@@ -540,8 +540,8 @@ fn handles_sharing_an_index_keep_their_own_decoded_caches() {
     let actual = second.read_tile_cpu(&req).unwrap();
 
     assert_eq!(actual.as_u8(), expected.as_u8());
-    assert_eq!(first.slide.source_decodes.load(Ordering::Relaxed), 1);
-    assert_eq!(second.slide.source_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(first.slide.probe.decodes(), 1);
+    assert_eq!(second.slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -568,11 +568,5 @@ fn mirax_batch_bounds_live_decoded_sources_independently_of_encoded_allowance() 
     for (actual, expected) in actual.iter().zip(&expected) {
         assert_eq!(actual.as_u8(), expected.as_u8());
     }
-    assert!(
-        reader
-            .slide
-            .prepared_source_peak_bytes
-            .load(Ordering::Relaxed)
-            <= 16 * 16 * 3
-    );
+    assert!(reader.slide.probe.prepared_peak_bytes() <= 16 * 16 * 3);
 }

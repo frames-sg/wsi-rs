@@ -123,7 +123,6 @@ fn ifd_construction() {
         id: IfdId(1024),
         offset: 1024,
         tags,
-        sub_ifds: vec![],
     };
     assert_eq!(ifd.id, IfdId(1024));
     assert_eq!(ifd.tags.len(), 1);

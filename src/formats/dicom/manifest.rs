@@ -1,7 +1,5 @@
 use super::*;
 use crate::core::registry::OpenBudget;
-#[cfg(test)]
-use crate::SlideLimits;
 
 const MAX_DICOM_DIRECTORY_FILES: usize = 1_024;
 
@@ -13,22 +11,6 @@ pub(super) struct DicomSlide {
 }
 
 impl DicomSlide {
-    #[cfg(test)]
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
-        Self::parse_with_cache_config(path, CacheConfig::deterministic())
-    }
-
-    #[cfg(test)]
-    pub(super) fn parse_with_cache_config(
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Self, WsiError> {
-        Self::parse_with_config(
-            path,
-            BackendOpenConfig::new(cache_config, SlideLimits::default()),
-        )
-    }
-
     pub(super) fn parse_with_config(
         path: &Path,
         config: BackendOpenConfig,

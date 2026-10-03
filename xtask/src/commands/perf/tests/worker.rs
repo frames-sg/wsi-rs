@@ -153,8 +153,8 @@ fn worker_paths_and_workspace_metadata_are_resolved_fail_closed() {
 #[test]
 fn default_results_are_partitioned_by_host_commit_and_dirty_state() {
     assert_eq!(
-        default_result_dir("Mac M4-Pro.local", "772f4f0", Some(true)),
-        PathBuf::from("bench/results/mac-m4-pro-local/772f4f0-dirty")
+        default_result_dir("Example Host.local", "abcdef0", Some(true)),
+        PathBuf::from("bench/results/example-host-local/abcdef0-dirty")
     );
     assert_eq!(
         default_result_dir("wsl-host", "abc123", Some(false)),

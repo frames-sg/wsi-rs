@@ -1,4 +1,5 @@
 use crate::core::types::{Level, TileLayout};
+use crate::error::WsiError;
 use crate::formats::zeiss::metadata::*;
 use crate::formats::zeiss::MAX_CZI_SCENES;
 use czi_rs::{
@@ -318,4 +319,19 @@ fn default_plane_filter_excludes_other_z_c_t_coordinates() {
         assert!(!subblock_matches_default_plane(&info, &stats));
         info.coordinate.set(dim, 4);
     }
+}
+
+fn build_canvas_level_tile_subblocks(
+    subblocks: &[czi_rs::DirectorySubBlockInfo],
+    canvas_level_subblocks: &[Vec<usize>],
+    levels: &[Level],
+    subblock_origin: (i32, i32),
+) -> Result<Vec<CanvasTileSubblockMap>, WsiError> {
+    build_canvas_level_tile_subblocks_with_budget(
+        subblocks,
+        canvas_level_subblocks,
+        levels,
+        subblock_origin,
+        &crate::core::registry::OpenBudget::new(crate::SlideLimits::default()),
+    )
 }

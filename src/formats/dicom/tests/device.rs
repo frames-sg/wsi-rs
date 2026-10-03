@@ -418,9 +418,8 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
         );
         let slide =
             Slide::open_with_options_and_runtime(&path, open(), Arc::clone(&runtime)).unwrap();
-        // Index the frames before the measured reads. Their known lengths
-        // tighten the encoded bounds, which turns streamed region batches into
-        // one dense batch; every read below then shares one route key.
+        // Index the frames before the measured reads so their encoded bounds
+        // stay fixed throughout calibration.
         slide
             .prepare_level_controlled(
                 SceneId::new(0),
@@ -430,19 +429,24 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
             )
             .unwrap();
         let read = |slide: &Slide| {
-            if region {
-                vec![slide
-                    .read_region(&crate::RegionRequest::new(0, 0, 0, (1, 1), (32, 24)))
-                    .unwrap()]
-            } else {
-                slide
-                    .read_tiles(
-                        &(0..9)
-                            .map(|n| tile_request(n % 3, n / 3))
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap()
-            }
+            // Keep every streamed batch at one tile. Borrowing idle cores can
+            // otherwise create different batch sizes (and route keys) depending
+            // on the host and concurrent reads, each needing its own warmup.
+            crate::core::test_hooks::with_idle_cores(0, || {
+                if region {
+                    vec![slide
+                        .read_region(&crate::RegionRequest::new(0, 0, 0, (1, 1), (32, 24)))
+                        .unwrap()]
+                } else {
+                    slide
+                        .read_tiles(
+                            &(0..9)
+                                .map(|n| tile_request(n % 3, n / 3))
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap()
+                }
+            })
         };
         let expected = read(&cpu);
         let mut probes = Vec::new();

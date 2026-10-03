@@ -122,8 +122,7 @@ impl ZeissReader {
             }
             // Source ownership precedes pool dispatch. Wait only after all
             // local producers have completed, on the original calling thread.
-            #[cfg(test)]
-            self.slide.prepared_source_peak_bytes.fetch_max(
+            self.slide.probe.record_prepared_bytes(|| {
                 sources
                     .values()
                     .map(|info| {
@@ -131,9 +130,8 @@ impl ZeissReader {
                             * u64::from(info.stored_size.h)
                             * info.pixel_type.bytes_per_pixel() as u64
                     })
-                    .sum(),
-                Ordering::Relaxed,
-            );
+                    .sum()
+            });
             let claims: Vec<_> = order
                 .iter()
                 .enumerate()

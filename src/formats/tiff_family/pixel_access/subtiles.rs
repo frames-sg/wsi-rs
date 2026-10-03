@@ -71,7 +71,7 @@ impl TiffPixelReader {
                 "Ventana subtile divisor must be positive".into(),
             ));
         }
-        let geometry = self.stored_tile_geometry(ifd_id).map_err(&tile_error)?;
+        let geometry = self.stored_tile_geometry(ifd_id).map_err(tile_error)?;
         let per_tile = u64::from(subtiles_per_tile);
         let (tile_col, tile_row) = (col / per_tile, row / per_tile);
         if tile_col >= geometry.tiles_across || tile_row >= geometry.tiles_down {

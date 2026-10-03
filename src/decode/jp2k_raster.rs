@@ -81,7 +81,7 @@ pub(crate) fn interleaved_image_to_sample_buffer(
     validate_image_len(&image)?;
     let mut pixels = image.pixels;
     if image.colorspace == Jp2kColorSpace::YCbCr {
-        for pixel in pixels.chunks_exact_mut(3) {
+        for pixel in pixels.as_chunks_mut::<3>().0 {
             let rgb = ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]);
             pixel.copy_from_slice(&rgb);
         }
@@ -143,7 +143,7 @@ pub(crate) fn interleaved_image_to_cropped_sample_buffer(
         .take(height as usize)
     {
         if image.colorspace == Jp2kColorSpace::YCbCr {
-            for pixel in row[..row_bytes].chunks_exact(3) {
+            for pixel in row[..row_bytes].as_chunks::<3>().0 {
                 pixels.extend_from_slice(&ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]));
             }
         } else {
@@ -158,68 +158,6 @@ pub(crate) fn interleaved_image_to_cropped_sample_buffer(
         color_space: ColorSpace::Rgb,
         layout: CpuTileLayout::Interleaved,
         data: CpuTileData::u8(pixels),
-    })
-}
-
-// Retain the original two-stage crop as an independent test oracle.
-#[cfg(test)]
-pub(crate) fn crop_sample_buffer(
-    buffer: CpuTile,
-    expected_width: u32,
-    expected_height: u32,
-) -> Result<CpuTile, WsiError> {
-    if expected_width == 0 || expected_height == 0 {
-        return Err(WsiError::Jp2k(
-            "cropped JP2K dimensions must be non-zero".into(),
-        ));
-    }
-    if expected_width > buffer.width || expected_height > buffer.height {
-        return Err(WsiError::Jp2k(format!(
-            "decoded JP2K buffer too small to crop: decoded {}x{}, requested {}x{}",
-            buffer.width, buffer.height, expected_width, expected_height
-        )));
-    }
-    if expected_width == buffer.width && expected_height == buffer.height {
-        return Ok(buffer);
-    }
-    if buffer.layout != CpuTileLayout::Interleaved {
-        return Err(WsiError::Jp2k(format!(
-            "unsupported JP2K buffer layout for crop: {:?}",
-            buffer.layout
-        )));
-    }
-
-    let channels = buffer.channels as usize;
-    let src_width = buffer.width as usize;
-    let dst_width = expected_width as usize;
-    let dst_height = expected_height as usize;
-
-    let data = match buffer.data {
-        CpuTileData::U8(samples) => {
-            let mut cropped = Vec::with_capacity(dst_width * dst_height * channels);
-            let src_row_stride = src_width * channels;
-            let dst_row_width = dst_width * channels;
-            for row in 0..dst_height {
-                let start = row * src_row_stride;
-                cropped.extend_from_slice(&samples[start..start + dst_row_width]);
-            }
-            CpuTileData::u8(cropped)
-        }
-        other => {
-            return Err(WsiError::Jp2k(format!(
-                "unsupported JP2K sample type for crop: {:?}",
-                other.sample_type()
-            )))
-        }
-    };
-
-    Ok(CpuTile {
-        width: expected_width,
-        height: expected_height,
-        channels: buffer.channels,
-        color_space: buffer.color_space,
-        layout: buffer.layout,
-        data,
     })
 }
 

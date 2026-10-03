@@ -1,3 +1,4 @@
+use super::composition_tests::composite_region_from_source_streaming;
 use super::*;
 use crate::{Dataset, DatasetId, TileRequest};
 use std::sync::{

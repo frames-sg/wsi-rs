@@ -5,6 +5,45 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::thread;
 use std::time::Duration;
 
+impl NdpiMcuStartsCache {
+    pub(in super::super) fn current_bytes(&self) -> u64 {
+        self.entries.current_bytes()
+    }
+
+    pub(in super::super) fn max_bytes(&self) -> u64 {
+        self.entries.capacity_bytes()
+    }
+
+    pub(in super::super) fn first_value(&mut self) -> Option<Arc<Vec<u64>>> {
+        let key = *self.entries.lru_key()?;
+        match self.get(&key)? {
+            NdpiMcuStartsEntry::Relative => None,
+            NdpiMcuStartsEntry::Normalized(starts) => Some(starts),
+        }
+    }
+}
+
+impl<K> ByteSizedTileCache<K>
+where
+    K: Eq + Hash,
+{
+    pub(in super::super) fn current_bytes(&self) -> u64 {
+        self.entries.current_bytes()
+    }
+}
+
+impl<K> SingleFlightTileCache<K>
+where
+    K: Clone + Eq + Hash,
+{
+    pub(in super::super) fn current_bytes(&self) -> u64 {
+        self.cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .current_bytes()
+    }
+}
+
 fn tile(value: u8) -> Arc<CpuTile> {
     Arc::new(CpuTile {
         width: 1,

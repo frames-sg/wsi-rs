@@ -1,7 +1,5 @@
 use super::*;
 use crate::core::registry::OpenBudget;
-#[cfg(test)]
-use crate::SlideLimits;
 
 pub(super) struct ParsedDicomMetadata {
     pub(super) path: PathBuf,
@@ -109,13 +107,7 @@ pub(super) fn parse_metadata_object_with_budget(
     Ok(meta)
 }
 
-#[cfg(test)]
-pub(super) fn parse_metadata_object_full(path: &Path) -> Result<ParsedDicomMetadata, WsiError> {
-    let budget = OpenBudget::new(SlideLimits::default());
-    parse_metadata_object_full_with_budget(path, budget.as_ref())
-}
-
-fn parse_metadata_object_full_with_budget(
+pub(super) fn parse_metadata_object_full_with_budget(
     path: &Path,
     budget: &OpenBudget,
 ) -> Result<ParsedDicomMetadata, WsiError> {
@@ -557,16 +549,6 @@ fn is_twelve_bit_jpeg_transfer_syntax(transfer_syntax_uid: &str) -> bool {
             | JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX
             | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX
     )
-}
-
-#[cfg(test)]
-pub(super) fn parse_sparse_tile_map(
-    obj: &DefaultDicomObject,
-    tile_width: u32,
-    tile_height: u32,
-) -> Result<HashMap<(u32, u32), u32>, WsiError> {
-    let budget = OpenBudget::new(SlideLimits::default());
-    parse_sparse_tile_map_with_budget(obj, tile_width, tile_height, budget.as_ref())
 }
 
 pub(super) fn parse_sparse_tile_map_with_budget(

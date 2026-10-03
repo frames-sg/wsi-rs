@@ -194,7 +194,7 @@ fn read_associated_decodes_single_strip_jpeg_image() {
     assert_eq!(image.color_space, ColorSpace::Rgb);
     let rgb = image.data.as_u8().unwrap();
     assert_eq!(rgb.len(), width as usize * height as usize * 3);
-    for pixel in rgb.chunks_exact(3) {
+    for pixel in rgb.as_chunks::<3>().0 {
         let delta: u16 = pixel
             .iter()
             .copied()

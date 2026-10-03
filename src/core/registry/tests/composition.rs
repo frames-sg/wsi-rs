@@ -127,7 +127,7 @@ impl SlideReader for GridReader {
             .iter()
             .map(|req| {
                 let mut bytes = vec![0u8; 2 * 2 * 3];
-                for pixel in bytes.chunks_exact_mut(3) {
+                for pixel in bytes.as_chunks_mut::<3>().0 {
                     pixel[0] = (req.col & 0xff) as u8;
                     pixel[1] = (req.row & 0xff) as u8;
                 }

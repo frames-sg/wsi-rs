@@ -25,29 +25,6 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
-#[cfg(test)]
-pub(crate) fn composite_fractional_region_from_source<T: SlideReader + ?Sized>(
-    source: &T,
-    cache: Option<&TileCache>,
-    req: &RegionRequest,
-    origin_px: (f64, f64),
-    max_region_pixels: u64,
-) -> Result<CpuTile, WsiError> {
-    let plan = RegionReadPlan::fractional(source.dataset(), req, origin_px, max_region_pixels)?;
-    compose_resolved_region(source, cache, req, plan)
-}
-
-#[cfg(test)]
-pub(crate) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
-    source: &T,
-    cache: Option<&TileCache>,
-    req: &RegionRequest,
-    max_region_pixels: u64,
-) -> Result<CpuTile, WsiError> {
-    let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan, 1)
-}
-
 /// Compose small source units in bounded batches. The caller must fit every
 /// batch's source buffers within its admitted region staging reservation.
 /// An incomplete region composes on one pool worker, and its source decodes
@@ -480,17 +457,23 @@ impl RegionComposer {
                             let count = (x1 - x0) as usize;
                             let row = &mut out[target..target + count * 4];
                             let source = &source[start..start + count * 3];
-                            if row.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+                            if row.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
                                 // Most tile rows have no overlap. Keep the
                                 // RGB-to-RGBA loop free of per-pixel branches.
-                                for (target, source) in
-                                    row.chunks_exact_mut(4).zip(source.chunks_exact(3))
+                                for (target, source) in row
+                                    .as_chunks_mut::<4>()
+                                    .0
+                                    .iter_mut()
+                                    .zip(source.as_chunks::<3>().0)
                                 {
                                     target.copy_from_slice(&[source[0], source[1], source[2], 255]);
                                 }
                             } else {
-                                for (target, source) in
-                                    row.chunks_exact_mut(4).zip(source.chunks_exact(3))
+                                for (target, source) in row
+                                    .as_chunks_mut::<4>()
+                                    .0
+                                    .iter_mut()
+                                    .zip(source.as_chunks::<3>().0)
                                 {
                                     if target[3] == 0 {
                                         target.copy_from_slice(&[
@@ -593,7 +576,7 @@ impl RegionComposer {
             .alpha_buffer
             .expect("Pixman-compatible composition has alpha state");
         let mut rgba = tile.into_rgba()?.into_raw();
-        for (pixel, alpha) in rgba.chunks_exact_mut(4).zip(alpha) {
+        for (pixel, alpha) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
             pixel[3] = contract_pixman_unorm8(alpha);
         }
         Ok(CpuTile {
@@ -674,12 +657,6 @@ fn composes_alpha_sources<'a>(
     hits.iter().any(|hit| hit.cairo_fixed_dest.is_some()) && tiles.into_iter().any(is_alpha_source)
 }
 
-#[cfg(test)]
-use super::fractional_u8::{pixman_bilinear_interpolate, unorm8_to_float};
-#[cfg(test)]
-use super::integral::{compose_dense_integral_u8_rows, DenseIntegralU8Hit};
-#[cfg(test)]
-use super::output::crop_rgb_interleaved_u8_buffer;
 #[cfg(test)]
 #[path = "region/tests.rs"]
 mod composition_tests;

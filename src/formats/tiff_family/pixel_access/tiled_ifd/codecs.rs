@@ -295,7 +295,9 @@ impl TiffPixelReader {
             }
             SampleType::Uint16 => {
                 let mut samples: Vec<u16> = data[..expected_bytes]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| match endian {
                         Endian::Little => u16::from_le_bytes([c[0], c[1]]),
                         Endian::Big => u16::from_be_bytes([c[0], c[1]]),
@@ -311,7 +313,9 @@ impl TiffPixelReader {
             }
             SampleType::Float32 => {
                 let samples: Vec<f32> = data[..expected_bytes]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| match endian {
                         Endian::Little => f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
                         Endian::Big => f32::from_be_bytes([c[0], c[1], c[2], c[3]]),
@@ -324,7 +328,7 @@ impl TiffPixelReader {
         // After MinIsWhite inversion, report as standard Grayscale
         // (the inversion already happened in the sample data)
         if effective_photometric == 0 && color_space == ColorSpace::Grayscale {
-            // Already inverted above — color_space stays Grayscale
+            // Already inverted above; color_space stays Grayscale
         }
 
         Ok(CpuTile {

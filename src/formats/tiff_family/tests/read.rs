@@ -28,7 +28,7 @@ fn open_without_prior_probe_works() {
     let file = build_ndpi_tiff(&[(512, 384, 20.0)]);
     let backend = TiffFamilyBackend::new();
 
-    // Skip probe — call open() directly
+    // Skip probe and call open() directly
     let source = backend.open(file.path()).unwrap();
     let dataset = source.dataset();
 
@@ -48,7 +48,7 @@ fn aperio_open_and_read_tile() {
     assert_eq!(dataset.scenes.len(), 1);
     assert_eq!(dataset.scenes[0].series[0].levels[0].dimensions, (64, 64));
 
-    // Read tile (0, 0) — should succeed with JPEG-decoded data
+    // Tile (0, 0) must decode as JPEG
     let req = crate::core::types::TileRequest {
         scene: 0usize.into(),
         series: 0usize.into(),

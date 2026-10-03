@@ -14,7 +14,7 @@ pub(super) struct RouteEntry {
     busy: bool,
     warmed: bool,
     samples: Vec<(Duration, Duration)>,
-    decision: Option<DecodeRouteDecision>,
+    pub(super) decision: Option<DecodeRouteDecision>,
 }
 
 pub(super) type DecodeRouteCache = LruCache<DecodeRouteKey, RouteEntry>;
@@ -55,7 +55,7 @@ enum ClaimState {
     Calibrate(CalibrationStep),
 }
 
-fn claim_route_with<R: Deref<Target = DecodeRuntime>>(
+pub(super) fn claim_route_with<R: Deref<Target = DecodeRuntime>>(
     runtime: R,
     key: DecodeRouteKey,
 ) -> RouteClaim<R> {
@@ -76,11 +76,6 @@ fn claim_route_with<R: Deref<Target = DecodeRuntime>>(
 }
 
 impl DecodeRuntime {
-    #[cfg(test)]
-    pub(super) fn claim_route(&self, key: DecodeRouteKey) -> RouteClaim<&Self> {
-        claim_route_with(self, key)
-    }
-
     /// [`Self::claim_route`] with leases that can move to another thread.
     #[cfg(any(feature = "metal", feature = "cuda"))]
     pub(super) fn claim_owned_route(
@@ -148,16 +143,6 @@ impl DecodeRuntime {
         } else {
             CalibrationStep::Warmup
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
-        self.route_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .peek(key)?
-            .decision
-            .clone()
     }
 
     pub(super) fn store_route(
@@ -341,13 +326,10 @@ impl<R: Deref<Target = DecodeRuntime>> Drop for CalibrationLease<R> {
 #[cfg(any(feature = "metal", feature = "cuda"))]
 #[derive(Debug, Default)]
 pub(super) struct BackgroundCalibrationSlot {
-    busy: Mutex<bool>,
-    idle: Condvar,
-    #[cfg(test)]
-    started: std::sync::atomic::AtomicUsize,
-    /// Holds the next background calibration before its device work.
-    #[cfg(test)]
-    hold: Mutex<Option<Arc<std::sync::Barrier>>>,
+    pub(super) busy: Mutex<bool>,
+    pub(super) idle: Condvar,
+    /// Counts claimed calibrations and can hold one before its device work.
+    pub(super) gate: crate::core::test_hooks::PathGate,
 }
 
 /// Owns the runtime's background calibration slot until dropped.
@@ -366,42 +348,15 @@ impl DecodeRuntime {
             return None;
         }
         *busy = true;
-        #[cfg(test)]
-        slot.started
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        slot.gate.record_entry();
         Some(BackgroundCalibration {
             runtime: Arc::clone(self),
         })
     }
 
-    #[cfg(all(test, feature = "metal"))]
-    pub(crate) fn background_calibrations_started(&self) -> usize {
-        self.background_calibration
-            .started
-            .load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    #[cfg(all(test, feature = "metal"))]
-    pub(super) fn hold_next_background_calibration(&self, barrier: Arc<std::sync::Barrier>) {
-        *self.background_calibration.hold.lock().unwrap() = Some(barrier);
-    }
-
-    #[cfg(test)]
+    /// Waits at a test's hold before a background calibration's device work.
     pub(super) fn wait_at_background_hold(&self) {
-        let hold = self.background_calibration.hold.lock().unwrap().take();
-        if let Some(barrier) = hold {
-            barrier.wait();
-        }
-    }
-
-    /// Blocks until no background calibration is running.
-    #[cfg(all(test, feature = "metal"))]
-    pub(crate) fn wait_for_background_calibration(&self) {
-        let slot = &self.background_calibration;
-        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
-        while *busy {
-            busy = slot.idle.wait(busy).unwrap_or_else(|e| e.into_inner());
-        }
+        self.background_calibration.gate.pass();
     }
 }
 

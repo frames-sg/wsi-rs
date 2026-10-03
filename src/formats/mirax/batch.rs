@@ -82,16 +82,14 @@ impl MiraxReader {
                 largest_source = next_largest;
                 output_bytes = next_output;
             }
-            #[cfg(test)]
-            self.slide.prepared_source_peak_bytes.fetch_max(
+            self.slide.probe.record_prepared_bytes(|| {
                 images
                     .iter()
                     .map(|image| {
                         u64::from(image.expected_width) * u64::from(image.expected_height) * 3
                     })
-                    .sum(),
-                Ordering::Relaxed,
-            );
+                    .sum()
+            });
             // Claim on the calling thread. Publish every owned source before
             // waiting for other batches, so reversed overlaps cannot deadlock.
             let claims: Vec<_> = images

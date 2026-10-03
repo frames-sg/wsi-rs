@@ -63,7 +63,7 @@ fn get_u64_array_cached_pointer_equality() {
 
     let arr1 = container.get_u64_array(ifd_id, tags::TILE_OFFSETS).unwrap();
     let arr2 = container.get_u64_array(ifd_id, tags::TILE_OFFSETS).unwrap();
-    // Same pointer — cached, not re-decoded
+    // Same pointer: cached, not re-decoded
     assert_eq!(arr1.as_ptr(), arr2.as_ptr());
 }
 

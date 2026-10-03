@@ -2,7 +2,7 @@ use super::ycbcr::{YcbcrAddressPlan, YcbcrAddressWidth, YcbcrToRgb8Params, YCBCR
 use super::*;
 use crate::{error::WsiError, PixelFormat};
 
-use super::interop::{resident_bytes, resident_test_image, u64_buffer_values};
+use super::interop::test_fixtures::{resident_bytes, resident_test_image, u64_buffer_values};
 
 mod address;
 mod conversion;

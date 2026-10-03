@@ -66,10 +66,10 @@ fn two_tile_cpu_scheduling_performance() {
     let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
     let mut records = Vec::new();
     runtime.install_jp2k_cpu(|| {
-        for jobs in jobs.chunks_exact(2) {
+        for jobs in jobs.as_chunks::<2>().0 {
             let run = |candidate| {
                 if candidate { jobs.par_iter().map(|job| super::super::cpu::decode_one_jp2k_job_with_parallelism(job,j2k::CpuDecodeParallelism::Serial)).collect::<Result<Vec<_>,_>>().unwrap() }
-                else { super::super::batch::try_decode_batch_jp2k_with_j2k(jobs).unwrap() }
+                else { super::super::tests::try_decode_batch_jp2k_with_j2k(jobs).unwrap() }
             };
             let expected=run(false);
             for (a,b) in run(true).iter().zip(&expected) { assert!(a.as_u8()==b.as_u8(),"short batch CPU pixels differ"); }

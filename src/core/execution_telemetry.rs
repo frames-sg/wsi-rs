@@ -1,5 +1,8 @@
-//! Optional counters for native benchmarks and scheduling regressions.
-//! Ordinary builds compile recording calls away.
+//! Path counters for native benchmarks, scheduling regressions and tests.
+//!
+//! Production code records events unconditionally. Ordinary builds compile
+//! the calls away; `route-telemetry` exports process-wide totals, and test
+//! builds keep per-thread totals readable through [`test_count`].
 
 #[derive(Clone, Copy)]
 #[repr(usize)]
@@ -32,10 +35,26 @@ pub(crate) enum Event {
     MetalPrivatePoolPeakBytes = 13,
     #[cfg(all(feature = "metal", feature = "route-telemetry"))]
     MetalSharedPoolPeakBytes = 14,
+    NdpiStripDecodes = 16,
+    ZeissEmbeddedComposedPixels = 17,
+    ZeissLocalTileHits = 18,
+    ZeissDirectLevelComposes = 19,
+    ZeissDirectUncompressedBlits = 20,
+    MiraxAssociatedCacheHits = 21,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    RouteDeviceAttemptTiles = 22,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    RouteDeviceTiles = 23,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    RouteAdaptiveCpuTiles = 24,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    RouteDeviceFailureFallbackTiles = 25,
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    RouteUnavailableFallbackTiles = 26,
 }
 
 #[cfg(any(test, feature = "route-telemetry"))]
-const COUNT: usize = 16;
+const COUNT: usize = 27;
 
 #[cfg(feature = "route-telemetry")]
 static COUNTERS: [std::sync::atomic::AtomicU64; COUNT] =
@@ -66,7 +85,7 @@ pub(crate) fn test_count(event: Event) -> u64 {
 
 #[cfg(feature = "route-telemetry")]
 pub(crate) fn snapshot() -> serde_json::Value {
-    let names = [
+    let names: [&str; COUNT] = [
         "cpu_jp2k_batches",
         "cpu_jp2k_tiles",
         "jp2k_preparations",
@@ -83,6 +102,17 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "metal_private_pool_observed_peak_cached_bytes",
         "metal_shared_pool_observed_peak_cached_bytes",
         "cpu_pool_dispatches",
+        "ndpi_strip_decodes",
+        "zeiss_embedded_composed_pixels",
+        "zeiss_local_tile_hits",
+        "zeiss_direct_level_composes",
+        "zeiss_direct_uncompressed_blits",
+        "mirax_associated_cache_hits",
+        "route_device_attempt_tiles",
+        "route_device_tiles",
+        "route_adaptive_cpu_tiles",
+        "route_device_failure_fallback_tiles",
+        "route_unavailable_fallback_tiles",
     ];
     names
         .into_iter()

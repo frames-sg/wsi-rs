@@ -77,6 +77,35 @@ fn metadata_parse_rejects_oversized_declared_value_before_allocation() {
 }
 
 #[test]
+fn metadata_preflight_rejects_short_file_meta_encoding_for_long_vr() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("invalid-file-meta-vr.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let original = std::fs::read(&path).unwrap();
+    let sop_class_header = [0x02, 0x00, 0x02, 0x00, b'U', b'I'];
+    let header_offset = original
+        .windows(sop_class_header.len())
+        .position(|candidate| candidate == sop_class_header)
+        .expect("test DICOM should contain Media Storage SOP Class UID");
+
+    for vr in [b"SV", b"UV"] {
+        // The CI fuzz input changed a short UI header to SV. Treating its
+        // nonzero reserved bytes as a short length lets the object parser
+        // interpret the UID's first four bytes as a multi-gigabyte length.
+        let mut bytes = original.clone();
+        bytes[header_offset + 4..header_offset + 6].copy_from_slice(vr);
+        std::fs::write(&path, bytes).unwrap();
+        let mut file = File::open(&path).unwrap();
+        let error = preflight_dicom_metadata(&mut file, &path)
+            .expect_err("long file-meta VR must be rejected before object parsing");
+        assert!(
+            error.to_string().contains("invalid reserved bytes"),
+            "unexpected error for {vr:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn metadata_preflight_rejects_odd_value_length_before_parser_desynchronization() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("odd-metadata-length.dcm");

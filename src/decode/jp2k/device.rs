@@ -34,21 +34,3 @@ pub(crate) fn decode_batch_jp2k_cuda(
         })
         .collect()
 }
-
-#[cfg(all(test, feature = "metal"))]
-pub(super) fn decode_one_jp2k_metal(
-    job: &Jp2kDecodeJob<'_>,
-    sessions: &crate::output::metal::MetalBackendSessions,
-) -> Result<crate::output::metal::MetalDeviceTile, WsiError> {
-    let prepared = prepare_jp2k_job(job)?;
-    super::metal_backend::decode_prepared_jp2k_metal(&prepared, sessions)
-}
-
-#[cfg(all(test, feature = "cuda"))]
-pub(super) fn decode_one_jp2k_cuda(
-    job: &Jp2kDecodeJob<'_>,
-    sessions: &crate::output::cuda::CudaBackendSessions,
-) -> Result<crate::output::cuda::CudaDeviceTile, WsiError> {
-    let prepared = prepare_jp2k_job(job)?;
-    super::cuda::decode_prepared_jp2k_cuda(&prepared, sessions)
-}

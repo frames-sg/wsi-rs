@@ -37,10 +37,7 @@ fn czi_large_source_groups_fit_decoded_staging() {
         .iter()
         .all(|tile| (tile.width(), tile.height()) == (256, 256)));
     assert_eq!(
-        reader
-            .slide
-            .prepared_source_peak_bytes
-            .load(Ordering::Relaxed),
+        reader.slide.probe.prepared_peak_bytes(),
         1024 * 1024 * 3,
         "the logical batch is smaller than a source block, so stage only one source at a time"
     );
@@ -51,7 +48,9 @@ fn concurrent_czi_batches_share_one_source_miss() {
     let fixture = jpeg_fixture();
     let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
     if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
-        slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+        slide
+            .probe
+            .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
     }
     let reader = ZeissReader {
         slide: Arc::new(slide),
@@ -67,7 +66,7 @@ fn concurrent_czi_batches_share_one_source_miss() {
             assert_eq!(a.as_u8(), b.as_u8());
         }
     });
-    assert_eq!(reader.slide.subblock_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reader.slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -85,7 +84,9 @@ fn concurrent_czi_neighbors_share_one_source_miss() {
         .map(|req| reference.read_tile_cpu(req).unwrap())
         .collect();
     let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
-    slide.source_miss_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+    slide
+        .probe
+        .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
     let reader = ZeissReader {
         slide: Arc::new(slide),
     };
@@ -98,7 +99,7 @@ fn concurrent_czi_neighbors_share_one_source_miss() {
             assert_eq!(handle.join().unwrap().as_u8(), expected.as_u8());
         }
     });
-    assert_eq!(reader.slide.subblock_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reader.slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -121,12 +122,9 @@ fn czi_batch_decodes_each_source_once_without_persistent_cache() {
         .iter()
         .map(|req| reader.read_tile_cpu(req).unwrap())
         .collect();
-    let before = reader.slide.subblock_decodes.load(Ordering::Relaxed);
+    let before = reader.slide.probe.decodes();
     let actual = reader.read_tiles_cpu(&reqs).unwrap();
-    assert_eq!(
-        reader.slide.subblock_decodes.load(Ordering::Relaxed) - before,
-        1
-    );
+    assert_eq!(reader.slide.probe.decodes() - before, 1);
     assert_eq!(
         reader.slide.subblock_cache.lock().unwrap().current_bytes(),
         0
@@ -208,8 +206,8 @@ fn neighboring_tiles_decode_a_shared_compressed_subblock_once() {
         assert_eq!(actual.data.as_u8(), expected.data.as_u8());
         assert_eq!((actual.width, actual.height), (256, 8));
     }
-    assert_eq!(reference.subblock_decodes.load(Ordering::Relaxed), 2);
-    assert_eq!(slide.subblock_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reference.probe.decodes(), 2);
+    assert_eq!(slide.probe.decodes(), 1);
 }
 
 #[test]
@@ -227,7 +225,7 @@ fn disabled_and_undersized_caches_keep_decoding_without_retention() {
                 .unwrap();
             assert_eq!((tile.width, tile.height), (256, 8));
         }
-        assert_eq!(slide.subblock_decodes.load(Ordering::Relaxed), 3);
+        assert_eq!(slide.probe.decodes(), 3);
         assert_eq!(slide.subblock_cache.lock().unwrap().current_bytes(), 0);
     }
 }
@@ -255,7 +253,7 @@ fn subblock_eviction_respects_the_aggregate_private_budget() {
         assert_eq!(cache.len(), 1);
         assert!(cache.current_bytes() <= cache.capacity_bytes());
     }
-    assert_eq!(slide.subblock_decodes.load(Ordering::Relaxed), 3);
+    assert_eq!(slide.probe.decodes(), 3);
     let capacity = slide.subblock_cache.lock().unwrap().capacity_bytes()
         + slide.tile_cache.lock().unwrap().capacity_bytes()
         + slide.level_cache.lock().unwrap().capacity_bytes()
@@ -336,7 +334,7 @@ fn jpegxr_neighbors_and_mixed_overlap_match_reference_pixels() {
         reader.slide.scene_level_image(0, 0).unwrap().data.as_u8(),
         Some(reference.as_slice())
     );
-    assert_eq!(reader.slide.subblock_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(reader.slide.probe.decodes(), 1);
 
     let public = crate::Slide::open(fixture.path()).unwrap();
     let region = RegionRequest::builder(0usize, 0usize, 0)
@@ -348,7 +346,9 @@ fn jpegxr_neighbors_and_mixed_overlap_match_reference_pixels() {
     let expected_rgba: Vec<_> = (1..6)
         .flat_map(|y| {
             reference[(y * 266 + 252) * 3..(y * 266 + 264) * 3]
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[1], p[2], 255])
         })
         .collect();
@@ -368,5 +368,5 @@ fn cached_subblocks_do_not_hide_source_replacement() {
         .read_tile(0, 0, 0, 1, 0, BackendRequest::Cpu)
         .unwrap_err();
     assert!(error.to_string().contains("source identity"));
-    assert_eq!(slide.subblock_decodes.load(Ordering::Relaxed), 1);
+    assert_eq!(slide.probe.decodes(), 1);
 }

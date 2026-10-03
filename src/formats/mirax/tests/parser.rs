@@ -6,7 +6,12 @@ use super::super::helpers::*;
 use super::super::index::*;
 use super::super::*;
 use super::fixtures::{encode_jpeg, patterned_pixels, write_bytes, MiraxFixture};
-use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
+use crate::core::limits::{SlideLimits, MAX_COMPRESSED_INPUT_BYTES};
+use crate::core::registry::OpenBudget;
+
+fn parse_mirax_ini(path: &Path) -> Result<ParsedIni, WsiError> {
+    parse_mirax_ini_with_budget(path, &OpenBudget::new(SlideLimits::default()))
+}
 
 fn error<T>(result: Result<T, WsiError>) -> WsiError {
     match result {

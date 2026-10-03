@@ -82,7 +82,7 @@ fn empty_ifd_accepted() {
 
 #[test]
 fn unknown_type_id_skipped() {
-    // Create an entry with type ID 99 (unknown) — should be skipped
+    // An entry with unknown type ID 99 must be skipped
     let entries = vec![
         SyntheticEntry {
             tag: 999,

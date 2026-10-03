@@ -2,6 +2,49 @@ type RecordedTileBatches = Arc<std::sync::Mutex<Vec<Vec<(i64, i64)>>>>;
 use super::*;
 use crate::test_support::{regular_rgb_dataset_for_test, RegularLevelForTest};
 
+impl Slide {
+    pub(crate) fn from_source_with_config_and_runtime(
+        source: Box<dyn SlideReader>,
+        cache_config: CacheConfig,
+        limits: SlideLimits,
+        decode_runtime: Arc<DecodeRuntime>,
+    ) -> Self {
+        let managed: Box<dyn ManagedSlideReader> = Box::new(ConservativeManagedReader::new(
+            source,
+            limits.encoded_unit_bytes(),
+        ));
+        Self::from_managed_source_with_config_and_runtime(
+            managed,
+            cache_config,
+            limits,
+            decode_runtime,
+        )
+    }
+}
+
+#[cfg(feature = "metal")]
+impl Slide {
+    /// Opens `path` like [`Self::open_with_options`] on a caller-owned decode
+    /// runtime, so a test's calibrations are isolated from other tests.
+    pub(crate) fn open_with_options_and_runtime(
+        path: impl AsRef<Path>,
+        options: SlideOpenOptions,
+        decode_runtime: Arc<DecodeRuntime>,
+    ) -> Result<Self, WsiError> {
+        let source = options.registry.open_with_config(
+            path.as_ref(),
+            BackendOpenConfig::new(options.cache_config, options.limits),
+        )?;
+        validate_dataset_limits(source.dataset(), options.limits)?;
+        Ok(Self::from_managed_source_with_config_and_runtime(
+            source,
+            options.cache_config,
+            options.limits,
+            decode_runtime,
+        ))
+    }
+}
+
 struct TinySource {
     dataset: Dataset,
 }
@@ -201,13 +244,15 @@ fn region_batches_preserve_pixels_and_fit_staging_and_encoded_bounds() {
             let expected = if offset == (0.0, 0.0) {
                 composite_region_from_source(&source, None, &req, 1024)
             } else {
-                composite_fractional_region_from_source(
-                    &source,
-                    None,
+                composition::RegionReadPlan::fractional(
+                    source.dataset(),
                     &req,
                     (1.0 + offset.0, 1.0 + offset.1),
                     1024,
                 )
+                .and_then(|plan| {
+                    composition::composite_region_from_plan(&source, None, &req, plan, &[])
+                })
             }
             .unwrap();
             let expected_order: Vec<_> = calls.lock().unwrap().iter().flatten().copied().collect();
@@ -230,7 +275,7 @@ fn region_batches_preserve_pixels_and_fit_staging_and_encoded_bounds() {
             // No idle cores: streamed batches keep their bounded structure.
             let actual = pool
                 .install(|| {
-                    crate::core::batch::with_idle_cores(0, || {
+                    crate::core::test_hooks::with_idle_cores(0, || {
                         slide.read_region_subpixel(&req, offset)
                     })
                 })
@@ -358,7 +403,7 @@ fn streamed_batches_do_not_repurpose_encoded_allowance_as_decoded_staging() {
         .unwrap();
     let tile = pool
         .install(|| {
-            crate::core::batch::with_idle_cores(0, || {
+            crate::core::test_hooks::with_idle_cores(0, || {
                 slide.read_region(&RegionRequest::new(0, 0, 0, (1, 1), (8, 8)))
             })
         })
@@ -414,7 +459,7 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
             .build()
             .unwrap();
         let actual = pool
-            .install(|| crate::core::batch::with_idle_cores(0, || slide.read_region(&req)))
+            .install(|| crate::core::test_hooks::with_idle_cores(0, || slide.read_region(&req)))
             .unwrap();
         assert_eq!(actual.as_u8(), expected.as_u8());
         let lengths = calls
@@ -473,7 +518,8 @@ fn streamed_batches_decode_several_tiles_on_idle_cores_when_admission_allows() {
                 .unwrap(),
             ),
         );
-        let tile = crate::core::batch::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
+        let tile =
+            crate::core::test_hooks::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
         assert_eq!(tile.as_u8(), expected.as_u8());
         let lengths = calls
             .lock()
@@ -528,7 +574,8 @@ fn streamed_tiles_larger_than_the_region_share_a_batch_on_idle_cores() {
                 .unwrap(),
             ),
         );
-        let tile = crate::core::batch::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
+        let tile =
+            crate::core::test_hooks::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
         assert_eq!(tile.as_u8(), expected.as_u8());
         let lengths = calls
             .lock()

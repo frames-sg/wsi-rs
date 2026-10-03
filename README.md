@@ -7,260 +7,260 @@
 [![docs.rs](https://img.shields.io/docsrs/wsi-rs)](https://docs.rs/wsi-rs)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-orange.svg)](#license)
 
-`wsi-rs` is a Rust whole-slide image reader. It opens TIFF-family WSI,
-including ARGOS and Huron, DICOM VL WSI, Zeiss CZI/ZVI, MIRAX, Hamamatsu VMS/VMU, Olympus VSI/ETS, raw
-JPEG 2000 codestream fixtures, and `.svcache` containers. JPEG, JPEG 2000,
-and HTJ2K decode is delegated to the
-[J2K pure-Rust JPEG 2000 codec](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/)
-crates. JPEG XR decoding uses the separate [JXR codec](https://github.com/frames-sg/jxr).
+wsi-rs is a Rust library for reading whole-slide images.
 
-The main crate denies `unsafe` code by default, with a narrowly scoped,
-audited exception for Metal interoperability.
-Unsupported or incomplete sources return `WsiError`; they should not silently
-produce black or partial pixels.
+A whole-slide image is a scan of an entire microscope slide, usually a tissue
+sample in pathology. One scan holds billions of pixels, far too many to load at
+once. Scanners store it as a pyramid: the full-resolution image plus several
+smaller copies, each cut into tiles and compressed, usually as JPEG or
+JPEG 2000. Every scanner vendor has its own file format.
+
+wsi-rs reads those files. You ask for a rectangle of pixels at a zoom level.
+wsi-rs finds the tiles that cover it, decodes them, stitches them together and
+gives you an image. The API is the same for every format.
+
+## Why use it
+
+[OpenSlide](https://openslide.org/) is the C library most pathology software
+uses for this. wsi-rs does the same job, and:
+
+- **Is memory-safe.** The library denies `unsafe` code everywhere except one
+  module that calls Apple's Metal API. JPEG, JPEG 2000 and JPEG XR are decoded by Rust
+  codecs ([J2K](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/) and
+  [JXR](https://github.com/frames-sg/jxr)), not libjpeg or OpenJPEG.
+- **Handles bad files.** Every size, count and offset read from a file is
+  checked before use, and memory is capped. A corrupt or malicious file gets an
+  error, not a crash or a runaway allocation. The parsers are fuzzed.
+- **Never returns wrong pixels quietly.** If a tile can't be decoded correctly,
+  you get an error, not a black or half-drawn tile.
+- **Can decode on the GPU.** With the `metal` or `cuda` feature, JPEG 2000 tiles
+  decode on the GPU when that is faster on your hardware.
+- **Works with existing OpenSlide programs.** The included
+  [OpenSlide-compatible C library](wsi-rs-openslide-shim/README.md) lets
+  software built on OpenSlide use wsi-rs without code changes.
+
+CI compares wsi-rs output with OpenSlide on a public corpus of real slides.
 
 ## Install
-
-Install [wsi-rs 0.7.0](https://crates.io/crates/wsi-rs/0.7.0):
 
 ```sh
 cargo add wsi-rs
 ```
 
-The examples below use the [0.7.0 API](https://docs.rs/wsi-rs/0.7.0).
-It uses published J2K 0.11.3 and JXR 0.2.1 packages; sibling codec checkouts
-are not required.
+wsi-rs needs Rust 1.99 or newer and a 64-bit x86 or ARM target.
 
-Supported architectures are x86_64 and aarch64. The JPEG backend in the
-required J2K 0.11 series does not support 32-bit targets.
-
-## Quick Start
+## Example
 
 ```rust,no_run
-use wsi_rs::{RegionRequest, Slide, TileRequest};
+use wsi_rs::{RegionRequest, Slide};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slide = Slide::open("sample.svs")?;
 
+    // The pyramid of the first image, from full resolution down.
+    let levels = &slide.dataset().scenes[0].series[0].levels;
+    for (index, level) in levels.iter().enumerate() {
+        println!(
+            "level {index}: {} x {} pixels, downsample {}",
+            level.dimensions.0, level.dimensions.1, level.downsample
+        );
+    }
+
+    // A 1024 x 1024 region from the top-left corner of level 0.
     let region = RegionRequest::builder(0usize, 0usize, 0u32)
         .origin_px((0, 0))
         .size_px((1024, 1024))
         .build()?;
     slide.read_region_rgba(&region)?.save("region.png")?;
 
-    let tile = TileRequest::builder(0usize, 0usize, 0u32).tile(0, 0).build()?;
-    let cpu_tile = slide.read_tile(&tile)?;
-    println!("{}x{}", cpu_tile.width(), cpu_tile.height());
+    // The photo of the slide label, if the scanner stored one.
+    if slide.dataset().associated_images.contains_key("label") {
+        slide.read_associated("label")?.to_rgba()?.save("label.png")?;
+    }
 
+    // Scanner metadata, using OpenSlide's property names.
+    if let Some(mpp) = slide.dataset().properties.get("openslide.mpp-x") {
+        println!("{mpp} microns per pixel");
+    }
     Ok(())
 }
 ```
 
-Use `SlideOpenOptions` for explicit cache budgets, read-through `.svcache`
-lookup, custom registries, region limits, or decode execution settings.
+## What's in a slide
 
-Every slide also has checked hostile-input limits. The defaults are 128 MiB
-aggregate metadata, 16 MiB per metadata value, 128 MiB each for tile indexes,
-encoded units, and decoded outputs, 33,554,432 pixels/128 MiB RGBA per region,
-384 MiB transient work per operation, 512 MiB in flight per slide, and a
-256 MiB internal batch-chunk target. Oversized batches are processed in order;
-only an individually oversized tile, associated image, or region is rejected.
-Use `SlideLimits` through `SlideOpenOptions::with_limits` to choose stricter
-checked limits.
+`Slide::open` reads the file's metadata. `slide.dataset()` describes it:
 
-## Architecture
+- **Scenes.** Most files hold one scanned area. Some formats hold several
+  separate areas; each one is a scene.
+- **Series.** The image data of a scene. Nearly every scene has exactly one.
+- **Levels.** The pyramid. Level 0 is full resolution. Each level's
+  `downsample` says how much smaller it is: 4.0 means a quarter of the width
+  and a quarter of the height.
+- **Associated images.** Small extra pictures stored with the scan, such as
+  `label`, `macro` (a photo of the whole glass slide) and `thumbnail`.
+- **Properties.** Scanner metadata as text. Common values use OpenSlide's
+  names (`openslide.mpp-x`, `openslide.objective-power`, `openslide.vendor`).
+  Vendor values keep a vendor prefix (`aperio.AppMag`).
 
-`wsi-rs` presents a format-independent `Slide` façade backed by a
-`SlideReader`. Format modules own metadata validation, tile or frame lookup,
-and source I/O; the shared core owns typed requests, byte-bounded caches,
-decode policy, and CPU output types. Unsupported or invalid input
-returns a typed `WsiError` instead of silently producing a partial tile.
-The detailed internal ownership map is in
-[`docs/architecture.md`](docs/architecture.md).
+Ways to read pixels:
 
-Batch reads preserve request order and cardinality. The default controlled-read
-adapter checks cancellation, submits the complete request slice once, validates
-the result count with `WsiError::BackendContract`, and checks cancellation again
-before returning. Format-specific implementations may group internal I/O, but
-they restore results to the original request slots. Cancellation is terminal for
-that attempt and is not reinterpreted as a codec error or a reason to fall back
-from device output to CPU. JPEG and JPEG 2000 kernels already running remain
-non-preemptive.
-
-Encapsulated DICOM images lazily share one validated frame index between reads
-and `prepare_level_controlled`. The normal indexer seeks over compressed
-payloads, prefers a valid Extended Offset Table, and otherwise validates the
-Basic Offset Table and Item headers. Unusual supported layouts retain a token
-parser fallback. Index construction checks counts, monotonic offsets, arithmetic,
-file bounds, frame lengths, and `NumberOfFrames`; it publishes only complete
-indexes and creates no sidecar files.
-
-`SlideOpenOptions` owns cache configuration. The shared source-tile and display
-composition caches are byte-bounded LRUs, while narrowly scoped format caches
-cover source-specific data such as DICOM frame bytes. Those private caches share
-one aggregate allocation derived from the configured source-tile budget; excess
-per-image or per-shard caches remain disabled instead of preallocating outside
-that policy. Cache effects completed by a legacy reader are not rolled back when
-a controlled read is cancelled, but a cancelled result is not returned to the
-caller. `.svcache` freshness policies stream the complete source through SHA-256,
-so opting into cache resolution performs a full source-file read; implicit
-`.svcache` resolution remains disabled by default.
-
-Default retained caches are capped at 128 MiB per slide: 64 MiB for decoded
-source tiles, 32 MiB for display tiles, and 32 MiB across private and
-full-decode caches. Explicit cache settings may choose a different budget.
-
-Metal and CUDA features accelerate JP2K/HTJ2K CPU reads automatically when a
-measured device route, including readback, wins by at least 15%. The ordinary
-API always returns `CpuTile` and falls back safely. Expert
-`read_tile(s)_metal` and `read_tile(s)_cuda` methods are strict: they support
-only JP2K/HTJ2K and either return typed resident tiles or an error. Both tile
-types provide checked, pitch-aware `download_cpu()` staging.
-
-Controlled-read diagnostics are opt-in and delivered outside internal locks.
-The library emits operational events through `tracing`, but installs no
-subscriber and owns no application UI or JSONL output.
-
-For viewer zoom/pan debugging on tiled SVS inputs:
-
-```sh
-RUST_LOG=wsi_rs=debug WSI_RS_TILE_CACHE_BYTES=134217728 \
-  WSI_RS_DISPLAY_TILE_CACHE_BYTES=67108864 your-viewer
-```
-
-`WSI_RS_TILE_CACHE_BYTES` controls the shared decoded source-tile cache and
-`WSI_RS_DISPLAY_TILE_CACHE_BYTES` controls display-tile composition cache
-capacity. The debug logs include cache hit/miss summaries for region/display
-tiles and timing for TIFF/SVS JPEG tile batches when the host application
-installs a `tracing` subscriber.
-
-Build cache files with:
-
-```sh
-cargo run --release --bin svcache -- build sample.svs --out sample.svs.svcache
-```
-
-## Supported Inputs
-
-| Input family | Typical paths |
+| Method | Returns |
 | --- | --- |
-| TIFF-family WSI (including ARGOS and Huron) and uncompressed RGB TIFF | `.svs`, `.tif`, `.tiff`, `.ndpi`, `.scn`, `.bif`, `.avs` |
-| DICOM VL WSI | `.dcm` files or a DICOM series directory |
-| Zeiss CZI (single-plane brightfield) and ZVI | `.czi`, `.zvi` |
-| MIRAX | `.mrxs` plus sibling data files |
-| Hamamatsu VMS/VMU | `.vms`, `.vmu` plus sibling JPEG (VMS) or NGR (VMU) files |
-| Olympus VSI | `.vsi` plus matching ETS companion data |
-| Raw JPEG 2000 codestream | `.j2k`, `.j2c` |
-| `.svcache` | `.svcache` |
+| `read_region_rgba`, `read_region` | Any rectangle on any level, in that level's pixel coordinates. |
+| `read_tile`, `read_tiles` | Tiles exactly as the file stores them. |
+| `read_display_tile` | Tiles on a regular grid of a size you choose, whatever the file uses. Useful for viewers. |
+| `read_associated` | An associated image by name. |
 
-CZI supports single-plane Bgr24 whole-slide images with uncompressed, JPEG,
-or JPEG XR subblocks. Scenes share a canvas and expose common native pyramid
-resolutions. JPEG XR Bgr48 preview attachments retain 16-bit samples. Other CZI
-pixel types, multi-plane datasets, and unsupported compression return errors.
-Sakura remains excluded until a redistributable real sample is available.
+## Supported formats
 
-JPEG XR TIFF support covers tiled, contiguous unsigned 8-bit grayscale/RGB
-images with top-left orientation, no predictor, and no alpha. Physical edge
-tiles are decoded before cropping. Compressed generic TIFF strips are not
-newly supported.
+| Format | Files |
+| --- | --- |
+| Aperio SVS | `.svs`, `.tif` |
+| Hamamatsu NDPI | `.ndpi` |
+| Hamamatsu VMS and VMU | `.vms`, `.vmu` with their companion files |
+| Leica SCN | `.scn` |
+| Roche Ventana BIF | `.bif`, `.tif` |
+| Philips TIFF | `.tiff` |
+| Trestle | `.tif` |
+| ARGOS | `.avs` |
+| Huron | `.tif` |
+| 3DHISTECH MIRAX | `.mrxs` with its data folder |
+| Olympus VSI | `.vsi` with its `.ets` files |
+| Zeiss CZI and ZVI | `.czi`, `.zvi` |
+| DICOM whole-slide images | `.dcm` files or a folder of them |
+| Other tiled TIFF | `.tif`, `.tiff` |
+| Raw JPEG 2000 | `.j2k`, `.j2c` |
+| wsi-rs pre-decoded cache | `.svcache` (see below) |
 
-Generic strip-based TIFF support is intentionally limited to one top-level,
-uncompressed 8-bit RGB image with top-left orientation, no predictor, and
-either interleaved or separate sample planes. Other ordinary TIFF variants
-remain unsupported unless they use a registered WSI layout.
+Sakura is not supported: there is no public sample file to test against.
 
-### DICOM pixels
+### Format details
 
-DICOM VL WSI images are 8-bit (BitsAllocated 8, BitsStored 8, HighBit 7) for
-every supported transfer syntax. JPEG Extended (1.2.840.10008.1.2.4.51) and the
-retired progressive syntaxes (1.2.840.10008.1.2.4.53 and .55) also accept 12-bit
-frames: BitsAllocated 16, BitsStored 12 and HighBit 11. These series report
-`Uint16` and return interleaved RGB `U16` tiles with the 12-bit samples
-unchanged. Monochrome frames expand to R=G=B at either depth. Use
-`read_region_rgba_windowed` with `DisplayWindow::new(0.0, 4095.0)?` for display.
-Each frame's JPEG precision must match BitsStored, and every pyramid level must
-share one depth; associated images keep their own. 12-bit JPEG decodes on the
-CPU only. The OpenSlide C shim rejects 12-bit DICOM, as OpenSlide does.
+- **Zeiss CZI:** single-plane RGB brightfield scans, stored uncompressed, as
+  JPEG or as JPEG XR. Fluorescence channels, z-stacks and other pixel types
+  return an error. Multiple scenes are combined onto one canvas.
+- **Other tiled TIFF:** any tiled TIFF, or a single uncompressed 8-bit RGB
+  image stored in strips. JPEG XR tiles must be 8-bit gray or RGB without alpha.
+- **DICOM:** 8-bit images in every supported transfer syntax. JPEG Extended and
+  progressive JPEG images can also be 12-bit; those come back as 16-bit samples
+  holding the original 12-bit values, and decode on the CPU.
+- **Hamamatsu VMU:** samples are 12-bit and come back as 16-bit samples with all
+  bits kept. Test files are generated from
+  [OpenSlide's NGR layout description](https://github.com/openslide/openslide/blob/main/misc/imhex/hamamatsu-vmu-ngr.hexpat);
+  no real VMU scan is in the test corpus.
 
-### Hamamatsu VMU pixels
+To display 12-bit images as 8-bit, use `read_region_rgba_windowed` with
+`DisplayWindow::new(0.0, 4095.0)?`.
 
-VMU reads the base and map NGR images at focal plane zero, plus an optional
-JPEG macro image. NGR pixels retain all stored RGB samples as interleaved
-`Uint16` (12 significant bits); native reads do not discard the low four bits.
-Use `read_region_rgba_windowed` with `DisplayWindow::new(0.0, 4095.0)?` for
-an explicit display conversion. The OpenSlide C shim applies OpenSlide's
-separate display rule, truncating each sample with `sample >> 4` before
-fractional region composition.
+## Memory
 
-VMU validation currently uses generated fixtures based on
-[OpenSlide's NGR layout](https://github.com/openslide/openslide/blob/main/misc/imhex/hamamatsu-vmu-ngr.hexpat),
-with native sample assertions and independent OpenSlide comparisons. A real
-scanner-generated VMU fixture has not yet been validated.
+Each slide caches decoded tiles in 128 MiB by default: 64 MiB for decoded
+tiles, 32 MiB for display tiles and 32 MiB for format-specific data. Set your
+own sizes with `SlideOpenOptions::with_cache_config`, or change the first two
+defaults with the `WSI_RS_TILE_CACHE_BYTES` and
+`WSI_RS_DISPLAY_TILE_CACHE_BYTES` environment variables.
 
-## Features
+Every slide also has hard limits that protect against bad files:
 
-| Feature | Default | Description |
-| --- | --- | --- |
-| `metal` | off | Metal-backed device payloads on macOS. |
-| `cuda` | off | CUDA-backed payload surface. |
-| `parity-openslide` | off | OpenSlide oracle parity tests. |
-| `parity-metal` | off | CPU-vs-Metal pixel parity checks on macOS. |
+| Limit | Default |
+| --- | --- |
+| All metadata in a slide | 128 MiB |
+| One metadata value | 16 MiB |
+| Tile index | 128 MiB |
+| One compressed tile or frame | 128 MiB |
+| One decoded tile or image | 128 MiB |
+| One region | 33,554,432 pixels (128 MiB as RGBA) |
+| Scratch memory per operation | 384 MiB |
+| Memory in use per slide at once | 512 MiB |
 
-## OpenSlide Compatibility Shim
+Large batches are split and processed in order. A request fails only when a
+single tile, image or region is over a limit. To change the limits, pass a
+`SlideLimits` to `SlideOpenOptions::with_limits`.
 
-The workspace includes `wsi-rs-openslide-shim`, a C ABI library that exports
-OpenSlide-compatible symbols and routes reads through wsi-rs.
+## GPU decoding
 
-```sh
-cargo build -p wsi-rs-openslide-shim --release
-cargo run -p wsi-rs-openslide-shim --bin wsi-rs-openslide-install -- \
-  install --shim target/release/libwsi_rs_openslide_shim.dylib \
-  --prefix /tmp/wsi-rs-openslide
+| Feature | Hardware |
+| --- | --- |
+| `metal` | Apple GPUs on macOS |
+| `cuda` | NVIDIA GPUs |
+
+Both features accelerate JPEG 2000 and HTJ2K tiles. The normal read methods
+still return tiles in CPU memory. Behind the scenes, wsi-rs times the GPU and
+the CPU on the first few reads of each kind of tile and uses the GPU only if it
+is at least 15% faster. If the GPU fails, the read uses the CPU. To turn this
+off, open the slide with:
+
+```rust,ignore
+SlideOpenOptions::default().with_decode_execution_options(
+    DecodeExecutionOptions::default().with_acceleration(DecodeAcceleration::CpuOnly),
+)
 ```
 
-Use `.so` instead of `.dylib` on Linux. Test in a private prefix before
-replacing any system OpenSlide library.
+To keep decoded tiles in GPU memory, call `read_tile_metal`, `read_tiles_metal`,
+`read_tile_cuda` or `read_tiles_cuda`. These only handle JPEG 2000 and HTJ2K
+tiles and return an error for anything else. They never fall back to the CPU.
+Call `download_cpu()` on the result to copy a tile to CPU memory.
+
+## Pre-decoded cache files
+
+Decoding JPEG and JPEG 2000 is most of the work of reading a slide. A
+`.svcache` file stores every tile of every level already decoded (compressed
+with zstd), plus the associated images, so reads skip JPEG and JPEG 2000
+decoding.
+
+Build one next to the slide:
+
+```sh
+cargo run --release --bin svcache -- build sample.svs
+```
+
+This writes `sample.svs.svcache`. To use it, open the slide with
+`SlideOpenOptions::with_svcache_policy`:
+
+| Policy | Behavior |
+| --- | --- |
+| `SvcachePolicy::Off` (default) | Ignore cache files. |
+| `SvcachePolicy::PreferFresh` | Use a cache file that matches the slide; otherwise read the slide. |
+| `SvcachePolicy::RequireFresh` | Use a cache file that matches the slide; otherwise return an error. |
+
+wsi-rs looks for the cache file next to the slide and in
+`~/.cache/wsi-rs/svcache/`. Checking that a cache file matches its slide
+reads the whole slide file and hashes it with SHA-256, which takes a while for
+large slides.
+
+## Logging
+
+wsi-rs logs through [`tracing`](https://docs.rs/tracing). It installs no
+subscriber; your application chooses where logs go. At debug level it logs
+cache hits and misses and decode timings:
+
+```sh
+RUST_LOG=wsi_rs=debug your-app
+```
+
+## OpenSlide-compatible C library
+
+[`wsi-rs-openslide-shim`](wsi-rs-openslide-shim/README.md) builds a shared
+library with the same C functions as OpenSlide. Programs that load OpenSlide
+can load it instead and read slides through wsi-rs.
 
 ## Development
 
 ```sh
-cargo xtask validate
-cargo xtask rc-preflight
-cargo xtask fuzz-check
+cargo xtask validate      # format, lint, tests, docs
+cargo xtask fuzz-check    # check that every fuzz target compiles
+cargo xtask rc-preflight  # every release check
 ```
 
-`cargo xtask validate` runs the default local gate.
-`cargo xtask rc-preflight` runs API and supply-chain checks, fuzz builds and
-five-minute campaigns for each target, feature-combination checks, validation,
-release and corpus tests, coverage, performance acceptance, and package dry-run
-checks. The four-platform RC workflow also verifies the C artifacts.
-
-Performance acceptance requires reviewed capture JSON files in
-`WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE`, and
-`WSI_RS_RC_CURRENT_CAPTURE`. Collect the OpenSlide/current pair with
-`cargo xtask perf-capture-pair <label>` using the default five alternating
-repetitions and worker matrix; collect the previous-release capture with the
-same corpus, workloads, cache budget, and thread limits. Missing captures or
-failed comparisons block preflight. Before collecting any of these captures,
-set `WSI_RS_PERF_PINNED_HOST_ID` to the same stable identifier for the physical
-host and set `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda` for that host.
-The paired capture compares the benchmark regions numerically with OpenSlide
-in separate workers outside timing and memory measurements. It uses the corpus
-color tolerances and requires exact alpha. Previous-release timing gates compare
-workloads with unchanged pixels; corrected output is checked against OpenSlide
-and reported explicitly instead of comparing its speed with an incorrect image.
-Temporary dependency exceptions and their
-expiry dates are recorded in
+[docs/architecture.md](docs/architecture.md) explains how the code is organized
+and what the release checks need. Dependency rules are in
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
-Releases that include the `cuda` feature also require the fail-closed
-`CUDA validation` workflow on the self-hosted CUDA runner.
 
 ## Security
 
-Report vulnerabilities privately through GitHub private vulnerability reporting
-or the repository owner profile.
+Report vulnerabilities privately through GitHub. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Dual-licensed under either [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE), at your option.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option.

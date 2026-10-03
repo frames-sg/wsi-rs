@@ -308,11 +308,11 @@ pub fn corpus_cache_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     std::env::var_os("HOME").map_or_else(
-        || PathBuf::from(".cache/slideviewer/parity-corpus"),
+        || PathBuf::from(".cache/wsi-rs/parity-corpus"),
         |home| {
             PathBuf::from(home)
                 .join(".cache")
-                .join("slideviewer")
+                .join("wsi-rs")
                 .join("parity-corpus")
         },
     )

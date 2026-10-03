@@ -1,6 +1,22 @@
 use super::*;
 use crate::core::types::*;
 
+impl<K: Hash + Eq, V> PrivateCache<K, V> {
+    pub(crate) fn current_bytes(&self) -> u64 {
+        self.lru.current_bytes()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.lru.len()
+    }
+}
+
+impl<K: Hash + Eq, V> WeightedLru<K, V> {
+    pub(crate) fn lru_key(&self) -> Option<&K> {
+        self.entries.peek_lru().map(|(key, _)| key)
+    }
+}
+
 const SVS_RGB_240_TILE_BYTES: usize = 240 * 240 * 3;
 const COMMON_ZOOM_VIEWPORT_TILE_COUNT: i64 = 96;
 
@@ -72,22 +88,16 @@ fn private_cache_budget_is_byte_weighted_and_bounds_aggregate_capacity() {
         .collect::<Vec<_>>();
 
     assert!(
-        caches
-            .iter()
-            .map(PrivateCache::accounted_capacity_bytes)
-            .sum::<u64>()
+        caches.iter().map(PrivateCache::capacity_bytes).sum::<u64>()
             <= config.private_cache_budget_bytes()
     );
     assert_eq!(
-        caches
-            .iter()
-            .map(PrivateCache::accounted_capacity_bytes)
-            .sum::<u64>(),
+        caches.iter().map(PrivateCache::capacity_bytes).sum::<u64>(),
         config.private_cache_budget_bytes()
     );
 
     let cache = &mut caches[0];
-    let capacity = cache.accounted_capacity_bytes();
+    let capacity = cache.capacity_bytes();
     cache.put(
         1,
         2,

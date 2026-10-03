@@ -1,5 +1,17 @@
 use super::*;
 
+impl CoreLedger {
+    /// A private ledger, so tests control idle cores without other tests.
+    fn with_cores(cores: usize) -> &'static Self {
+        let ledger: &'static Self = Box::leak(Box::new(Self::new()));
+        ledger
+            .cores
+            .set(cores)
+            .expect("new ledger has no core count");
+        ledger
+    }
+}
+
 #[test]
 fn exactly_one_accepts_one_and_rejects_other_cardinalities() {
     assert_eq!(exactly_one(vec![7], "test").expect("one item"), 7);

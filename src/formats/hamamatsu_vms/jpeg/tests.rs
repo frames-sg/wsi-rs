@@ -5,6 +5,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{os::fd::OwnedFd, os::unix::net::UnixStream};
 
 use super::*;
+use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
 use crate::formats::hamamatsu_vms::tests::fixtures::{write_jpeg_header, write_restart_jpeg};
 
 fn sof_payload(width: u16, height: u16, precision: u8, sampling: u8) -> Vec<u8> {
@@ -573,4 +574,8 @@ fn decoder_reports_entropy_that_disagrees_with_the_declared_tile_width() {
         .decode_tile(0, 1, BackendRequest::Auto)
         .expect_err("declared tile width must agree with its entropy stream");
     assert!(matches!(error, WsiError::Jpeg(_)));
+}
+
+fn checked_vms_entropy_len(segment_len: u64, header_len: usize) -> Result<usize, WsiError> {
+    checked_vms_entropy_len_with_limit(segment_len, header_len, MAX_COMPRESSED_INPUT_BYTES)
 }

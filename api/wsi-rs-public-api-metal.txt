@@ -14,10 +14,10 @@ pub wsi_rs::error::WsiError::DisplayConversion(alloc::string::String)
 pub wsi_rs::error::WsiError::InvalidSlide
 pub wsi_rs::error::WsiError::InvalidSlide::message: alloc::string::String
 pub wsi_rs::error::WsiError::InvalidSlide::path: std::path::PathBuf
-pub wsi_rs::error::WsiError::Io(std::io::error::Error)
+pub wsi_rs::error::WsiError::Io(core::io::error::Error)
 pub wsi_rs::error::WsiError::IoWithPath
 pub wsi_rs::error::WsiError::IoWithPath::path: std::path::PathBuf
-pub wsi_rs::error::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::error::WsiError::IoWithPath::source: alloc::sync::Arc<core::io::error::Error>
 pub wsi_rs::error::WsiError::Jp2k(alloc::string::String)
 pub wsi_rs::error::WsiError::Jpeg(alloc::string::String)
 pub wsi_rs::error::WsiError::LevelOutOfRange
@@ -128,10 +128,10 @@ pub wsi_rs::prelude::WsiError::DisplayConversion(alloc::string::String)
 pub wsi_rs::prelude::WsiError::InvalidSlide
 pub wsi_rs::prelude::WsiError::InvalidSlide::message: alloc::string::String
 pub wsi_rs::prelude::WsiError::InvalidSlide::path: std::path::PathBuf
-pub wsi_rs::prelude::WsiError::Io(std::io::error::Error)
+pub wsi_rs::prelude::WsiError::Io(core::io::error::Error)
 pub wsi_rs::prelude::WsiError::IoWithPath
 pub wsi_rs::prelude::WsiError::IoWithPath::path: std::path::PathBuf
-pub wsi_rs::prelude::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::prelude::WsiError::IoWithPath::source: alloc::sync::Arc<core::io::error::Error>
 pub wsi_rs::prelude::WsiError::Jp2k(alloc::string::String)
 pub wsi_rs::prelude::WsiError::Jpeg(alloc::string::String)
 pub wsi_rs::prelude::WsiError::LevelOutOfRange
@@ -548,10 +548,10 @@ pub wsi_rs::WsiError::DisplayConversion(alloc::string::String)
 pub wsi_rs::WsiError::InvalidSlide
 pub wsi_rs::WsiError::InvalidSlide::message: alloc::string::String
 pub wsi_rs::WsiError::InvalidSlide::path: std::path::PathBuf
-pub wsi_rs::WsiError::Io(std::io::error::Error)
+pub wsi_rs::WsiError::Io(core::io::error::Error)
 pub wsi_rs::WsiError::IoWithPath
 pub wsi_rs::WsiError::IoWithPath::path: std::path::PathBuf
-pub wsi_rs::WsiError::IoWithPath::source: alloc::sync::Arc<std::io::error::Error>
+pub wsi_rs::WsiError::IoWithPath::source: alloc::sync::Arc<core::io::error::Error>
 pub wsi_rs::WsiError::Jp2k(alloc::string::String)
 pub wsi_rs::WsiError::Jpeg(alloc::string::String)
 pub wsi_rs::WsiError::LevelOutOfRange

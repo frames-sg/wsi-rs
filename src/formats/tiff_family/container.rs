@@ -7,6 +7,3 @@ mod parse;
 mod tests;
 
 pub(crate) use model::{tags, Endian, TiffContainer};
-
-#[cfg(test)]
-use model::{Ifd, InlineValue, TagEntry, TagValue, TiffType};

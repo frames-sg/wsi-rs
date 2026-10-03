@@ -85,9 +85,9 @@ impl ZviSlide {
                     let dst = row as usize * w as usize;
                     for (slot, bytes) in samples[dst..dst + w as usize]
                         .iter_mut()
-                        .zip(row_bytes.chunks_exact(2))
+                        .zip(row_bytes.as_chunks::<2>().0)
                     {
-                        *slot = u16::from_le_bytes([bytes[0], bytes[1]]);
+                        *slot = u16::from_le_bytes(*bytes);
                     }
                 }
                 CpuTile::new(
@@ -243,9 +243,9 @@ fn crop_decoded_zvi_plane(
                 let dst = row * w as usize;
                 for (slot, bytes) in samples[dst..dst + w as usize]
                     .iter_mut()
-                    .zip(data[src..src + w as usize * 2].chunks_exact(2))
+                    .zip(data[src..src + w as usize * 2].as_chunks::<2>().0)
                 {
-                    *slot = u16::from_le_bytes([bytes[0], bytes[1]]);
+                    *slot = u16::from_le_bytes(*bytes);
                 }
             }
             CpuTile::new(

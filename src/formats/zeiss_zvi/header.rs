@@ -234,7 +234,9 @@ fn checked_dimension(value: i32) -> Result<u32, WsiError> {
 
 pub(super) fn decode_utf16le_lossy(raw: &[u8]) -> String {
     let words = raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
         .take_while(|value| *value != 0)
         .collect::<Vec<_>>();

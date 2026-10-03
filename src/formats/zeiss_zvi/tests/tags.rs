@@ -48,3 +48,8 @@ fn tag_parser_tolerates_negative_counts_and_incomplete_trailing_entries() {
     truncated.extend_from_slice(&[0; 2]);
     assert!(parse_zvi_tags(&truncated).unwrap().is_empty());
 }
+
+fn parse_zvi_tags(data: &[u8]) -> Result<HashMap<i32, String>, WsiError> {
+    let budget = OpenBudget::new(crate::SlideLimits::default());
+    parse_zvi_tags_with_budget(data, &budget)
+}

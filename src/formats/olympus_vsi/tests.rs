@@ -11,7 +11,7 @@ use super::scene::index::{
 };
 use super::scene::EtsScene;
 use super::*;
-use crate::core::registry::Slide;
+use crate::core::registry::{OpenBudget, Slide};
 use crate::core::types::*;
 
 mod fixtures;
@@ -156,8 +156,10 @@ fn synthetic_vsi_opens_with_metadata_and_reads_encoded_and_background_tiles() {
     assert!(background
         .as_u8()
         .expect("U8 background")
-        .chunks_exact(3)
-        .all(|pixel| pixel == [7, 11, 13]));
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [7, 11, 13]));
 
     let encoded_req = TileRequest::new(0, 0, 0, 1, 0);
     let encoded = reader
@@ -790,4 +792,16 @@ fn opens_olympus_vsi_when_corpus_is_available() {
         .expect("read Olympus VSI tile");
     assert!(tile.width() > 0);
     assert!(tile.height() > 0);
+}
+
+impl EtsScene {
+    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_budget(path, &OpenBudget::new(crate::SlideLimits::default()))
+    }
+}
+
+impl OlympusVsiSlide {
+    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
+        Self::parse_with_config(path, BackendOpenConfig::deterministic())
+    }
 }

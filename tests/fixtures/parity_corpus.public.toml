@@ -1,6 +1,6 @@
 # Public, redistributable parity corpus.
 # Slides listed here are downloaded by `scripts/parity-corpus-fetch.sh` into
-# `$WSI_RS_PARITY_CORPUS_CACHE` (default `~/.cache/slideviewer/parity-corpus/`).
+# `$WSI_RS_PARITY_CORPUS_CACHE` (default `~/.cache/wsi-rs/parity-corpus/`).
 
 [[slide]]
 name             = "aperio_svs_brightfield_he_typical"

@@ -8,7 +8,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
     }
 
     fn detect(&self, container: &TiffContainer) -> bool {
-        // Reject NDPI — handled by NdpiInterpreter.
+        // Reject NDPI; NdpiInterpreter handles it.
         if container.is_ndpi() {
             return false;
         }
@@ -57,7 +57,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             }
 
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
-                // Tiled IFD — pyramid level.
+                // Tiled IFD: pyramid level.
                 let tile_width = container.get_u32(ifd_id, tags::TILE_WIDTH)?;
                 let tile_height = container.get_u32(ifd_id, tags::TILE_LENGTH)?;
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
@@ -71,7 +71,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                     compression: compression_from_tag(compression_val),
                 });
             } else {
-                // Stripped IFD — associated image.
+                // Stripped IFD: associated image.
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
                 let strip_offsets = container
                     .get_u64_array(ifd_id, tags::STRIP_OFFSETS)

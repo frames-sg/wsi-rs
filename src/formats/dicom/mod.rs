@@ -3,8 +3,6 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Mutex;
 
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
@@ -13,10 +11,6 @@ use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
 use j2k_core::BackendRequest;
 
-#[cfg(test)]
-use crate::core::cache::CacheConfig;
-#[cfg(test)]
-use crate::core::cache::PrivateCache;
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
@@ -66,8 +60,6 @@ const SUPPORTED_TRANSFER_SYNTAXES: &[&str] = &[
     HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
     uids::RLE_LOSSLESS,
 ];
-#[cfg(test)]
-const JPEG_TRANSFER_SYNTAX: &str = uids::JPEG_BASELINE8_BIT;
 const JPEG_TRANSFER_SYNTAXES: &[&str] = &[
     uids::JPEG_BASELINE8_BIT,
     uids::JPEG_EXTENDED12_BIT,
@@ -103,8 +95,6 @@ mod reader;
 pub(crate) use backend::DicomBackend;
 use backend::*;
 use decode::*;
-#[cfg(test)]
-use frame_index::*;
 use image::*;
 use manifest::*;
 use metadata::*;

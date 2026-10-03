@@ -70,7 +70,7 @@ fn embedded_attachment_probe_preserves_typed_metadata_without_composing_pixels()
     use super::fixtures::{
         build_czi_bytes, metadata_xml, write_fixture, AttachmentSpec, SubblockSpec,
     };
-    use crate::formats::zeiss::attachments::EMBEDDED_COMPOSED_PIXELS;
+    use crate::core::execution_telemetry::{test_count, Event};
 
     for (pixel_type, bytes_per_pixel) in [(3, 3), (4, 6), (9, 4)] {
         let data = (1..=2 * bytes_per_pixel).map(|value| value as u8).collect();
@@ -101,7 +101,7 @@ fn embedded_attachment_probe_preserves_typed_metadata_without_composing_pixels()
             9 => assert_eq!(pixels.as_u8().unwrap(), &[3, 2, 1, 7, 6, 5]),
             _ => unreachable!(),
         }
-        EMBEDDED_COMPOSED_PIXELS.with(|count| count.set(0));
+        let composed_before = test_count(Event::ZeissEmbeddedComposedPixels);
         let actual = probe_associated_attachment(
             fixture.path(),
             &mut czi,
@@ -114,13 +114,11 @@ fn embedded_attachment_probe_preserves_typed_metadata_without_composing_pixels()
         assert_eq!(actual.sample_type, expected.sample_type);
         assert_eq!(actual.channels, expected.channels);
         assert_eq!(actual.icc_profile, expected.icc_profile);
-        EMBEDDED_COMPOSED_PIXELS.with(|count| {
-            assert_eq!(
-                count.get(),
-                0,
-                "metadata probing must not compose an output plane"
-            )
-        });
+        assert_eq!(
+            test_count(Event::ZeissEmbeddedComposedPixels),
+            composed_before,
+            "metadata probing must not compose an output plane"
+        );
     }
 }
 

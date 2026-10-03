@@ -74,22 +74,6 @@ impl YcbcrToRgb8Converter {
         self.convert_jobs(jobs)
     }
 
-    #[cfg(test)]
-    pub(super) fn convert_tiles_u64(
-        &self,
-        tiles: &[MetalDeviceTile],
-    ) -> Result<Vec<MetalDeviceTile>, WsiError> {
-        let jobs = tiles
-            .iter()
-            .map(|tile| {
-                let mut job = self.prepare_job(tile)?;
-                job.address_width = YcbcrAddressWidth::U64;
-                Ok(job)
-            })
-            .collect::<Result<Vec<_>, WsiError>>()?;
-        self.convert_jobs(jobs)
-    }
-
     fn convert_jobs(&self, jobs: Vec<YcbcrToRgb8Job>) -> Result<Vec<MetalDeviceTile>, WsiError> {
         use crate::core::execution_telemetry::{record, Event};
         record(Event::ColorSubmissions, 1);
@@ -303,3 +287,25 @@ pub(super) struct YcbcrToRgb8Params {
 }
 
 pub(super) const YCBCR_TO_RGB8_METAL: &str = include_str!("ycbcr.metal");
+
+#[cfg(test)]
+mod test_fixtures {
+    use super::*;
+
+    impl YcbcrToRgb8Converter {
+        pub(in super::super) fn convert_tiles_u64(
+            &self,
+            tiles: &[MetalDeviceTile],
+        ) -> Result<Vec<MetalDeviceTile>, WsiError> {
+            let jobs = tiles
+                .iter()
+                .map(|tile| {
+                    let mut job = self.prepare_job(tile)?;
+                    job.address_width = YcbcrAddressWidth::U64;
+                    Ok(job)
+                })
+                .collect::<Result<Vec<_>, WsiError>>()?;
+            self.convert_jobs(jobs)
+        }
+    }
+}

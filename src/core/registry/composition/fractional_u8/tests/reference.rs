@@ -137,3 +137,49 @@ pub(in crate::core::registry::composition) fn blit_fractional_saturating_u8(
         }
     }
 }
+
+#[derive(Clone, Copy)]
+struct BilinearSample {
+    x0: i64,
+    x1: i64,
+    y0: i64,
+    y1: i64,
+    a00: f32,
+    a10: f32,
+    a01: f32,
+    a11: f32,
+}
+
+fn bilinear_sample(
+    out_x: usize,
+    out_y: usize,
+    dest: (f64, f64),
+    pixman_float_sampling: bool,
+) -> BilinearSample {
+    let src_x = out_x as f64 - dest.0;
+    let src_y = out_y as f64 - dest.1;
+    let x0 = src_x.floor() as i64;
+    let y0 = src_y.floor() as i64;
+    let wx1 = (src_x - x0 as f64) as f32;
+    let wy1 = (src_y - y0 as f64) as f32;
+    let wx0 = if pixman_float_sampling {
+        1.0_f32 - wx1
+    } else {
+        (1.0 - (src_x - x0 as f64)) as f32
+    };
+    let wy0 = if pixman_float_sampling {
+        1.0_f32 - wy1
+    } else {
+        (1.0 - (src_y - y0 as f64)) as f32
+    };
+    BilinearSample {
+        x0,
+        x1: x0 + 1,
+        y0,
+        y1: y0 + 1,
+        a00: wx0 * wy0,
+        a10: wx1 * wy0,
+        a01: wx0 * wy1,
+        a11: wx1 * wy1,
+    }
+}

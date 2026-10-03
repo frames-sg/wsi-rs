@@ -8,7 +8,7 @@ pub(crate) fn fixture_path(alias: &str, extension: &str) -> Option<CString> {
             std::env::var_os("HOME").map(|home| {
                 PathBuf::from(home)
                     .join(".cache")
-                    .join("slideviewer")
+                    .join("wsi-rs")
                     .join("parity-corpus")
             })
         })?;

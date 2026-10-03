@@ -393,7 +393,6 @@ fn calibrate_device(
     tiles: usize,
     cpu_elapsed: Duration,
 ) {
-    #[cfg(test)]
     runtime.wait_at_background_hold();
     let published = match runtime.preferred_device() {
         None => lease.fail(None),

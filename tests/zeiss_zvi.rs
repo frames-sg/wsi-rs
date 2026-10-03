@@ -15,18 +15,9 @@ const ZVI_FIXTURES: &[&str] = &[
 ];
 
 fn zeiss_zvi_root() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("WSI_RS_ZVI_ROOT").map(PathBuf::from) {
-        return path.is_dir().then_some(path);
-    }
-
-    let local = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("SlideViewer")
-        .join("downloads")
-        .join("openslide-testdata")
-        .join("Zeiss");
-    local.is_dir().then_some(local)
+    env::var_os("WSI_RS_ZVI_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
 }
 
 fn fixture_paths() -> Option<Vec<PathBuf>> {

@@ -100,7 +100,7 @@ impl TiffContainer {
         }
     }
 
-    /// Alias for resolve_tag — returns raw bytes without type interpretation.
+    /// Alias for resolve_tag. Returns raw bytes without type interpretation.
     pub(crate) fn get_bytes(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
         self.resolve_tag(ifd_id, tag)
     }
@@ -370,7 +370,9 @@ impl TiffContainer {
 
         let decoded: Vec<u64> = match entry.tiff_type {
             TiffType::Short => bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .take(count)
                 .map(|c| match self.endian {
                     Endian::Little => u16::from_le_bytes([c[0], c[1]]) as u64,
@@ -378,7 +380,9 @@ impl TiffContainer {
                 })
                 .collect(),
             TiffType::Long => bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(count)
                 .map(|c| match self.endian {
                     Endian::Little => u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as u64,
@@ -393,7 +397,9 @@ impl TiffContainer {
                 })
                 .collect(),
             TiffType::Long8 => bytes
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .take(count)
                 .map(|c| match self.endian {
                     Endian::Little => {

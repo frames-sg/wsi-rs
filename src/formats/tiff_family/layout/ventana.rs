@@ -31,11 +31,7 @@ use geometry::{
     ventana_exact_tile_dimensions, ventana_level0_dimensions, ventana_public_level_dimensions,
     ventana_tilemap_layout, VentanaStoredLevel,
 };
-#[cfg(test)]
-use metadata::{extract_encode_info, extract_encode_info_bytes, extract_iscan_fragment_bytes};
 use metadata::{find_encode_info_xml, find_xmp_string, has_iscan_xmp, parse_iscan_properties};
-#[cfg(test)]
-use stitching::{joint_delta, ventana_snake_coords, BifArea, BifTile};
 use stitching::{parse_level0_xml, BifInfo};
 
 #[cfg(test)]

@@ -1,8 +1,40 @@
 use super::input::{
-    checked_jpeg_preparation_len, ensure_jpeg_eoi, patch_jpeg_dimensions,
-    try_decode_jpeg_rgb_scaled,
+    checked_jpeg_preparation_len, patch_sof_dimensions, planned_dimension_patch, repair_jpeg_eoi,
+    set_sof_dimensions, try_decode_jpeg_rgb_scaled,
 };
 use super::*;
+use std::borrow::Cow;
+
+fn ensure_jpeg_eoi<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
+    if input.len() >= 2 && input[input.len() - 2..] == [0xFF, 0xD9] {
+        return Cow::Borrowed(input);
+    }
+
+    let mut repaired = input.to_vec();
+    repair_jpeg_eoi(&mut repaired);
+    Cow::Owned(repaired)
+}
+
+fn patch_jpeg_dimensions<'a>(
+    input: &'a [u8],
+    expected_width: u32,
+    expected_height: u32,
+    force_dimensions: bool,
+) -> Cow<'a, [u8]> {
+    let Some((sof_offset, width, height, force)) =
+        planned_dimension_patch(input, expected_width, expected_height, force_dimensions)
+    else {
+        return Cow::Borrowed(input);
+    };
+
+    let mut patched = input.to_vec();
+    if force {
+        set_sof_dimensions(&mut patched, sof_offset, width, height);
+    } else {
+        patch_sof_dimensions(&mut patched, sof_offset, width, height);
+    }
+    Cow::Owned(patched)
+}
 use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 
 fn encode_test_jpeg(img: &image::RgbImage) -> Vec<u8> {
@@ -26,7 +58,7 @@ fn decode_jpeg(
 ) -> Result<image::RgbaImage, WsiError> {
     let decoded = decode_jpeg_rgb(data, tables, expected_width, expected_height)?;
     let mut rgba = Vec::with_capacity(decoded.pixels.len() / 3 * 4);
-    for rgb in decoded.pixels.chunks_exact(3) {
+    for rgb in decoded.pixels.as_chunks::<3>().0 {
         rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
     }
     Ok(
@@ -145,7 +177,7 @@ fn parse_jpeg_tile_header(data: &[u8]) -> Result<ParsedJpegTileHeader, WsiError>
             if components.len() < component_count * 3 {
                 return Err(WsiError::Jpeg("JPEG SOF component table too short".into()));
             }
-            for component in components.chunks_exact(3).take(component_count) {
+            for component in components.as_chunks::<3>().0.iter().take(component_count) {
                 let sampling = component[1];
                 max_h = max_h.max(sampling >> 4);
                 max_v = max_v.max(sampling & 0x0F);
@@ -207,7 +239,9 @@ fn progressive_8x8_jpeg() -> Vec<u8> {
         );
     assert_eq!(HEX.len() % 2, 0);
     HEX.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = (pair[0] as char).to_digit(16).unwrap();
             let low = (pair[1] as char).to_digit(16).unwrap();

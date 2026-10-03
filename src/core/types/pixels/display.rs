@@ -248,7 +248,7 @@ impl CpuTile {
                         rgba.extend_from_slice(&[v, v, v, 255]);
                     }
                 } else if self.channels == 3 && self.layout == CpuTileLayout::Interleaved {
-                    for pixel in samples.chunks_exact(3) {
+                    for pixel in samples.as_chunks::<3>().0 {
                         for &s in pixel {
                             let v = (((s as f64 - window.min) / range) * 255.0)
                                 .round()
@@ -388,7 +388,7 @@ impl CpuTile {
                         rgb.extend_from_slice(&[v, v, v]);
                     }
                 } else if self.channels == 3 && self.layout == CpuTileLayout::Interleaved {
-                    for pixel in samples.chunks_exact(3) {
+                    for pixel in samples.as_chunks::<3>().0 {
                         for &s in pixel {
                             let v = (((s as f64 - window.min) / range) * 255.0)
                                 .round()

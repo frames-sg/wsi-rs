@@ -6,24 +6,12 @@ use j2k::{
 };
 use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelFormat};
 
-#[cfg(test)]
-use super::cpu::decode_one_jp2k_job;
 use super::cpu::decode_prepared_jp2k_job;
 use super::output::sample_buffer_from_rgb8_bytes;
 use super::prepare::{prepare_jp2k_job, PreparedJp2kJob};
 use super::{Jp2kColorSpace, Jp2kDecodeJob};
 use crate::core::types::CpuTile;
 use crate::error::WsiError;
-
-#[cfg(test)]
-pub(crate) fn decode_jp2k_tile_batch_to_sample_buffers(
-    reqs: &[Jp2kDecodeJob<'_>],
-) -> Result<Vec<CpuTile>, WsiError> {
-    if reqs.is_empty() {
-        return Ok(Vec::new());
-    }
-    decode_jp2k_tile_batch_with_j2k(reqs)
-}
 
 pub(crate) fn decode_batch_jp2k(jobs: &[Jp2kDecodeJob<'_>]) -> Vec<Result<CpuTile, WsiError>> {
     if jobs.is_empty() {
@@ -91,17 +79,7 @@ pub(super) struct PreparedJp2kBatchJob {
     pub(super) output_colorspace: Jp2kColorSpace,
 }
 
-#[cfg(test)]
-pub(super) fn try_decode_batch_jp2k_with_j2k(jobs: &[Jp2kDecodeJob<'_>]) -> Option<Vec<CpuTile>> {
-    let prepared = jobs
-        .iter()
-        .map(prepare_jp2k_job)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    try_decode_prepared_batch_jp2k_with_j2k(&prepared)
-}
-
-fn try_decode_prepared_batch_jp2k_with_j2k(
+pub(super) fn try_decode_prepared_batch_jp2k_with_j2k(
     prepared: &[PreparedJp2kJob<'_>],
 ) -> Option<Vec<CpuTile>> {
     if prepared.len() <= 1 {
@@ -174,11 +152,4 @@ pub(super) fn materialize_jp2k_batch_outputs(
             )
         })
         .collect()
-}
-
-#[cfg(test)]
-pub(super) fn decode_jp2k_tile_batch_with_j2k(
-    reqs: &[Jp2kDecodeJob<'_>],
-) -> Result<Vec<CpuTile>, WsiError> {
-    reqs.iter().map(decode_one_jp2k_job).collect()
 }

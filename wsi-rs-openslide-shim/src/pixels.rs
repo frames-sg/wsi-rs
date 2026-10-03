@@ -22,7 +22,7 @@ pub(crate) fn tile_to_premultiplied_argb_into(
     if let Some(bytes) = tile.as_u8() {
         match (tile.color_space(), tile.channels(), tile.layout()) {
             (ColorSpace::Rgb, 3, CpuTileLayout::Interleaved) => {
-                for (dest, pixel) in argb.iter_mut().zip(bytes.chunks_exact(3)) {
+                for (dest, pixel) in argb.iter_mut().zip(bytes.as_chunks::<3>().0) {
                     *dest = 0xff00_0000
                         | (u32::from(pixel[0]) << 16)
                         | (u32::from(pixel[1]) << 8)
@@ -65,8 +65,8 @@ fn tile_pixel_count(tile: &CpuTile) -> Result<usize, WsiError> {
 }
 
 fn convert_rgba_to_premultiplied_argb(rgba: &[u8], argb: &mut [u32]) {
-    if rgba.chunks_exact(4).all(|pixel| pixel[3] == 255) {
-        for (dest, pixel) in argb.iter_mut().zip(rgba.chunks_exact(4)) {
+    if rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255) {
+        for (dest, pixel) in argb.iter_mut().zip(rgba.as_chunks::<4>().0) {
             *dest = 0xff00_0000
                 | (u32::from(pixel[0]) << 16)
                 | (u32::from(pixel[1]) << 8)
@@ -74,7 +74,7 @@ fn convert_rgba_to_premultiplied_argb(rgba: &[u8], argb: &mut [u32]) {
         }
         return;
     }
-    for (dest, pixel) in argb.iter_mut().zip(rgba.chunks_exact(4)) {
+    for (dest, pixel) in argb.iter_mut().zip(rgba.as_chunks::<4>().0) {
         let a = pixel[3];
         let premultiply = |channel: u8| -> u8 {
             ((u16::from(channel) * u16::from(a) + 127) / 255).min(255) as u8

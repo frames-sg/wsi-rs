@@ -36,3 +36,11 @@ fn payload_bounds_reject_offset_trailing_raw_data_and_oversize() {
     oversized_decoded.height = u32::MAX;
     assert!(validated_payload_length(path, 11, &oversized_decoded).is_err());
 }
+
+fn validated_payload_length(
+    path: &Path,
+    stream_length: u64,
+    header: &super::model::ZviImageHeader,
+) -> Result<u64, WsiError> {
+    validated_payload_length_with_limits(path, stream_length, header, crate::SlideLimits::default())
+}

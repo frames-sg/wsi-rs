@@ -154,7 +154,7 @@ pub(super) fn jpeg_sof_color_hint(payload: &[u8]) -> JpegBitstreamColorHint {
         return JpegBitstreamColorHint::YCbCr;
     }
 
-    if ids == [b'R', b'G', b'B'] {
+    if ids == *b"RGB" {
         return JpegBitstreamColorHint::Rgb;
     }
     if ids == [0, 1, 2] {

@@ -230,22 +230,6 @@ pub(super) fn common_level_ratios(
     Ok(ratios.into_iter().collect())
 }
 
-#[cfg(test)]
-pub(super) fn build_canvas_level_tile_subblocks(
-    subblocks: &[czi_rs::DirectorySubBlockInfo],
-    canvas_level_subblocks: &[Vec<usize>],
-    levels: &[Level],
-    subblock_origin: (i32, i32),
-) -> Result<Vec<CanvasTileSubblockMap>, WsiError> {
-    build_canvas_level_tile_subblocks_with_budget(
-        subblocks,
-        canvas_level_subblocks,
-        levels,
-        subblock_origin,
-        &crate::core::registry::OpenBudget::new(crate::SlideLimits::default()),
-    )
-}
-
 pub(super) fn build_canvas_level_tile_subblocks_with_budget(
     subblocks: &[czi_rs::DirectorySubBlockInfo],
     canvas_level_subblocks: &[Vec<usize>],

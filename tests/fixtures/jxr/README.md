@@ -5,11 +5,10 @@
 `rgb.jxr` was encoded losslessly from those pixels using the external ITU-T
 T.835 (2012) software 1.32; no reference source or conformance vector is vendored.
 
-Regenerate with the reference executable built by the sibling JXR workspace:
+Regenerate with the ITU-T T.835 reference encoder (`jpegxr`):
 
 ```sh
-../jxr/target/t835-oracle/t835-201201/Software/jpegxr \
-  -c -q 0 -l 0 -f YUV444 -o tests/fixtures/jxr/rgb.jxr tests/fixtures/jxr/rgb.ppm
+jpegxr -c -q 0 -l 0 -f YUV444 -o tests/fixtures/jxr/rgb.jxr tests/fixtures/jxr/rgb.ppm
 ```
 
 Tests embed the same compressed payload in synthetic CZI and tiled TIFF

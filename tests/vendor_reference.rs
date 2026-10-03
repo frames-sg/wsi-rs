@@ -69,7 +69,9 @@ fn vendor_native_pixels_match_independent_reference() {
                     probe.size.0 as usize * probe.size.1 as usize * 3
                 );
                 let expected: Vec<u8> = expected
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
                     .collect();
                 let actual = actual.into_rgba().expect("RGB8 display pixels");

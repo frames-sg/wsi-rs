@@ -151,7 +151,7 @@ fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe,
             }
             let mut max_h = 1u8;
             let mut max_v = 1u8;
-            for component in components.chunks_exact(3).take(component_count) {
+            for component in components.as_chunks::<3>().0.iter().take(component_count) {
                 let sampling = component[1];
                 let h = sampling >> 4;
                 let v = sampling & 0x0F;

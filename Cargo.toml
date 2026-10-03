@@ -1,6 +1,6 @@
 [package]
 name = "wsi-rs"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "wsi-rs whole-slide image reader"
@@ -12,10 +12,9 @@ keywords = ["whole-slide", "microscopy", "tiff", "pathology"]
 categories = ["multimedia::images", "science"]
 # MSRV policy: track the latest stable Rust release. Bumping `rust-version`
 # is a minor-version bump for this crate.
-rust-version = "1.96"
+rust-version = "1.99.0"
 readme = "README.md"
 exclude = [
-    "docs/audits/**",
     "fuzz/**",
     "scripts/**",
     ".github/**",

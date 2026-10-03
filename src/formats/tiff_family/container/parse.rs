@@ -9,8 +9,6 @@ use tracing::debug;
 use crate::core::registry::OpenBudget;
 
 use super::super::error::{IfdId, TiffParseError};
-#[cfg(test)]
-use super::model::TagValue;
 use super::model::{tags, Endian, Ifd, TagEntry, TiffContainer, TiffType};
 use super::ndpi_offsets::{fix_offset_ndpi, is_ndpi_extension, repair_ndpi_first_ifd_offset};
 
@@ -28,7 +26,7 @@ const MAX_TOTAL_TAG_PAYLOAD: u64 = 128 * 1024 * 1024;
 
 /// Sequential reader used during TiffContainer::open().
 /// Wraps a BufReader and provides endian-aware reading.
-/// Dropped when open() returns — not stored on TiffContainer.
+/// Dropped when open() returns; not stored on TiffContainer.
 pub(super) struct ParseReader {
     reader: std::io::BufReader<std::fs::File>,
     endian: Endian,
@@ -83,13 +81,6 @@ impl ParseReader {
 }
 
 impl TiffContainer {
-    /// Open and parse a TIFF or BigTIFF file.
-    #[cfg(test)]
-    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self, TiffParseError> {
-        let budget = OpenBudget::new(crate::SlideLimits::default());
-        Self::open_with_budget(path, budget)
-    }
-
     pub(crate) fn open_with_budget(
         path: impl AsRef<Path>,
         open_budget: Arc<OpenBudget>,
@@ -208,12 +199,6 @@ impl TiffContainer {
         );
 
         Ok(container)
-    }
-
-    #[cfg(test)]
-    fn open_parse_reader(&self) -> Result<ParseReader, TiffParseError> {
-        let file = std::fs::File::open(self.path.as_ref())?;
-        Ok(ParseReader::new(file, self.endian, self.bigtiff))
     }
 
     // ── IFD chain walking ──────────────────────────────────────
@@ -347,7 +332,7 @@ impl TiffContainer {
             let tiff_type = match TiffType::from_u16(type_id) {
                 Some(t) => t,
                 None => {
-                    // Unknown type — skip this entry
+                    // Unknown type: skip this entry
                     continue;
                 }
             };
@@ -464,144 +449,9 @@ impl TiffContainer {
             id: IfdId(offset),
             offset,
             tags: tags_map,
-            sub_ifds: Vec::new(),
         };
 
         Ok((ifd, next_offset))
-    }
-
-    // ── SubIFD parsing ────────────────────────────────────────
-
-    /// Parse SubIFDs referenced by tag 330 in an IFD.
-    /// Adds newly discovered IFDs to the global arena. Deduplicates by offset.
-    #[cfg(test)]
-    pub(crate) fn materialize_sub_ifds(
-        &mut self,
-        parent_ifd_id: IfdId,
-        max_depth: u32,
-    ) -> Result<(), TiffParseError> {
-        let mut reader = self.open_parse_reader()?;
-        let mut ancestry = vec![parent_ifd_id];
-        self.parse_sub_ifds(&mut reader, parent_ifd_id, 0, max_depth, &mut ancestry)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn materialize_all_sub_ifds(
-        &mut self,
-        max_depth: u32,
-    ) -> Result<(), TiffParseError> {
-        let root_ids = self.top_ifds.clone();
-        let mut reader = self.open_parse_reader()?;
-        for root_id in root_ids {
-            let mut ancestry = vec![root_id];
-            self.parse_sub_ifds(&mut reader, root_id, 0, max_depth, &mut ancestry)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn parse_sub_ifds(
-        &mut self,
-        reader: &mut ParseReader,
-        parent_ifd_id: IfdId,
-        depth: u32,
-        max_depth: u32,
-        ancestry: &mut Vec<IfdId>,
-    ) -> Result<(), TiffParseError> {
-        if depth > max_depth {
-            return Err(TiffParseError::Structure(format!(
-                "SubIFD depth limit exceeded (max {})",
-                max_depth
-            )));
-        }
-
-        // Check if parent has a SUB_IFDS tag
-        let sub_ifd_offsets = {
-            let parent = self
-                .ifds
-                .get(&parent_ifd_id)
-                .ok_or(TiffParseError::IfdNotFound(parent_ifd_id))?;
-
-            let entry = match parent.tags.get(&tags::SUB_IFDS) {
-                Some(e) => e,
-                None => return Ok(()), // No SubIFDs
-            };
-
-            // Extract offsets from inline or lazy data
-            let bytes = match &entry.value {
-                TagValue::Inline(v) => v.as_bytes().to_vec(),
-                TagValue::Lazy {
-                    offset, byte_len, ..
-                } => self.pread(*offset, *byte_len)?,
-            };
-
-            // Decode as array of IFD offsets
-            let elem_size = entry.tiff_type.byte_size() as usize;
-            if elem_size == 0 {
-                return Ok(());
-            }
-            let mut offsets = Vec::new();
-            for chunk in bytes.chunks_exact(elem_size) {
-                let off = match (entry.tiff_type, self.endian) {
-                    (TiffType::Long | TiffType::Ifd, Endian::Little) => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64
-                    }
-                    (TiffType::Long | TiffType::Ifd, Endian::Big) => {
-                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64
-                    }
-                    (TiffType::Long8 | TiffType::Ifd8, Endian::Little) => u64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ]),
-                    (TiffType::Long8 | TiffType::Ifd8, Endian::Big) => u64::from_be_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ]),
-                    _ => continue,
-                };
-                if off != 0 {
-                    offsets.push(off);
-                }
-            }
-            offsets
-        };
-
-        // Parse each SubIFD
-        let mut child_ids = Vec::new();
-        for sub_offset in &sub_ifd_offsets {
-            let sub_id = IfdId(*sub_offset);
-
-            if ancestry.contains(&sub_id) {
-                return Err(TiffParseError::Structure(format!(
-                    "SubIFD loop detected: offset {} already in ancestry",
-                    sub_offset
-                )));
-            }
-
-            if !self.ifds.contains_key(&sub_id) {
-                // Safety limit
-                if self.ifds.len() >= 10_000 {
-                    return Err(TiffParseError::Structure(
-                        "too many IFDs (>10000), possible corrupt file".into(),
-                    ));
-                }
-
-                let (ifd, _next_offset) = self.parse_ifd(reader, *sub_offset)?;
-                self.ifds.insert(sub_id, ifd);
-            }
-            child_ids.push(sub_id);
-
-            ancestry.push(sub_id);
-            self.parse_sub_ifds(reader, sub_id, depth + 1, max_depth, ancestry)?;
-            ancestry.pop();
-        }
-
-        // Store child IDs on the parent
-        if let Some(parent) = self.ifds.get_mut(&parent_ifd_id) {
-            parent.sub_ifds = child_ids;
-        }
-
-        Ok(())
     }
 }
 
@@ -612,7 +462,7 @@ fn is_tiff_index_tag(tag: u16) -> bool {
             | tags::STRIP_BYTE_COUNTS
             | tags::TILE_OFFSETS
             | tags::TILE_BYTE_COUNTS
-            | 330 // SubIFDs
+            | tags::SUB_IFDS
     )
 }
 

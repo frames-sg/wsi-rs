@@ -301,9 +301,3 @@ pub(in super::super) fn build_ndpi_scan_data_tiff_from_blobs_with_mcu_mode_and_o
 }
 
 // ── TiffPixelReader tests ─────────────────────────────────────
-
-// Note: Testing TiffPixelReader with NdpiJpeg requires a synthetic NDPI
-// file with valid MCU-starts tags. Since building such files is complex,
-// we test the TiffPixelReader through the full interpret -> read path in
-// Task 9's integration tests. Here we test the FullDecodeCache directly
-// (above) and add integration tests in Task 9.

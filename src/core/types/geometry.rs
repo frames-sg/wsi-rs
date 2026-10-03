@@ -6,7 +6,7 @@ use super::*;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TileLayout {
-    /// Regular grid — fixed tile size, row-major.
+    /// Regular grid with a fixed tile size, row-major.
     Regular {
         tile_width: u32,
         tile_height: u32,

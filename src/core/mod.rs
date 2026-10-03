@@ -9,4 +9,5 @@ pub(crate) mod limits;
 pub(crate) mod positioned_file;
 pub(crate) mod read_control;
 pub(crate) mod registry;
+pub(crate) mod test_hooks;
 pub(crate) mod types;

@@ -7,9 +7,8 @@ payloads into codec backends. If you find a crash, memory-safety issue,
 malformed-output bug, metadata leak, or unexpected file-system behavior, please
 report it privately rather than opening a public issue.
 
-Use GitHub's private vulnerability reporting for the repository, or contact the
-maintainer through the repository owner profile if private reporting is not yet
-enabled.
+Use GitHub's private vulnerability reporting for the repository. If it is
+unavailable, contact the maintainer through the repository owner's profile.
 
 Please include:
 
@@ -24,7 +23,7 @@ generally within 30 days for high-severity issues.
 
 ## Supported Versions
 
-Supported versions are the latest published release (currently 0.7.0), the
+Supported versions are the latest published release (currently 0.8.0), the
 0.5 stabilization line, and main.
 Optional Metal behavior is triaged on supported macOS hardware when that
 hardware is available.

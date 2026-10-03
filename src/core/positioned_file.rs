@@ -17,12 +17,6 @@ impl PositionedFile {
         }
     }
 
-    #[cfg(all(test, not(unix)))]
-    pub(crate) fn poison_position_for_test(&self) {
-        let _guard = self.position.lock().unwrap();
-        panic!("poison the positional read fallback lock");
-    }
-
     pub(crate) fn read_exact_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<()> {
         #[cfg(unix)]
         {
@@ -42,3 +36,6 @@ impl PositionedFile {
         }
     }
 }
+
+#[cfg(all(test, not(unix)))]
+mod tests;

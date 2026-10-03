@@ -8,7 +8,7 @@ use super::{artifact, coverage};
 const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
-const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-04-17";
+const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-08-13";
 const FUZZ_TARGETS: [&str; 9] = [
     "open_wsi_bytes",
     "open_jp2k_codestream_bytes",

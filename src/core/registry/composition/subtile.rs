@@ -76,16 +76,20 @@ pub(crate) fn cairo_subtile_surface_u8(
     }
 
     if premultiplied
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .all(|pixel| pixel[3] == u8::MAX)
     {
         let rgb = premultiplied
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
         return CpuTile::from_u8_interleaved(size.0, size.1, 3, ColorSpace::Rgb, rgb);
     }
-    for pixel in premultiplied.chunks_exact_mut(4) {
+    for pixel in premultiplied.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
         for channel in &mut pixel[..3] {
             *channel = (u16::from(*channel) * 255 + alpha / 2)

@@ -25,16 +25,7 @@ struct DicomEncapsulatedLayout {
     extended_lengths_value: Option<u64>,
 }
 
-#[cfg(test)]
-pub(in super::super) fn scan_encapsulated_frames_raw_little_endian(
-    path: &Path,
-    number_of_frames: u32,
-) -> Result<Option<DicomEncapsulatedFrames>, WsiError> {
-    scan_encapsulated_frames_raw_little_endian_controlled(path, number_of_frames, None)
-        .map(|index| index.map(|index| index.frames))
-}
-
-pub(super) fn scan_encapsulated_frames_raw_little_endian_controlled(
+pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
     path: &Path,
     number_of_frames: u32,
     control: Option<&crate::ReadControl>,

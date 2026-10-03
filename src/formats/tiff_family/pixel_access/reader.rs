@@ -16,11 +16,6 @@ pub(crate) struct TiffPixelReader {
 }
 
 impl TiffPixelReader {
-    #[cfg(test)]
-    pub(crate) fn new(container: Arc<TiffContainer>, layout: DatasetLayout) -> Self {
-        Self::new_with_cache_config(container, layout, crate::CacheConfig::deterministic())
-    }
-
     pub(crate) fn new_with_cache_config(
         container: Arc<TiffContainer>,
         layout: DatasetLayout,

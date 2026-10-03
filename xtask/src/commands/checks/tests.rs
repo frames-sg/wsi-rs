@@ -3,12 +3,12 @@ use std::path::Path;
 
 #[test]
 fn nightly_tools_use_the_ci_pinned_toolchain() {
-    assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-04-17");
+    assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-08-13");
     assert_eq!(
         pinned_nightly_cargo_args(&["public-api", "-p", "wsi-rs"]),
         [
             "run",
-            "nightly-2026-04-17",
+            "nightly-2026-08-13",
             "cargo",
             "public-api",
             "-p",
@@ -56,9 +56,9 @@ fn semver_check_uses_checksum_pinned_published_baseline() {
     assert!(script.contains(
         "BASELINE_SHA256=\"c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75\""
     ));
-    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.7.0"));
+    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.8.0"));
     assert!(script.contains("--baseline-rustdoc"));
-    assert!(script.contains("cargo +nightly-2026-04-17 rustdoc"));
+    assert!(script.contains("cargo +nightly-2026-08-13 rustdoc"));
     assert!(!script.contains("cargo +nightly rustdoc"));
     assert!(!script.contains("skipping cargo-semver-checks"));
 }

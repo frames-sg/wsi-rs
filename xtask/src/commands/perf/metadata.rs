@@ -327,7 +327,7 @@ fn corpus_tier(slides: &[SlideSpec]) -> &'static str {
     }
     if slides.iter().any(|slide| {
         let path = slide.path.to_string_lossy();
-        path.contains(".cache/slideviewer/parity-corpus")
+        path.contains(".cache/wsi-rs/parity-corpus")
     }) {
         return "local-parity";
     }

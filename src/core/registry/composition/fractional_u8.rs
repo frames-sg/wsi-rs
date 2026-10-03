@@ -84,7 +84,7 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
     let color = if alpha_source {
         premultiplied.reserve_exact(bytes.len() / 4 * 3);
         coverage.reserve_exact(bytes.len() / 4);
-        for pixel in bytes.chunks_exact(4) {
+        for pixel in bytes.as_chunks::<4>().0 {
             let alpha = u16::from(pixel[3]);
             premultiplied.extend(
                 pixel[..3]
@@ -140,14 +140,21 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
             let destination =
                 &out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
             // Rows no earlier tile reached are empty premultiplied pixels.
-            if destination.chunks_exact(4).all(|pixel| pixel == [0; 4]) {
+            if destination
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0; 4])
+            {
                 rgb.fill(0);
                 alpha.fill(0.0);
                 continue;
             }
             for ((pixel, rgb), alpha) in destination
-                .chunks_exact(4)
-                .zip(rgb.chunks_exact_mut(3))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rgb.as_chunks_mut::<3>().0)
                 .zip(alpha)
             {
                 rgb.copy_from_slice(&pixel[..3]);
@@ -184,8 +191,10 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
             let destination =
                 &mut out[(row * shape.width + start_x) * 4..(row * shape.width + end_x) * 4];
             for ((pixel, rgb), &alpha) in destination
-                .chunks_exact_mut(4)
-                .zip(rgb.chunks_exact(3))
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(rgb.as_chunks::<3>().0)
                 .zip(alpha)
             {
                 pixel[..3].copy_from_slice(rgb);
@@ -197,7 +206,7 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
 }
 
 pub(super) fn unpremultiply_rgba(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
         if alpha == 0 {
             pixel.fill(0);
@@ -232,7 +241,7 @@ pub(super) fn blit_alpha_source_saturating_u8(
     let pixels = rgba.len() / 4;
     let mut color = Vec::with_capacity(pixels * 3);
     let mut coverage = Vec::with_capacity(pixels);
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         let a = u16::from(pixel[3]);
         color.extend(
             pixel[..3]
@@ -681,54 +690,6 @@ fn sampling_axis(out: usize, dest: f64, pixman: bool) -> (i64, f32, f32) {
 #[path = "fractional_u8/tests/reference.rs"]
 pub(super) mod reference;
 
-#[cfg(test)]
-#[derive(Clone, Copy)]
-struct BilinearSample {
-    x0: i64,
-    x1: i64,
-    y0: i64,
-    y1: i64,
-    a00: f32,
-    a10: f32,
-    a01: f32,
-    a11: f32,
-}
-
-#[cfg(test)]
-fn bilinear_sample(
-    out_x: usize,
-    out_y: usize,
-    dest: (f64, f64),
-    pixman_float_sampling: bool,
-) -> BilinearSample {
-    let src_x = out_x as f64 - dest.0;
-    let src_y = out_y as f64 - dest.1;
-    let x0 = src_x.floor() as i64;
-    let y0 = src_y.floor() as i64;
-    let wx1 = (src_x - x0 as f64) as f32;
-    let wy1 = (src_y - y0 as f64) as f32;
-    let wx0 = if pixman_float_sampling {
-        1.0_f32 - wx1
-    } else {
-        (1.0 - (src_x - x0 as f64)) as f32
-    };
-    let wy0 = if pixman_float_sampling {
-        1.0_f32 - wy1
-    } else {
-        (1.0 - (src_y - y0 as f64)) as f32
-    };
-    BilinearSample {
-        x0,
-        x1: x0 + 1,
-        y0,
-        y1: y0 + 1,
-        a00: wx0 * wy0,
-        a10: wx1 * wy0,
-        a01: wx0 * wy1,
-        a11: wx1 * wy1,
-    }
-}
-
 #[inline]
 pub(super) fn pixman_bilinear_interpolate(values: [f32; 4], weights: [f32; 4]) -> f32 {
     values[3].mul_add(
@@ -758,14 +719,21 @@ pub(super) fn unpremultiply_u8(pixels: &mut [u8], alpha: &[f32], channels: usize
 pub(super) fn unpremultiplied_rgba_u8(premultiplied: &[u8], alpha: &[f32]) -> Vec<u8> {
     let mut rgba = vec![0u8; alpha.len() * 4];
     if alpha.iter().all(|&coverage| coverage == 1.0) {
-        for (target, source) in rgba.chunks_exact_mut(4).zip(premultiplied.chunks_exact(3)) {
+        for (target, source) in rgba
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(premultiplied.as_chunks::<3>().0)
+        {
             target.copy_from_slice(&[source[0], source[1], source[2], u8::MAX]);
         }
         return rgba;
     }
     for ((target, source), &coverage) in rgba
-        .chunks_exact_mut(4)
-        .zip(premultiplied.chunks_exact(3))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(premultiplied.as_chunks::<3>().0)
         .zip(alpha)
     {
         target[3] = contract_pixman_unorm8(coverage);

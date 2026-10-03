@@ -28,17 +28,6 @@ struct VmsDatasetParts {
 }
 
 impl VmsSlide {
-    #[cfg(test)]
-    pub(in crate::formats::hamamatsu_vms) fn parse_with_cache_config(
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Self, WsiError> {
-        Self::parse_with_config(
-            path,
-            BackendOpenConfig::new(cache_config, crate::SlideLimits::default()),
-        )
-    }
-
     pub(in crate::formats::hamamatsu_vms) fn parse_with_config(
         path: &Path,
         config: BackendOpenConfig,

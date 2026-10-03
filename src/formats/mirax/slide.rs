@@ -1,5 +1,6 @@
 use super::helpers::*;
 use super::*;
+use crate::core::execution_telemetry::{self, Event};
 use crate::core::file_identity::FileIdentity;
 use std::sync::Weak;
 
@@ -72,11 +73,6 @@ fn register_shared_index(key: MiraxShareKey, shared: MiraxShared) -> Arc<MiraxSh
 }
 
 impl MiraxSlide {
-    #[cfg(test)]
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
-        Self::parse_with_cache_config(path, CacheConfig::deterministic())
-    }
-
     pub(super) fn decode_image_with_backend(
         &self,
         image: &Arc<MiraxImage>,
@@ -96,10 +92,7 @@ impl MiraxSlide {
         if let Some(tile) = cached() {
             return crate::core::cache::TileClaim::Ready(tile);
         }
-        #[cfg(test)]
-        if let Some(barrier) = &self.source_miss_barrier {
-            barrier.wait();
-        }
+        self.probe.wait_before_miss();
         self.source_flights.claim_miss(&image.id, cached)
     }
 
@@ -120,8 +113,7 @@ impl MiraxSlide {
             TileClaim::Producer(producer) => Some(producer),
             TileClaim::Uncoalesced => None,
         };
-        #[cfg(test)]
-        self.source_decodes.fetch_add(1, Ordering::Relaxed);
+        self.probe.record_decode();
         let decoded = Arc::new(self.decode_record_to_sample_buffer(
             &image.record,
             image.format,
@@ -152,10 +144,7 @@ impl MiraxSlide {
             .get(name)
             .cloned()
         {
-            #[cfg(test)]
-            {
-                MIRAX_ASSOCIATED_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-            }
+            execution_telemetry::record(Event::MiraxAssociatedCacheHits, 1);
             return Ok((*buffer).clone());
         }
         let decoded = Arc::new(self.decode_record_to_sample_buffer(

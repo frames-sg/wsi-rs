@@ -37,7 +37,9 @@ fn read_reference(name: &str) -> Vec<u16> {
     );
     let body = &bytes[header.len()..];
     assert_eq!(body.len(), (MATRIX.0 * MATRIX.1 * 3 * 2) as usize);
-    body.chunks_exact(2)
+    body.as_chunks::<2>()
+        .0
+        .iter()
         .map(|sample| u16::from_be_bytes([sample[0], sample[1]]))
         .collect()
 }

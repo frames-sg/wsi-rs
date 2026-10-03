@@ -27,7 +27,7 @@ use super::{
 
 // ── Constants ────────────────────────────────────────────────────────
 
-/// TIFF tag 305 (Software) — not in the shared `tags::` constants.
+/// TIFF tag 305 (Software), which is not in the shared `tags::` constants.
 const TAG_SOFTWARE: u16 = 305;
 
 // ── PhilipsInterpreter ──────────────────────────────────────────────
@@ -108,7 +108,7 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
                     jpeg_tables,
                 });
             } else {
-                // Stripped IFD — check ImageDescription for associated image type.
+                // Stripped IFD: check ImageDescription for the associated image type.
                 let name = classify_associated(container, ifd_id);
                 if let Some(name) = name {
                     let strip_offsets = container

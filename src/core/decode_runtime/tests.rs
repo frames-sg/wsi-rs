@@ -1,7 +1,65 @@
+use super::calibration::claim_route_with;
+use super::reader::*;
 use super::*;
+use crate::core::registry::ConservativeManagedReader;
 use crate::core::types::*;
 use crate::test_support::{regular_rgb_dataset_for_test, RegularLevelForTest};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+impl DecodeRuntime {
+    pub(crate) fn new(options: DecodeExecutionOptions) -> Result<Self, WsiError> {
+        Ok(Self::build(options))
+    }
+
+    pub(crate) fn inline(options: DecodeExecutionOptions) -> Self {
+        Self::build(options)
+    }
+
+    pub(super) fn claim_route(&self, key: DecodeRouteKey) -> RouteClaim<&Self> {
+        claim_route_with(self, key)
+    }
+
+    pub(super) fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
+        self.route_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .peek(key)?
+            .decision
+            .clone()
+    }
+}
+
+impl AdaptiveDecodeReader {
+    pub(crate) fn new(inner: Box<dyn SlideReader>, runtime: Arc<DecodeRuntime>) -> Self {
+        Self::new_managed(
+            Box::new(ConservativeManagedReader::new(
+                inner,
+                crate::SlideLimits::default().encoded_unit_bytes(),
+            )),
+            runtime,
+        )
+    }
+}
+
+#[cfg(feature = "metal")]
+impl DecodeRuntime {
+    pub(crate) fn background_calibrations_started(&self) -> usize {
+        self.background_calibration.gate.entries()
+    }
+
+    pub(crate) fn hold_next_background_calibration(&self, barrier: Arc<std::sync::Barrier>) {
+        self.background_calibration.gate.hold_next(barrier);
+    }
+
+    /// Blocks until no background calibration is running.
+    pub(crate) fn wait_for_background_calibration(&self) {
+        let slot = &self.background_calibration;
+        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
+        while *busy {
+            busy = slot.idle.wait(busy).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
 
 fn dataset(id: u128) -> Dataset {
     regular_rgb_dataset_for_test(
@@ -680,7 +738,7 @@ fn routed_tiles() -> [u64; 5] {
         DeviceFailureFallback,
         UnavailableFallback,
     ]
-    .map(test_route_tiles)
+    .map(|outcome| crate::core::execution_telemetry::test_count(outcome.event()))
 }
 
 #[cfg(feature = "metal")]

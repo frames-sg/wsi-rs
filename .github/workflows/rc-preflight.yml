@@ -26,14 +26,14 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          toolchain: nightly-2026-04-17
+          toolchain: nightly-2026-08-13
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.99.0"
           components: rustfmt,clippy
       - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
         with:
-          tool: cargo-nextest@0.9.136,cargo-hack@0.6.44,cargo-public-api@0.52.0,cargo-semver-checks@0.48.0,cargo-fuzz@0.13.1,cargo-deny@0.19.4,cargo-machete@0.9.2
+          tool: cargo-nextest@0.9.136,cargo-hack@0.6.44,cargo-public-api@0.52.0,cargo-semver-checks@0.50.0,cargo-fuzz@0.13.1,cargo-deny@0.19.4,cargo-machete@0.9.2
           fallback: cargo-install
       - name: Install cargo-vet
         run: cargo install cargo-vet --locked --version 0.10.2
@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.99.0"
       - uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4.1.0
         if: runner.os == 'Windows'
         with:

@@ -451,15 +451,6 @@ fn quickhash_for_zvi(
         .ok_or_else(|| WsiError::DisplayConversion("failed to compute ZVI quickhash".into()))
 }
 
-#[cfg(test)]
-fn validated_payload_length(
-    path: &Path,
-    stream_length: u64,
-    header: &super::model::ZviImageHeader,
-) -> Result<u64, WsiError> {
-    validated_payload_length_with_limits(path, stream_length, header, crate::SlideLimits::default())
-}
-
 fn validated_payload_length_with_limits(
     path: &Path,
     stream_length: u64,

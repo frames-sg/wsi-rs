@@ -1,16 +1,9 @@
 pub(super) use super::raster::bitmap_to_sample_buffer;
-#[cfg(test)]
-pub(super) use super::raster::blit_tile;
 use super::raster::rgb_u8_tile;
-#[cfg(test)]
-pub(super) use super::raster::{blit_raw_uncompressed_rgb_subblock, blit_rgb_sample, RgbSample};
 use super::slide::ZeissSlide;
-#[cfg(test)]
-use super::slide::ZEISS_LOCAL_TILE_HITS;
 
-#[cfg(test)]
-pub(super) use super::subblock::bitmap_from_raw_uncompressed_subblock;
 use super::*;
+use crate::core::execution_telemetry::{record, Event};
 
 impl ZeissSlide {
     pub(super) fn exact_raw_jpeg_subblock(
@@ -238,8 +231,7 @@ impl ZeissSlide {
         let buffer = if let Some(buffer) =
             self.scene_tile_image_local(scene, level as usize, col, row, sources)?
         {
-            #[cfg(test)]
-            ZEISS_LOCAL_TILE_HITS.fetch_add(1, Ordering::Relaxed);
+            record(Event::ZeissLocalTileHits, 1);
             buffer
         } else {
             let level_img = self.scene_level_image(scene, level as usize)?;
@@ -265,7 +257,7 @@ impl ZeissSlide {
         row: i64,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<Option<CpuTile>, WsiError> {
-        let (_tile_width, _tile_height, tile_x, tile_y, tile_w, tile_h) = {
+        let (tile_x, tile_y, tile_w, tile_h) = {
             let series = &self.dataset.scenes[scene].series[0];
             let level_ref = &series.levels[level];
             let TileLayout::Regular {
@@ -289,7 +281,7 @@ impl ZeissSlide {
                 .1
                 .saturating_sub(tile_y)
                 .min(u64::from(tile_height)) as u32;
-            (tile_width, tile_height, tile_x, tile_y, tile_w, tile_h)
+            (tile_x, tile_y, tile_w, tile_h)
         };
         let candidate_indices = self
             .canvas_level_tile_subblocks
@@ -305,7 +297,7 @@ impl ZeissSlide {
         if candidate_indices.is_empty() {
             return rgb_u8_tile(tile_w, tile_h, vec![0; tile_rgb_len]).map(Some);
         }
-        let _level_ratio = self.dataset.scenes[scene].series[0].levels[level]
+        let level_ratio = self.dataset.scenes[scene].series[0].levels[level]
             .downsample
             .round()
             .max(1.0) as i32;
@@ -330,11 +322,6 @@ impl ZeissSlide {
                         | CziCompressionMode::Jpg
                         | CziCompressionMode::JpgXr
                 ) {
-                    #[cfg(test)]
-                    eprintln!(
-                        "zeiss local tile: unsupported compression {:?} for subblock {index}",
-                        info.compression
-                    );
                     return Ok(None);
                 }
                 selected.push(info);
@@ -353,8 +340,8 @@ impl ZeissSlide {
             .iter()
             .filter(|&info| {
                 let global_rect = IntRect::new(
-                    (info.rect.x - self.subblock_origin.0).div_euclid(_level_ratio),
-                    (info.rect.y - self.subblock_origin.1).div_euclid(_level_ratio),
+                    (info.rect.x - self.subblock_origin.0).div_euclid(level_ratio),
+                    (info.rect.y - self.subblock_origin.1).div_euclid(level_ratio),
                     i32::try_from(info.stored_size.w).unwrap_or(i32::MAX),
                     i32::try_from(info.stored_size.h).unwrap_or(i32::MAX),
                 );
@@ -363,11 +350,6 @@ impl ZeissSlide {
             .cloned()
             .collect();
         if subblocks.is_empty() {
-            #[cfg(test)]
-            eprintln!(
-                "zeiss local tile fallback: no subblocks intersect tile ({}, {}) level {}",
-                tile_origin_x, tile_origin_y, level
-            );
             // The candidate loop either returns early or selects every input,
             // and this branch is only reached from a nonempty candidate list.
             let pixel_type = candidate_infos[0].pixel_type;
@@ -381,7 +363,7 @@ impl ZeissSlide {
             &subblocks,
             (tile_w, tile_h),
             (tile_origin_x, tile_origin_y),
-            _level_ratio,
+            level_ratio,
             sources,
         )?;
         if tile.data.as_u8().is_none() {

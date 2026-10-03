@@ -22,11 +22,6 @@ pub(super) struct OlympusVsiSlide {
 }
 
 impl OlympusVsiSlide {
-    #[cfg(test)]
-    pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {
-        Self::parse_with_config(path, BackendOpenConfig::deterministic())
-    }
-
     pub(super) fn parse_with_config(
         path: &Path,
         config: BackendOpenConfig,

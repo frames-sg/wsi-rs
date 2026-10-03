@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::execution_telemetry::{record, Event};
 
 const NDPI_MCU_STARTS_LOW: u16 = 65426;
 const NDPI_MCU_STARTS_HIGH: u16 = 65432;
@@ -18,13 +19,6 @@ impl NdpiMcuStarts<'_> {
             Self::Normalized(starts) => starts.as_slice(),
         }
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// NDPI strips decoded on this thread; tests use it to prove where
-    /// region strips decode.
-    pub(super) static NDPI_STRIP_DECODES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl TiffPixelReader {
@@ -576,8 +570,7 @@ impl TiffPixelReader {
         level_width: u32,
         level_height: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        #[cfg(test)]
-        NDPI_STRIP_DECODES.with(|count| count.set(count.get() + 1));
+        record(Event::NdpiStripDecodes, 1);
         let payload = self.ndpi_jpeg_tile_payload(
             req,
             ifd_id,

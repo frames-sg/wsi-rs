@@ -1,5 +1,39 @@
 use super::model::VmsJpeg;
 use super::{jpeg::read_vms_jpeg_header, *};
+use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
+use j2k_jpeg::JpegView as J2kJpegView;
+
+impl VmsJpeg {
+    pub(super) fn parse(path: &Path, row_starts: Vec<Option<u64>>) -> Result<Self, WsiError> {
+        Self::parse_with_cache_config(path, row_starts, CacheConfig::deterministic())
+    }
+
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        row_starts: Vec<Option<u64>>,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
+        let mut private_cache_budget = cache_config.private_cache_budget(1);
+        Self::parse_with_private_cache_budget(
+            path,
+            row_starts,
+            &mut private_cache_budget,
+            MAX_COMPRESSED_INPUT_BYTES,
+        )
+    }
+}
+
+impl VmsSlide {
+    pub(super) fn parse_with_cache_config(
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Self, WsiError> {
+        Self::parse_with_config(
+            path,
+            BackendOpenConfig::new(cache_config, crate::SlideLimits::default()),
+        )
+    }
+}
 
 mod backend;
 mod errors;

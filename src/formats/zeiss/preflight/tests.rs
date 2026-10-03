@@ -338,3 +338,29 @@ fn file_preflight_wrappers_preserve_paths_for_io_and_parse_errors() {
         Err(WsiError::InvalidSlide { path: error_path, .. }) if error_path == path
     ));
 }
+
+fn preflight_czi_file(path: &Path) -> Result<FileIdentity, WsiError> {
+    preflight_czi_file_with_limits(path, crate::SlideLimits::default())
+}
+
+fn preflight_czi_subblock(path: &Path, offset: u64) -> Result<FileIdentity, WsiError> {
+    preflight_czi_subblock_with_limits(path, offset, crate::SlideLimits::default())
+}
+
+fn preflight_czi_reader(reader: &mut (impl Read + Seek), file_len: u64) -> Result<(), WsiError> {
+    preflight_czi_reader_with_limits(reader, file_len, crate::SlideLimits::default())
+}
+
+fn preflight_czi_subblock_reader(
+    reader: &mut (impl Read + Seek),
+    file_len: u64,
+    offset: u64,
+) -> Result<(), WsiError> {
+    preflight_czi_subblock_reader_with_limits(
+        reader,
+        file_len,
+        offset,
+        crate::SlideLimits::default(),
+    )
+    .map(|_| ())
+}

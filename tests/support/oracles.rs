@@ -566,7 +566,7 @@ fn crop_rgb_to_rgba(
     let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
     for row in 0..height as usize {
         let start = row * decoded_stride;
-        for rgb in pixels[start..start + width as usize * 3].chunks_exact(3) {
+        for rgb in pixels[start..start + width as usize * 3].as_chunks::<3>().0 {
             rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         }
     }

@@ -323,7 +323,9 @@ fn subtile_batches_decode_each_stored_tile_once_with_a_one_tile_cache() {
         } else {
             assert!(
                 pixels
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .all(|rgb| rgb[1] > 150 && rgb[0] < 60),
                 "cell {request:?} is not the green stored tile"
             );

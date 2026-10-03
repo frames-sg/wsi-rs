@@ -19,7 +19,7 @@ impl PlaneSelection {
     }
 }
 
-/// A region request — used by Slide (public API), not by backends.
+/// A region request, used by Slide (public API), not by backends.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RegionRequest {
@@ -122,7 +122,7 @@ impl RegionRequestBuilder {
     }
 }
 
-/// A single-tile request — the backend primitive.
+/// A single-tile request: the backend primitive.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TileRequest {

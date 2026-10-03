@@ -19,7 +19,7 @@ pub(in super::super) struct DicomExtendedOffsetTables {
     pub(in super::super) lengths: Vec<u64>,
 }
 
-pub(super) struct FastDicomFrameIndex {
-    pub(super) frames: DicomEncapsulatedFrames,
+pub(in super::super) struct FastDicomFrameIndex {
+    pub(in super::super) frames: DicomEncapsulatedFrames,
     pub(super) mapping: crate::DicomIndexMapping,
 }

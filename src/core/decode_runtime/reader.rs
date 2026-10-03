@@ -1,17 +1,6 @@
 use super::*;
 
 impl AdaptiveDecodeReader {
-    #[cfg(test)]
-    pub(crate) fn new(inner: Box<dyn SlideReader>, runtime: Arc<DecodeRuntime>) -> Self {
-        Self::new_managed(
-            Box::new(ConservativeManagedReader::new(
-                inner,
-                crate::SlideLimits::default().encoded_unit_bytes(),
-            )),
-            runtime,
-        )
-    }
-
     pub(crate) fn new_managed(
         inner: Box<dyn ManagedSlideReader>,
         runtime: Arc<DecodeRuntime>,

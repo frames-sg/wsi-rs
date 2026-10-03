@@ -1,43 +1,9 @@
+use super::metadata::{
+    extract_encode_info, extract_encode_info_bytes, extract_iscan_fragment_bytes,
+};
+use super::stitching::{joint_delta, ventana_snake_coords, BifArea, BifTile};
 use super::*;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
-
-fn validate_no_adjacent_overlap(
-    tiles: &HashMap<(i64, i64), TileEntry>,
-    tile_advance_x: f64,
-    tile_advance_y: f64,
-    _tile_width: u32,
-    _tile_height: u32,
-) -> Result<(), TiffParseError> {
-    let mut rects: Vec<(f64, f64, f64, f64, i64, i64)> = tiles
-        .iter()
-        .map(|(&(col, row), entry)| {
-            let x1 = col as f64 * tile_advance_x + entry.offset.0;
-            let y1 = row as f64 * tile_advance_y + entry.offset.1;
-            let x2 = x1 + entry.dimensions.0 as f64;
-            let y2 = y1 + entry.dimensions.1 as f64;
-            (x1, y1, x2, y2, col, row)
-        })
-        .collect();
-    rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (index, &(x1, y1, x2, y2, col, row)) in rects.iter().enumerate() {
-        for &(nx1, ny1, nx2, ny2, next_col, next_row) in rects.iter().skip(index + 1) {
-            if nx1 >= x2 {
-                break;
-            }
-            let intersection_x = (x2.min(nx2) - x1.max(nx1)).max(0.0);
-            let intersection_y = (y2.min(ny2) - y1.max(ny1)).max(0.0);
-            let overlap_area = intersection_x * intersection_y;
-            if overlap_area > 0.0 {
-                return Err(TiffParseError::Structure(format!(
-                    "Ventana BIF: tiles ({col},{row}) and ({next_col},{next_row}) overlap by {overlap_area:.1} pixels"
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
 
 fn encode_info() -> &'static str {
     r#"<EncodeInfo>
@@ -716,74 +682,6 @@ fn ventana_snake_coords_reverse_odd_rows() {
     assert_eq!(ventana_snake_coords(8, 4), (0, 1));
 }
 
-// ── Overlap validation ──────────────────────────────────────────
-
-#[test]
-fn no_overlap_passes_validation() {
-    let mut tiles = HashMap::new();
-    tiles.insert(
-        (0, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(0),
-            extent: Default::default(),
-        },
-    );
-    tiles.insert(
-        (1, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(1),
-            extent: Default::default(),
-        },
-    );
-    tiles.insert(
-        (0, 1),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(2),
-            extent: Default::default(),
-        },
-    );
-
-    // tile_advance = 256 means tiles are exactly adjacent with 0-pixel offsets.
-    let result = validate_no_adjacent_overlap(&tiles, 256.0, 256.0, 256, 256);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn overlap_detected_fails_validation() {
-    let mut tiles = HashMap::new();
-    tiles.insert(
-        (0, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(0),
-            extent: Default::default(),
-        },
-    );
-    tiles.insert(
-        (1, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(1),
-            extent: Default::default(),
-        },
-    );
-
-    // tile_advance = 200 means tile at (1,0) starts at pixel 200 but tile at
-    // (0,0) extends to pixel 256, causing a 56-pixel overlap.
-    let result = validate_no_adjacent_overlap(&tiles, 200.0, 256.0, 256, 256);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("overlap"), "got: {}", msg);
-}
-
 // ── compression_from_tag ────────────────────────────────────────
 
 #[test]
@@ -882,50 +780,4 @@ fn parse_iscan_properties_does_not_publish_invalid_physical_metadata() {
         assert_eq!(props.get("openslide.mpp-x"), None);
         assert_eq!(props.get("openslide.mpp-y"), None);
     }
-}
-
-#[test]
-fn non_adjacent_overlap_detected() {
-    // Tiles at (0,0) and (2,0) with large offsets that make them overlap
-    // despite being 2 grid cells apart. The old neighbor-only check would miss this.
-    let mut tiles = HashMap::new();
-    tiles.insert(
-        (0, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(0),
-            extent: Default::default(),
-        },
-    );
-    // (1,0) exists but is normal
-    tiles.insert(
-        (1, 0),
-        TileEntry {
-            offset: (0.0, 0.0),
-            dimensions: (100, 256), // narrow tile
-            tiff_tile_index: Some(1),
-            extent: Default::default(),
-        },
-    );
-    // (2,0) has a large negative offset that pushes it back into (0,0)'s territory
-    tiles.insert(
-        (2, 0),
-        TileEntry {
-            offset: (-350.0, 0.0),
-            dimensions: (256, 256),
-            tiff_tile_index: Some(2),
-            extent: Default::default(),
-        },
-    );
-
-    // tile_advance = 200
-    // (0,0): x=[0, 256)
-    // (1,0): x=[200, 300) — no overlap with (0,0) since 200 < 256... actually overlaps!
-    // (2,0): x=[400-350, 400-350+256) = [50, 306) — overlaps with (0,0)
-    // The sweep-line should catch the (0,0)/(2,0) overlap.
-    let result = validate_no_adjacent_overlap(&tiles, 200.0, 256.0, 256, 256);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("overlap"), "got: {}", msg);
 }

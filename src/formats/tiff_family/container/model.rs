@@ -29,7 +29,6 @@ pub(crate) mod tags {
     pub(crate) const ROWS_PER_STRIP: u16 = 278;
     pub(crate) const STRIP_BYTE_COUNTS: u16 = 279;
     pub(crate) const PLANAR_CONFIGURATION: u16 = 284;
-    #[cfg(test)]
     pub(crate) const SUB_IFDS: u16 = 330;
     pub(crate) const TILE_WIDTH: u16 = 322;
     pub(crate) const TILE_LENGTH: u16 = 323;
@@ -208,8 +207,6 @@ pub(crate) struct Ifd {
     pub id: IfdId,
     pub offset: u64,
     pub tags: HashMap<u16, TagEntry>,
-    /// References to SubIFDs by stable ID.
-    pub sub_ifds: Vec<IfdId>,
 }
 
 impl std::fmt::Debug for Ifd {
@@ -218,7 +215,6 @@ impl std::fmt::Debug for Ifd {
             .field("id", &self.id)
             .field("offset", &self.offset)
             .field("tag_count", &self.tags.len())
-            .field("sub_ifds", &self.sub_ifds)
             .finish()
     }
 }
@@ -228,7 +224,7 @@ impl std::fmt::Debug for Ifd {
 pub(crate) struct TiffContainer {
     pub(super) path: Arc<PathBuf>,
     pub(super) file_len: u64,
-    /// Persistent file handle for pread — avoids re-opening per call.
+    /// Persistent file handle for pread, so calls do not reopen the file.
     /// pread(2) on Unix is atomic and doesn't use the file position, so a
     /// single File can be shared across threads safely.
     pub(super) file: std::fs::File,

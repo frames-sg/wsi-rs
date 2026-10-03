@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly BASELINE_VERSION="0.6.0"
 readonly BASELINE_SHA256="c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75"
-readonly USER_AGENT="wsi-rs-semver-check/0.7.0 (+https://github.com/frames-sg/wsi-rs)"
+readonly USER_AGENT="wsi-rs-semver-check/0.8.0 (+https://github.com/frames-sg/wsi-rs)"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wsi-rs-semver.XXXXXX")"
@@ -52,16 +52,16 @@ build_rustdoc() {
     cd "$root"
     if [[ "$root" == "$repo_root" && "$profile" == "default" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly-2026-04-17 rustdoc --package wsi-rs --lib --locked
+        cargo +nightly-2026-08-13 rustdoc --package wsi-rs --lib --locked
     elif [[ "$root" == "$repo_root" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly-2026-04-17 rustdoc --package wsi-rs --lib --features "$profile" --locked
+        cargo +nightly-2026-08-13 rustdoc --package wsi-rs --lib --features "$profile" --locked
     elif [[ "$profile" == "default" ]]; then
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly-2026-04-17 rustdoc --lib --locked
+        cargo +nightly-2026-08-13 rustdoc --lib --locked
     else
       RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-        cargo +nightly-2026-04-17 rustdoc --lib --features "$profile" --locked
+        cargo +nightly-2026-08-13 rustdoc --lib --features "$profile" --locked
     fi
     cp target/doc/wsi_rs.json "$output"
   )

@@ -55,7 +55,7 @@ fn regular_tiles_negative_coords() {
         tiles_across: 4,
         tiles_down: 4,
     };
-    // Negative start — only in-bounds tiles returned
+    // Negative start: only in-bounds tiles are returned
     let tiles = layout.tiles_for_region(-100, -100, 200, 200);
     assert_eq!(tiles.len(), 1);
     assert_eq!(tiles[0].col, 0);

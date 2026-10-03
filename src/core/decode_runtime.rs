@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::core::registry::ConservativeManagedReader;
 use crate::core::registry::{ManagedSlideReader, SlideReader};
 use crate::core::types::{CpuTile, Dataset, TileCodecKind, TileRequest};
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
@@ -203,11 +201,6 @@ pub(crate) struct DecodeRuntime {
 }
 
 impl DecodeRuntime {
-    #[cfg(test)]
-    pub(crate) fn new(options: DecodeExecutionOptions) -> Result<Self, WsiError> {
-        Ok(Self::build(options))
-    }
-
     pub(crate) fn arc_for_options(options: DecodeExecutionOptions) -> Result<Arc<Self>, WsiError> {
         static AUTO_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
         static CPU_ONLY_RUNTIME: OnceLock<Arc<DecodeRuntime>> = OnceLock::new();
@@ -237,11 +230,6 @@ impl DecodeRuntime {
     pub(crate) fn default_arc() -> Arc<Self> {
         Self::arc_for_options(DecodeExecutionOptions::default())
             .expect("constructing the default decode runtime is infallible")
-    }
-
-    #[cfg(test)]
-    fn inline(options: DecodeExecutionOptions) -> Self {
-        Self::build(options)
     }
 
     pub(crate) fn install_jp2k_cpu<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
@@ -355,15 +343,18 @@ enum RouteTileOutcome {
     UnavailableFallback,
 }
 
-#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
-thread_local! {
-    static TEST_ROUTE_TILES: std::cell::Cell<[u64; 5]> = const { std::cell::Cell::new([0; 5]) };
-}
-
-// Only the Metal adaptive-routing tests read these counters.
-#[cfg(all(test, feature = "metal"))]
-fn test_route_tiles(outcome: RouteTileOutcome) -> u64 {
-    TEST_ROUTE_TILES.with(|cell| cell.get()[outcome as usize])
+#[cfg(any(feature = "metal", feature = "cuda"))]
+impl RouteTileOutcome {
+    fn event(self) -> crate::core::execution_telemetry::Event {
+        use crate::core::execution_telemetry::Event;
+        match self {
+            Self::DeviceAttempt => Event::RouteDeviceAttemptTiles,
+            Self::Device => Event::RouteDeviceTiles,
+            Self::AdaptiveCpu => Event::RouteAdaptiveCpuTiles,
+            Self::DeviceFailureFallback => Event::RouteDeviceFailureFallbackTiles,
+            Self::UnavailableFallback => Event::RouteUnavailableFallbackTiles,
+        }
+    }
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -389,13 +380,8 @@ fn record_route(device: DeviceKind, outcome: RouteTileOutcome, tiles: usize) {
             }
         }
     }
-    #[cfg(test)]
-    TEST_ROUTE_TILES.with(|cell| {
-        let mut counts = cell.get();
-        counts[outcome as usize] += tiles as u64;
-        cell.set(counts);
-    });
-    let _ = (device, outcome, tiles);
+    crate::core::execution_telemetry::record(outcome.event(), tiles);
+    let _ = device;
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -472,8 +458,6 @@ pub(crate) struct AdaptiveDecodeReader {
 #[cfg(any(feature = "metal", feature = "cuda"))]
 mod adaptive;
 mod reader;
-#[cfg(test)]
-use reader::*;
 
 #[cfg(test)]
 #[path = "decode_runtime/tests.rs"]

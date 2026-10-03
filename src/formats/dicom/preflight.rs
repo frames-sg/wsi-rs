@@ -80,16 +80,7 @@ pub(super) fn open_metadata_object_until_with_budget(
     })
 }
 
-#[cfg(test)]
-pub(super) fn preflight_dicom_metadata(
-    file: &mut File,
-    path: &Path,
-) -> Result<DicomPixelDataLocation, WsiError> {
-    let budget = OpenBudget::new(SlideLimits::default());
-    preflight_dicom_metadata_with_budget(file, path, budget.as_ref())
-}
-
-fn preflight_dicom_metadata_with_budget(
+pub(super) fn preflight_dicom_metadata_with_budget(
     file: &mut File,
     path: &Path,
     budget: &OpenBudget,
@@ -405,10 +396,12 @@ fn read_explicit_header(
             | VR::OV
             | VR::OW
             | VR::SQ
+            | VR::SV
             | VR::UC
             | VR::UN
             | VR::UR
             | VR::UT
+            | VR::UV
     );
     let (value_len, header_len) = if uses_u32_length {
         if base[6..8] != [0, 0] {

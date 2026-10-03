@@ -92,12 +92,7 @@ impl MiraxSlide {
         let associated_cache =
             PrivateCache::new(private_cache_budget.allocate(shared.associated_image_bytes));
         Self {
-            #[cfg(test)]
-            source_decodes: AtomicU64::new(0),
-            #[cfg(test)]
-            prepared_source_peak_bytes: AtomicU64::new(0),
-            #[cfg(test)]
-            source_miss_barrier: None,
+            probe: Default::default(),
             limits: config.limits,
             shared,
             source_flights: crate::core::cache::TileFlights::new(decoded_cache.capacity_bytes()),

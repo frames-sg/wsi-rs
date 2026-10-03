@@ -18,8 +18,6 @@ use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::read_file_bounded;
-#[cfg(test)]
-use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
 use crate::core::registry::{
     read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
     ConfiguredProbeCache, ConservativeManagedReader, DatasetReader, FormatProbe,
@@ -32,8 +30,6 @@ use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::properties::Properties;
 use j2k_core::BackendRequest;
-#[cfg(test)]
-use j2k_jpeg::JpegView as J2kJpegView;
 use j2k_jpeg::{
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
     PixelFormat as J2kPixelFormat, Rect as J2kRect,

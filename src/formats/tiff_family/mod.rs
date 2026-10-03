@@ -40,7 +40,7 @@ use self::pixel_access::TiffPixelReader;
 ///
 /// Probing does a full `TiffContainer::open()` which parses the entire
 /// IFD chain. The parsed container is cached so `open()` doesn't
-/// redundantly re-parse — the amortized cost of probe+open is a single parse.
+/// redundantly re-parse; the amortized cost of probe+open is a single parse.
 pub(crate) struct TiffFamilyBackend {
     probe_cache: ConfiguredProbeCache<TiffContainer>,
     interpreters: Vec<Box<dyn TiffLayoutInterpreter>>,
@@ -62,7 +62,7 @@ impl TiffFamilyBackend {
                 Box::new(PhilipsInterpreter),
                 Box::new(TrestleInterpreter),
                 Box::new(VentanaInterpreter),
-                Box::new(GenericTiffInterpreter), // must be last — catches any tiled TIFF
+                Box::new(GenericTiffInterpreter), // must be last: catches any tiled TIFF
             ],
         }
     }
@@ -89,7 +89,7 @@ impl ConfiguredFormatProbe for TiffFamilyBackend {
         config: BackendOpenConfig,
     ) -> Result<ProbeResult, WsiError> {
         // Parse the full container (IFD chain).
-        // If the file isn't a valid TIFF, return detected=false — not an error.
+        // A file that isn't a valid TIFF returns detected=false, not an error.
         // This lets other backends in the registry try their probes.
         let budget = OpenBudget::new(config.limits);
         let container = match TiffContainer::open_with_budget(path, budget) {
@@ -118,7 +118,7 @@ impl ConfiguredFormatProbe for TiffFamilyBackend {
 
             Ok(ProbeResult::detected(vendor, ProbeConfidence::Definite))
         } else {
-            // No interpreter matched — container dropped, not cached
+            // No interpreter matched: the container is dropped, not cached
             Ok(ProbeResult::not_detected(""))
         }
     }

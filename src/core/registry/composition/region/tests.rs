@@ -1,6 +1,30 @@
+use super::super::fractional_u8::{pixman_bilinear_interpolate, unorm8_to_float};
+use super::super::integral::{compose_dense_integral_u8_rows, DenseIntegralU8Hit};
+use super::super::output::crop_rgb_interleaved_u8_buffer;
 use super::*;
 use crate::core::types::{Dataset, DatasetId, TileEntry, TileLayout, TileRequest};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+pub(super) fn composite_fractional_region_from_source<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    origin_px: (f64, f64),
+    max_region_pixels: u64,
+) -> Result<CpuTile, WsiError> {
+    let plan = RegionReadPlan::fractional(source.dataset(), req, origin_px, max_region_pixels)?;
+    compose_resolved_region(source, cache, req, plan)
+}
+
+pub(super) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
+    source: &T,
+    cache: Option<&TileCache>,
+    req: &RegionRequest,
+    max_region_pixels: u64,
+) -> Result<CpuTile, WsiError> {
+    let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
+    compose_resolved_region_streaming(source, cache, req, plan, 1)
+}
 
 struct StreamingSource {
     dataset: Dataset,

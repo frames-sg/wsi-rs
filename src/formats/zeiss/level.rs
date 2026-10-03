@@ -1,6 +1,5 @@
-#[cfg(test)]
-use super::slide::ZEISS_DIRECT_LEVEL_COMPOSE_HITS;
 use super::*;
+use crate::core::execution_telemetry::{record, Event};
 
 impl ZeissSlide {
     pub(super) fn scene_level_image(
@@ -25,8 +24,7 @@ impl ZeissSlide {
                     "Zeiss level {level} requires direct subblock composition"
                 ))
             })?;
-        #[cfg(test)]
-        ZEISS_DIRECT_LEVEL_COMPOSE_HITS.fetch_add(1, Ordering::Relaxed);
+        record(Event::ZeissDirectLevelComposes, 1);
         let arc = Arc::new(buffer);
         let retained_bytes = u64::try_from(arc.data.byte_size()).unwrap_or(u64::MAX);
         self.level_cache

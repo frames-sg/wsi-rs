@@ -180,7 +180,7 @@ fn read_ppm_oracle(path: &Path) -> Result<support::oracles::TileBuffer, String> 
         .to_rgb8();
     let (width, height) = rgb.dimensions();
     let mut pixels_rgba = Vec::with_capacity(rgb.as_raw().len() / 3 * 4);
-    for pixel in rgb.as_raw().chunks_exact(3) {
+    for pixel in rgb.as_raw().as_chunks::<3>().0 {
         pixels_rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
     }
     Ok(support::oracles::TileBuffer {

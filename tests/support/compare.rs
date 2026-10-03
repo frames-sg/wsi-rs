@@ -71,7 +71,12 @@ pub(crate) fn compare_rgba(actual: &[u8], expected: &[u8], tol: Tolerance) -> Co
     let mut sum_abs = 0u64;
     let mut sum_sq = 0u64;
     let mut alpha_exact = true;
-    for (actual, expected) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+    for (actual, expected) in actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected.as_chunks::<4>().0)
+    {
         alpha_exact &= actual[3] == expected[3];
         for channel in 0..3 {
             if actual[channel] == expected[channel] {

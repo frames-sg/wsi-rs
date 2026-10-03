@@ -169,7 +169,7 @@ fn interpret_multi_level_sorted_by_area() {
 
 #[test]
 fn interpret_multi_level_reverse_order() {
-    // Small IFD first in chain, large IFD second — should still sort correctly
+    // Small IFD first in chain, large IFD second; levels must still sort by size
     let file = build_aperio_tiff(&[
         vec![
             SyntheticTag::long(tags::IMAGE_WIDTH, 512),
@@ -224,7 +224,7 @@ fn interpret_tiles_across_rounds_up() {
 
 #[test]
 fn interpret_no_tiled_ifds_returns_error() {
-    // All stripped — no pyramid levels
+    // All stripped: no pyramid levels
     let file = build_aperio_tiff(&[vec![
         SyntheticTag::long(tags::IMAGE_WIDTH, 800),
         SyntheticTag::long(tags::IMAGE_LENGTH, 600),

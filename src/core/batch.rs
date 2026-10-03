@@ -40,17 +40,6 @@ impl CoreLedger {
         }
     }
 
-    /// A private ledger, so tests control idle cores without other tests.
-    #[cfg(test)]
-    fn with_cores(cores: usize) -> &'static Self {
-        let ledger: &'static Self = Box::leak(Box::new(Self::new()));
-        ledger
-            .cores
-            .set(cores)
-            .expect("new ledger has no core count");
-        ledger
-    }
-
     fn cores(&self) -> usize {
         *self
             .cores
@@ -90,28 +79,12 @@ impl CoreLedger {
 
 static PROCESS_CORES: CoreLedger = CoreLedger::new();
 
-#[cfg(test)]
-thread_local! {
-    static IDLE_CORES_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-
 /// Cores that no [`share_cpu_work`] caller or helper is using right now.
 pub(crate) fn idle_cores() -> usize {
-    #[cfg(test)]
-    if let Some(cores) = IDLE_CORES_OVERRIDE.with(std::cell::Cell::get) {
+    if let Some(cores) = crate::core::test_hooks::idle_cores_override() {
         return cores;
     }
     PROCESS_CORES.idle()
-}
-
-/// Runs `f` with [`idle_cores`] fixed on this thread, so batch planning is
-/// deterministic regardless of other tests' work.
-#[cfg(test)]
-pub(crate) fn with_idle_cores<T>(cores: usize, f: impl FnOnce() -> T) -> T {
-    let previous = IDLE_CORES_OVERRIDE.with(|cell| cell.replace(Some(cores)));
-    let result = f();
-    IDLE_CORES_OVERRIDE.with(|cell| cell.set(previous));
-    result
 }
 
 /// Counts one thread in its [`CoreLedger`] until dropped.

@@ -1,349 +1,197 @@
-# Internal Architecture
+# How wsi-rs works
 
-The public `Slide` and `SlideReader` surfaces stay format-independent. Internal
-work is divided at validation, planning, I/O, and decode boundaries so that
-format-specific state does not leak into the shared core.
+This is a guide to the code for people changing it. For using the library, see
+the [README](../README.md).
 
-## Region reads
+## Code layout
 
-`core::registry::composition` owns region behavior:
+| Path | What it does |
+| --- | --- |
+| `src/core/registry` | `Slide`, format detection, region and tile reads, composition. |
+| `src/core/cache.rs`, `src/core/cache/` | Byte-bounded tile caches and shared in-flight decodes. |
+| `src/core/limits.rs` | `SlideLimits` and checked size arithmetic. |
+| `src/core/batch.rs` | The shared CPU thread pool and idle-core accounting. |
+| `src/core/decode_runtime` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
+| `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`. |
+| `src/formats/<format>` | One module per file format: parse metadata, locate and read tiles. |
+| `src/formats/tiff_family` | Every TIFF-based format. `container` parses TIFF, `layout` maps each vendor's TIFF layout to levels, `pixel_access` reads tiles. |
+| `src/decode` | Adapters to the JPEG, JPEG 2000 and JPEG XR codec crates. |
+| `src/output` | GPU tile types for Metal and CUDA, and copying GPU tiles to CPU memory. |
+| `wsi-rs-openslide-shim` | The OpenSlide-compatible C library. |
+| `xtask` | Build, test, release and benchmark commands (`cargo xtask`). |
+| `fuzz` | Fuzz targets for every file parser. |
+| `perf-runner` | Benchmarks wsi-rs and OpenSlide through the same C API. |
 
-- `RegionReadPlan` validates scene, series, level, plane, geometry, and limits,
-  then records tile hits and the selected integral or fractional mode.
-- `RegionTileResolver` owns cache lookup, batched misses, result cardinality,
-  cache insertion, concurrent-miss coalescing, and cache diagnostics.
-- `integral` owns the exact single-tile return, typed clipped blits, and dense
-  integral U8 row copies.
-- `fractional_u8` owns interpolation and alpha accumulation. It allocates alpha
-  storage only for fractional U8 work.
-- `output` owns template selection, compatible output allocation, empty-region
-  results, and RGB cropping.
+## Opening a slide
 
-`Slide` creates one validated plan and reuses its hits for source admission,
-resolution and composition. Generic encoded-tile estimates are deferred until a
-format region fast path declines the request; admission still validates its own
-encoded bound and decoded staging first. A complete batch fitting the pre-composition
-reservation retains dense composition even with one CPU worker. Streamed
-consecutive batches fit decoded tiles plus codec work within the remaining staging
-allowance, with separate encoded bounds and the CPU worker limit. Streaming targets
-half the output allowance, capped at 1 MiB, for decoded/codec staging (or one
-larger source); wider windows regressed measured RSS. When cores are idle and the
-read's admission grants optional memory for their staging, a streamed batch may
-hold one tile per idle core, so tiles larger than the region no longer decode
-one after another. This target changes execution granularity, not public resource or
-cache limits. Singleton windows use direct tile resolution without batch vectors
-and query no worker count unless a second tile can fit. Fully cached regions pin
-their existing tiles under one cache lock and reuse dense composition without
-decoder staging.
-A source without sufficiently precise bounds streams single tiles. Tiled TIFF
-JPEG batches read their tiles on the caller, which then decodes them in order
-while helpers on otherwise idle cores claim the remaining tiles. The caller never
-waits for a helper that has not started, so a batch cannot queue behind other
-readers' tiles. Whole-batch
-integral composition keeps the exact-tile return and dense row-copy path; streamed
-batches preserve hit order. Built-in readers reject unavailable region fast paths
-on the caller thread. Custom readers retain their existing worker context. Cached
-ordinary tiled regions avoid an otherwise empty worker dispatch. NDPI restart
-regions also compose fully cached strips on the caller. A non-mutating cache
-presence hint selects one worker handoff for incomplete regions; that worker
-decodes the region's strips in order, and ordinary resolution still handles
-eviction. The hint neither pins tiles nor changes admission, recency or cache
-counters. Synthetic NDPI region fast paths decode their scaled strips on the
-calling thread. When each read fanned its strips out to the shared pool,
-concurrent readers queued behind each other's strips, and that queueing, not
-decoding, set their tail latency.
+`Slide::open` hands the path to a `FormatRegistry`. Every registered format
+checks whether it recognizes the file. A `Definite` match beats a `Likely` one;
+among equal matches the format registered first wins. The winning format then
+parses the file's metadata and builds a `Dataset`.
 
-The OpenSlide shim writes the caller's destination in row bands, bounded to
-262,144 pixels for regular grids and 8,192 pixels for coverage-carrying tile maps.
-The complete request still obeys the region output limits. Stable band boundaries
-preserve clipping-dependent interpolation across worker counts. Opaque bands
-whose tile rectangles cover the output skip redundant alpha reconstruction.
-The shim starts with a 32 MiB decoded cache and no display-tile cache; private
-format caches use the existing proportional budget.
-Dense composition plans clipped row spans once. Fractional composition precomputes
-sampling axes only when the table fits the unused RGB/gray portion of the existing
-RGBA output reservation; RGBA and thin strips retain scalar sampling. The float
-weights, Pixman rounding, fused-operation order and alpha accumulation are unchanged.
+Parsing draws on an `OpenBudget`: one running total of metadata and index bytes
+shared by every file in the slide (MIRAX, VMS and VSI slides are several files).
+Every size read from a file goes through checked arithmetic against
+`SlideLimits` before anything is allocated. Formats remember each source file's
+identity and refuse to read a file that was replaced after opening.
 
-## Decode execution and JPEG 2000
+## Reading a region
 
-Automatic and CPU-only `DecodeRuntime` handles share one process-wide CPU pool.
-Rayon callers reuse their invoking pool. Codec preparation receives the current
-worker count explicitly. DICOM can resolve a complete native batch from existing
-decoded frames before a worker handoff. A partial miss retains ordinary source
-execution. Completed device decisions also use this fast path; calibration
-continues to bypass decoded caches when comparing the routes.
+A region read goes through four steps in `core::registry::composition`:
 
-`ReadExecutionContext` carries the enclosing operation reservation and cancellation
-control through the private managed-reader boundary. Optional calibration and
-native Metal input copies may reserve only immediately available operation and
-slide headroom. A stack-owned atomic flag is shared by every context in one public
-read, including separate admission chunks. A newly pending route consumes that
-read's calibration opportunity; later internal batches cannot initialize the GPU
-during the same first read. Subsequent reads advance at most one warmup/sample,
-while selected routes may execute every admitted batch. Optional work cannot wait
-while holding the ordinary reservation or bypass a FIFO admission waiter. Public
-reader APIs and configured limits are unchanged.
+1. **Plan.** `RegionReadPlan` validates the request and finds the tiles that
+   cover the rectangle. If the rectangle lines up with whole pixels on the
+   level, the read is *integral*. Otherwise it is *fractional* and needs
+   interpolation.
+2. **Admit.** The read reserves the memory it needs from the slide's budget.
+   Reads that would go over the budget wait in line (first in, first out).
+   Requests too large to ever fit are rejected.
+3. **Resolve.** `RegionTileResolver` takes tiles from the cache, decodes the
+   missing ones in batches, and stores the results. When two reads need the same
+   missing tile at the same time, one decodes it and the other waits for that
+   result (`core::cache::flights`).
+4. **Compose.** Integral reads copy tile rows straight into the output.
+   Fractional reads interpolate with the same arithmetic and rounding as
+   OpenSlide's renderer (Pixman), so the pixels match OpenSlide.
 
-`decode::jp2k::prepare` validates the unsigned RGB8 contract and logical dimensions.
-Direct single-image CPU decodes consume the validated `J2kView`. Two-image batches
-reuse the invoking CPU pool and consume each validated view once. Their two generic
-native claims stay below the codec's existing four-claim ceiling. Singleton native
-batches retain the original executor after the specialization regressed a constrained
-concurrent workload. Intra-image parallelism for singleton decodes stays serial:
-on 240–256 px corpus tiles it saved at most 16% for one caller on one format,
-cost 11–13% for one caller on another, and cost 22–36% with one caller per
-worker. Larger borrowed CPU batches retain the codec's
-aggregate allocation guards and parallel scheduler. Operation-local
-`PreparedJp2kBatch` owners retain j2k 0.11.3 prepared groups for automatic route
-comparisons, sharing encoded input and validated metadata between CPU and device
-work. Metal consumes native prepared plans. CPU uses the established borrowed
-batch executor: the j2k 0.10.0 owned CPU batch experiment changed lossy rounding
-and regressed subsampled multithreaded batches, so it was rejected.
-TIFF, DICOM and raw-JP2K preparation bypass decoded caches. No persistent metadata
-cache is added. Metadata-only or unrepresentable codec plans retain their supported
-strict single-image decode paths. Preparation keeps strict codec validation.
+Large regions stream through in batches sized to the memory budget. A format
+can provide its own faster region path (NDPI does); the generic path handles
+any request it declines.
 
-Automatic JP2K execution uses consecutive windows of at most 16 images and 4 MiB
-of full-tile RGBA-equivalent output. This bounds simultaneously live comparison
-outputs without reducing the request to a calibration sample. CPU-only reads and
-strict device APIs retain their separate scheduling; individually larger images
-retain existing admission. Automatic routing is foreground and bounded to 1,024
-decisions:
+Tile reads (`read_tile`, `read_tiles`) skip planning and composition: they
+admit, resolve and return tiles in request order. Every batch read returns
+exactly one result per request, in the order requested.
 
-1. A new eligible route returns CPU output and marks calibration pending without
-   initializing the device.
-2. A later eligible read warms the device and times an uncached CPU decode of
-   the same prepared input. If device warmup takes more than four CPU decodes,
-   the route stays on CPU without further foreground probes. This conservative
-   guard can prefer CPU even when later device reads would amortize startup.
-3. Otherwise, three subsequent reads each measure one CPU/device pair from the
-   same prepared inputs. Measurement order alternates; the entire execution
-   window is measured.
-4. The median device/CPU ratio must be at most 0.85 to select the device.
+## Caches
 
-A greater-than-fourfold measured device loss also keeps clipped sibling tiles on
-CPU when level, codec, batch count, device and CPU worker budget match. Every
-clipped dimension must fit within the measured uniform tile geometry. The original
-route owns the evidence; the shortcut publishes no additional calibration result.
-Larger workloads and other levels retain independent calibration.
+Each slide has three caches, all limited by bytes and evicting the least
+recently used entry:
 
-The key includes dataset, scene, series, level, codec, the full logical geometry
-histogram and batch count, CPU worker count, and the initialized device identity
-(Metal registry ID and name). Identity binding is lazy. The initial CPU read owns
-the pending route until its output is ready. Later, one caller owns calibration;
-competitors use CPU immediately. Busy entries cannot be evicted. Cancellation and
-unwinding release ownership without publishing a partial measurement. Device failure
-selects CPU for ordinary reads. Explicit resident APIs remain strict.
+- **Decoded tiles**, shared by all reads of the slide (64 MiB by default).
+- **Display tiles** for `read_display_tile` (32 MiB).
+- **Format caches** for format-specific data such as DICOM frames, NDPI restart
+  offsets and CZI source blocks. They split one 32 MiB budget.
 
-`jp2k::metal_batch` creates an operation-local `MetalBatchDecoder` over the retained
-backend session, requests NHWC unsigned RGB8, submits compatible groups before
-waiting within bounded execution windows, and restores original source slots.
-Windows bound 16 images and target 4 MiB of physical RGBA-equivalent output to contain native
-scratch retention; individually larger images retain their existing admission and
-strict decoding rules. Prepared automatic batches regroup retained images without
-reparsing. Color conversion still covers all eligible outputs in one pass.
-Duplicates, mixed geometry and per-input errors remain ordered. Only batch capability rejection uses strict single Metal.
-When extra encoded ownership cannot fit, admitted strict reads use single-image
-Metal submissions. DICOM charges copies from actual frame sizes after loading
-frames inside the ordinary reservation, allowing concurrent small native batches
-without multiplying its conservative 128 MiB pre-index allowance. Optional
-preparation forwards cancellation through source indexing and payload reads.
-Logical crops precede one batch YCbCr conversion submission.
-The converter uploads the immutable CPU lookup tables once and uses them in both
-checked-u32 and u64-addressing shaders, giving exact CPU-compatible RGB conversion.
+A cache sized too small for an entry decodes without storing it.
 
-CUDA JP2K decodes one image per submission and rejects YCbCr output without
-codestream MCT (Aperio 33003) instead of converting it on the device. Batched
-CUDA submission and a resident YCbCr conversion are not implemented.
+## Threads
 
-Raw JP2K codestreams expose each decodable wavelet reduction as a single-tile
-pyramid level. Level `k` has dimensions rounded up from `2^k` source blocks and
-downsample exactly `2^k`. The main-header ladder can be shortened by component
-overrides, so opening proves the deepest offered reduction with a one-pixel
-decode. Reduced levels decode on the CPU from discarded resolution levels rather
-than resampling a full decode. Their pixels equal OpenJPEG reduced decodes, not a
-box-filtered full decode. Only full resolution has compressed passthrough, strict
-device reads, and adaptive device routing.
+All decoding shares one process-wide CPU thread pool. A batch read decodes on
+the calling thread and lets idle cores take the remaining tiles. The caller
+never waits for a helper that hasn't started, so one slow reader can't hold up
+another reader's tiles.
 
-## DICOM
+## GPU decoding
 
-DICOM frame indexing is independent of tile decoding:
+With the `metal` or `cuda` feature, ordinary reads of JPEG 2000 and HTJ2K tiles
+can decode on the GPU. `core::decode_runtime` decides per *route*: a
+combination of slide, level, codec, tile sizes, batch size, CPU thread count
+and GPU. For each route:
 
-- `frame_index::model` owns immutable fragment references, frame ranges, and
-  offset-table model data.
-- `validation` owns fragment-graph and compressed-size limits.
-- `offset_tables` reads and interprets Basic and Extended Offset Tables.
-- `raw_little_endian` scans supported explicit-little-endian file layouts.
-- `token_stream` provides the controlled parser fallback.
-- `batch_io` turns an index into bounded grouped read spans, validates Item
-  headers, and restores frame results by index.
+1. The first read uses the CPU.
+2. A later read starts the GPU and times one CPU decode. If starting the GPU
+   takes longer than four CPU decodes, the route stays on the CPU.
+3. The next three reads each time the CPU and the GPU on the same input,
+   alternating which goes first.
+4. The route uses the GPU if the median GPU time is at most 85% of the CPU
+   time. Otherwise it uses the CPU.
 
-`DicomFrameStore` owns the source path, native pixel location, lazy frame index,
-and compressed-frame cache. `DicomImage` owns the decoded-frame cache alongside
-its immutable image metadata.
+Up to 1,024 route decisions are kept. A GPU error sends the read to the CPU.
+`read_tile_metal` and `read_tile_cuda` skip all of this: they always use the
+GPU and return an error when they can't.
 
-`DicomBatchPlanner` validates requests and classifies each original result slot
-as sparse black, cached, decodable frame, or device-ineligible. The CPU and
-device reader modules consume the same plan metadata and restore output to the
-original request order. `DicomReader` remains the thin `SlideReader` adapter.
+On Metal, compatible tiles decode together in groups of up to 16 images and
+4 MiB of output. Color conversion from YCbCr to RGB also runs on the GPU, using
+the same lookup tables as the CPU path, so the colors match exactly. CUDA
+decodes one image per submission and rejects YCbCr tiles that the CPU would
+convert.
 
-All input-derived sizes use checked arithmetic and the shared resource limits.
-Index publication is cancellation-aware, source replacement remains protected
-by file identity checks, and `RequireDevice` never silently returns CPU data.
+## Formats
 
-## Olympus VSI and device readback
+**TIFF family** (Aperio, NDPI, Leica, Ventana, Philips, Trestle, ARGOS, Huron,
+generic TIFF). `container` reads TIFF and BigTIFF structure. Each module under
+`layout` recognizes one vendor and maps its images to pyramid levels and
+associated images. A generic layout catches any other tiled TIFF.
 
-The Olympus VSI module owns format probing and the reader adapter. `slide`
-discovers companion ETS files and assembles ordered public scenes; `scene`
-owns immutable metadata, with checked header and chunk-index parsing in its
-`header` and `index` modules. `pixels` owns ETS payload reads, JPEG 2000
-batch dispatch, and sparse background tiles. Each ETS scene retains its parsed
-file handle and reads payloads positionally on Unix. Parsing retains the original
-validation order and shared open budgets. Stored ETS tiles report JP2K, so their
-CPU decodes use the JP2K pool and participate in automatic device routing. Raw
-passthrough, strict Metal/CUDA reads, and adaptive preparation read each distinct
-stored tile once. Sparse background tiles have no codestream: they stay CPU-only
-and strict device reads reject them.
+**NDPI** stores each level as one huge JPEG with restart markers. wsi-rs presents
+it as virtual tiles of at most 256 x 256 pixels and decodes only the strips
+between the restart markers that a read needs.
 
-`output::download` materializes tightly packed CPU tiles from completed
-device readback bytes. Metal and CUDA retain their own transfer, pitch, device
-identity, and readback-limit checks. Completed immutable shared Metal storage
-copies directly into the final CPU allocation, honoring offsets and padded rows.
-Other storage uses a lazy retained session queue and a staging batch capped at the
-existing 128 MiB download ceiling. Tight layouts encode one contiguous blit; padded
-layouts retain row copies. Unsafe pointer/Metal interoperability stays confined to
-`output::metal::interop`. Resident ownership survives crop, clone and session drop.
+**DICOM** slides are a folder of DICOM files. Compressed frames are located
+through an index built once per image on first use, from the Extended Offset
+Table, the Basic Offset Table, or by scanning item headers. Every count and
+offset in the index is checked against the file size. Tiles that a sparse DICOM
+image leaves out come back black.
 
-## CZI and JPEG XR
+**MIRAX** stores tiles in separate data files listed in an index file. A batch
+read decodes each stored image once even when several requested tiles share it.
 
-CZI preflight checks segment spans and configured metadata/index/input budgets
-before the container library allocates or reads payloads. The WSI reader
-accepts single-plane Bgr24 sources and rejects unsupported pixel/compression
-contracts. `zeiss::composition` owns deterministic mosaic order and bounded
-assembly; `subblock` owns codec adaptation; `raster` owns sample conversion and
-clipped copies. Reconstruction runs outside the CZI seek lock.
+**Olympus VSI** keeps pixels in `.ets` companion files, one per scene. Tiles are
+JPEG 2000 and use the same CPU pool and GPU routing as other JPEG 2000 tiles.
 
-`zeiss::source` owns subblock I/O and a byte-bounded LRU of decoded compressed
-RGB blocks. Adjacent output tiles reuse these blocks; uncompressed sources keep
-their clipped direct-copy path. CZI assigns half of its existing private-cache
-budget to source blocks (16 MiB by default, enough for a 2056 × 2464 RGB block),
-and divides the remainder between output tiles, whole levels, and associated
-images. Oversized entries are decoded without retention. `zeiss::batch` resolves unique
-source blocks once per admitted batch, bounds both actual decoded staging and
-encoded/codec work, and composes outputs in deterministic order. It preserves
-uncompressed clipped-row copies. Concurrent compressed-block misses share the
-existing bounded flight machinery; local producers finish before callers wait,
-and pool workers never wait for source flights. No cache or seek mutex is held
-during decode.
+**Zeiss CZI** stores a mosaic of overlapping blocks. Before the CZI library
+reads anything, wsi-rs checks every segment's size and position against the
+limits. Output tiles are composed from the blocks in a fixed order, and decoded
+blocks are cached because neighboring tiles reuse them.
 
-Main-image JPEG/JPEG XR composition copies the codec's RGB rows directly into
-the output. Typed embedded CZI attachments retain the container bitmap adapter.
-Subblock preflight reuses one open file handle while retaining span, limit, and
-source-identity checks. Cache hits validate source identity before reusing pixels.
+**Hamamatsu VMU** stores 12-bit samples in column-ordered NGR files. wsi-rs
+reads them as virtual tiles of at most 256 x 64 pixels and returns all 16 bits.
+The C shim converts to 8-bit the way OpenSlide does (`sample >> 4`).
 
-`decode::jpegxr` is the shared CZI/TIFF adapter to the separate JXR crate.
-It validates dimensions, precision, color and alpha, then applies bounded CPU
-decode settings. TIFF owns physical-to-logical edge cropping.
+**Raw JPEG 2000** files have one image. Each wavelet resolution becomes a
+level with a downsample of 2, 4, 8 and so on, decoded at that resolution rather
+than by shrinking the full image.
 
-JPEG 2000 metadata and coding support come from `j2k::J2kView`. The WSI layer
-checks its unsigned RGB8 output contract and output budget, and leaves packet,
-quantization, coding-style, and tile-part policy to the codec. The legacy parser
-is compiled only in tests as an independent fixture oracle.
+## The OpenSlide shim
 
-`core::decode_runtime::reader` owns forwarding and route geometry;
-`adaptive` owns admitted execution, and `calibration` owns state transitions.
-The parent owns reusable runtime/pool state and routing configuration.
+`wsi-rs-openslide-shim` exports OpenSlide's C functions and forwards them to a
+`Slide`. It writes `read_region` output in horizontal bands of at most 262,144
+pixels, which keeps memory flat for large requests and gives the same pixels
+at any thread count. Slides opened through the shim start with a 32 MiB cache.
 
-## NDPI offset reuse
+## Unsafe code
 
-Generated NDPI levels use virtual tiles no larger than 256 by 256 pixels. Native tile reads use the existing cropped synthetic-level path; this keeps generic and fractional region planning from treating a whole generated level as one decoded tile. Physical level geometry and image coordinates remain unchanged.
+`src/lib.rs` denies `unsafe` code. The only exception is
+`src/output/metal/interop.rs`, which calls the Metal API.
+`tests/repo_policy/unsafe_syntax.rs` fails the build if `unsafe` appears in any
+other file.
 
-NDPI borrows relative MCU offsets from TIFF's already validated immutable tag
-allocation. The existing byte-bounded MCU cache retains a 128-byte classification
-entry instead of a second copy of the offset array. High-word combination and
-file-absolute normalization retain the existing separately owned, byte-weighted
-array path. Cache keys still include the IFD, tag, strip offset, and strip length.
-Disabled and undersized caches borrow relative offsets without retaining the
-classification; they repeat the unchanged classification scan. No cache budget,
-source identity check, payload validation, decode algorithm, or thread policy is
-changed.
+## Tests
 
-## Bounded region concurrency
+- **Unit tests** live in each module's `tests` module or `tests/` folder.
+- **Integration tests** in `tests/` read synthetic and real fixture files.
+- **OpenSlide comparison.** `scripts/parity-corpus-fetch.sh` downloads a public
+  corpus of real slides; `cargo xtask parity-corpus-test` reads every slide with
+  wsi-rs and OpenSlide and compares the pixels. CI runs it.
+- **Fuzzing.** `fuzz/fuzz_targets` has one target per parser.
+  `cargo xtask fuzz-check` checks that each compiles; CI runs each for 15
+  seconds, and release checks run each for five minutes.
+- **Coverage.** CI requires 80% line coverage across the workspace and 70% in
+  each major component.
+- **Release checks.** `cargo xtask rc-preflight` runs the API and dependency
+  checks, five-minute fuzz runs, every feature combination, the OpenSlide
+  comparison, coverage, the performance gate and a package dry run. Releases
+  with the `cuda` feature also need the `CUDA validation` workflow on the CUDA
+  runner.
+- **Test hooks.** Tests observe internal behavior through two modules:
+  `core::execution_telemetry` counts events such as tiles decoded on each path,
+  and `core::test_hooks` lets tests pause work at fixed points to force
+  races. Both compile to nothing in normal builds. The `route-telemetry` feature
+  also exports the event counts for benchmarks.
 
-NDPI integral region reads batch small restart strips inside the existing region
-staging reservation. The batch is limited by output-to-strip geometry, existing
-NDPI batch caps, and the current Rayon pool. Large strips retain one-at-a-time
-streaming. NDPI region batches decode in request order on the composing thread
-and stop at the first error. Codec algorithms remain external.
+## Performance gate
 
-`core::cache::flights` coordinates active shared region-cache misses by the full
-tile key. It permits at most 128 producer records (fewer for small caches), keeps
-only weak references in the registry, and retains no additional decoded tile
-cache. Active callers may share the same decoded `Arc` even if the LRU evicts it.
-The existing pixel-cache capacities and admission limits are unchanged; bounded
-coordination bookkeeping is additional to pixel-payload accounting.
+Before a release, `rc-preflight` compares three benchmark captures: OpenSlide,
+the previous wsi-rs release and the current code. Capture all three on the same
+machine with the same corpus, workloads, cache size and thread limits:
 
-Region batches finish and publish their owned loads before waiting for other
-batches, avoiding cycles between overlapping requests. Errors and unwinding
-release ownership; callers retry failed shared work through their own source
-path to preserve typed errors. Disabled/tiny caches bypass coordination. Rayon
-workers and reentrant owners also bypass waiting, preventing pool starvation.
-Explicit controlled tile APIs retain their existing cancellation boundaries.
+1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine, and
+   `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda`.
+2. Capture OpenSlide and the current code with
+   `cargo xtask perf-capture-pair <label>`.
+3. Capture the previous release the same way.
+4. Point `WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE` and
+   `WSI_RS_RC_CURRENT_CAPTURE` at the three capture files.
 
-## MIRAX and positional source access
-
-`mirax::batch` deduplicates backing images within each admitted batch, resolves
-bounded source groups in the existing pool, and restores logical crops in request
-order. Actual decoded source sizes have a separate staging bound; an encoded
-allowance cannot justify additional live decoded images. Concurrent source misses
-reuse the existing flight coordinator and private-cache budget.
-
-`core::positioned_file` owns retained handles for MIRAX records, VSI payloads and
-`.svcache` payloads. Unix reads use explicit offsets. Other platforms serialize the
-complete seek/read operation on one retained handle; cloned descriptors are never
-assumed to have independent cursors. Source identity checks, `.svcache` format and
-payload checksums retain their existing contracts.
-
-## Performance diagnostics
-
-Optional `route-telemetry` records adapter preparations, CPU batch sizes, actual
-Metal group submissions, completion calls, color conversion and readback/staging
-bytes, strict single-image decode calls and observed cached buffer-pool peaks.
-These pool peaks do not measure all live GPU memory. Native benchmarks separate reference validation from timed reads and label
-fresh readers versus warm revisits; a fresh reader is not cold disk or a cold
-process. Perf-runner retains legacy wall-clock throughput and checksum semantics.
-Its optional reader timing reports reader-active rates separately from verification
-and bookkeeping, using the longest worker's accumulated reader-call time.
-
-## Hamamatsu VMU
-
-`formats::hamamatsu_vmu` owns the bounded specimen INI parse, companion path
-resolution, dataset metadata, and macro JPEG. Its `ngr` module validates the
-28-byte little-endian header and complete pixel span before exposing tiles.
-NGR stores full-height columns, each containing row-major RGB16 samples.
-Virtual tiles are at most 256 by 64 pixels, and positioned reads split a row
-at storage-column boundaries. This avoids allocating scanner-sized columns
-or complete pyramid levels and keeps concurrent reads independent.
-
-Native output preserves all 16 stored bits instead of applying OpenSlide's
-lossy RGB12-to-RGB8 display conversion. The C shim's `vmu` adapter converts
-each tile before the existing fractional compositor; converting the final
-native region would either reject fractional U16 composition or change
-rounding. The adapter transfers the initially empty shared cache to its display
-slide and disables the inner native cache, so C cache entries contain RGB8 only.
-No new public format-specific API or dependency is required.
-
-Synthetic geometry, pixel values, limits, malformed spans, and companion rules
-are covered in `tests/hamamatsu_vmu.rs`. Independent comparisons require an
-installed OpenSlide library. On macOS, run the C ABI comparison with:
-
-```sh
-cargo build --locked -p wsi-rs-openslide-shim
-WSI_RS_VMU_SHIM_LIBRARY=target/debug/libwsi_rs_openslide_shim.dylib \
-  cargo test --locked --features parity-openslide --test hamamatsu_vmu -- --include-ignored
-```
-
-Use the platform's `.so` or `.dll` path on Linux or Windows. These tests establish
-synthetic layout and rendering agreement, not compatibility with every scanner's
-VMU metadata variants.
+The gate fails if the current code is slower than allowed or if its pixels
+differ from OpenSlide beyond the corpus color tolerances.

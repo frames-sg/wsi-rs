@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-#[cfg(test)]
-use std::io::{Read, Seek};
 use std::sync::Arc;
 
 use dicom_dictionary_std::tags;
@@ -15,8 +13,6 @@ use crate::formats::dicom::frame_index::{
     preflight_compressed_lengths_with_limit, reopen_dicom_object,
     scan_encapsulated_frames_controlled, DicomEncapsulatedFrames,
 };
-#[cfg(test)]
-use crate::formats::dicom::frame_index::{DicomFragmentRef, DicomFrameReadGroup};
 use crate::formats::dicom::metadata::optional_u32;
 
 impl DicomImage {
@@ -402,28 +398,5 @@ impl DicomImage {
             );
         }
         Ok(frames)
-    }
-
-    #[cfg(test)]
-    pub(in super::super) fn read_encapsulated_fragments(
-        &self,
-        fragments: &[DicomFragmentRef],
-    ) -> Result<Vec<u8>, WsiError> {
-        frame_index::read_encapsulated_fragments(&self.frame_store.path, fragments)
-    }
-
-    #[cfg(test)]
-    pub(in super::super) fn read_encapsulated_frame_group<R: Read + Seek>(
-        &self,
-        file: &mut R,
-        encapsulated_frames: &DicomEncapsulatedFrames,
-        group: &DicomFrameReadGroup,
-    ) -> Result<Vec<(u32, Vec<u8>)>, WsiError> {
-        frame_index::read_encapsulated_frame_group(
-            &self.frame_store.path,
-            file,
-            encapsulated_frames,
-            group,
-        )
     }
 }

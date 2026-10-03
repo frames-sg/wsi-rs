@@ -132,9 +132,9 @@ impl Ngr {
                 let dest = (dy as usize * width as usize + dx as usize) * 3;
                 for (out, pair) in samples[dest..dest + count as usize * 3]
                     .iter_mut()
-                    .zip(data.chunks_exact(2))
+                    .zip(data.as_chunks::<2>().0)
                 {
-                    *out = u16::from_le_bytes([pair[0], pair[1]]);
+                    *out = u16::from_le_bytes(*pair);
                 }
                 dx += count;
             }

@@ -63,10 +63,7 @@ impl ZeissSlide {
         if let Some(tile) = cached() {
             return crate::core::cache::TileClaim::Ready(tile);
         }
-        #[cfg(test)]
-        if let Some(barrier) = &self.source_miss_barrier {
-            barrier.wait();
-        }
+        self.probe.wait_before_miss();
         self.source_flights.claim_miss(&info.file_position, cached)
     }
 
@@ -93,8 +90,7 @@ impl ZeissSlide {
         }
         let raw = self.read_source_subblock(info)?;
         // Neither the seek lock nor the cache lock is held during decoding.
-        #[cfg(test)]
-        self.subblock_decodes.fetch_add(1, Ordering::Relaxed);
+        self.probe.record_decode();
         let tile = Arc::new(super::subblock::tile_from_raw_subblock(&raw, self.limits)?);
         self.subblock_cache
             .lock()

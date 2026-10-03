@@ -110,3 +110,14 @@ fn attachment_prefix_read_reports_offset_open_and_truncation_failures() {
         Err(WsiError::IoWithPath { path, .. }) if path == truncated
     ));
 }
+
+fn ensure_embedded_czi_plane_budget(
+    dimensions: (i32, i32),
+    bytes_per_pixel: usize,
+) -> Result<(), WsiError> {
+    ensure_embedded_czi_plane_budget_with_limit(
+        dimensions,
+        bytes_per_pixel,
+        MAX_DECODED_IMAGE_BYTES,
+    )
+}

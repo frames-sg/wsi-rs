@@ -599,7 +599,7 @@ fn assert_rgba_visible_exact(path: &Path, region: RegionCase, ours: &[u8], their
 
 fn rgba_visible_bytes(bytes: &[u8]) -> Vec<u8> {
     let mut visible = Vec::with_capacity(bytes.len().saturating_sub(bytes.len() / 4));
-    for pixel in bytes.chunks_exact(4) {
+    for pixel in bytes.as_chunks::<4>().0 {
         visible.extend_from_slice(&pixel[..3]);
     }
     visible

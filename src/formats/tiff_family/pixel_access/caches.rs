@@ -58,25 +58,6 @@ impl NdpiMcuStartsCache {
         // Charge the key, value, and LRU bookkeeping even without an offset payload.
         self.entries.put(key, NdpiMcuStartsEntry::Relative, 128);
     }
-
-    #[cfg(test)]
-    pub(super) fn current_bytes(&self) -> u64 {
-        self.entries.current_bytes()
-    }
-
-    #[cfg(test)]
-    pub(super) fn max_bytes(&self) -> u64 {
-        self.entries.capacity_bytes()
-    }
-
-    #[cfg(test)]
-    pub(super) fn first_value(&mut self) -> Option<Arc<Vec<u64>>> {
-        let key = *self.entries.lru_key()?;
-        match self.get(&key)? {
-            NdpiMcuStartsEntry::Relative => None,
-            NdpiMcuStartsEntry::Normalized(starts) => Some(starts),
-        }
-    }
 }
 pub(super) const NDPI_DISPLAY_WIDE_STRIP_WIDTH: u32 = 1024;
 
@@ -112,11 +93,6 @@ where
     pub(super) fn put(&mut self, key: K, data: Arc<CpuTile>) {
         let byte_size = data.data.byte_size() as u64;
         self.entries.put(key, data, byte_size);
-    }
-
-    #[cfg(test)]
-    pub(super) fn current_bytes(&self) -> u64 {
-        self.entries.current_bytes()
     }
 
     pub(super) fn max_bytes(&self) -> u64 {
@@ -168,14 +144,6 @@ where
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .put(key, value);
-    }
-
-    #[cfg(test)]
-    pub(super) fn current_bytes(&self) -> u64 {
-        self.cache
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .current_bytes()
     }
 
     pub(super) fn max_bytes(&self) -> u64 {
