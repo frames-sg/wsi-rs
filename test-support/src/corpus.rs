@@ -5,17 +5,15 @@ use serde::Deserialize;
 
 const CORPUS_CACHE_ENV: &str = "WSI_RS_PARITY_CORPUS_CACHE";
 
-/// Format evidence required before the built-in registry can be released.
+/// Formats covered by the available public release samples.
 ///
-/// This is deliberately the retained format inventory rather than the smaller
-/// backend inventory: one TIFF sample cannot establish production readiness for
-/// all vendor-specific TIFF interpreters.
+/// Each vendor-specific interpreter needs its own evidence. VMU/NGR has only
+/// synthetic fixtures and is excluded until a real public sample is available.
 pub const REQUIRED_RELEASE_FORMATS: &[&str] = &[
     "aperio",
     "argos",
     "dicom",
     "hamamatsu_vms",
-    "hamamatsu_vmu",
     "huron",
     "leica",
     "mirax",
@@ -470,6 +468,15 @@ mod tests {
             ..CorpusEntry::default()
         };
         assert_eq!(entry.benchmark_group(), "aperio/j2k+jpeg");
+    }
+
+    #[test]
+    fn public_manifest_satisfies_release_coverage() {
+        let manifest = parse_manifest(include_str!(
+            "../../tests/fixtures/parity_corpus.public.toml"
+        ))
+        .unwrap();
+        validate_release_coverage(&manifest).unwrap();
     }
 
     #[test]

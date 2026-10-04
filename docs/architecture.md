@@ -162,7 +162,9 @@ other file.
 - **Integration tests** in `tests/` read synthetic and real fixture files.
 - **OpenSlide comparison.** `scripts/parity-corpus-fetch.sh` downloads a public
   corpus of real slides; `cargo xtask parity-corpus-test` reads every slide with
-  wsi-rs and OpenSlide and compares the pixels. CI runs it.
+  wsi-rs and compares pixels with OpenSlide where it supports the format.
+  Release preflight covers the available public samples. VMU/NGR currently has
+  synthetic-test coverage only. CI runs the public corpus checks.
 - **Fuzzing.** `fuzz/fuzz_targets` has one target per parser.
   `cargo xtask fuzz-check` checks that each compiles; CI runs each for 15
   seconds, and release checks run each for five minutes.
