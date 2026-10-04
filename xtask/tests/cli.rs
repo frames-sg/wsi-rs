@@ -116,17 +116,147 @@ mod unix {
         }
 
         fn run(&self, task: &str, arguments: &[&str]) -> std::process::Output {
-            xtask()
-                .arg(task)
-                .args(arguments)
+            self.command().arg(task).args(arguments).output().unwrap()
+        }
+
+        fn command(&self) -> Command {
+            let mut command = xtask();
+            command
                 .current_dir(&self.root)
                 .env("CARGO", &self.cargo)
                 .env("PATH", &self.path)
                 .env("XTASK_FAKE_LOG", &self.log_path)
                 .env_remove("WSI_RS_UPDATE_PUBLIC_API")
-                .env_remove("WSI_RS_PARITY_ALIASES")
-                .output()
-                .unwrap()
+                .env_remove("WSI_RS_PARITY_ALIASES");
+            command
+        }
+    }
+
+    #[test]
+    fn paired_capture_interleaves_optional_baseline_and_keeps_outputs_separate() {
+        let fixture = FakeRepository::new();
+        let target = fixture.root.join("target");
+        let results = fixture.root.join("results");
+        let manifest = fixture.root.join("slides.toml");
+        fs::write(&manifest, "[[slide]]\nalias='fixture'\nformat='aperio'\npath='tests/fixtures/jp2k/rgb_nomct.j2k'\nmust_decode=['cpu']\n").unwrap();
+        fs::create_dir_all(target.join("release")).unwrap();
+        for name in ["current", "openslide", "previous"] {
+            fs::write(fixture.root.join(name), name).unwrap();
+        }
+        let worker_log = fixture.root.join("workers.log");
+        let script = r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --engine) engine=$2;;
+        --library) library=$2;;
+        --slide) slide=$2;;
+        --repeat-index) repeat=$2;;
+        --workers) workers=$2;;
+        --compare-library) comparison=$2;;
+    esac
+    shift 2
+done
+if [ -n "$comparison" ]; then
+    printf '%s\n' '{"reference_version":"4.0.1","workloads":[]}'
+    exit 0
+fi
+printf '%s %s %s\n' "$repeat" "$workers" "${library##*/}" >> "$XTASK_WORKER_LOG"
+cat <<EOF
+{"schema_version":SCHEMA,"kind":"wsi-rs-perf-worker","engine":"$engine",
+"library_path":"$library","library_sha256":"DIGEST","library_version":"test",
+"slide_path":"$slide","slide_sha256":"DIGEST","repeat_index":$repeat,
+"cache_bytes":268435456,"worker_count":$workers,
+"level0_bounds":{"x":0,"y":0,"width":8,"height":8},
+"levels":[{"width":8,"height":8,"downsample":1.0}],
+"workloads":[{"name":"pan_trace_l0","n":1,"samples_us":[1],
+"p50_us":1,"p95_us":1,"p99_us":1,"mean_us":1,"bytes_read":4,
+"workers":$workers,"effective_elapsed_us":1,"throughput_bytes_per_second":4000000,
+"checksum_sha256":"DIGEST"}]}
+EOF
+"#
+        .replace("SCHEMA", &wsi_rs_perf::WORKER_SCHEMA_VERSION.to_string())
+        .replace("DIGEST", &"a".repeat(64));
+        write_executable(&target.join("release/wsi-rs-perf"), &script);
+
+        for with_previous in [false, true] {
+            fs::write(&worker_log, "").unwrap();
+            let label = if with_previous { "triple" } else { "pair" };
+            let mut command = fixture.command();
+            command
+                .args(["perf-capture-pair", label, "fixture"])
+                .env("CARGO_TARGET_DIR", &target)
+                .env("WSI_RS_PERF_MANIFEST", &manifest)
+                .env("WSI_RS_PERF_RESULTS_DIR", &results)
+                .env("WSI_RS_PERF_WORKERS", "1,2")
+                .env("WSI_RS_PERF_REPEATS", "5")
+                .env("WSI_RS_PERF_ONLY", "pan_trace_l0")
+                .env("WSI_RS_PERF_CACHE_BYTES", "268435456")
+                .env("WSI_RS_BENCH_WSI_RS_LIBRARY", fixture.root.join("current"))
+                .env("WSI_RS_OPENSLIDE_LIBRARY", fixture.root.join("openslide"))
+                .env("XTASK_WORKER_LOG", &worker_log)
+                .env_remove("WSI_RS_BENCH_PREVIOUS_LIBRARY");
+            if with_previous {
+                command.env(
+                    "WSI_RS_BENCH_PREVIOUS_LIBRARY",
+                    fixture.root.join("previous"),
+                );
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut expected = Vec::new();
+            for repeat in 0..5 {
+                let mut order = vec!["current", "openslide"];
+                if with_previous {
+                    order.push("previous");
+                }
+                if repeat % 2 != 0 {
+                    order.reverse();
+                }
+                for workers in [1, 2] {
+                    expected.extend(
+                        order
+                            .iter()
+                            .map(|name| format!("{repeat} {workers} {name}")),
+                    );
+                }
+            }
+            assert_eq!(
+                fs::read_to_string(&worker_log)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            for (suffix, library) in [
+                ("wsi_rs", "current"),
+                ("openslide", "openslide"),
+                ("previous", "previous"),
+            ] {
+                let path = results.join(format!("{label}-{suffix}.json"));
+                if suffix == "previous" && !with_previous {
+                    assert!(!path.exists());
+                    continue;
+                }
+                let capture: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                let runs = capture["runs"].as_array().unwrap();
+                assert_eq!(runs.len(), 10);
+                assert!(
+                    runs.iter()
+                        .all(|run| Path::new(run["library_path"].as_str().unwrap())
+                            .ends_with(library))
+                );
+                assert_eq!(
+                    runs.iter()
+                        .filter(|run| run.get("pixel_comparison").is_some())
+                        .count(),
+                    usize::from(suffix == "wsi_rs")
+                );
+            }
         }
     }
 
