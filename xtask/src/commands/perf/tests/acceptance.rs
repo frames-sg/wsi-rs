@@ -171,6 +171,12 @@ fn openslide_acceptance_rejects_cross_host_or_unequal_cache_comparisons() {
     let error = evaluate_openslide_acceptance(&openslide, &wsi_rs)
         .expect_err("unequal decoded-cache budgets must not be compared");
     assert!(error.contains("cache_bytes"), "{error}");
+
+    let mut wsi_rs = engine_capture("wsi_rs", 5_000, 10_000, 15_000, 1_000);
+    wsi_rs["runs"][0]["schema_version"] = json!(wsi_rs_perf::WORKER_SCHEMA_VERSION);
+    let error = evaluate_openslide_acceptance(&openslide, &wsi_rs)
+        .expect_err("different worker protocols must not be compared");
+    assert!(error.contains("worker schema"), "{error}");
 }
 
 #[test]

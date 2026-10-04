@@ -11,8 +11,8 @@ use super::metadata::capture_summary;
 use super::process_metrics::annotate_run_resource_usage_typed;
 use super::schema::CaptureRun;
 use super::worker::{
-    cache_bytes, prepare_bench, prepare_pair, result_dir, run_bench, run_pixel_comparison,
-    BenchInvocation, BenchLibrary,
+    cache_bytes, prepare_bench, prepare_pair, previous_invocation, result_dir, run_bench,
+    run_pixel_comparison, BenchInvocation, BenchLibrary,
 };
 
 const DEFAULT_REPEAT_COUNT: u32 = 5;
@@ -58,13 +58,37 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
     let worker_matrix = requested_worker_matrix()?;
     let settings = capture_settings()?;
     let (wsi_rs, openslide) = prepare_pair()?;
+    let previous = previous_invocation(&wsi_rs)?;
     let mut wsi_rs_runs = Vec::new();
     let mut openslide_runs = Vec::new();
+    let mut previous_runs = Vec::new();
 
     for repeat in 0..repeats {
         let engine_order = paired_engine_order(repeat);
         for &workers in &worker_matrix.counts {
             for slide in &slides {
+                let mut capture_previous = || -> Result<(), String> {
+                    if let Some(invocation) = &previous {
+                        previous_runs.push(capture_run(
+                            BenchLibrary::WsiRs,
+                            invocation,
+                            &settings,
+                            RunSpec {
+                                slide,
+                                repeat,
+                                workers,
+                                engine_order: &[BenchLibrary::WsiRs],
+                                engine_position: 0,
+                            },
+                        )?);
+                    }
+                    Ok(())
+                };
+                // Reverse all three runs together, retaining the paired
+                // current/OpenSlide order recorded in their capture metadata.
+                if repeat % 2 != 0 {
+                    capture_previous()?;
+                }
                 for (engine_position, library) in engine_order.into_iter().enumerate() {
                     let invocation = match library {
                         BenchLibrary::WsiRs => &wsi_rs,
@@ -86,6 +110,9 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
                         BenchLibrary::WsiRs => wsi_rs_runs.push(run),
                         BenchLibrary::OpenSlide => openslide_runs.push(run),
                     }
+                }
+                if repeat % 2 == 0 {
+                    capture_previous()?;
                 }
             }
         }
@@ -126,7 +153,19 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
         &worker_matrix,
         &settings.planned_workloads,
         openslide_runs,
-    )
+    )?;
+    if previous.is_some() {
+        write_capture(
+            &format!("{label}-previous"),
+            BenchLibrary::WsiRs,
+            repeats,
+            &slides,
+            &worker_matrix,
+            &settings.planned_workloads,
+            previous_runs,
+        )?;
+    }
+    Ok(())
 }
 
 fn capture_single(args: Vec<String>, library: BenchLibrary) -> Result<(), String> {

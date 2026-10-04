@@ -99,6 +99,20 @@ fn read_checksum_includes_coordinates_and_argb_bytes() {
         digest(ReadSpec { x: 11, ..spec }, &[0x1122_3344, 0x5566_7788])
     );
     assert_ne!(first, digest(spec, &[0x1122_3344, 0x5566_7789]));
+
+    for len in [0, 1, 1023, 1024, 1025, 2048] {
+        let pixels: Vec<u32> = (0..len).map(|i| 0x1122_3344_u32.wrapping_mul(i)).collect();
+        let mut reference = Sha256::new();
+        reference.update(spec.x.to_le_bytes());
+        reference.update(spec.y.to_le_bytes());
+        reference.update(spec.level.to_le_bytes());
+        reference.update(spec.width.to_le_bytes());
+        reference.update(spec.height.to_le_bytes());
+        for pixel in &pixels {
+            reference.update(pixel.to_le_bytes());
+        }
+        assert_eq!(digest(spec, &pixels), format!("{:x}", reference.finalize()));
+    }
 }
 
 #[test]

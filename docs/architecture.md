@@ -185,15 +185,28 @@ other file.
 
 Before a release, `rc-preflight` compares three benchmark captures: OpenSlide,
 the previous wsi-rs release and the current code. Capture all three on the same
-machine with the same corpus, workloads, cache size and thread limits:
+machine with the same corpus, workloads, cache size and thread limits. Build
+the previous and current wsi-rs versions with the same Rust toolchain and
+release profile. When supplying a prebuilt library through
+`WSI_RS_BENCH_WSI_RS_LIBRARY`, check its build settings too; the capture's
+toolchain metadata describes the running environment, not that library's
+compiler.
+
+To capture the results:
 
 1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine, and
    `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda`.
-2. Capture OpenSlide and the current code with
-   `cargo xtask perf-capture-pair <label>`.
-3. Capture the previous release the same way.
+2. Set `WSI_RS_BENCH_PREVIOUS_LIBRARY` to the previous release's shim, then run
+   `cargo xtask perf-capture-pair <label>`. This interleaves all three libraries
+   for each sample, worker count and repeat, reversing their order on alternate
+   repeats. It writes `<label>-wsi_rs.json`, `<label>-openslide.json` and
+   `<label>-previous.json`.
+3. Without the previous-library setting, the command captures only the current
+   code and OpenSlide. `perf-capture` can still capture one library separately.
 4. Point `WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE` and
    `WSI_RS_RC_CURRENT_CAPTURE` at the three capture files.
 
 The gate fails if the current code is slower than allowed or if its pixels
 differ from OpenSlide beyond the corpus color tolerances.
+Worker schema 5 batches checksum updates without changing the checked bytes;
+recapture all engines together rather than mixing results from older workers.

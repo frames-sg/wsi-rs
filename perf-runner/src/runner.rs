@@ -18,7 +18,7 @@ use wsi_rs_test_support::openslide::{
     OpenSlide, OpenSlideApi, OpenSlideBounds, OpenSlideCache, OpenSlideLevel,
 };
 
-pub const WORKER_SCHEMA_VERSION: u32 = 4;
+pub const WORKER_SCHEMA_VERSION: u32 = 5;
 const OPEN_SAMPLE_COUNT: usize = 10;
 const ROUTE_TELEMETRY_PROPERTY: &str = "wsi-rs.internal.decode-route-telemetry";
 
@@ -599,7 +599,14 @@ fn hash_read(checksum: &mut Sha256, spec: ReadSpec, pixels: &[u32]) {
     checksum.update(spec.level.to_le_bytes());
     checksum.update(spec.width.to_le_bytes());
     checksum.update(spec.height.to_le_bytes());
-    for pixel in pixels {
+    // Preserve the little-endian byte stream while keeping verification from
+    // dominating CPU use and contending with other benchmark readers.
+    let (chunks, remainder) = pixels.as_chunks::<1024>();
+    for chunk in chunks {
+        let bytes = chunk.map(u32::to_le_bytes);
+        checksum.update(bytes.as_flattened());
+    }
+    for pixel in remainder {
         checksum.update(pixel.to_le_bytes());
     }
 }

@@ -430,6 +430,16 @@ pub(super) fn validate_comparison_context(first: &Value, second: &Value) -> Resu
         return Err("headline acceptance requires a portable release build".into());
     }
 
+    let worker_schema = first.runs.first().map(|run| run.schema_version);
+    if first
+        .runs
+        .iter()
+        .chain(&second.runs)
+        .any(|run| Some(run.schema_version) != worker_schema)
+    {
+        return Err("capture worker schema versions differ; recapture with the same worker".into());
+    }
+
     let first_cache = (first.metadata.benchmark.cache_bytes > 0)
         .then_some(first.metadata.benchmark.cache_bytes)
         .ok_or_else(|| "first capture missing positive cache_bytes".to_string())?;

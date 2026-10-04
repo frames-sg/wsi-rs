@@ -9,6 +9,7 @@ const OPENSLIDE_LIBRARY_ENV: &str = "WSI_RS_OPENSLIDE_LIBRARY";
 const OPENSLIDE_LIBRARY_FALLBACK_ENV: &str = "OPENSLIDE_LIB_PATH";
 const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
 const WSI_RS_LIBRARY_ENV: &str = "WSI_RS_BENCH_WSI_RS_LIBRARY";
+const PREVIOUS_LIBRARY_ENV: &str = "WSI_RS_BENCH_PREVIOUS_LIBRARY";
 pub(super) const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
 /// wsi-rs 0.6 shims read this per-handle JP2K pool width and otherwise use
 /// every core, ignoring RAYON_NUM_THREADS. Later shims ignore it.
@@ -237,6 +238,19 @@ pub(super) fn prepare_pair() -> Result<(BenchInvocation, BenchInvocation), Strin
         invocation(BenchLibrary::WsiRs, &target_dir)?,
         invocation(BenchLibrary::OpenSlide, &target_dir)?,
     ))
+}
+
+pub(super) fn previous_invocation(
+    current: &BenchInvocation,
+) -> Result<Option<BenchInvocation>, String> {
+    std::env::var_os(PREVIOUS_LIBRARY_ENV)
+        .map(|path| {
+            Ok(BenchInvocation {
+                worker: current.worker.clone(),
+                library: exact_library_path(Path::new(&path), "previous wsi-rs OpenSlide shim")?,
+            })
+        })
+        .transpose()
 }
 
 fn invocation(library: BenchLibrary, target_dir: &Path) -> Result<BenchInvocation, String> {
