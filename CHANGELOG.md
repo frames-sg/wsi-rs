@@ -20,6 +20,9 @@
 
 ### Fixed
 
+- The OpenSlide shim composes small MIRAX reads in one pass and writes cached
+  regular-grid regions directly into the caller's pixel buffer.
+- XML attribute parsing has less overhead when opening Ventana BIF slides.
 - Malformed DICOM file-meta headers using `SV` or `UV` no longer bypass length
   checks and trigger oversized allocations.
 - Concurrent single-tile reads of one DICOM slide no longer queue behind each

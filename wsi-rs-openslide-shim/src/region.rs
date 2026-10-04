@@ -19,6 +19,19 @@ pub(crate) fn read_region_into(
     }
     let within_limits = pixels <= slide.limits().region_pixels()
         && pixels <= slide.limits().region_rgba_bytes() / 4;
+    if within_limits
+        && matches!(level.tile_layout, TileLayout::Regular { .. })
+        && offset == (0.0, 0.0)
+        && slide.read_cached_region_argb32_into(request, offset, destination)?
+    {
+        clear_outside_level(
+            level.dimensions,
+            request.origin_px,
+            request.size_px,
+            destination,
+        );
+        return Ok(());
+    }
     let irregular = matches!(level.tile_layout, TileLayout::Irregular { .. });
     let mut bandable = !irregular;
     if irregular && within_limits {
@@ -55,9 +68,15 @@ pub(crate) fn read_region_into(
             });
         }
     }
-    // Keep eligible irregular composition buffers within 32 KiB allocations.
+    // Small viewer reads need one composition. Splitting them into short
+    // bands repeats tile planning and can probe source metadata for empty
+    // bands in sparse levels. Larger irregular reads retain 32 KiB buffers.
     // The complete clip is retained when it affects Pixman's sampling.
-    let band_pixels: u64 = if irregular { 8 * 1024 } else { 256 * 1024 };
+    let band_pixels: u64 = if irregular && pixels > 64 * 1024 {
+        8 * 1024
+    } else {
+        256 * 1024
+    };
     // Let Slide report its ordinary validation error for an oversized request;
     // splitting must not bypass the limit on the complete output.
     let band_height = if !within_limits || !bandable {

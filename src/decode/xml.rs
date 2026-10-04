@@ -1,7 +1,7 @@
 use crate::error::WsiError;
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 const MAX_XML_INPUT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_XML_DEPTH: u32 = 128;
@@ -56,7 +56,7 @@ impl XmlBudget {
 #[derive(Debug, Clone)]
 pub(crate) struct XmlNode {
     pub tag: String,
-    pub attributes: HashMap<String, String>,
+    pub attributes: BTreeMap<String, String>,
     pub text: Option<String>,
     pub children: Vec<XmlNode>,
 }
@@ -117,7 +117,7 @@ fn make_empty_node(
 ) -> Result<XmlNode, WsiError> {
     budget.add_node()?;
     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-    let mut attributes = HashMap::new();
+    let mut attributes = BTreeMap::new();
     let mut attribute_count = 0usize;
     for attr in e.attributes() {
         attribute_count += 1;
@@ -157,7 +157,7 @@ fn parse_node_recursive(
     }
     budget.add_node()?;
     let tag = String::from_utf8_lossy(start.name().as_ref()).into_owned();
-    let mut attributes = HashMap::new();
+    let mut attributes = BTreeMap::new();
     let mut attribute_count = 0usize;
     for attr in start.attributes() {
         attribute_count += 1;

@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::registry::Slide;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn minimal_dataset(scene_count: usize) -> Dataset {
@@ -254,7 +255,7 @@ fn parse_dimension_extracts_resolution_index() {
     let interp = LeicaInterpreter;
     let node = xml::XmlNode {
         tag: "dimension".into(),
-        attributes: HashMap::from([
+        attributes: BTreeMap::from([
             ("ifd".into(), "2".into()),
             ("sizeX".into(), "4096".into()),
             ("sizeY".into(), "3072".into()),
@@ -279,19 +280,19 @@ fn parse_dimension_extracts_resolution_index() {
 fn parse_channel_settings_extracts_names_and_colors() {
     let image = xml::XmlNode {
         tag: "image".into(),
-        attributes: HashMap::new(),
+        attributes: BTreeMap::new(),
         text: None,
         children: vec![xml::XmlNode {
             tag: "scanSettings".into(),
-            attributes: HashMap::new(),
+            attributes: BTreeMap::new(),
             text: None,
             children: vec![xml::XmlNode {
                 tag: "channelSettings".into(),
-                attributes: HashMap::new(),
+                attributes: BTreeMap::new(),
                 text: None,
                 children: vec![xml::XmlNode {
                     tag: "channel".into(),
-                    attributes: HashMap::from([
+                    attributes: BTreeMap::from([
                         ("index".into(), "2".into()),
                         ("name".into(), "TX2|Empty".into()),
                         ("rgb".into(), "#ff0000".into()),
@@ -315,19 +316,19 @@ fn macro_detection_uses_collection_geometry() {
     let interp = LeicaInterpreter;
     let image = xml::XmlNode {
         tag: "image".into(),
-        attributes: HashMap::new(),
+        attributes: BTreeMap::new(),
         text: None,
         children: vec![
             xml::XmlNode {
                 tag: "pixels".into(),
-                attributes: HashMap::from([
+                attributes: BTreeMap::from([
                     ("sizeX".into(), "100".into()),
                     ("sizeY".into(), "200".into()),
                 ]),
                 text: None,
                 children: vec![xml::XmlNode {
                     tag: "dimension".into(),
-                    attributes: HashMap::from([
+                    attributes: BTreeMap::from([
                         ("ifd".into(), "0".into()),
                         ("sizeX".into(), "100".into()),
                         ("sizeY".into(), "200".into()),
@@ -339,7 +340,7 @@ fn macro_detection_uses_collection_geometry() {
             },
             xml::XmlNode {
                 tag: "view".into(),
-                attributes: HashMap::from([
+                attributes: BTreeMap::from([
                     ("sizeX".into(), "1000".into()),
                     ("sizeY".into(), "2000".into()),
                     ("offsetX".into(), "0".into()),
@@ -350,15 +351,15 @@ fn macro_detection_uses_collection_geometry() {
             },
             xml::XmlNode {
                 tag: "scanSettings".into(),
-                attributes: HashMap::new(),
+                attributes: BTreeMap::new(),
                 text: None,
                 children: vec![xml::XmlNode {
                     tag: "illuminationSettings".into(),
-                    attributes: HashMap::new(),
+                    attributes: BTreeMap::new(),
                     text: None,
                     children: vec![xml::XmlNode {
                         tag: "illuminationSource".into(),
-                        attributes: HashMap::new(),
+                        attributes: BTreeMap::new(),
                         text: Some("brightfield".into()),
                         children: vec![],
                     }],
@@ -379,7 +380,7 @@ fn public_properties_use_axis_specific_cpp() {
     let interp = LeicaInterpreter;
     let collection = xml::XmlNode {
         tag: "collection".into(),
-        attributes: HashMap::new(),
+        attributes: BTreeMap::new(),
         text: None,
         children: vec![],
     };

@@ -717,62 +717,66 @@ impl SlideReader for IrregularGridSource {
 }
 
 #[test]
-fn cached_dense_irregular_regions_write_argb32_like_the_composed_path() {
-    let slide = Slide::from_source(
-        Box::new(IrregularGridSource::new(ColorSpace::Rgb, true)),
-        Arc::new(TileCache::new(1 << 20)),
-    );
-    let dense = RegionRequest::new(0usize, 0usize, 0u32, (5, 9), (70, 50));
-    let mut pixels = vec![u32::MAX; 70 * 50];
+fn cached_dense_regions_write_argb32_like_the_composed_path() {
+    for irregular in [false, true] {
+        let slide = Slide::from_source(
+            Box::new(IrregularGridSource::new(ColorSpace::Rgb, irregular)),
+            Arc::new(TileCache::new(1 << 20)),
+        );
+        let dense = RegionRequest::new(0usize, 0usize, 0u32, (5, 9), (70, 50));
+        let mut pixels = vec![u32::MAX; 70 * 50];
 
-    // Uncached tiles need the ordinary path, which leaves pixels untouched.
-    assert!(!slide
-        .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut pixels)
-        .unwrap());
-    assert!(pixels.iter().all(|&pixel| pixel == u32::MAX));
-
-    // Uncached composition keeps coverage as RGBA; dense coverage is opaque.
-    let composed = slide.read_region_subpixel(&dense, (0.0, 0.0)).unwrap();
-    let channels = usize::from(composed.channels());
-    let expected: Vec<u32> = composed
-        .as_u8()
-        .unwrap()
-        .chunks_exact(channels)
-        .map(|pixel| {
-            assert!(channels == 3 || pixel[3] == 255);
-            0xff00_0000
-                | (u32::from(pixel[0]) << 16)
-                | (u32::from(pixel[1]) << 8)
-                | u32::from(pixel[2])
-        })
-        .collect();
-    assert!(slide
-        .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut pixels)
-        .unwrap());
-    assert_eq!(pixels, expected);
-
-    let mut short = vec![0; 70 * 50 - 1];
-    assert!(slide
-        .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut short)
-        .is_err());
-
-    // A gap or a fractional placement keeps the coverage-preserving path.
-    let gap = RegionRequest::new(0usize, 0usize, 0u32, (80, 80), (40, 40));
-    for (request, offset) in [(&gap, (0.0, 0.0)), (&dense, (0.25, 0.0))] {
-        slide.read_region_subpixel(request, offset).unwrap();
-        let mut untouched = vec![u32::MAX; request.size_px.0 as usize * request.size_px.1 as usize];
+        // Uncached tiles need the ordinary path, which leaves pixels untouched.
         assert!(!slide
-            .read_cached_region_argb32_into(request, offset, &mut untouched)
+            .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut pixels)
             .unwrap());
-        assert!(untouched.iter().all(|&pixel| pixel == u32::MAX));
+        assert!(pixels.iter().all(|&pixel| pixel == u32::MAX));
+
+        // Uncached composition keeps coverage as RGBA; dense coverage is opaque.
+        let composed = slide.read_region_subpixel(&dense, (0.0, 0.0)).unwrap();
+        let channels = usize::from(composed.channels());
+        let expected: Vec<u32> = composed
+            .as_u8()
+            .unwrap()
+            .chunks_exact(channels)
+            .map(|pixel| {
+                assert!(channels == 3 || pixel[3] == 255);
+                0xff00_0000
+                    | (u32::from(pixel[0]) << 16)
+                    | (u32::from(pixel[1]) << 8)
+                    | u32::from(pixel[2])
+            })
+            .collect();
+        assert!(slide
+            .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut pixels)
+            .unwrap());
+        assert_eq!(pixels, expected);
+
+        let mut short = vec![0; 70 * 50 - 1];
+        assert!(slide
+            .read_cached_region_argb32_into(&dense, (0.0, 0.0), &mut short)
+            .is_err());
+
+        // A gap or a fractional placement keeps the coverage-preserving path.
+        let gap_origin = if irregular { (80, 80) } else { (100, 100) };
+        let gap = RegionRequest::new(0usize, 0usize, 0u32, gap_origin, (40, 40));
+        for (request, offset) in [(&gap, (0.0, 0.0)), (&dense, (0.25, 0.0))] {
+            slide.read_region_subpixel(request, offset).unwrap();
+            let mut untouched =
+                vec![u32::MAX; request.size_px.0 as usize * request.size_px.1 as usize];
+            assert!(!slide
+                .read_cached_region_argb32_into(request, offset, &mut untouched)
+                .unwrap());
+            assert!(untouched.iter().all(|&pixel| pixel == u32::MAX));
+        }
     }
 }
 
 #[test]
-fn cached_argb32_regions_decline_regular_levels_and_alpha_tiles() {
-    for (color_space, irregular) in [(ColorSpace::Rgb, false), (ColorSpace::Rgba, true)] {
+fn cached_argb32_regions_decline_alpha_tiles() {
+    for irregular in [false, true] {
         let slide = Slide::from_source(
-            Box::new(IrregularGridSource::new(color_space, irregular)),
+            Box::new(IrregularGridSource::new(ColorSpace::Rgba, irregular)),
             Arc::new(TileCache::new(1 << 20)),
         );
         let request = RegionRequest::new(0usize, 0usize, 0u32, (5, 9), (70, 50));

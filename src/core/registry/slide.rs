@@ -420,7 +420,7 @@ impl Slide {
         Ok(tile)
     }
 
-    /// Writes a cached irregular-level region straight into premultiplied
+    /// Writes a cached tiled region straight into premultiplied
     /// ARGB32 pixels, as [`Self::read_region_subpixel`] followed by an ARGB32
     /// conversion would. Returns `Ok(false)`, leaving `destination` untouched,
     /// unless every tile is cached, opaque 8-bit RGB and densely covers the
@@ -438,15 +438,20 @@ impl Slide {
                 offset_px.0, offset_px.1
             )));
         }
-        let irregular = self
+        let tiled = self
             .source
             .dataset()
             .scenes
             .get(req.scene.get())
             .and_then(|scene| scene.series.get(req.series.get()))
             .and_then(|series| series.levels.get(req.level.get() as usize))
-            .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
-        if !irregular {
+            .is_some_and(|level| {
+                matches!(
+                    level.tile_layout,
+                    TileLayout::Regular { .. } | TileLayout::Irregular { .. }
+                )
+            });
+        if !tiled {
             return Ok(false);
         }
         self.check_region_output(req)?;
