@@ -49,7 +49,9 @@
   can share a bounded batch instead of each reserving the maximum input size.
 - MIRAX source batches decode on the caller with help from the shared CPU
   pool. JPEG tiles with known dimensions use J2K's direct output API and
-  reusable decode scratch.
+  reusable decode scratch, including TIFF tiles whose color hints match the
+  JPEG header. Larger MIRAX reads use wider bounded row bands to reduce
+  repeated tile planning.
 - The first GPU calibration read no longer includes Metal kernel compilation,
   which could make a decode route settle on the CPU.
 

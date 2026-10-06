@@ -225,9 +225,21 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_height,
         force_dimensions,
     )?;
-    // Known tile sizes let the codec parse and lease its cached plan once.
+    // Container color hints often repeat the JPEG header. Confirm that before
+    // using the default direct-output path and its reusable decode scratch.
+    let direct_color = if color_transform == J2kColorTransform::Auto {
+        true
+    } else {
+        let view =
+            JpegView::parse(input.as_ref()).map_err(|err| WsiError::Jpeg(err.to_string()))?;
+        effective_jpeg_color_transform(
+            view.info().sampling.len(),
+            view.info().color_space,
+            color_transform,
+        ) == J2kColorTransform::Auto
+    };
     // Mismatched container sizes retain the owned-output path below.
-    if color_transform == J2kColorTransform::Auto {
+    if direct_color {
         if let Some(decoded) =
             try_decode_known_jpeg_tile(input.as_ref(), expected_width, expected_height)
         {

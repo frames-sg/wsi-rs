@@ -3,8 +3,8 @@ use wsi_rs::{ColorSpace, Level, RegionRequest, Slide, TileEntry, TileHit, TileLa
 
 /// Irregular reads up to one 256x256 viewer tile are composed in one pass.
 const SINGLE_PASS_IRREGULAR_PIXELS: u64 = 256 * 256;
-/// Larger irregular reads use 8,192-pixel (32 KiB ARGB) bands.
-const IRREGULAR_BAND_PIXELS: u64 = 8 * 1024;
+/// Larger irregular reads use 32,768-pixel (128 KiB ARGB) bands.
+const IRREGULAR_BAND_PIXELS: u64 = 32 * 1024;
 /// Other reads use 262,144-pixel (1 MiB ARGB) bands.
 const BAND_PIXELS: u64 = 256 * 1024;
 
