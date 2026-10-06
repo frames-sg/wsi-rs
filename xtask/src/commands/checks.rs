@@ -36,7 +36,7 @@ pub(super) fn rc_preflight() -> Result<(), String> {
     validate()?;
     release_test()?;
     parity_corpus_test()?;
-    coverage()?;
+    coverage_with_corpus(true)?;
     performance_preflight()?;
     package()
 }
@@ -455,11 +455,17 @@ const COVERAGE_REPORT_ARGS: &[&str] = &[
 ];
 
 pub(super) fn coverage() -> Result<(), String> {
+    coverage_with_corpus(
+        std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()),
+    )
+}
+
+fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {
     // Do not narrow this to `--lib --tests`: xtask, the OpenSlide shim, and the
     // performance worker all contain production binary code with unit tests.
     run_cargo(COVERAGE_BASE_ARGS)?;
 
-    if std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()) {
+    if include_corpus {
         let report = [
             "--no-clean",
             "--lcov",
