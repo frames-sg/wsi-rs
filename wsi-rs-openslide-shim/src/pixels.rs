@@ -22,11 +22,8 @@ pub(crate) fn tile_to_premultiplied_argb_into(
     if let Some(bytes) = tile.as_u8() {
         match (tile.color_space(), tile.channels(), tile.layout()) {
             (ColorSpace::Rgb, 3, CpuTileLayout::Interleaved) => {
-                for (dest, pixel) in argb.iter_mut().zip(bytes.as_chunks::<3>().0) {
-                    *dest = 0xff00_0000
-                        | (u32::from(pixel[0]) << 16)
-                        | (u32::from(pixel[1]) << 8)
-                        | u32::from(pixel[2]);
+                for (dest, &[r, g, b]) in argb.iter_mut().zip(bytes.as_chunks::<3>().0) {
+                    *dest = opaque_argb(r, g, b);
                 }
                 return Ok(());
             }
@@ -36,10 +33,7 @@ pub(crate) fn tile_to_premultiplied_argb_into(
             }
             (ColorSpace::Grayscale, 1, _) => {
                 for (dest, &value) in argb.iter_mut().zip(bytes) {
-                    *dest = 0xff00_0000
-                        | (u32::from(value) << 16)
-                        | (u32::from(value) << 8)
-                        | u32::from(value);
+                    *dest = opaque_argb(value, value, value);
                 }
                 return Ok(());
             }
@@ -64,16 +58,11 @@ fn tile_pixel_count(tile: &CpuTile) -> Result<usize, WsiError> {
         })
 }
 
+fn opaque_argb(r: u8, g: u8, b: u8) -> u32 {
+    0xff00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
 fn convert_rgba_to_premultiplied_argb(rgba: &[u8], argb: &mut [u32]) {
-    if rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255) {
-        for (dest, pixel) in argb.iter_mut().zip(rgba.as_chunks::<4>().0) {
-            *dest = 0xff00_0000
-                | (u32::from(pixel[0]) << 16)
-                | (u32::from(pixel[1]) << 8)
-                | u32::from(pixel[2]);
-        }
-        return;
-    }
     for (dest, pixel) in argb.iter_mut().zip(rgba.as_chunks::<4>().0) {
         let a = pixel[3];
         let premultiply = |channel: u8| -> u8 {

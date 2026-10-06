@@ -44,7 +44,7 @@ pub(super) fn downloaded_bytes_to_cpu_tile(
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|sample| u16::from_ne_bytes([sample[0], sample[1]]))
+                .map(|sample| u16::from_ne_bytes(*sample))
                 .collect();
             CpuTileData::u16(samples)
         }

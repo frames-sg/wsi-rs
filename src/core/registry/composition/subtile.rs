@@ -89,14 +89,7 @@ pub(crate) fn cairo_subtile_surface_u8(
             .collect();
         return CpuTile::from_u8_interleaved(size.0, size.1, 3, ColorSpace::Rgb, rgb);
     }
-    for pixel in premultiplied.as_chunks_mut::<4>().0 {
-        let alpha = u16::from(pixel[3]);
-        for channel in &mut pixel[..3] {
-            *channel = (u16::from(*channel) * 255 + alpha / 2)
-                .checked_div(alpha)
-                .map_or(0, |straight| straight.min(255) as u8);
-        }
-    }
+    super::fractional_u8::unpremultiply_rgba(&mut premultiplied);
     CpuTile::from_u8_interleaved(size.0, size.1, 4, ColorSpace::Rgba, premultiplied)
 }
 

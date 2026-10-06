@@ -11,7 +11,7 @@ use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::frame_index::{
     self, group_frame_read_spans, preflight_compressed_frame_with_limit,
     preflight_compressed_lengths_with_limit, reopen_dicom_object,
-    scan_encapsulated_frames_controlled, DicomEncapsulatedFrames,
+    scan_encapsulated_frames_controlled, DicomEncapsulatedFrames, DicomFrameReadSpan,
 };
 use crate::formats::dicom::metadata::optional_u32;
 
@@ -277,35 +277,86 @@ impl DicomImage {
         Ok(results)
     }
 
-    /// Encoded bytes a read of `frame_index` holds, when known without I/O:
-    /// the native frame size, or the indexed fragment lengths once the lazy
-    /// frame index exists. Every frame read takes the index lock briefly, so
-    /// this waits for it rather than falling back under concurrency. The only
-    /// long hold is the first index build, which the planned read needs anyway.
+    /// Encoded bytes a single-frame read of `frame_index` holds, when known
+    /// without I/O: the native frame size, or the indexed fragment lengths once
+    /// the lazy frame index exists.
     pub(in super::super) fn known_encoded_frame_bytes(&self, frame_index: u32) -> Option<u64> {
         if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+            return Some(self.native_frame_bytes());
+        }
+        let frames = self.indexed_encapsulated_frames()?;
+        let range = frames.frame_ranges.get(frame_index as usize)?;
+        Some(fragment_payload_bytes(frames.fragments.get(range.clone())?))
+    }
+
+    /// Encoded bytes a batch read of `frame_indices` holds, when known without
+    /// I/O. Each frame, capped at `frame_cap`, stays alive until decode, and
+    /// coalesced reads also hold the largest read window, Item headers and gaps
+    /// between frames included, while frames are copied out of it.
+    pub(in super::super) fn known_batch_read_bytes(
+        &self,
+        frame_indices: &[u32],
+        frame_cap: u64,
+    ) -> Option<u64> {
+        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+            // Native frames are read one at a time without a shared window.
+            let frames = u64::try_from(frame_indices.len()).unwrap_or(u64::MAX);
             return Some(
-                u64::from(self.tile_width)
-                    .saturating_mul(u64::from(self.tile_height))
-                    .saturating_mul(u64::from(self.samples_per_pixel))
-                    .saturating_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8)),
+                self.native_frame_bytes()
+                    .min(frame_cap)
+                    .saturating_mul(frames),
             );
         }
-        let frames = self
-            .frame_store
+        let frames = self.indexed_encapsulated_frames()?;
+        let mut retained = 0_u64;
+        let mut spans = Vec::with_capacity(frame_indices.len());
+        for &frame_index in frame_indices {
+            let frame_range = frames.frame_ranges.get(frame_index as usize)?.clone();
+            let fragments = frames.fragments.get(frame_range.clone())?;
+            retained = retained.saturating_add(fragment_payload_bytes(fragments).min(frame_cap));
+            let start = fragments.iter().map(|fragment| fragment.item_offset).min();
+            let end = fragments
+                .iter()
+                .map(|fragment| {
+                    fragment
+                        .payload_offset
+                        .saturating_add(u64::from(fragment.len))
+                })
+                .max();
+            if let (Some(start), Some(end)) = (start, end) {
+                spans.push(DicomFrameReadSpan {
+                    frame_index,
+                    frame_range,
+                    start,
+                    end,
+                });
+            }
+        }
+        let window = group_frame_read_spans(spans)
+            .iter()
+            .map(|group| group.end.saturating_sub(group.start))
+            .max()
+            .unwrap_or(0);
+        Some(retained.saturating_add(window))
+    }
+
+    fn native_frame_bytes(&self) -> u64 {
+        u64::from(self.tile_width)
+            .saturating_mul(u64::from(self.tile_height))
+            .saturating_mul(u64::from(self.samples_per_pixel))
+            .saturating_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8))
+    }
+
+    /// The lazy frame index, once built. Every frame read takes this lock
+    /// briefly, so callers wait for it rather than falling back under
+    /// concurrency; the only long hold is the first index build, which the
+    /// planned read needs anyway.
+    fn indexed_encapsulated_frames(&self) -> Option<Arc<DicomEncapsulatedFrames>> {
+        self.frame_store
             .encapsulated_frames
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()?;
-        let range = frames.frame_ranges.get(frame_index as usize)?;
-        Some(
-            frames
-                .fragments
-                .get(range.clone())?
-                .iter()
-                .map(|fragment| u64::from(fragment.len))
-                .sum(),
-        )
+            .clone()
     }
 
     pub(in super::super) fn ensure_encapsulated_frames(
@@ -399,4 +450,13 @@ impl DicomImage {
         }
         Ok(frames)
     }
+}
+
+fn fragment_payload_bytes(
+    fragments: &[crate::formats::dicom::frame_index::model::DicomFragmentRef],
+) -> u64 {
+    fragments
+        .iter()
+        .map(|fragment| u64::from(fragment.len))
+        .sum()
 }

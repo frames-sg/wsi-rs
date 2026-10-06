@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       artifacts_only:
-        description: "Build C artifacts only; source preflight must pass separately"
+        description: "Build C artifacts only, reusing the source preflight named below"
         type: boolean
         default: false
+      source_preflight_run_id:
+        description: "With artifacts_only: ID of an RC Preflight run whose source preflight passed on this commit"
+        type: string
+        default: ""
+      performance_release_tag:
+        description: "Release containing current.json.gz, previous.json.gz, and openslide.json.gz for source preflight"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -30,6 +38,37 @@ jobs:
           path: wsi-rs
           fetch-depth: 0
           persist-credentials: false
+      - name: Load reviewed performance captures for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PERFORMANCE_RELEASE_TAG: ${{ inputs.performance_release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PERFORMANCE_RELEASE_TAG" || {
+            echo "::error::source preflight requires performance_release_tag"
+            exit 1
+          }
+          capture_dir="$RUNNER_TEMP/release-performance"
+          mkdir -p "$capture_dir"
+          gh release download "$PERFORMANCE_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" --dir "$capture_dir" \
+            --pattern current.json.gz --pattern previous.json.gz --pattern openslide.json.gz
+          gzip -d "$capture_dir/current.json.gz" "$capture_dir/previous.json.gz" "$capture_dir/openslide.json.gz"
+          python3 - "$capture_dir/current.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              capture = json.load(handle)
+          source = capture["metadata"]["git"]
+          if source["commit"] != os.environ["GITHUB_SHA"] or source["dirty"]:
+              raise SystemExit("current performance capture must measure this commit from a clean checkout")
+          PY
+          printf 'WSI_RS_RC_CURRENT_CAPTURE=%s/current.json\n' "$capture_dir" >> "$GITHUB_ENV"
+          printf 'WSI_RS_RC_PREVIOUS_CAPTURE=%s/previous.json\n' "$capture_dir" >> "$GITHUB_ENV"
+          printf 'WSI_RS_RC_OPENSLIDE_CAPTURE=%s/openslide.json\n' "$capture_dir" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
           toolchain: nightly-2026-08-13
@@ -46,8 +85,43 @@ jobs:
       - run: cargo xtask rc-preflight
         working-directory: wsi-rs
 
+  verify-source-preflight:
+    if: ${{ inputs.artifacts_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Require a passing source preflight for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.source_preflight_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::artifacts_only requires source_preflight_run_id"
+            exit 1
+          fi
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+          if [[ "$(jq -r .path <<<"$run")" != ".github/workflows/rc-preflight.yml" ]]; then
+            echo "::error::run $RUN_ID is not an RC Preflight run"
+            exit 1
+          fi
+          if [[ "$(jq -r .head_sha <<<"$run")" != "$GITHUB_SHA" ]]; then
+            echo "::error::run $RUN_ID tested a different commit"
+            exit 1
+          fi
+          passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name | startswith("source-preflight"))]
+                  | length > 0 and all(.conclusion == "success")')"
+          if [[ "$passed" != "true" ]]; then
+            echo "::error::run $RUN_ID has no passing source-preflight jobs"
+            exit 1
+          fi
+
   c-artifacts:
     name: C artifact (${{ matrix.target }})
+    needs: verify-source-preflight
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.verify-source-preflight.result) }}
     strategy:
       fail-fast: false
       matrix:

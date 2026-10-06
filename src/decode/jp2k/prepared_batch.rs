@@ -181,16 +181,16 @@ impl PreparedJp2kBatch {
         &self,
         sessions: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        self.jobs
-            .iter()
-            .map(|job| {
-                super::cuda::decode_prepared_jp2k_cuda(
-                    &job.borrowed(BackendRequest::Cuda),
-                    sessions,
-                )?
-                .download_cpu()
-            })
-            .collect()
+        super::cuda::decode_prepared_jobs(
+            self.jobs
+                .iter()
+                .map(|job| Ok(job.borrowed(BackendRequest::Cuda)))
+                .collect(),
+            sessions,
+        )
+        .into_iter()
+        .map(|tile| tile?.download_cpu())
+        .collect()
     }
 }
 

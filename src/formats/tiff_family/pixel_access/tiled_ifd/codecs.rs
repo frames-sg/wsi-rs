@@ -299,8 +299,8 @@ impl TiffPixelReader {
                     .0
                     .iter()
                     .map(|c| match endian {
-                        Endian::Little => u16::from_le_bytes([c[0], c[1]]),
-                        Endian::Big => u16::from_be_bytes([c[0], c[1]]),
+                        Endian::Little => u16::from_le_bytes(*c),
+                        Endian::Big => u16::from_be_bytes(*c),
                     })
                     .collect();
                 // MinIsWhite: invert
@@ -317,20 +317,15 @@ impl TiffPixelReader {
                     .0
                     .iter()
                     .map(|c| match endian {
-                        Endian::Little => f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
-                        Endian::Big => f32::from_be_bytes([c[0], c[1], c[2], c[3]]),
+                        Endian::Little => f32::from_le_bytes(*c),
+                        Endian::Big => f32::from_be_bytes(*c),
                     })
                     .collect();
                 CpuTileData::f32(samples)
             }
         };
 
-        // After MinIsWhite inversion, report as standard Grayscale
-        // (the inversion already happened in the sample data)
-        if effective_photometric == 0 && color_space == ColorSpace::Grayscale {
-            // Already inverted above; color_space stays Grayscale
-        }
-
+        // MinIsWhite samples were inverted above, so they report as Grayscale.
         Ok(CpuTile {
             width,
             height,

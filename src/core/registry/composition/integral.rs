@@ -332,6 +332,45 @@ pub(super) fn compose_dense_integral_rgb_argb32(
     Ok(true)
 }
 
+/// SATURATE-paints an opaque interleaved RGB8 tile at integral position `dest`
+/// into premultiplied RGBA output of size `output`. Integral opaque SATURATE
+/// needs only one RGBA image: covered pixels keep the first painter's color.
+pub(super) fn blit_integral_rgb_saturating_rgba(
+    out: &mut [u8],
+    output: (u32, u32),
+    source: &[u8],
+    tile: &CpuTile,
+    (x, y): (i64, i64),
+) {
+    let x0 = x.max(0);
+    let y0 = y.max(0);
+    let x1 = (x + i64::from(tile.width)).min(i64::from(output.0));
+    let y1 = (y + i64::from(tile.height)).min(i64::from(output.1));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let count = (x1 - x0) as usize;
+    for row in y0..y1 {
+        let target = (row as usize * output.0 as usize + x0 as usize) * 4;
+        let start = ((row - y) as usize * tile.width as usize + (x0 - x) as usize) * 3;
+        let row = &mut out[target..target + count * 4];
+        let source = source[start..start + count * 3].as_chunks::<3>().0;
+        if row.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
+            // Most tile rows have no overlap. Keep the RGB-to-RGBA loop free
+            // of per-pixel branches.
+            for (target, &[r, g, b]) in row.as_chunks_mut::<4>().0.iter_mut().zip(source) {
+                *target = [r, g, b, 255];
+            }
+        } else {
+            for (target, &[r, g, b]) in row.as_chunks_mut::<4>().0.iter_mut().zip(source) {
+                if target[3] == 0 {
+                    *target = [r, g, b, 255];
+                }
+            }
+        }
+    }
+}
+
 fn rgb_to_opaque_argb32(rgb: &[u8], argb: &mut [u32]) {
     // Whole-pixel arrays carry no bounds checks, so the loop vectorizes.
     let (pixels, _) = rgb.as_chunks::<3>();

@@ -89,6 +89,10 @@ impl CudaDeviceStorage {
     }
 
     /// Return the CUDA device pointer for the resident backing buffer.
+    ///
+    /// Retain this storage or a clone until every stream using the pointer has
+    /// finished. Dropping the last owner can return the allocation to J2K's pool
+    /// for immediate reuse without synchronizing those consumer streams.
     pub fn device_ptr(&self) -> u64 {
         self.surface
             .cuda_surface()

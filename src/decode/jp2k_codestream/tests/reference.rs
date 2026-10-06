@@ -366,7 +366,7 @@ fn parse_qcd(segment: &[u8]) -> Result<Jp2kQuantizationInfo, WsiError> {
                 .0
                 .iter()
                 .map(|chunk| {
-                    let packed = u16::from_be_bytes([chunk[0], chunk[1]]);
+                    let packed = u16::from_be_bytes(*chunk);
                     Jp2kQuantStep {
                         exponent: (packed >> 11) as u8,
                         mantissa: packed & 0x07FF,

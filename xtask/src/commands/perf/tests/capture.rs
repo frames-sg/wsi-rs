@@ -2,18 +2,32 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn paired_engine_order_alternates_across_repeats() {
+fn engine_order_alternates_across_repeats_including_the_previous_release() {
+    let pair = [CaptureEngine::WsiRs, CaptureEngine::OpenSlide];
+    assert_eq!(alternate_order(&pair, 0), pair);
     assert_eq!(
-        paired_engine_order(0),
-        [BenchLibrary::WsiRs, BenchLibrary::OpenSlide]
+        alternate_order(&pair, 1),
+        [CaptureEngine::OpenSlide, CaptureEngine::WsiRs]
+    );
+    assert_eq!(alternate_order(&pair, 2), pair);
+
+    let triple = [
+        CaptureEngine::WsiRs,
+        CaptureEngine::OpenSlide,
+        CaptureEngine::PreviousRelease,
+    ];
+    assert_eq!(alternate_order(&triple, 0), triple);
+    assert_eq!(
+        alternate_order(&triple, 1),
+        [
+            CaptureEngine::PreviousRelease,
+            CaptureEngine::OpenSlide,
+            CaptureEngine::WsiRs,
+        ]
     );
     assert_eq!(
-        paired_engine_order(1),
-        [BenchLibrary::OpenSlide, BenchLibrary::WsiRs]
-    );
-    assert_eq!(
-        paired_engine_order(2),
-        [BenchLibrary::WsiRs, BenchLibrary::OpenSlide]
+        triple.map(CaptureEngine::name),
+        ["wsi_rs", "openslide", PREVIOUS_RELEASE_ENGINE]
     );
 }
 
@@ -83,7 +97,7 @@ fn run_context_rejects_non_objects_and_worker_mismatches() {
         benchmark_group: "aperio/jpeg".into(),
         manifest_sha256: None,
     };
-    let order = [BenchLibrary::WsiRs];
+    let order = ["wsi_rs"];
     assert!(annotate_run_context(
         &mut json!(null),
         json!({"enforced": true}),
@@ -127,7 +141,7 @@ fn run_context_records_manifest_identity_worker_and_engine_order() {
         manifest_sha256: Some("manifest-hash".into()),
     };
     let mut run = json!({"worker_count": 2});
-    let order = paired_engine_order(1);
+    let order = ["openslide", "wsi_rs"];
 
     annotate_run_context(
         &mut run,
@@ -166,7 +180,7 @@ fn openslide_run_context_records_per_handle_decode_budget() {
         manifest_sha256: None,
     };
     let mut run = json!({"worker_count": 4});
-    let order = paired_engine_order(0);
+    let order = ["wsi_rs", "openslide"];
 
     annotate_run_context(
         &mut run,

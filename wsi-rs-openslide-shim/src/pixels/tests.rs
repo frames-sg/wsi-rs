@@ -39,3 +39,23 @@ fn direct_conversion_rejects_a_mismatched_destination() {
 
     assert!(error.to_string().contains("destination has 0 pixels"));
 }
+
+#[test]
+fn opaque_rgba_matches_the_rgb_conversion() {
+    let rgb =
+        CpuTile::from_u8_interleaved(2, 1, 3, ColorSpace::Rgb, vec![10, 20, 30, 200, 150, 100])
+            .expect("valid tile");
+    let rgba = CpuTile::from_u8_interleaved(
+        2,
+        1,
+        4,
+        ColorSpace::Rgba,
+        vec![10, 20, 30, 255, 200, 150, 100, 255],
+    )
+    .expect("valid tile");
+
+    assert_eq!(
+        tile_to_premultiplied_argb(rgba).expect("convert RGBA"),
+        tile_to_premultiplied_argb(rgb).expect("convert RGB")
+    );
+}

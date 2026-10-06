@@ -16,28 +16,20 @@ mod tile_cases;
 
 static ZEISS_TEST_GUARD: Mutex<()> = Mutex::new(());
 
-fn zeiss_uncompressed_fixture() -> Option<PathBuf> {
+fn zeiss_uncompressed_fixture() -> PathBuf {
     env::var_os("WSI_RS_ZEISS_CZI_PATH")
         .map(PathBuf::from)
         .filter(|path| path.is_file())
-}
-
-fn zeiss_fixture_or_skip() -> Option<PathBuf> {
-    let path = zeiss_uncompressed_fixture();
-    if path.is_none() {
-        eprintln!("[zeiss] skipping: set WSI_RS_ZEISS_CZI_PATH to Zeiss-5-Uncompressed.czi");
-    }
-    path
+        .expect("set WSI_RS_ZEISS_CZI_PATH to Zeiss-5-Uncompressed.czi")
 }
 
 #[test]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH pointing at Zeiss-5-Uncompressed.czi"]
 fn uncompressed_sentinel_hits_local_tile_path() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let local_hits_before = test_count(Event::ZeissLocalTileHits);
     let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
-    let Some(path) = zeiss_fixture_or_skip() else {
-        return;
-    };
+    let path = zeiss_uncompressed_fixture();
     let handle = crate::core::registry::Slide::open(&path).expect("open Zeiss sentinel");
     assert_eq!(handle.dataset().scenes.len(), 1);
     assert_eq!(handle.dataset().scenes[0].series.len(), 1);
@@ -80,11 +72,10 @@ fn uncompressed_sentinel_hits_local_tile_path() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH pointing at Zeiss-5-Uncompressed.czi"]
 fn uncompressed_sentinel_pan_trace_l0_reads_successfully() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(path) = zeiss_fixture_or_skip() else {
-        return;
-    };
+    let path = zeiss_uncompressed_fixture();
     let handle = crate::core::registry::Slide::open(&path).expect("open Zeiss sentinel");
     let dims = handle.dataset().scenes[0].series[0].levels[0].dimensions;
     let tile_px = 256i64;
@@ -118,11 +109,10 @@ fn uncompressed_sentinel_pan_trace_l0_reads_successfully() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH pointing at Zeiss-5-Uncompressed.czi"]
 fn uncompressed_sentinel_gap_tile_is_blank() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(path) = zeiss_fixture_or_skip() else {
-        return;
-    };
+    let path = zeiss_uncompressed_fixture();
     let handle = crate::core::registry::Slide::open(&path).expect("open Zeiss sentinel");
     let req = crate::core::types::TileViewRequest {
         scene: 0usize.into(),
@@ -142,12 +132,11 @@ fn uncompressed_sentinel_gap_tile_is_blank() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH pointing at Zeiss-5-Uncompressed.czi"]
 fn uncompressed_sentinel_top_left_tile_is_not_blank() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
-    let Some(path) = zeiss_fixture_or_skip() else {
-        return;
-    };
+    let path = zeiss_uncompressed_fixture();
     let slide = ZeissSlide::parse(&path).expect("parse Zeiss sentinel");
     let candidate_indices = slide.canvas_level_subblocks[0].clone();
     assert!(
@@ -176,13 +165,12 @@ fn uncompressed_sentinel_top_left_tile_is_not_blank() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_ZEISS_CZI_PATH pointing at Zeiss-5-Uncompressed.czi"]
 fn uncompressed_sentinel_levels_use_direct_composition() {
     let _guard = ZEISS_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let level_composes_before = test_count(Event::ZeissDirectLevelComposes);
     let direct_blits_before = test_count(Event::ZeissDirectUncompressedBlits);
-    let Some(path) = zeiss_fixture_or_skip() else {
-        return;
-    };
+    let path = zeiss_uncompressed_fixture();
     let slide = ZeissSlide::parse(&path).expect("parse Zeiss sentinel");
     let scene = 0;
     let level = slide.dataset.scenes[scene].series[0].levels.len() - 1;

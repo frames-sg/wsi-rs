@@ -8,11 +8,16 @@ use std::os::unix::fs::MetadataExt;
 
 use crate::error::WsiError;
 
-/// Filesystem identity used for short-lived probe-to-open caches.
+/// Filesystem identity used to decide whether parsed slide data can be reused:
+/// short-lived probe-to-open caches, and MIRAX indexes shared across handles
+/// for as long as any handle is open.
 ///
 /// Including metadata prevents a parsed object from being reused after the
-/// path has been replaced or modified. Cache entries are still consumed on
-/// open, so directory identities do not need to fingerprint every child.
+/// path has been replaced or modified. A rewrite in place that keeps the same
+/// length and inode within one modification-time tick is not detected, so on
+/// filesystems with coarse timestamps such a rewrite can reuse stale data.
+/// Probe-to-open entries are consumed on open, so directory identities do not
+/// need to fingerprint every child.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct FileIdentity {
     canonical_path: PathBuf,

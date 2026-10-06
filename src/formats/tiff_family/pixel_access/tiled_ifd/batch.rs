@@ -131,11 +131,13 @@ impl TiffPixelReader {
         result
     }
 
-    /// Reads each tile on the caller, then decodes the batch there while idle
-    /// cores help. A batch never queues behind other readers' tiles.
+    /// Reads each tile on the caller. A pool that fills the machine owns the
+    /// decode work; a smaller pool helps callers use the remaining cores.
     fn decode_tiled_ifd_jpeg_jobs(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         let mut tiles: Vec<Option<CpuTile>> = Vec::with_capacity(reqs.len());
         let mut jobs = Vec::new();
+        // Jobs from one IFD share its JPEGTables instead of copying them per tile.
+        let mut shared_tables: Vec<(IfdId, Option<std::sync::Arc<[u8]>>)> = Vec::new();
         for req in reqs {
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
@@ -163,18 +165,36 @@ impl TiffPixelReader {
                 &data,
                 jpeg_tables.as_deref(),
             );
+            let tables = match shared_tables.iter().find(|(id, _)| id == ifd_id) {
+                Some((_, tables)) => tables.clone(),
+                None => {
+                    let tables = jpeg_tables.as_deref().map(std::sync::Arc::<[u8]>::from);
+                    shared_tables.push((*ifd_id, tables.clone()));
+                    tables
+                }
+            };
             tiles.push(None);
             jobs.push(TiledJpegJob {
                 data,
-                tables: jpeg_tables.clone(),
+                tables,
                 width: span.width,
                 height: span.height,
                 options,
                 position: (req.col, req.row, req.level.get()),
             });
         }
-        let mut decoded =
-            crate::core::batch::share_cpu_work(jobs, TiledJpegJob::decode).into_iter();
+        let decoded = if jobs.is_empty() {
+            Vec::new()
+        } else {
+            let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
+            let decode = || crate::core::batch::share_cpu_work(jobs, TiledJpegJob::decode);
+            if runtime.cpu_worker_count() >= crate::core::batch::cpu_core_count() {
+                runtime.install_jp2k_cpu(decode)
+            } else {
+                decode()
+            }
+        };
+        let mut decoded = decoded.into_iter();
         tiles
             .into_iter()
             .map(|tile| match tile {
@@ -286,7 +306,7 @@ impl TiffPixelReader {
 /// One tiled-IFD JPEG tile with its encoded bytes already read.
 struct TiledJpegJob {
     data: Vec<u8>,
-    tables: Option<Vec<u8>>,
+    tables: Option<std::sync::Arc<[u8]>>,
     width: u32,
     height: u32,
     options: TiffJpegDecodeOptions,

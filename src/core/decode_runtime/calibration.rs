@@ -1,8 +1,9 @@
 //! FIFO-bounded route decisions with one nonblocking calibration owner per key.
 use super::*;
-use std::ops::Deref;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use std::sync::Condvar;
+
+/// A device sample slower than this many uncached CPU decodes settles a route
+/// on the CPU without further samples.
+const DEVICE_LOSS_FACTOR: u32 = 4;
 
 /// Largest prepared batch a background calibration may retain after its
 /// foreground read returns and releases that read's admission.
@@ -33,17 +34,17 @@ pub(super) enum CalibrationStep {
     },
 }
 
-/// `R` is how the lease reaches its runtime: a borrow for work on the calling
-/// thread, or an `Arc` that a background calibration can own.
-pub(super) enum RouteClaim<R: Deref<Target = DecodeRuntime>> {
+/// Leases own their runtime, so a background calibration can carry one to
+/// another thread.
+pub(super) enum RouteClaim {
     Cpu,
-    FirstCpu { _lease: CalibrationLease<R> },
+    FirstCpu { _lease: CalibrationLease },
     Ready(DecodeRouteDecision),
-    Calibrate(CalibrationLease<R>),
+    Calibrate(CalibrationLease),
 }
 
-pub(super) struct CalibrationLease<R: Deref<Target = DecodeRuntime>> {
-    runtime: R,
+pub(super) struct CalibrationLease {
+    runtime: Arc<DecodeRuntime>,
     key: DecodeRouteKey,
     pub(super) step: CalibrationStep,
 }
@@ -55,41 +56,31 @@ enum ClaimState {
     Calibrate(CalibrationStep),
 }
 
-pub(super) fn claim_route_with<R: Deref<Target = DecodeRuntime>>(
-    runtime: R,
-    key: DecodeRouteKey,
-) -> RouteClaim<R> {
-    match runtime.claim_route_state(&key) {
-        ClaimState::Cpu => RouteClaim::Cpu,
-        ClaimState::Ready(decision) => RouteClaim::Ready(decision),
-        ClaimState::FirstCpu => RouteClaim::FirstCpu {
-            _lease: CalibrationLease {
-                runtime,
-                key,
-                step: CalibrationStep::Warmup,
-            },
-        },
-        ClaimState::Calibrate(step) => {
-            RouteClaim::Calibrate(CalibrationLease { runtime, key, step })
-        }
-    }
-}
-
 impl DecodeRuntime {
-    /// [`Self::claim_route`] with leases that can move to another thread.
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(super) fn claim_owned_route(
-        self: &Arc<Self>,
-        key: DecodeRouteKey,
-    ) -> RouteClaim<Arc<Self>> {
-        claim_route_with(Arc::clone(self), key)
+    /// Claims `key`'s route: a decision, CPU while another caller calibrates,
+    /// or a lease that owns this runtime for the calibration step it runs.
+    pub(super) fn claim_owned_route(self: &Arc<Self>, key: DecodeRouteKey) -> RouteClaim {
+        let runtime = Arc::clone(self);
+        match self.claim_route_state(&key) {
+            ClaimState::Cpu => RouteClaim::Cpu,
+            ClaimState::Ready(decision) => RouteClaim::Ready(decision),
+            ClaimState::FirstCpu => RouteClaim::FirstCpu {
+                _lease: CalibrationLease {
+                    runtime,
+                    key,
+                    step: CalibrationStep::Warmup,
+                },
+            },
+            ClaimState::Calibrate(step) => {
+                RouteClaim::Calibrate(CalibrationLease { runtime, key, step })
+            }
+        }
     }
 
     /// Marks the route busy for the lease the caller constructs.
     fn claim_route_state(&self, key: &DecodeRouteKey) -> ClaimState {
-        let key = key.clone();
         let mut cache = self.route_cache.lock().unwrap_or_else(|e| e.into_inner());
-        if !cache.contains(&key) && !key.device_identity.is_empty() {
+        if !cache.contains(key) && !key.device_identity.is_empty() {
             let mut pending = key.clone();
             pending.device_identity.clear();
             if let Some(entry) = cache.peek(&pending) {
@@ -103,16 +94,16 @@ impl DecodeRuntime {
             }
         }
         if cache
-            .peek(&key)
+            .peek(key)
             .is_none_or(|entry| !entry.busy && entry.decision.is_none())
         {
-            if let Some(decision) = clipped_cpu_preference(&cache, &key) {
+            if let Some(decision) = clipped_cpu_preference(&cache, key) {
                 // Keep the measured full-tile route as the evidence owner.
                 // No new decision is published by this optional shortcut.
                 return ClaimState::Ready(decision);
             }
         }
-        let Some(entry) = cache.peek_mut(&key) else {
+        let Some(entry) = cache.peek_mut(key) else {
             insert_entry(
                 &mut cache,
                 key.clone(),
@@ -121,7 +112,7 @@ impl DecodeRuntime {
                     ..RouteEntry::default()
                 },
             );
-            return if cache.contains(&key) {
+            return if cache.contains(key) {
                 // Protect startup until CPU output is ready, just as later
                 // calibration protects its pending route from other callers.
                 ClaimState::FirstCpu
@@ -205,7 +196,7 @@ fn clipped_cpu_preference(
         (decision.winner == DecodeRoute::Cpu
             && !decision.device_failure
             && !decision.cpu_elapsed.is_zero()
-            && decision.device_elapsed > decision.cpu_elapsed.saturating_mul(4)
+            && decision.device_elapsed > decision.cpu_elapsed.saturating_mul(DEVICE_LOSS_FACTOR)
             && full.dataset_id == key.dataset_id
             && full.scene == key.scene
             && full.series == key.series
@@ -223,7 +214,7 @@ fn clipped_cpu_preference(
     })
 }
 
-impl<R: Deref<Target = DecodeRuntime>> CalibrationLease<R> {
+impl CalibrationLease {
     pub(super) fn bind_device(&mut self, identity: String) {
         if self.key.device_identity == identity {
             return;
@@ -268,7 +259,7 @@ impl<R: Deref<Target = DecodeRuntime>> CalibrationLease<R> {
                     // too expensive for this route; avoid three more probes.
                     // This is deliberately conservative about cold GPU costs.
                     if let Some((cpu, device)) = sample {
-                        if !cpu.is_zero() && device > cpu.saturating_mul(4) {
+                        if !cpu.is_zero() && device > cpu.saturating_mul(DEVICE_LOSS_FACTOR) {
                             entry.decision = Some(DecodeRouteDecision::measured(cpu, device));
                         }
                     }
@@ -308,7 +299,7 @@ fn ratio((cpu, device): (Duration, Duration)) -> f64 {
     }
 }
 
-impl<R: Deref<Target = DecodeRuntime>> Drop for CalibrationLease<R> {
+impl Drop for CalibrationLease {
     fn drop(&mut self) {
         if let Some(entry) = self
             .runtime
@@ -326,8 +317,7 @@ impl<R: Deref<Target = DecodeRuntime>> Drop for CalibrationLease<R> {
 #[cfg(any(feature = "metal", feature = "cuda"))]
 #[derive(Debug, Default)]
 pub(super) struct BackgroundCalibrationSlot {
-    pub(super) busy: Mutex<bool>,
-    pub(super) idle: Condvar,
+    pub(super) busy: std::sync::atomic::AtomicBool,
     /// Counts claimed calibrations and can hold one before its device work.
     pub(super) gate: crate::core::test_hooks::PathGate,
 }
@@ -343,11 +333,14 @@ impl DecodeRuntime {
     /// Claims the background slot, or `None` while another calibration runs.
     pub(super) fn claim_background_calibration(self: &Arc<Self>) -> Option<BackgroundCalibration> {
         let slot = &self.background_calibration;
-        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
-        if *busy {
-            return None;
-        }
-        *busy = true;
+        slot.busy
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::Acquire,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .ok()?;
         slot.gate.record_entry();
         Some(BackgroundCalibration {
             runtime: Arc::clone(self),
@@ -364,7 +357,7 @@ impl DecodeRuntime {
 impl Drop for BackgroundCalibration {
     fn drop(&mut self) {
         let slot = &self.runtime.background_calibration;
-        *slot.busy.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        slot.idle.notify_all();
+        slot.busy.store(false, std::sync::atomic::Ordering::Release);
+        slot.gate.record_exit();
     }
 }

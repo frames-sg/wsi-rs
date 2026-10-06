@@ -34,6 +34,9 @@ pub(super) fn is_alpha_source(tile: &CpuTile) -> bool {
 pub(super) struct RgbaBandScratch {
     color: Vec<u8>,
     coverage: Vec<f32>,
+    /// Premultiplied color and coverage of an alpha source tile.
+    source_color: Vec<u8>,
+    source_coverage: Vec<u8>,
 }
 
 /// Unpacked pixels per band of [`blit_premultiplied_rgba`] (112 KiB scratch).
@@ -75,25 +78,19 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
     scratch: &mut RgbaBandScratch,
     (band_pixels, min_rows): (usize, usize),
 ) -> Result<(), WsiError> {
-    let mut premultiplied = Vec::new();
-    let mut coverage = Vec::new();
+    let RgbaBandScratch {
+        color: band_color,
+        coverage: band_alpha,
+        source_color,
+        source_coverage,
+    } = scratch;
     let bytes = tile
         .as_u8()
         .ok_or_else(|| WsiError::DisplayConversion("RGBA composition requires u8 source".into()))?;
     let alpha_source = is_alpha_source(tile);
     let color = if alpha_source {
-        premultiplied.reserve_exact(bytes.len() / 4 * 3);
-        coverage.reserve_exact(bytes.len() / 4);
-        for pixel in bytes.as_chunks::<4>().0 {
-            let alpha = u16::from(pixel[3]);
-            premultiplied.extend(
-                pixel[..3]
-                    .iter()
-                    .map(|&c| ((u16::from(c) * alpha + 127) / 255) as u8),
-            );
-            coverage.push(pixel[3]);
-        }
-        premultiplied.as_slice()
+        premultiply_rgba_source(bytes, source_color, source_coverage);
+        source_color.as_slice()
     } else if tile.channels == 3
         && tile.color_space == ColorSpace::Rgb
         && tile.layout == CpuTileLayout::Interleaved
@@ -104,7 +101,11 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
             "RGBA composition requires RGB8 or RGBA8 source".into(),
         ));
     };
-    let (x, y) = hit.cairo_fixed_dest.expect("Pixman placement");
+    let Some((x, y)) = hit.cairo_fixed_dest else {
+        return Err(WsiError::DisplayConversion(
+            "RGBA composition requires Pixman-placed output".into(),
+        ));
+    };
     let start_x = x.floor().max(0.0) as usize;
     let start_y = y.floor().max(0.0) as usize;
     let end_x = (x + f64::from(tile.width)).ceil().min(shape.width as f64) as usize;
@@ -114,19 +115,17 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
     }
     let mut band_hit = hit.clone();
     // Preserve the complete paint's filter selection when clipping to bands.
-    band_hit.cairo_rgb24 &= (start_x as f64 - x).floor() >= 0.0
-        && (start_y as f64 - y).floor() >= 0.0
-        && (end_x as f64 - 1.0 - x).floor() + 1.0 < f64::from(tile.width)
-        && (end_y as f64 - 1.0 - y).floor() + 1.0 < f64::from(tile.height);
+    band_hit.cairo_rgb24 &= opaque_clip_covers_taps(
+        (x, y),
+        (start_x, start_y),
+        (end_x, end_y),
+        (tile.width, tile.height),
+    );
     let band_width = end_x - start_x;
     let band_rows = (band_pixels / band_width).max(min_rows).max(1);
     // Even bands keep the last one as tall as the others.
     let bands = (end_y - start_y).div_ceil(band_rows);
     let band_rows = (end_y - start_y).div_ceil(bands);
-    let RgbaBandScratch {
-        color: band_color,
-        coverage: band_alpha,
-    } = scratch;
     for band_start in (start_y..end_y).step_by(band_rows) {
         let band_end = (band_start + band_rows).min(end_y);
         let pixels = band_width * (band_end - band_start);
@@ -170,7 +169,13 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
         band_hit.cairo_fixed_dest = Some((x - start_x as f64, y - band_start as f64));
         if alpha_source {
             blit_fractional::<true, true>(
-                band_color, band_alpha, color, &coverage, tile, &band_hit, band_shape,
+                band_color,
+                band_alpha,
+                color,
+                source_coverage,
+                tile,
+                &band_hit,
+                band_shape,
             );
         } else {
             blit_fractional::<true, false>(
@@ -203,6 +208,39 @@ pub(super) fn blit_premultiplied_rgba_in_bands(
         }
     }
     Ok(())
+}
+
+/// Splits straight-alpha RGBA8 into premultiplied color and coverage with
+/// exact unorm8 rounding, as Cairo samples it.
+fn premultiply_rgba_source(rgba: &[u8], color: &mut Vec<u8>, coverage: &mut Vec<u8>) {
+    color.clear();
+    coverage.clear();
+    color.reserve(rgba.len() / 4 * 3);
+    coverage.reserve(rgba.len() / 4);
+    for pixel in rgba.as_chunks::<4>().0 {
+        let alpha = u16::from(pixel[3]);
+        color.extend(
+            pixel[..3]
+                .iter()
+                .map(|&c| ((u16::from(c) * alpha + 127) / 255) as u8),
+        );
+        coverage.push(pixel[3]);
+    }
+}
+
+/// Whether a source placed at `dest` keeps every bilinear tap of the clipped
+/// paint area `[start, end)` inside the tile. Pixman then reduces SATURATE to
+/// OVER_REVERSE for an opaque source and selects its narrow 7-bit filter.
+fn opaque_clip_covers_taps(
+    dest: (f64, f64),
+    start: (usize, usize),
+    end: (usize, usize),
+    tile: (u32, u32),
+) -> bool {
+    (start.0 as f64 - dest.0).floor() >= 0.0
+        && (start.1 as f64 - dest.1).floor() >= 0.0
+        && ((end.0 - 1) as f64 - dest.0).floor() + 1.0 < f64::from(tile.0)
+        && ((end.1 - 1) as f64 - dest.1).floor() + 1.0 < f64::from(tile.1)
 }
 
 pub(super) fn unpremultiply_rgba(pixels: &mut [u8]) {
@@ -238,18 +276,9 @@ pub(super) fn blit_alpha_source_saturating_u8(
             "alpha-source composition requires Pixman-placed RGB output".into(),
         ));
     }
-    let pixels = rgba.len() / 4;
-    let mut color = Vec::with_capacity(pixels * 3);
-    let mut coverage = Vec::with_capacity(pixels);
-    for pixel in rgba.as_chunks::<4>().0 {
-        let a = u16::from(pixel[3]);
-        color.extend(
-            pixel[..3]
-                .iter()
-                .map(|&c| ((u16::from(c) * a + 127) / 255) as u8),
-        );
-        coverage.push(pixel[3]);
-    }
+    let mut color = Vec::new();
+    let mut coverage = Vec::new();
+    premultiply_rgba_source(rgba, &mut color, &mut coverage);
     blit_fractional::<true, true>(out, alpha, &color, &coverage, tile, hit, shape);
     Ok(())
 }
@@ -298,10 +327,12 @@ fn blit_fractional<const PIXMAN: bool, const ALPHA: bool>(
     if PIXMAN
         && !ALPHA
         && hit.cairo_rgb24
-        && source_x.floor() >= 0.0
-        && source_y.floor() >= 0.0
-        && ((end_x - 1) as f64 - raster_dest.0).floor() + 1.0 < tile_width as f64
-        && ((end_y - 1) as f64 - raster_dest.1).floor() + 1.0 < tile_height as f64
+        && opaque_clip_covers_taps(
+            raster_dest,
+            (start_x, start_y),
+            (end_x, end_y),
+            (tile.width, tile.height),
+        )
     {
         let weights = super::subtile::pixman_bilinear_weights(
             (source_x.fract() * 128.0) as u32,

@@ -70,8 +70,6 @@ impl MiraxReader {
                 {
                     break;
                 }
-                // Borrow rather than clone: handles share these images, and
-                // concurrent refcount updates would contend on them.
                 let index = *indices.entry(tile.image.id).or_insert_with(|| {
                     images.push(tile.image.as_ref());
                     images.len() - 1

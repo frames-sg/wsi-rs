@@ -9,10 +9,10 @@
 use std::sync::atomic::AtomicUsize;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
-use std::sync::Mutex;
 #[cfg(test)]
 use std::sync::{Arc, Barrier};
+#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
+use std::sync::{Condvar, Mutex};
 
 /// Decode accounting for one slide's source images, plus a rendezvous that
 /// tests use to make concurrent cache misses overlap.
@@ -77,6 +77,8 @@ pub(crate) struct PathGate {
     entries: AtomicUsize,
     #[cfg(test)]
     hold: Mutex<Option<Arc<Barrier>>>,
+    #[cfg(test)]
+    exits: (Mutex<()>, Condvar),
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -98,10 +100,29 @@ impl PathGate {
             }
         }
     }
+
+    /// Wakes tests waiting in `wait_until`. Callers update the state the test
+    /// checks before calling this.
+    #[inline]
+    pub(crate) fn record_exit(&self) {
+        #[cfg(test)]
+        {
+            let _exits = self.exits.0.lock().unwrap_or_else(|e| e.into_inner());
+            self.exits.1.notify_all();
+        }
+    }
 }
 
 #[cfg(all(test, feature = "metal"))]
 impl PathGate {
+    /// Blocks until `done` holds, rechecking after each `record_exit`.
+    pub(crate) fn wait_until(&self, done: impl Fn() -> bool) {
+        let mut exits = self.exits.0.lock().unwrap_or_else(|e| e.into_inner());
+        while !done() {
+            exits = self.exits.1.wait(exits).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
     pub(crate) fn entries(&self) -> usize {
         self.entries.load(Ordering::SeqCst)
     }

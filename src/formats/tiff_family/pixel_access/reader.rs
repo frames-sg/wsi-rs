@@ -50,6 +50,9 @@ pub(super) fn private_cache_budgets(
     uses_ndpi_caches: bool,
 ) -> (u64, u64, u64, u64) {
     let aggregate = cache_config.private_cache_budget_bytes();
+    // Without a configured budget every reader gets the documented default
+    // split, so the environment overrides apply uniformly; only a configured
+    // budget is narrowed to the caches the layout uses.
     let requested = if cache_config.shared_tile_bytes.is_none() {
         [
             crate::core::environment::positive_u64(

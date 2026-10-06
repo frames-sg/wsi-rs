@@ -375,8 +375,8 @@ impl TiffContainer {
                 .iter()
                 .take(count)
                 .map(|c| match self.endian {
-                    Endian::Little => u16::from_le_bytes([c[0], c[1]]) as u64,
-                    Endian::Big => u16::from_be_bytes([c[0], c[1]]) as u64,
+                    Endian::Little => u16::from_le_bytes(*c) as u64,
+                    Endian::Big => u16::from_be_bytes(*c) as u64,
                 })
                 .collect(),
             TiffType::Long => bytes
@@ -385,8 +385,8 @@ impl TiffContainer {
                 .iter()
                 .take(count)
                 .map(|c| match self.endian {
-                    Endian::Little => u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as u64,
-                    Endian::Big => u32::from_be_bytes([c[0], c[1], c[2], c[3]]) as u64,
+                    Endian::Little => u32::from_le_bytes(*c) as u64,
+                    Endian::Big => u32::from_be_bytes(*c) as u64,
                 })
                 .map(|value| {
                     if self.ndpi && is_ndpi_data_offset_tag(tag) {
@@ -402,12 +402,8 @@ impl TiffContainer {
                 .iter()
                 .take(count)
                 .map(|c| match self.endian {
-                    Endian::Little => {
-                        u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
-                    }
-                    Endian::Big => {
-                        u64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
-                    }
+                    Endian::Little => u64::from_le_bytes(*c),
+                    Endian::Big => u64::from_be_bytes(*c),
                 })
                 .collect(),
             _ => {

@@ -275,17 +275,73 @@ fn strict_cuda_decode_returns_resident_jp2k_tile() {
 
 #[cfg(feature = "cuda")]
 #[test]
-fn strict_cuda_batch_preserves_empty_and_result_cardinality() {
+fn strict_cuda_batch_preserves_order_crops_errors_and_pixels() {
     let sessions = crate::output::cuda::CudaBackendSessions::new();
     assert!(decode_batch_jp2k_cuda(&[], &sessions).is_empty());
-    let results = decode_batch_jp2k_cuda(
-        &[
-            rgb_job(J2kBackendRequest::Cuda),
-            rgb_job(J2kBackendRequest::Cuda),
-        ],
-        &sessions,
-    );
-    assert_eq!(results.len(), 2);
+    let full = rgb_job(J2kBackendRequest::Cuda);
+    let mut initial = decode_batch_jp2k_cuda(&[full.clone(), full.clone()], &sessions);
+    assert_eq!(initial.len(), 2);
+    match initial.pop().unwrap() {
+        Ok(_) => {}
+        Err(WsiError::Unsupported { reason })
+            if std::env::var_os("J2K_REQUIRE_CUDA_RUNTIME").is_none() =>
+        {
+            eprintln!("skipping JP2K CUDA batch test: {reason}");
+            return;
+        }
+        Err(error) => panic!("strict CUDA decode failed: {error}"),
+    }
+    let mut crop = full.clone();
+    crop.expected_width -= 1;
+    crop.expected_height -= 2;
+    let mut jobs = (0..19)
+        .map(|index| {
+            if index % 2 == 0 {
+                crop.clone()
+            } else {
+                full.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut malformed = full;
+    malformed.data = Cow::Borrowed(b"invalid");
+    jobs.insert(17, malformed);
+    let expected = jobs
+        .iter()
+        .map(|job| {
+            let mut job = job.clone();
+            job.backend = J2kBackendRequest::Cpu;
+            decode_one_jp2k_job(&job)
+        })
+        .collect::<Vec<_>>();
+    let results = decode_batch_jp2k_cuda(&jobs, &sessions);
+    assert_eq!(results.len(), jobs.len());
+    for (actual, expected) in results.into_iter().zip(expected) {
+        match (actual, expected) {
+            (Ok(actual), Ok(expected)) => {
+                assert_eq!(
+                    (actual.width, actual.height),
+                    (expected.width(), expected.height())
+                );
+                assert_ne!(actual.storage.device_ptr(), 0);
+                assert_eq!(actual.download_cpu().unwrap().as_u8(), expected.as_u8());
+            }
+            (Err(_), Err(_)) => {}
+            (actual, expected) => panic!("CUDA source slot changed: {actual:?} / {expected:?}"),
+        }
+    }
+    jobs.remove(17);
+    let prepared = super::super::PreparedJp2kBatch::new(&jobs, 2).unwrap();
+    let actual = prepared.read_cuda(&sessions).unwrap();
+    let expected = prepared.read_cpu().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(
+            (actual.width(), actual.height()),
+            (expected.width(), expected.height())
+        );
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
 }
 
 #[cfg(feature = "metal")]

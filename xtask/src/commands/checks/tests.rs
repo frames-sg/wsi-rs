@@ -1,14 +1,69 @@
 use super::*;
 use std::path::Path;
 
+fn repo_file(relative: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(relative),
+    )
+    .unwrap_or_else(|error| panic!("read {relative}: {error}"))
+}
+
+/// Every `nightly-YYYY-MM-DD` toolchain named in `text`.
+fn dated_nightlies(text: &str) -> Vec<&str> {
+    text.match_indices("nightly-")
+        .filter_map(|(start, _)| text.get(start..start + "nightly-YYYY-MM-DD".len()))
+        .filter(|name| {
+            name["nightly-".len()..]
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| match index {
+                    4 | 7 => byte == b'-',
+                    _ => byte.is_ascii_digit(),
+                })
+        })
+        .collect()
+}
+
+fn workspace_package_version() -> String {
+    let manifest: toml::Value = toml::from_str(&repo_file("Cargo.toml")).expect("parse Cargo.toml");
+    manifest["package"]["version"]
+        .as_str()
+        .expect("workspace package version")
+        .to_string()
+}
+
+fn shell_assignment<'a>(script: &'a str, name: &str) -> &'a str {
+    let prefix = format!("readonly {name}=\"");
+    let line = script
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("script assigns {name}"));
+    line.strip_suffix('"').expect("quoted shell assignment")
+}
+
 #[test]
 fn nightly_tools_use_the_ci_pinned_toolchain() {
-    assert_eq!(PINNED_NIGHTLY_TOOLCHAIN, "nightly-2026-08-13");
+    for workflow in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/rc-preflight.yml",
+    ] {
+        let text = repo_file(workflow);
+        let nightlies = dated_nightlies(&text);
+        assert!(!nightlies.is_empty(), "{workflow} pins a dated nightly");
+        assert!(
+            nightlies
+                .iter()
+                .all(|name| *name == PINNED_NIGHTLY_TOOLCHAIN),
+            "{workflow} pins {nightlies:?}, xtask pins {PINNED_NIGHTLY_TOOLCHAIN}"
+        );
+    }
     assert_eq!(
         pinned_nightly_cargo_args(&["public-api", "-p", "wsi-rs"]),
         [
             "run",
-            "nightly-2026-08-13",
+            PINNED_NIGHTLY_TOOLCHAIN,
             "cargo",
             "public-api",
             "-p",
@@ -48,17 +103,28 @@ fn corpus_coverage_report_keeps_every_workspace_package() {
 
 #[test]
 fn semver_check_uses_checksum_pinned_published_baseline() {
-    let script = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-semver.sh"),
-    )
-    .expect("read semver script");
-    assert!(script.contains("BASELINE_VERSION=\"0.6.0\""));
-    assert!(script.contains(
-        "BASELINE_SHA256=\"c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75\""
-    ));
-    assert!(script.contains("USER_AGENT=\"wsi-rs-semver-check/0.8.0"));
+    let script = repo_file("scripts/check-semver.sh");
+    let version = workspace_package_version();
+    let numeric = |version: &str| {
+        version
+            .split('.')
+            .map(|part| part.parse::<u64>().expect("numeric version component"))
+            .collect::<Vec<_>>()
+    };
+    let baseline = shell_assignment(&script, "BASELINE_VERSION");
+    assert!(
+        numeric(baseline) < numeric(&version),
+        "semver baseline {baseline} must be an earlier release than {version}"
+    );
+    let checksum = shell_assignment(&script, "BASELINE_SHA256");
+    assert!(
+        checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "baseline archive must be pinned by a SHA-256 digest, got {checksum:?}"
+    );
+    assert!(shell_assignment(&script, "USER_AGENT")
+        .starts_with(&format!("wsi-rs-semver-check/{version} ")));
     assert!(script.contains("--baseline-rustdoc"));
-    assert!(script.contains("cargo +nightly-2026-08-13 rustdoc"));
+    assert!(script.contains(&format!("cargo +{PINNED_NIGHTLY_TOOLCHAIN} rustdoc")));
     assert!(!script.contains("cargo +nightly rustdoc"));
     assert!(!script.contains("skipping cargo-semver-checks"));
 }

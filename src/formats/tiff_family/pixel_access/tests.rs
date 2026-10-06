@@ -7,11 +7,6 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression as DeflateCompression;
 use image::{DynamicImage, ImageFormat};
 
-impl TiffPixelReader {
-    pub(crate) fn new(container: Arc<TiffContainer>, layout: DatasetLayout) -> Self {
-        Self::new_with_cache_config(container, layout, crate::CacheConfig::deterministic())
-    }
-}
 use jpeg_encoder::{
     ColorType as JpegColorType, Encoder as JpegEncoder, SamplingFactor as JpegSamplingFactor,
 };
@@ -31,3 +26,9 @@ mod ndpi;
 mod synthetic;
 
 use fixtures::*;
+
+impl TiffPixelReader {
+    pub(crate) fn new(container: Arc<TiffContainer>, layout: DatasetLayout) -> Self {
+        Self::new_with_cache_config(container, layout, crate::CacheConfig::deterministic())
+    }
+}

@@ -209,8 +209,8 @@ fn decodes_progressive_frames_stored_under_the_baseline_syntax() {
         .join("tests/fixtures/public_dicom/progressive-sof2.dcm");
     let slide = DicomSlide::parse(&fixture).expect("open progressive fixture");
     let image = &slide.levels[0].parts[0];
-    let photometric_interpretation: &'static str =
-        Box::leak(image.photometric_interpretation.clone().into_boxed_str());
+    let photometric_interpretation = "YBR_FULL_422";
+    assert_eq!(image.photometric_interpretation, photometric_interpretation);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("progressive-under-baseline.dcm");
     write_test_dicom(

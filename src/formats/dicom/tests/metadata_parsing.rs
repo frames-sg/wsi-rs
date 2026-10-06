@@ -89,9 +89,9 @@ fn metadata_preflight_rejects_short_file_meta_encoding_for_long_vr() {
         .expect("test DICOM should contain Media Storage SOP Class UID");
 
     for vr in [b"SV", b"UV"] {
-        // The CI fuzz input changed a short UI header to SV. Treating its
-        // nonzero reserved bytes as a short length lets the object parser
-        // interpret the UID's first four bytes as a multi-gigabyte length.
+        // A short-form UI header relabelled SV or UV must be rejected: reading
+        // its nonzero reserved bytes as a short length lets the object parser
+        // take the UID's first four bytes as a multi-gigabyte length.
         let mut bytes = original.clone();
         bytes[header_offset + 4..header_offset + 6].copy_from_slice(vr);
         std::fs::write(&path, bytes).unwrap();

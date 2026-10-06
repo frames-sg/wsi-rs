@@ -231,10 +231,10 @@ EOF
                     .collect::<Vec<_>>(),
                 expected
             );
-            for (suffix, library) in [
-                ("wsi_rs", "current"),
-                ("openslide", "openslide"),
-                ("previous", "previous"),
+            for (suffix, library, engine) in [
+                ("wsi_rs", "current", "wsi_rs"),
+                ("openslide", "openslide", "openslide"),
+                ("previous", "previous", "wsi_rs_previous"),
             ] {
                 let path = results.join(format!("{label}-{suffix}.json"));
                 if suffix == "previous" && !with_previous {
@@ -256,6 +256,35 @@ EOF
                         .count(),
                     usize::from(suffix == "wsi_rs")
                 );
+                for run in runs {
+                    let mut order = vec!["wsi_rs", "openslide"];
+                    if with_previous {
+                        order.push("wsi_rs_previous");
+                    }
+                    if run["repeat_index"].as_u64().unwrap() % 2 != 0 {
+                        order.reverse();
+                    }
+                    assert_eq!(run["engine_order"], serde_json::json!(order));
+                    assert_eq!(
+                        run["engine_position"],
+                        serde_json::json!(order.iter().position(|name| *name == engine).unwrap())
+                    );
+                }
+                let metadata = &capture["metadata"];
+                if suffix == "previous" {
+                    assert!(metadata.get("git").is_none());
+                    assert!(metadata["benchmark"]
+                        .get("rust_codec_dependencies")
+                        .is_none());
+                    assert!(Path::new(
+                        metadata["previous_release"]["library_path"]
+                            .as_str()
+                            .unwrap()
+                    )
+                    .ends_with("previous"));
+                } else {
+                    assert!(metadata["git"].is_object());
+                }
             }
         }
     }

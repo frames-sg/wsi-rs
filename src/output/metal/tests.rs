@@ -19,13 +19,12 @@ fn ycbcr_test_tile(device: &MetalDevice, bytes: &[u8]) -> MetalDeviceTile {
 }
 
 #[test]
-fn prewarm_builds_decode_kernels_that_later_decodes_reuse() {
+fn prewarm_succeeds_repeatedly() {
     let Some(device) = test_device() else {
         return;
     };
     let sessions = MetalBackendSessions::new(device);
     sessions.prewarm().expect("prewarm decode");
-    // A second prewarm reuses the published kernels.
     sessions.prewarm().expect("prewarm again");
 }
 

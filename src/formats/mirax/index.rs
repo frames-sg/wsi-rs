@@ -299,7 +299,7 @@ pub(super) fn insert_tile(
     let offset_x = pos_x - tile_x as f64 * params.tile_advance_x;
     let offset_y = pos_y - tile_y as f64 * params.tile_advance_y;
     let descriptor_index = level.descriptors.len();
-    let fractional = level.tile_width.fract() != 0.0 || level.tile_height.fract() != 0.0;
+    let fractional = image.resample;
     let mut entry = if fractional {
         // OpenSlide resamples a fractional subtile onto a ceil-sized surface
         // and places it by its exact extent.

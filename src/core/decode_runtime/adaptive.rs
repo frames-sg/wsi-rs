@@ -107,46 +107,38 @@ impl AdaptiveDecodeReader {
         }
         // Claim the device before preparing, so a busy slot costs no I/O.
         // The route stays pending until a later read finds the slot free.
-        let background = match &claim {
-            RouteClaim::Calibrate(_) => match self.runtime.claim_background_calibration() {
-                Some(background) => Some(background),
+        let calibration = match claim {
+            RouteClaim::Calibrate(lease) => match self.runtime.claim_background_calibration() {
+                Some(background) => Some((lease, background)),
                 None => return self.read_adaptive_cpu(reqs, control),
             },
-            _ => None,
+            RouteClaim::Ready(_) => None,
+            RouteClaim::Cpu | RouteClaim::FirstCpu { .. } => {
+                unreachable!("CPU claims returned before optional work")
+            }
         };
         let Some((prepared, _extra)) = self.prepare_optional(reqs, &key, context)? else {
             return self.read_adaptive_cpu(reqs, control);
         };
         Self::check_control(control)?;
-        match claim {
-            RouteClaim::Calibrate(lease) => {
-                let background = background.expect("calibration claimed the background slot");
-                self.calibrate_prepared(lease, background, prepared, reqs, control)
+        if let Some((lease, background)) = calibration {
+            return self.calibrate_prepared(lease, background, prepared, reqs, control);
+        }
+        let Some(device) = self.runtime.preferred_device() else {
+            return self.read_unavailable_device(reqs, control);
+        };
+        match self.read_device_controlled(device, &prepared, reqs.len(), control) {
+            Ok(tiles) => {
+                record_device_route(device, tiles.len());
+                Ok(tiles)
             }
-            RouteClaim::Ready(_) => {
-                let Some(device) = self.runtime.preferred_device() else {
-                    return self.read_unavailable_device(reqs, control);
-                };
-                match self.read_device_controlled(device, &prepared, reqs.len(), control) {
-                    Ok(tiles) => {
-                        record_device_route(device, tiles.len());
-                        Ok(tiles)
-                    }
-                    Err(error) => {
-                        Self::check_control(control)?;
-                        tracing::debug!(%error, "selected JP2K device route failed");
-                        self.runtime.store_route(
-                            key,
-                            DecodeRouteDecision::device_failure(),
-                            control,
-                        )?;
-                        record_device_failure_fallback(device, reqs.len());
-                        self.read_inner_cpu(reqs, control)
-                    }
-                }
-            }
-            RouteClaim::Cpu | RouteClaim::FirstCpu { .. } => {
-                unreachable!("CPU claims returned before optional work")
+            Err(error) => {
+                Self::check_control(control)?;
+                tracing::debug!(%error, "selected JP2K device route failed");
+                self.runtime
+                    .store_route(key, DecodeRouteDecision::device_failure(), control)?;
+                record_device_failure_fallback(device, reqs.len());
+                self.read_inner_cpu(reqs, control)
             }
         }
     }
@@ -183,7 +175,7 @@ impl AdaptiveDecodeReader {
     /// after this read's admission ends keep the foreground comparison.
     fn calibrate_prepared(
         &self,
-        lease: CalibrationLease<Arc<DecodeRuntime>>,
+        lease: CalibrationLease,
         background: BackgroundCalibration,
         prepared: PreparedJp2kBatch,
         reqs: &[TileRequest],
@@ -222,7 +214,7 @@ impl AdaptiveDecodeReader {
 
     fn calibrate_in_foreground(
         &self,
-        mut lease: CalibrationLease<Arc<DecodeRuntime>>,
+        mut lease: CalibrationLease,
         prepared: &PreparedJp2kBatch,
         reqs: &[TileRequest],
         device: DeviceKind,
@@ -231,9 +223,12 @@ impl AdaptiveDecodeReader {
         let read_device = || self.read_device_controlled(device, prepared, reqs.len(), control);
         lease.bind_device(self.runtime.device_identity(device)?);
         if lease.step == CalibrationStep::Warmup {
-            let device_started = Instant::now();
-            let device_elapsed = match read_device() {
-                Ok(_) => device_started.elapsed(),
+            let timed_warmup = self.runtime.prewarm_device(device).and_then(|()| {
+                let device_started = Instant::now();
+                read_device().map(|_| device_started.elapsed())
+            });
+            let device_elapsed = match timed_warmup {
+                Ok(elapsed) => elapsed,
                 Err(error) => {
                     Self::check_control(control)?;
                     tracing::debug!(%error, "JP2K device warmup failed");
@@ -388,7 +383,7 @@ impl AdaptiveDecodeReader {
 /// No `ReadControl` applies, so the decision always publishes.
 fn calibrate_device(
     runtime: &DecodeRuntime,
-    mut lease: CalibrationLease<Arc<DecodeRuntime>>,
+    mut lease: CalibrationLease,
     prepared: &PreparedJp2kBatch,
     tiles: usize,
     cpu_elapsed: Duration,
@@ -404,9 +399,14 @@ fn calibrate_device(
             Ok(identity) => {
                 lease.bind_device(identity);
                 record_device_attempt(device, tiles);
-                let started = Instant::now();
-                match runtime.read_prepared_device(device, prepared) {
-                    Ok(_) => lease.complete(Some((cpu_elapsed, started.elapsed())), None),
+                let timed = runtime.prewarm_device(device).and_then(|()| {
+                    let started = Instant::now();
+                    runtime
+                        .read_prepared_device(device, prepared)
+                        .map(|_| started.elapsed())
+                });
+                match timed {
+                    Ok(device_elapsed) => lease.complete(Some((cpu_elapsed, device_elapsed)), None),
                     Err(error) => {
                         tracing::debug!(%error, "JP2K device calibration failed");
                         lease.fail(None)
@@ -433,7 +433,6 @@ impl DecodeRuntime {
                 return Some(DeviceKind::Cuda);
             }
         }
-        #[allow(unreachable_code)]
         None
     }
 
@@ -443,6 +442,18 @@ impl DecodeRuntime {
             DeviceKind::Metal => Ok(self.metal_sessions()?.device_identity()),
             #[cfg(feature = "cuda")]
             DeviceKind::Cuda => Ok(self.cuda_sessions()?.device_identity().to_owned()),
+        }
+    }
+
+    /// Builds the device's kernels before a timed calibration read, so the
+    /// sample measures decode work rather than one-time pipeline setup.
+    fn prewarm_device(&self, device: DeviceKind) -> Result<(), WsiError> {
+        match device {
+            #[cfg(feature = "metal")]
+            DeviceKind::Metal => self.metal_sessions()?.prewarm(),
+            // CUDA sessions have no kernel prewarm.
+            #[cfg(feature = "cuda")]
+            DeviceKind::Cuda => Ok(()),
         }
     }
 

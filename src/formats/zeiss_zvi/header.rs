@@ -237,7 +237,7 @@ pub(super) fn decode_utf16le_lossy(raw: &[u8]) -> String {
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .map(|bytes| u16::from_le_bytes(*bytes))
         .take_while(|value| *value != 0)
         .collect::<Vec<_>>();
     String::from_utf16_lossy(&words)

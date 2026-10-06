@@ -343,7 +343,7 @@ enum RouteTileOutcome {
     UnavailableFallback,
 }
 
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(all(test, any(feature = "metal", feature = "cuda")))]
 impl RouteTileOutcome {
     fn event(self) -> crate::core::execution_telemetry::Event {
         use crate::core::execution_telemetry::Event;
@@ -380,8 +380,9 @@ fn record_route(device: DeviceKind, outcome: RouteTileOutcome, tiles: usize) {
             }
         }
     }
+    #[cfg(test)]
     crate::core::execution_telemetry::record(outcome.event(), tiles);
-    let _ = device;
+    let _ = (device, outcome, tiles);
 }
 
 #[cfg(any(feature = "metal", feature = "cuda"))]

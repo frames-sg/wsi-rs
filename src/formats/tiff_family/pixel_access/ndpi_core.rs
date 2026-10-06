@@ -337,42 +337,29 @@ impl TiffPixelReader {
             }
         }
 
-        let missing_indices: Vec<usize> = needed_strips
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, needed)| needed.strip.is_none().then_some(idx))
-            .collect();
-        // Decode in order on this thread; see `NdpiRegionReader`.
-        for idx in missing_indices {
-            let needed = &needed_strips[idx];
-            let strip = self.get_or_decode_ndpi_strip(
-                &needed.strip_req,
-                ifd_id,
-                jpeg_header,
-                mcu_starts_tag,
-                tiles_across,
-                tiles_down,
-                strip_offset,
-                strip_byte_count,
-                needed.strip_key,
-                vtw,
-                vth,
-                level_w as u32,
-                level_h as u32,
-            )?;
-            needed_strips[idx].strip = Some(strip);
-        }
-
         let mut tile_data = vec![255u8; (content_width * content_height * 3) as usize];
         let dst_stride = content_width as usize * 3;
 
+        // Uncached strips decode in order on this thread; see `NdpiRegionReader`.
         for needed in needed_strips {
-            let strip = needed.strip.ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("missing decoded NDPI strip {:?}", needed.strip_key),
-            })?;
+            let strip = match needed.strip {
+                Some(strip) => strip,
+                None => self.get_or_decode_ndpi_strip(
+                    &needed.strip_req,
+                    ifd_id,
+                    jpeg_header,
+                    mcu_starts_tag,
+                    tiles_across,
+                    tiles_down,
+                    strip_offset,
+                    strip_byte_count,
+                    needed.strip_key,
+                    vtw,
+                    vth,
+                    level_w as u32,
+                    level_h as u32,
+                )?,
+            };
 
             let copy_start_x = needed.copy_start_x;
             let copy_start_y = needed.copy_start_y;

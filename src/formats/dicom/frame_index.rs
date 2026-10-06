@@ -13,7 +13,7 @@ pub(super) mod validation;
 
 pub(super) use batch_io::{
     frame_read_span, group_frame_read_spans, read_encapsulated_fragments,
-    read_encapsulated_frame_group,
+    read_encapsulated_frame_group, DicomFrameReadSpan,
 };
 pub(super) use model::DicomEncapsulatedFrames;
 pub(super) use validation::{

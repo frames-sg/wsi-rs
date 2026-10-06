@@ -68,12 +68,13 @@ fn read_admission_reserves_indexed_frame_lengths() {
         (frame.len() as u64..=frame.len() as u64 + 1).contains(&bound),
         "bound {bound} should be the indexed frame length"
     );
+    // A repeated frame is read once; the batch also holds its read window,
+    // the frame plus its 8-byte Item header.
     assert_eq!(
         reader
             .tile_batch_encoded_upper_bound(&[tile.clone(), tile.clone()])
             .unwrap(),
-        bound,
-        "a repeated frame is read once"
+        2 * bound + 8,
     );
     assert_eq!(reader.tile_batch_encoded_upper_bound(&[]).unwrap(), 0);
     assert_eq!(
@@ -82,6 +83,62 @@ fn read_admission_reserves_indexed_frame_lengths() {
             .unwrap(),
         unit,
         "out-of-range requests keep the conservative bound"
+    );
+}
+
+#[test]
+fn batch_admission_covers_the_coalesced_read_window_between_frames() {
+    use crate::core::registry::ManagedSlideReader;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("admission-window.dcm");
+    let frame = |len: usize| {
+        let mut bytes = vec![0xFF, 0x4F];
+        bytes.resize(len, 0);
+        bytes
+    };
+    let mut options = TestDicomOptions::native(Vec::new());
+    options.transfer_syntax = HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX;
+    options.rows = 16;
+    options.columns = 16;
+    options.total_pixel_matrix_rows = 16;
+    options.total_pixel_matrix_columns = 48;
+    options.number_of_frames = 3;
+    options.pixel_data = TestPixelData::EncapsulatedFrames(vec![frame(6), frame(100), frame(10)]);
+    write_test_dicom(&path, options);
+    let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
+    let image = slide.levels[0].parts[0].clone();
+    let frames = image.ensure_encapsulated_frames().expect("index frames");
+    let reader = DicomReader { slide };
+
+    let first = &frames.fragments[frames.frame_ranges[0].clone()];
+    let last = &frames.fragments[frames.frame_ranges[2].clone()];
+    let payload = |fragments: &[_]| -> u64 {
+        fragments
+            .iter()
+            .map(
+                |fragment: &crate::formats::dicom::frame_index::model::DicomFragmentRef| {
+                    u64::from(fragment.len)
+                },
+            )
+            .sum()
+    };
+    let window_end = last
+        .iter()
+        .map(|fragment| fragment.payload_offset + u64::from(fragment.len))
+        .max()
+        .unwrap();
+    let window = window_end - first[0].item_offset;
+    let bound = reader
+        .tile_batch_encoded_upper_bound(&[
+            TileRequest::new(0usize, 0usize, 0u32, 0, 0),
+            TileRequest::new(0usize, 0usize, 0u32, 2, 0),
+        ])
+        .unwrap();
+
+    assert_eq!(bound, payload(first) + payload(last) + window);
+    assert!(
+        window > payload(first) + payload(last) + 100,
+        "the coalesced window spans the unrequested middle frame"
     );
 }
 

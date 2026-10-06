@@ -4,8 +4,8 @@ use super::fractional_u8::{
     RgbaBandScratch,
 };
 use super::integral::{
-    blit_integral_samples, compose_dense_integral_rgb_argb32, has_integral_position,
-    hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
+    blit_integral_rgb_saturating_rgba, blit_integral_samples, compose_dense_integral_rgb_argb32,
+    has_integral_position, hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
     try_compose_dense_integral_u8_region,
 };
 use super::output::{
@@ -27,6 +27,15 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
 
 /// Compose small source units in bounded batches. The caller must fit every
 /// batch's source buffers within its admitted region staging reservation.
+fn plan_cache_keys<'a>(
+    dataset_id: crate::core::types::DatasetId,
+    req: &'a RegionRequest,
+    hits: &'a [TileHit],
+) -> impl Iterator<Item = CacheKey> + 'a {
+    hits.iter()
+        .map(move |hit| CacheKey::from_region_tile(dataset_id, req, hit.col, hit.row))
+}
+
 /// An incomplete region composes on one pool worker, and its source decodes
 /// units in order there, so concurrent regions each occupy one worker rather
 /// than queueing behind each other's units.
@@ -39,13 +48,8 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
 ) -> Result<CpuTile, WsiError> {
     let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
     let dataset_id = source.dataset().id;
-    let cached = cache.is_some_and(|cache| {
-        cache.contains_keys(
-            plan.hits
-                .iter()
-                .map(|hit| CacheKey::from_region_tile(dataset_id, req, hit.col, hit.row)),
-        )
-    });
+    let cached = cache
+        .is_some_and(|cache| cache.contains_keys(plan_cache_keys(dataset_id, req, &plan.hits)));
     let compose = || compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1));
     if cached {
         // The hint changes scheduling only. Normal resolution still handles
@@ -103,11 +107,8 @@ pub(in crate::core::registry) fn compose_cached_region_argb32<T: SlideReader + ?
     if plan.hits.is_empty() || !plan.hits.iter().all(has_integral_position) {
         return Ok(false);
     }
-    let Some(tiles) = cache.get_complete(
-        plan.hits
-            .iter()
-            .map(|hit| CacheKey::from_region_tile(source.dataset().id, req, hit.col, hit.row)),
-    ) else {
+    let Some(tiles) = cache.get_complete(plan_cache_keys(source.dataset().id, req, &plan.hits))
+    else {
         return Ok(false);
     };
     for tile in &tiles {
@@ -132,13 +133,9 @@ pub(in crate::core::registry) fn composite_region_from_plan<T: SlideReader + ?Si
     if batch_ends.len() <= 1 {
         return compose_resolved_region(source, cache, req, plan);
     }
-    if let Some(tiles) = cache.and_then(|cache| {
-        cache.get_complete(
-            plan.hits
-                .iter()
-                .map(|hit| CacheKey::from_region_tile(source.dataset().id, req, hit.col, hit.row)),
-        )
-    }) {
+    if let Some(tiles) = cache
+        .and_then(|cache| cache.get_complete(plan_cache_keys(source.dataset().id, req, &plan.hits)))
+    {
         // Cached tiles need no decoder staging. Reuse the dense compositor
         // instead of treating an already resident region as streamed misses.
         return compose_region_tiles(
@@ -435,55 +432,18 @@ impl RegionComposer {
                 && tile.channels == 3
                 && tile.color_space == ColorSpace::Rgb
                 && tile.layout == CpuTileLayout::Interleaved
-                && hit
-                    .cairo_fixed_dest
-                    .is_some_and(|(x, y)| x.fract() == 0.0 && y.fract() == 0.0)
             {
-                if let Some(source) = tile.as_u8() {
-                    // Integral opaque SATURATE needs only one RGBA image:
-                    // covered pixels retain the first painter's color.
-                    let (x, y) = hit.cairo_fixed_dest.expect("integral Pixman placement");
-                    let x = x as i64;
-                    let y = y as i64;
-                    let x0 = x.max(0);
-                    let y0 = y.max(0);
-                    let x1 = (x + i64::from(tile.width)).min(i64::from(self.width));
-                    let y1 = (y + i64::from(tile.height)).min(i64::from(self.height));
-                    if x0 < x1 && y0 < y1 {
-                        for row in y0..y1 {
-                            let target = (row as usize * self.width as usize + x0 as usize) * 4;
-                            let start =
-                                ((row - y) as usize * tile.width as usize + (x0 - x) as usize) * 3;
-                            let count = (x1 - x0) as usize;
-                            let row = &mut out[target..target + count * 4];
-                            let source = &source[start..start + count * 3];
-                            if row.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
-                                // Most tile rows have no overlap. Keep the
-                                // RGB-to-RGBA loop free of per-pixel branches.
-                                for (target, source) in row
-                                    .as_chunks_mut::<4>()
-                                    .0
-                                    .iter_mut()
-                                    .zip(source.as_chunks::<3>().0)
-                                {
-                                    target.copy_from_slice(&[source[0], source[1], source[2], 255]);
-                                }
-                            } else {
-                                for (target, source) in row
-                                    .as_chunks_mut::<4>()
-                                    .0
-                                    .iter_mut()
-                                    .zip(source.as_chunks::<3>().0)
-                                {
-                                    if target[3] == 0 {
-                                        target.copy_from_slice(&[
-                                            source[0], source[1], source[2], 255,
-                                        ]);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                let integral = hit
+                    .cairo_fixed_dest
+                    .filter(|(x, y)| x.fract() == 0.0 && y.fract() == 0.0);
+                if let (Some(source), Some((x, y))) = (tile.as_u8(), integral) {
+                    blit_integral_rgb_saturating_rgba(
+                        out,
+                        (self.width, self.height),
+                        source,
+                        tile,
+                        (x as i64, y as i64),
+                    );
                     return Ok(());
                 }
             }

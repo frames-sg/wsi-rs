@@ -1,83 +1,95 @@
 use super::*;
 use std::collections::HashMap;
-use wsi_rs::{TileEntry, TileLayout};
+use wsi_rs::{
+    AxesShape, CpuTile, Dataset, DatasetId, SampleType, Scene, Series, SlideReader, TileEntry,
+    TileLayout, TileRequest,
+};
+
+/// A 128x128-tile RGB source whose blue channel is `blue(x, y)` within a tile.
+struct Pattern {
+    dataset: Dataset,
+    blue: fn(i64, i64) -> i64,
+}
+
+impl SlideReader for Pattern {
+    fn dataset(&self) -> &Dataset {
+        &self.dataset
+    }
+
+    fn read_tile_cpu(&self, request: &TileRequest) -> Result<CpuTile, WsiError> {
+        let mut data = Vec::with_capacity(128 * 128 * 3);
+        for y in 0..128 {
+            for x in 0..128 {
+                data.extend_from_slice(&[
+                    (request.col * 37 + x) as u8,
+                    (request.row * 29 + y) as u8,
+                    (self.blue)(x, y) as u8,
+                ]);
+            }
+        }
+        CpuTile::from_u8_interleaved(128, 128, 3, ColorSpace::Rgb, data)
+    }
+}
+
+fn regular_grid() -> TileLayout {
+    TileLayout::Regular {
+        tile_width: 128,
+        tile_height: 128,
+        tiles_across: 4,
+        tiles_down: 8,
+    }
+}
+
+/// A 4x8 irregular grid with tile (1, 3) missing.
+fn irregular_grid(
+    tile_advance: (f64, f64),
+    extra_tiles: (u32, u32, u32, u32),
+    placement: impl Fn(i64, i64) -> (f64, f64),
+) -> TileLayout {
+    TileLayout::Irregular {
+        tile_advance,
+        extra_tiles,
+        tiles: (0..8)
+            .flat_map(|row| (0..4).map(move |col| (col, row)))
+            .filter(|position| *position != (1, 3))
+            .map(|(col, row)| ((col, row), TileEntry::new(placement(col, row), (128, 128))))
+            .collect(),
+    }
+}
+
+fn pattern_slide(
+    dimensions: (u64, u64),
+    layout: TileLayout,
+    blue: fn(i64, i64) -> i64,
+    cache_bytes: u64,
+) -> Slide {
+    let dataset = Dataset::new(
+        DatasetId::new(1),
+        vec![Scene::new(
+            "pattern",
+            vec![Series::new(
+                "rgb",
+                AxesShape::default(),
+                vec![Level::new(dimensions, 1.0, layout)],
+                SampleType::Uint8,
+                vec![],
+            )],
+        )],
+    );
+    Slide::from_source_with_cache_bytes(Box::new(Pattern { dataset, blue }), cache_bytes)
+}
 
 #[test]
 fn banded_reads_preserve_fractional_pixels_gaps_and_edges() {
-    use wsi_rs::{
-        AxesShape, CpuTile, Dataset, DatasetId, SampleType, Scene, Series, SlideReader, TileRequest,
-    };
-
-    struct Pattern(Dataset);
-    impl SlideReader for Pattern {
-        fn dataset(&self) -> &Dataset {
-            &self.0
-        }
-        fn read_tile_cpu(&self, request: &TileRequest) -> Result<CpuTile, WsiError> {
-            let mut data = Vec::with_capacity(128 * 128 * 3);
-            for y in 0..128 {
-                for x in 0..128 {
-                    data.extend_from_slice(&[
-                        (request.col * 37 + x) as u8,
-                        (request.row * 29 + y) as u8,
-                        (x + y) as u8,
-                    ]);
-                }
-            }
-            CpuTile::from_u8_interleaved(128, 128, 3, ColorSpace::Rgb, data)
-        }
-    }
-
     let layouts = [
-        TileLayout::Regular {
-            tile_width: 128,
-            tile_height: 128,
-            tiles_across: 4,
-            tiles_down: 8,
-        },
-        TileLayout::Irregular {
-            tile_advance: (128.0, 128.0),
-            extra_tiles: (0, 0, 0, 0),
-            tiles: (0..8)
-                .flat_map(|row| (0..4).map(move |col| (col, row)))
-                .filter(|position| *position != (1, 3))
-                .map(|position| (position, TileEntry::new((0.0, 0.0), (128, 128))))
-                .collect(),
-        },
-        TileLayout::Irregular {
-            tile_advance: (130.25, 126.5),
-            extra_tiles: (1, 1, 1, 1),
-            tiles: (0..8)
-                .flat_map(|row| (0..4).map(move |col| (col, row)))
-                .filter(|position| *position != (1, 3))
-                .map(|(col, row)| {
-                    (
-                        (col, row),
-                        TileEntry::new(
-                            ((col % 2) as f64 * 0.25, (row % 2) as f64 * 0.5),
-                            (128, 128),
-                        ),
-                    )
-                })
-                .collect(),
-        },
+        regular_grid(),
+        irregular_grid((128.0, 128.0), (0, 0, 0, 0), |_, _| (0.0, 0.0)),
+        irregular_grid((130.25, 126.5), (1, 1, 1, 1), |col, row| {
+            ((col % 2) as f64 * 0.25, (row % 2) as f64 * 0.5)
+        }),
     ];
     for layout in layouts {
-        let level = Level::new((530, 1030), 1.0, layout);
-        let dataset = Dataset::new(
-            DatasetId::new(1),
-            vec![Scene::new(
-                "pattern",
-                vec![Series::new(
-                    "rgb",
-                    AxesShape::default(),
-                    vec![level],
-                    SampleType::Uint8,
-                    vec![],
-                )],
-            )],
-        );
-        let slide = Slide::from_source_with_cache_bytes(Box::new(Pattern(dataset)), 0);
+        let slide = pattern_slide((530, 1030), layout, |x, y| x + y, 0);
         let level = &slide.dataset().scenes[0].series[0].levels[0];
         let request = RegionRequest::new(0, 0, 0, (-13, -7), (541, 1047));
         for offset in [(0.0, 0.0), (0.25, 0.5)] {
@@ -93,6 +105,8 @@ fn banded_reads_preserve_fractional_pixels_gaps_and_edges() {
                 opaque,
             )
             .unwrap();
+            // Concurrent banded reads through one handle must produce the
+            // same pixels as the single unbanded read.
             std::thread::scope(|scope| {
                 for _ in 0..4 {
                     scope.spawn(|| {
@@ -114,64 +128,14 @@ fn banded_reads_preserve_fractional_pixels_gaps_and_edges() {
 
 #[test]
 fn cached_dense_reads_match_the_composed_path() {
-    use wsi_rs::{
-        AxesShape, CpuTile, Dataset, DatasetId, SampleType, Scene, Series, SlideReader, TileRequest,
-    };
-
-    struct Pattern(Dataset);
-    impl SlideReader for Pattern {
-        fn dataset(&self) -> &Dataset {
-            &self.0
-        }
-        fn read_tile_cpu(&self, request: &TileRequest) -> Result<CpuTile, WsiError> {
-            let mut data = Vec::with_capacity(128 * 128 * 3);
-            for y in 0..128 {
-                for x in 0..128 {
-                    data.extend_from_slice(&[
-                        (request.col * 37 + x) as u8,
-                        (request.row * 29 + y) as u8,
-                        (x ^ y) as u8,
-                    ]);
-                }
-            }
-            CpuTile::from_u8_interleaved(128, 128, 3, ColorSpace::Rgb, data)
-        }
-    }
-
     for irregular in [false, true] {
         let open = |cache_bytes| {
             let layout = if irregular {
-                TileLayout::Irregular {
-                    tile_advance: (128.0, 128.0),
-                    extra_tiles: (0, 0, 0, 0),
-                    tiles: (0..8)
-                        .flat_map(|row| (0..4).map(move |col| (col, row)))
-                        .filter(|position| *position != (1, 3))
-                        .map(|position| (position, TileEntry::new((0.0, 0.0), (128, 128))))
-                        .collect(),
-                }
+                irregular_grid((128.0, 128.0), (0, 0, 0, 0), |_, _| (0.0, 0.0))
             } else {
-                TileLayout::Regular {
-                    tile_width: 128,
-                    tile_height: 128,
-                    tiles_across: 4,
-                    tiles_down: 8,
-                }
+                regular_grid()
             };
-            let dataset = Dataset::new(
-                DatasetId::new(2),
-                vec![Scene::new(
-                    "pattern",
-                    vec![Series::new(
-                        "rgb",
-                        AxesShape::default(),
-                        vec![Level::new((500, 1024), 1.0, layout)],
-                        SampleType::Uint8,
-                        vec![],
-                    )],
-                )],
-            );
-            Slide::from_source_with_cache_bytes(Box::new(Pattern(dataset)), cache_bytes)
+            pattern_slide((500, 1024), layout, |x, y| x ^ y, cache_bytes)
         };
         let reference = open(0);
         let cached = open(64 << 20);

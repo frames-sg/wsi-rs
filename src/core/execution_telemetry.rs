@@ -41,15 +41,16 @@ pub(crate) enum Event {
     ZeissDirectLevelComposes = 19,
     ZeissDirectUncompressedBlits = 20,
     MiraxAssociatedCacheHits = 21,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    // Route tile counts for tests; telemetry exports them per device instead.
+    #[cfg(all(test, any(feature = "metal", feature = "cuda")))]
     RouteDeviceAttemptTiles = 22,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(all(test, any(feature = "metal", feature = "cuda")))]
     RouteDeviceTiles = 23,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(all(test, any(feature = "metal", feature = "cuda")))]
     RouteAdaptiveCpuTiles = 24,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(all(test, any(feature = "metal", feature = "cuda")))]
     RouteDeviceFailureFallbackTiles = 25,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(all(test, any(feature = "metal", feature = "cuda")))]
     RouteUnavailableFallbackTiles = 26,
 }
 
@@ -85,7 +86,7 @@ pub(crate) fn test_count(event: Event) -> u64 {
 
 #[cfg(feature = "route-telemetry")]
 pub(crate) fn snapshot() -> serde_json::Value {
-    let names: [&str; COUNT] = [
+    let names: [&str; 22] = [
         "cpu_jp2k_batches",
         "cpu_jp2k_tiles",
         "jp2k_preparations",
@@ -108,11 +109,6 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "zeiss_direct_level_composes",
         "zeiss_direct_uncompressed_blits",
         "mirax_associated_cache_hits",
-        "route_device_attempt_tiles",
-        "route_device_tiles",
-        "route_adaptive_cpu_tiles",
-        "route_device_failure_fallback_tiles",
-        "route_unavailable_fallback_tiles",
     ];
     names
         .into_iter()

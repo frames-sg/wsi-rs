@@ -1,9 +1,9 @@
 use super::*;
 
-/// Batch orchestration is local to the admitted NDPI region path. Region
-/// tiles decode in request order on the thread composing the region. When
-/// each read fanned its strips out to the shared pool, concurrent readers
-/// queued behind each other's strips, and that queueing set their tail latency.
+/// Wraps the reader so NDPI region batches use the default in-order
+/// [`SlideReader::read_tiles_cpu`] on the composing thread instead of
+/// `TiffPixelReader`'s batched decode, keeping concurrent reads off the shared
+/// pool.
 pub(super) struct NdpiRegionReader<'a>(pub(super) &'a TiffPixelReader);
 
 impl SlideReader for NdpiRegionReader<'_> {
@@ -36,8 +36,6 @@ impl TiffPixelReader {
             NDPI_DISPLAY_NARROW_STRIP_BATCH
         };
         let batch_size = (output_pixels / tile_pixels).clamp(1, max_batch as u64) as usize;
-        let batch_size = batch_size
-            .min(crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count());
         Some(
             crate::core::registry::composite_region_from_source_in_batches(
                 &NdpiRegionReader(self),

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use super::capture::{alternate_order, CaptureEngine};
 use super::checksum::{validate_cross_capture_checksums, validate_declared_capture_plan};
 use super::comparison::{capture_library, comparison_summaries, P99_MIN_SAMPLE_COUNT};
 use super::process_metrics::PEAK_RSS_METRIC;
@@ -229,24 +230,38 @@ fn validate_mandatory_acceptance_matrix(capture: &Value) -> Result<(), String> {
 fn validate_paired_run_order(capture: &Value) -> Result<(), String> {
     let capture = CaptureDocument::parse(capture)?;
     let library = capture.metadata.benchmark.library.as_str();
+    let mut engine_count = None;
     for run in &capture.runs {
         let repeat = run
             .repeat_index
             .ok_or_else(|| "paired performance run missing repeat_index".to_string())?;
-        let expected = if repeat.is_multiple_of(2) {
-            ["wsi_rs", "openslide"]
-        } else {
-            ["openslide", "wsi_rs"]
-        };
-        if run.engine_order != expected {
+        let accepted = [
+            &[CaptureEngine::WsiRs, CaptureEngine::OpenSlide][..],
+            &[
+                CaptureEngine::WsiRs,
+                CaptureEngine::OpenSlide,
+                CaptureEngine::PreviousRelease,
+            ],
+        ]
+        .map(|engines| {
+            alternate_order(engines, repeat)
+                .into_iter()
+                .map(CaptureEngine::name)
+                .collect::<Vec<_>>()
+        });
+        if !accepted.iter().any(|order| order == &run.engine_order) {
             return Err(format!(
-                "paired performance run repeat={repeat} has engine_order={:?}, expected {expected:?}",
+                "paired performance run repeat={repeat} has engine_order={:?}, expected one of {accepted:?}",
                 run.engine_order
             ));
         }
-        let expected_position = expected
+        if *engine_count.get_or_insert(run.engine_order.len()) != run.engine_order.len() {
+            return Err("paired performance capture mixes two-engine and three-engine runs".into());
+        }
+        let expected_position = run
+            .engine_order
             .iter()
-            .position(|engine| *engine == library)
+            .position(|engine| engine == library)
             .ok_or_else(|| format!("unknown paired performance library {library:?}"))?;
         if run.engine_position != Some(expected_position) {
             return Err(format!(

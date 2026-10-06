@@ -1,4 +1,3 @@
-use super::calibration::claim_route_with;
 use super::reader::*;
 use super::*;
 use crate::core::registry::ConservativeManagedReader;
@@ -13,10 +12,6 @@ impl DecodeRuntime {
 
     pub(crate) fn inline(options: DecodeExecutionOptions) -> Self {
         Self::build(options)
-    }
-
-    pub(super) fn claim_route(&self, key: DecodeRouteKey) -> RouteClaim<&Self> {
-        claim_route_with(self, key)
     }
 
     pub(super) fn cached_route(&self, key: &DecodeRouteKey) -> Option<DecodeRouteDecision> {
@@ -54,10 +49,8 @@ impl DecodeRuntime {
     /// Blocks until no background calibration is running.
     pub(crate) fn wait_for_background_calibration(&self) {
         let slot = &self.background_calibration;
-        let mut busy = slot.busy.lock().unwrap_or_else(|e| e.into_inner());
-        while *busy {
-            busy = slot.idle.wait(busy).unwrap_or_else(|e| e.into_inner());
-        }
+        slot.gate
+            .wait_until(|| !slot.busy.load(std::sync::atomic::Ordering::Acquire));
     }
 }
 
@@ -263,7 +256,7 @@ fn route_cache_recovers_after_poisoning_and_remains_bounded() {
 
 #[test]
 fn route_cache_reads_and_replacements_preserve_fifo_eviction_order() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let decision =
         DecodeRouteDecision::measured(Duration::from_millis(100), Duration::from_millis(80));
     for sequence in 0..ROUTE_CACHE_MAX_ENTRIES {
@@ -286,7 +279,7 @@ fn route_cache_reads_and_replacements_preserve_fifo_eviction_order() {
 
 #[test]
 fn cancelled_route_publication_does_not_mutate_the_cache() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let token = crate::ReadCancellationToken::new();
     token.cancel();
     let control = crate::ReadControl::new(token);
@@ -515,17 +508,20 @@ fn first_automatic_read_returns_cpu_without_initializing_metal() {
 
 #[test]
 fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let key = route_key(909);
     assert!(matches!(
-        runtime.claim_route(key.clone()),
+        runtime.claim_owned_route(key.clone()),
         RouteClaim::FirstCpu { .. }
     ));
-    let RouteClaim::Calibrate(warmup) = runtime.claim_route(key.clone()) else {
+    let RouteClaim::Calibrate(warmup) = runtime.claim_owned_route(key.clone()) else {
         panic!("warmup pending")
     };
     assert_eq!(warmup.step, CalibrationStep::Warmup);
-    assert!(matches!(runtime.claim_route(key.clone()), RouteClaim::Cpu));
+    assert!(matches!(
+        runtime.claim_owned_route(key.clone()),
+        RouteClaim::Cpu
+    ));
     warmup
         .complete(
             Some((Duration::from_millis(100), Duration::from_millis(200))),
@@ -533,7 +529,7 @@ fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
         )
         .unwrap();
     for (index, device_ms) in [80, 200, 70].into_iter().enumerate() {
-        let RouteClaim::Calibrate(sample) = runtime.claim_route(key.clone()) else {
+        let RouteClaim::Calibrate(sample) = runtime.claim_owned_route(key.clone()) else {
             panic!("sample pending")
         };
         assert_eq!(
@@ -556,7 +552,7 @@ fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
         runtime.cached_route(&key).unwrap().winner,
         DecodeRoute::Device
     );
-    let RouteClaim::Ready(decision) = runtime.claim_route(key) else {
+    let RouteClaim::Ready(decision) = runtime.claim_owned_route(key) else {
         panic!("completed decision missing")
     };
     assert_eq!(decision.winner, DecodeRoute::Device);
@@ -565,13 +561,13 @@ fn calibration_is_deferred_exclusive_and_uses_three_median_ratios() {
 #[test]
 fn slow_device_warmup_keeps_cpu_without_more_foreground_probes() {
     for (device_us, selects_cpu) in [(400, false), (401, true)] {
-        let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+        let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
         let key = route_key(914);
         assert!(matches!(
-            runtime.claim_route(key.clone()),
+            runtime.claim_owned_route(key.clone()),
             RouteClaim::FirstCpu { .. }
         ));
-        let RouteClaim::Calibrate(warmup) = runtime.claim_route(key.clone()) else {
+        let RouteClaim::Calibrate(warmup) = runtime.claim_owned_route(key.clone()) else {
             panic!("warmup pending")
         };
         warmup
@@ -581,13 +577,13 @@ fn slow_device_warmup_keeps_cpu_without_more_foreground_probes() {
             )
             .unwrap();
         if selects_cpu {
-            let RouteClaim::Ready(decision) = runtime.claim_route(key) else {
+            let RouteClaim::Ready(decision) = runtime.claim_owned_route(key) else {
                 panic!("slow warmup must not schedule another device probe")
             };
             assert_eq!(decision.winner, DecodeRoute::Cpu);
             assert!(!decision.device_failure);
         } else {
-            let RouteClaim::Calibrate(sample) = runtime.claim_route(key) else {
+            let RouteClaim::Calibrate(sample) = runtime.claim_owned_route(key) else {
                 panic!("moderate warmup should retain median calibration")
             };
             assert_eq!(sample.step, CalibrationStep::Sample { cpu_first: true });
@@ -597,19 +593,19 @@ fn slow_device_warmup_keeps_cpu_without_more_foreground_probes() {
 
 #[test]
 fn clipped_tiles_reuse_a_strong_cpu_preference_for_full_sized_siblings() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let full = route_key(915);
     let mut edge = full.clone();
     edge.sample_geometry = RouteSampleGeometry::from_dimensions([(129, 139)]);
     assert!(matches!(
-        runtime.claim_route(full.clone()),
+        runtime.claim_owned_route(full.clone()),
         RouteClaim::FirstCpu { .. }
     ));
     assert!(matches!(
-        runtime.claim_route(edge.clone()),
+        runtime.claim_owned_route(edge.clone()),
         RouteClaim::FirstCpu { .. }
     ));
-    let RouteClaim::Calibrate(warmup) = runtime.claim_route(full.clone()) else {
+    let RouteClaim::Calibrate(warmup) = runtime.claim_owned_route(full.clone()) else {
         panic!("warmup pending")
     };
     warmup
@@ -620,7 +616,7 @@ fn clipped_tiles_reuse_a_strong_cpu_preference_for_full_sized_siblings() {
         .unwrap();
     for geometry in [(129, 139), (256, 139), (129, 256)] {
         edge.sample_geometry = RouteSampleGeometry::from_dimensions([geometry]);
-        let RouteClaim::Ready(decision) = runtime.claim_route(edge.clone()) else {
+        let RouteClaim::Ready(decision) = runtime.claim_owned_route(edge.clone()) else {
             panic!("clipped tile should not repeat a costly device warmup");
         };
         assert_eq!(decision.winner, DecodeRoute::Cpu);
@@ -645,7 +641,7 @@ fn clipped_tiles_reuse_a_strong_cpu_preference_for_full_sized_siblings() {
         larger_batch,
     ] {
         assert!(
-            matches!(runtime.claim_route(key), RouteClaim::FirstCpu { .. }),
+            matches!(runtime.claim_owned_route(key), RouteClaim::FirstCpu { .. }),
             "unmeasured workload must keep its own calibration"
         );
     }
@@ -653,17 +649,17 @@ fn clipped_tiles_reuse_a_strong_cpu_preference_for_full_sized_siblings() {
 
 #[test]
 fn abandoned_and_cancelled_calibration_release_ownership_without_publishing() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let key = route_key(910);
     assert!(matches!(
-        runtime.claim_route(key.clone()),
+        runtime.claim_owned_route(key.clone()),
         RouteClaim::FirstCpu { .. }
     ));
-    let RouteClaim::Calibrate(lease) = runtime.claim_route(key.clone()) else {
+    let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(key.clone()) else {
         panic!("warmup pending")
     };
     drop(lease);
-    let RouteClaim::Calibrate(lease) = runtime.claim_route(key.clone()) else {
+    let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(key.clone()) else {
         panic!("ownership leaked")
     };
     let token = crate::ReadCancellationToken::new();
@@ -672,7 +668,7 @@ fn abandoned_and_cancelled_calibration_release_ownership_without_publishing() {
         lease.complete(None, Some(&crate::ReadControl::new(token))),
         Err(WsiError::Cancelled)
     ));
-    let RouteClaim::Calibrate(lease) = runtime.claim_route(key.clone()) else {
+    let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(key.clone()) else {
         panic!("ownership leaked")
     };
     assert_eq!(lease.step, CalibrationStep::Warmup);
@@ -682,29 +678,32 @@ fn abandoned_and_cancelled_calibration_release_ownership_without_publishing() {
 
 #[test]
 fn busy_routes_cannot_be_evicted_into_duplicate_calibration() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let mut leases = Vec::new();
     for n in 0..ROUTE_CACHE_MAX_ENTRIES {
         assert!(matches!(
-            runtime.claim_route(route_key(n)),
+            runtime.claim_owned_route(route_key(n)),
             RouteClaim::FirstCpu { .. }
         ));
-        let RouteClaim::Calibrate(lease) = runtime.claim_route(route_key(n)) else {
+        let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(route_key(n)) else {
             panic!("warmup pending")
         };
         leases.push(lease);
     }
     assert!(matches!(
-        runtime.claim_route(route_key(9000)),
+        runtime.claim_owned_route(route_key(9000)),
         RouteClaim::Cpu
     ));
     assert_eq!(
         runtime.route_cache.lock().unwrap().len(),
         ROUTE_CACHE_MAX_ENTRIES
     );
-    assert!(matches!(runtime.claim_route(route_key(0)), RouteClaim::Cpu));
+    assert!(matches!(
+        runtime.claim_owned_route(route_key(0)),
+        RouteClaim::Cpu
+    ));
     drop(leases);
-    let RouteClaim::Calibrate(_) = runtime.claim_route(route_key(0)) else {
+    let RouteClaim::Calibrate(_) = runtime.claim_owned_route(route_key(0)) else {
         panic!("owner not released")
     };
 }
@@ -820,7 +819,7 @@ fn calibrating_reads_return_before_background_device_work() {
     let identity = runtime.metal_sessions().unwrap().device_identity();
     let key =
         route_key_for_batch(slide.source(), std::slice::from_ref(&request), &identity).unwrap();
-    match runtime.claim_route(key) {
+    match runtime.claim_owned_route(key) {
         RouteClaim::Ready(decision) => assert!(!decision.device_failure),
         RouteClaim::Calibrate(sample) => {
             assert!(matches!(sample.step, CalibrationStep::Sample { .. }))
@@ -867,19 +866,22 @@ fn constrained_admission_skips_calibration_and_strict_native_copying() {
 
 #[test]
 fn calibration_binds_a_device_lazily_and_failure_publishes_cpu() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let mut key = route_key(911);
     key.device_identity.clear();
     assert!(matches!(
-        runtime.claim_route(key.clone()),
+        runtime.claim_owned_route(key.clone()),
         RouteClaim::FirstCpu { .. }
     ));
-    let RouteClaim::Calibrate(mut lease) = runtime.claim_route(key.clone()) else {
+    let RouteClaim::Calibrate(mut lease) = runtime.claim_owned_route(key.clone()) else {
         panic!("pending warmup")
     };
     let pending = key.clone();
     key.device_identity = "metal:1234:test".into();
-    assert!(matches!(runtime.claim_route(key.clone()), RouteClaim::Cpu));
+    assert!(matches!(
+        runtime.claim_owned_route(key.clone()),
+        RouteClaim::Cpu
+    ));
     lease.bind_device(key.device_identity.clone());
     assert!(!runtime.route_cache.lock().unwrap().contains(&pending));
     lease.fail(None).unwrap();
@@ -890,10 +892,10 @@ fn calibration_binds_a_device_lazily_and_failure_publishes_cpu() {
 
 #[test]
 fn concurrent_route_claims_do_not_wait_for_the_calibrating_caller() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let key = route_key(912);
     assert!(matches!(
-        runtime.claim_route(key.clone()),
+        runtime.claim_owned_route(key.clone()),
         RouteClaim::FirstCpu { .. }
     ));
     std::thread::scope(|scope| {
@@ -902,7 +904,7 @@ fn concurrent_route_claims_do_not_wait_for_the_calibrating_caller() {
         let runtime = &runtime;
         let key = &key;
         scope.spawn(move || {
-            let RouteClaim::Calibrate(lease) = runtime.claim_route(key.clone()) else {
+            let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(key.clone()) else {
                 panic!("warmup pending")
             };
             owned_tx.send(()).unwrap();
@@ -910,10 +912,16 @@ fn concurrent_route_claims_do_not_wait_for_the_calibrating_caller() {
             drop(lease);
         });
         owned_rx.recv().unwrap();
-        assert!(matches!(runtime.claim_route(key.clone()), RouteClaim::Cpu));
+        assert!(matches!(
+            runtime.claim_owned_route(key.clone()),
+            RouteClaim::Cpu
+        ));
         release_tx.send(()).unwrap();
     });
-    assert!(matches!(runtime.claim_route(key), RouteClaim::Calibrate(_)));
+    assert!(matches!(
+        runtime.claim_owned_route(key),
+        RouteClaim::Calibrate(_)
+    ));
 }
 
 #[cfg(feature = "metal")]
@@ -1019,7 +1027,7 @@ fn cancelled_optional_preparation_releases_route_and_memory_ownership() {
     );
     assert!(runtime.metal_sessions.get().is_none());
     let key = route_key_for_batch(&reader, &reqs, "").unwrap();
-    let RouteClaim::Calibrate(lease) = runtime.claim_route(key) else {
+    let RouteClaim::Calibrate(lease) = runtime.claim_owned_route(key) else {
         panic!("calibration ownership leaked")
     };
     assert_eq!(lease.step, CalibrationStep::Warmup);
@@ -1032,15 +1040,15 @@ fn cancelled_optional_preparation_releases_route_and_memory_ownership() {
 
 #[test]
 fn the_initial_cpu_read_owns_the_pending_route_until_completion() {
-    let runtime = DecodeRuntime::inline(DecodeExecutionOptions::default());
+    let runtime = Arc::new(DecodeRuntime::inline(DecodeExecutionOptions::default()));
     let key = route_key(9901);
-    let initial = runtime.claim_route(key.clone());
+    let initial = runtime.claim_owned_route(key.clone());
     assert!(
-        matches!(runtime.claim_route(key.clone()), RouteClaim::Cpu),
+        matches!(runtime.claim_owned_route(key.clone()), RouteClaim::Cpu),
         "warmup must not race the route's first CPU read"
     );
     drop(initial);
-    let RouteClaim::Calibrate(warmup) = runtime.claim_route(key) else {
+    let RouteClaim::Calibrate(warmup) = runtime.claim_owned_route(key) else {
         panic!("a later read must be able to warm the device");
     };
     assert_eq!(warmup.step, CalibrationStep::Warmup);

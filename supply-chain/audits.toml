@@ -25,6 +25,12 @@ criteria = "safe-to-deploy"
 delta = "0.2.0 -> 0.2.1"
 notes = "Reviewed the exact published 0.2.0 and 0.2.1 package contents. Runtime source is identical. Changes are package/dependency versions, registry lockfile metadata, release-status README text, and VCS metadata. Exact JXR dependencies move to 0.2.1; no new runtime capabilities or unsafe code."
 
+[[audits.jxr]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.3.0"
+notes = "Reviewed the release checkout delta against v0.2.1. Facade runtime source is unchanged. Package metadata moves the exact JXR dependency cohort to 0.3.0, J2K to 0.12.0, and the host Rust requirement to 1.99. No runtime capability or unsafe-code policy change. Optional accelerator implementations remain separate dependencies."
+
 [[audits.jxr-core]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
@@ -49,11 +55,23 @@ criteria = "safe-to-deploy"
 delta = "0.2.0 -> 0.2.1"
 notes = "Reviewed the exact published 0.2.0 and 0.2.1 package contents. Runtime source is identical; only package metadata, lockfile metadata, and the exact j2k-core pin change to align with J2K 0.11.3. No build script, unsafe code, or new runtime capabilities."
 
+[[audits.jxr-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.3.0"
+notes = "Reviewed the release checkout delta against v0.2.1. Runtime source is unchanged; package metadata and the public j2k-core dependency move to the coordinated 0.12.0 release, with Rust 1.99 required. Existing checked geometry, request limits, and the unsafe-code prohibition remain intact."
+
 [[audits.jxr-math]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 notes = "Reviewed the exact published registry package and VCS provenance, manifests, runtime capabilities and unsafe-code policy. Source forbids unsafe code; no runtime filesystem, network, subprocess or environment access was found. Reviewed checked integer arithmetic, transform/overlap/color operations and generated reconstruction ABI. The build script reads packaged data/reconstruction.abi, validates the permutation, and writes only reconstruction_tables.rs under Cargo OUT_DIR."
+
+[[audits.jxr-math]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
+notes = "Reviewed the release checkout delta. Runtime source and build.rs are unchanged. The package version and host Rust requirement change; no new runtime capabilities or build-script behavior are introduced."
 
 [[audits.jxr-native]]
 who = "Codex-assisted source review"
@@ -78,6 +96,12 @@ who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 delta = "0.2.0 -> 0.2.1"
 notes = "Reviewed the exact published 0.2.0 and 0.2.1 package contents. Runtime source is identical; only package metadata, lockfile metadata, and the exact jxr-core dependency change. Existing parser bounds, decode contracts, and unsafe-code prohibition remain intact."
+
+[[audits.jxr-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.3.0"
+notes = "Reviewed all changed decoder source against v0.2.1. The private highpass path writes coefficients directly into the existing adaptive scan; checked coefficient advancement bounds each index and count, and errors discard the partial tile and scan state. The public run/level decoder retains its prior behavior. Other runtime changes are inlining hints, fixed-size slice chunks, and an equivalent bounded integer midpoint. The crate still forbids unsafe code and adds no filesystem, network, subprocess, or environment access. The added differential test covers 4096 complete, malformed, and truncated entropy blocks. This source review does not claim formal verification or complete format conformance."
 
 [[audits.sha2-asm]]
 who = "Codex-assisted source review"

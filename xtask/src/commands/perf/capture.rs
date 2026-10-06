@@ -7,7 +7,7 @@ use super::checksum::{
     validate_capture_checksums, validate_declared_capture_plan, validate_worker_run_typed,
 };
 use super::manifest::{load_manifest, resolve_manifest_slides, SlideSpec};
-use super::metadata::capture_summary;
+use super::metadata::{capture_summary, CapturePlan, CaptureSubject};
 use super::process_metrics::annotate_run_resource_usage_typed;
 use super::schema::CaptureRun;
 use super::worker::{
@@ -38,8 +38,36 @@ struct RunSpec<'a> {
     slide: &'a SlideSpec,
     repeat: u32,
     workers: usize,
-    engine_order: &'a [BenchLibrary],
+    engine_order: &'a [&'static str],
     engine_position: usize,
+}
+
+/// Engine name recorded for runs of the previous release's shim.
+pub(super) const PREVIOUS_RELEASE_ENGINE: &str = "wsi_rs_previous";
+
+/// One engine in an interleaved `perf-capture-pair` run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptureEngine {
+    WsiRs,
+    OpenSlide,
+    PreviousRelease,
+}
+
+impl CaptureEngine {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::WsiRs => BenchLibrary::WsiRs.name(),
+            Self::OpenSlide => BenchLibrary::OpenSlide.name(),
+            Self::PreviousRelease => PREVIOUS_RELEASE_ENGINE,
+        }
+    }
+
+    fn library(self) -> BenchLibrary {
+        match self {
+            Self::WsiRs | Self::PreviousRelease => BenchLibrary::WsiRs,
+            Self::OpenSlide => BenchLibrary::OpenSlide,
+        }
+    }
 }
 
 pub(in crate::commands) fn capture(args: Vec<String>) -> Result<(), String> {
@@ -59,43 +87,28 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
     let settings = capture_settings()?;
     let (wsi_rs, openslide) = prepare_pair()?;
     let previous = previous_invocation(&wsi_rs)?;
+    let mut engines = vec![
+        (CaptureEngine::WsiRs, &wsi_rs),
+        (CaptureEngine::OpenSlide, &openslide),
+    ];
+    if let Some(previous) = &previous {
+        engines.push((CaptureEngine::PreviousRelease, previous));
+    }
     let mut wsi_rs_runs = Vec::new();
     let mut openslide_runs = Vec::new();
     let mut previous_runs = Vec::new();
 
     for repeat in 0..repeats {
-        let engine_order = paired_engine_order(repeat);
+        let order = alternate_order(&engines, u64::from(repeat));
+        let engine_order = order
+            .iter()
+            .map(|(engine, _)| engine.name())
+            .collect::<Vec<_>>();
         for &workers in &worker_matrix.counts {
             for slide in &slides {
-                let mut capture_previous = || -> Result<(), String> {
-                    if let Some(invocation) = &previous {
-                        previous_runs.push(capture_run(
-                            BenchLibrary::WsiRs,
-                            invocation,
-                            &settings,
-                            RunSpec {
-                                slide,
-                                repeat,
-                                workers,
-                                engine_order: &[BenchLibrary::WsiRs],
-                                engine_position: 0,
-                            },
-                        )?);
-                    }
-                    Ok(())
-                };
-                // Reverse all three runs together, retaining the paired
-                // current/OpenSlide order recorded in their capture metadata.
-                if repeat % 2 != 0 {
-                    capture_previous()?;
-                }
-                for (engine_position, library) in engine_order.into_iter().enumerate() {
-                    let invocation = match library {
-                        BenchLibrary::WsiRs => &wsi_rs,
-                        BenchLibrary::OpenSlide => &openslide,
-                    };
+                for (engine_position, &(engine, invocation)) in order.iter().enumerate() {
                     let run = capture_run(
-                        library,
+                        engine.library(),
                         invocation,
                         &settings,
                         RunSpec {
@@ -106,13 +119,11 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
                             engine_position,
                         },
                     )?;
-                    match library {
-                        BenchLibrary::WsiRs => wsi_rs_runs.push(run),
-                        BenchLibrary::OpenSlide => openslide_runs.push(run),
+                    match engine {
+                        CaptureEngine::WsiRs => wsi_rs_runs.push(run),
+                        CaptureEngine::OpenSlide => openslide_runs.push(run),
+                        CaptureEngine::PreviousRelease => previous_runs.push(run),
                     }
-                }
-                if repeat % 2 == 0 {
-                    capture_previous()?;
                 }
             }
         }
@@ -136,36 +147,43 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
         }
     }
 
+    let plan = CapturePlan {
+        repeats,
+        slides: &slides,
+        worker_matrix: &worker_matrix,
+        planned_workloads: &settings.planned_workloads,
+    };
     write_capture(
         &format!("{label}-wsi_rs"),
-        BenchLibrary::WsiRs,
-        repeats,
-        &slides,
-        &worker_matrix,
-        &settings.planned_workloads,
+        CaptureSubject::Current(BenchLibrary::WsiRs),
+        &plan,
         wsi_rs_runs,
     )?;
     write_capture(
         &format!("{label}-openslide"),
-        BenchLibrary::OpenSlide,
-        repeats,
-        &slides,
-        &worker_matrix,
-        &settings.planned_workloads,
+        CaptureSubject::Current(BenchLibrary::OpenSlide),
+        &plan,
         openslide_runs,
     )?;
     if previous.is_some() {
         write_capture(
             &format!("{label}-previous"),
-            BenchLibrary::WsiRs,
-            repeats,
-            &slides,
-            &worker_matrix,
-            &settings.planned_workloads,
+            CaptureSubject::PreviousRelease,
+            &plan,
             previous_runs,
         )?;
     }
     Ok(())
+}
+
+/// Even repeats run the engines in the given order and odd repeats in reverse,
+/// so no engine always runs first or last.
+pub(super) fn alternate_order<T: Clone>(engines: &[T], repeat: u64) -> Vec<T> {
+    let mut order = engines.to_vec();
+    if !repeat.is_multiple_of(2) {
+        order.reverse();
+    }
+    order
 }
 
 fn capture_single(args: Vec<String>, library: BenchLibrary) -> Result<(), String> {
@@ -175,7 +193,7 @@ fn capture_single(args: Vec<String>, library: BenchLibrary) -> Result<(), String
     let worker_matrix = requested_worker_matrix()?;
     let settings = capture_settings()?;
     let invocation = prepare_bench(library)?;
-    let engine_order = [library];
+    let engine_order = [library.name()];
     let mut runs = Vec::new();
 
     for repeat in 0..repeats {
@@ -199,11 +217,13 @@ fn capture_single(args: Vec<String>, library: BenchLibrary) -> Result<(), String
 
     write_capture(
         label,
-        library,
-        repeats,
-        &slides,
-        &worker_matrix,
-        &settings.planned_workloads,
+        CaptureSubject::Current(library),
+        &CapturePlan {
+            repeats,
+            slides: &slides,
+            worker_matrix: &worker_matrix,
+            planned_workloads: &settings.planned_workloads,
+        },
         runs,
     )
 }
@@ -268,7 +288,7 @@ fn annotate_run_context_typed(
     decode_cpu_concurrency: Value,
     slide: &SlideSpec,
     workers: usize,
-    engine_order: &[BenchLibrary],
+    engine_order: &[&str],
     engine_position: usize,
 ) -> Result<(), String> {
     if run.worker_count != Some(workers as u64) {
@@ -281,10 +301,7 @@ fn annotate_run_context_typed(
     run.benchmark_group = Some(slide.benchmark_group.clone());
     run.engine_position = Some(engine_position);
     run.decode_cpu_concurrency = Some(decode_cpu_concurrency);
-    run.engine_order = engine_order
-        .iter()
-        .map(|library| library.name().to_string())
-        .collect();
+    run.engine_order = engine_order.iter().map(ToString::to_string).collect();
     run.manifest_sha256.clone_from(&slide.manifest_sha256);
     Ok(())
 }
@@ -295,7 +312,7 @@ fn annotate_run_context(
     decode_cpu_concurrency: Value,
     slide: &SlideSpec,
     workers: usize,
-    engine_order: &[BenchLibrary],
+    engine_order: &[&str],
     engine_position: usize,
 ) -> Result<(), String> {
     if !run.is_object() {
@@ -317,11 +334,8 @@ fn annotate_run_context(
 
 fn write_capture(
     label: &str,
-    library: BenchLibrary,
-    repeats: u32,
-    slides: &[SlideSpec],
-    worker_matrix: &WorkerMatrix,
-    planned_workloads: &[String],
+    subject: CaptureSubject,
+    plan: &CapturePlan<'_>,
     runs: Vec<CaptureRun>,
 ) -> Result<(), String> {
     let output_path = result_dir().join(format!("{label}.json"));
@@ -333,15 +347,7 @@ fn write_capture(
         .into_iter()
         .map(|run| serde_json::to_value(run).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    let summary = capture_summary(
-        label,
-        library,
-        repeats,
-        slides,
-        worker_matrix,
-        planned_workloads,
-        runs,
-    )?;
+    let summary = capture_summary(label, subject, plan, runs)?;
     validate_declared_capture_plan(&summary)?;
     validate_capture_checksums(&summary)?;
     std::fs::write(
@@ -392,14 +398,6 @@ fn capture_task_name(library: BenchLibrary) -> &'static str {
     match library {
         BenchLibrary::WsiRs => "perf-capture",
         BenchLibrary::OpenSlide => "perf-capture-openslide",
-    }
-}
-
-fn paired_engine_order(repeat: u32) -> [BenchLibrary; 2] {
-    if repeat.is_multiple_of(2) {
-        [BenchLibrary::WsiRs, BenchLibrary::OpenSlide]
-    } else {
-        [BenchLibrary::OpenSlide, BenchLibrary::WsiRs]
     }
 }
 

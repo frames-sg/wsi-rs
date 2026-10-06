@@ -72,6 +72,33 @@ fn shared_cpu_work_never_waits_for_helpers_that_have_not_started() {
     release.send(()).unwrap();
 }
 
+fn job_marker(_: &Arc<()>) {}
+
+#[test]
+fn shared_cpu_work_releases_job_data_before_queued_helpers_start() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let (release, blocked) = std::sync::mpsc::channel::<()>();
+    let (started, is_blocked) = std::sync::mpsc::channel();
+    pool.spawn(move || {
+        started.send(()).unwrap();
+        blocked.recv().unwrap();
+    });
+    is_blocked.recv().unwrap();
+    let marker = Arc::new(());
+    let jobs = (0..8).map(|_| Arc::clone(&marker)).collect();
+    // Helpers stay queued behind the blocked worker after the caller returns.
+    share_cpu_work_on(CoreLedger::with_cores(4), Some(&pool), jobs, job_marker);
+    assert_eq!(
+        Arc::strong_count(&marker),
+        1,
+        "queued helpers must not keep job data alive"
+    );
+    release.send(()).unwrap();
+}
+
 #[derive(Default)]
 struct LateCoreProbe {
     caller: std::sync::OnceLock<std::thread::ThreadId>,
@@ -147,6 +174,63 @@ fn shared_cpu_work_recruits_cores_that_become_idle_mid_batch() {
 fn panic_on_three(value: &u64) -> u64 {
     assert_ne!(*value, 3, "job three fails");
     *value
+}
+
+fn record_work_with_late_callers(job: &(usize, Arc<LateCoreProbe>)) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let (index, probe) = job;
+    let thread = std::thread::current().id();
+    if *index == 0 {
+        probe.caller.set(thread).unwrap();
+        probe.started.store(true, SeqCst);
+        while !probe.released.load(SeqCst) {
+            std::thread::yield_now();
+        }
+    } else if probe.caller.get() != Some(&thread) {
+        probe.helper_ran.store(true, SeqCst);
+    }
+}
+
+#[test]
+fn shared_cpu_helpers_retire_when_new_callers_occupy_their_cores() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let ledger = CoreLedger::with_cores(2);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let (release, blocked) = std::sync::mpsc::channel::<()>();
+    let (started, is_blocked) = std::sync::mpsc::channel();
+    pool.spawn(move || {
+        started.send(()).unwrap();
+        blocked.recv().unwrap();
+    });
+    is_blocked.recv().unwrap();
+    let probe = Arc::new(LateCoreProbe::default());
+    let jobs = (0..32).map(|index| (index, Arc::clone(&probe))).collect();
+    std::thread::scope(|scope| {
+        let batch = scope
+            .spawn(|| share_cpu_work_on(ledger, Some(&pool), jobs, record_work_with_late_callers));
+        while !probe.started.load(SeqCst) {
+            std::thread::yield_now();
+        }
+        // The helper was reserved when a core was idle. A new caller takes
+        // that core before the pool can start it.
+        let _other_read = ledger.enter();
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ledger.active.load(SeqCst) > 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let retired = ledger.active.load(SeqCst) <= 2;
+        probe.released.store(true, SeqCst);
+        batch.join().unwrap();
+        assert!(retired, "helper must retire");
+    });
+    assert!(
+        !probe.helper_ran.load(SeqCst),
+        "busy cores must stay with callers"
+    );
 }
 
 #[test]

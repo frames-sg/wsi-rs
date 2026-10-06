@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::registry::ManagedSlideReader;
 use crate::core::types::{RegionRequest, TileViewRequest};
+use crate::formats::dicom::DicomImage;
 
 impl ManagedSlideReader for DicomReader {
     fn read_tiles_cpu_fastpath(
@@ -74,23 +75,47 @@ impl ManagedSlideReader for DicomReader {
             .unwrap_or(self.slide.encoded_unit_bytes))
     }
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
-        let mut frames = std::collections::HashSet::with_capacity(reqs.len());
-        let mut known = 0_u64;
+        let mut seen = std::collections::HashSet::with_capacity(reqs.len());
+        let mut images: Vec<(Arc<DicomImage>, Vec<u32>)> = Vec::new();
         let mut unknown = false;
         for req in reqs {
-            if !frames.insert((req.level.get(), req.col, req.row)) {
+            let key = (
+                req.scene.get(),
+                req.series.get(),
+                req.level.get(),
+                req.plane.get(),
+                req.col,
+                req.row,
+            );
+            if !seen.insert(key) {
                 continue;
             }
-            match self.known_frame_encoded_bytes(req) {
-                Some(bytes) => known = known.saturating_add(bytes),
+            match self.frame_for_request(req) {
+                FrameLookup::Frame(image, frame_index) => {
+                    match images
+                        .iter_mut()
+                        .find(|(known, _)| Arc::ptr_eq(known, &image))
+                    {
+                        Some((_, frames)) => frames.push(frame_index),
+                        None => images.push((image, vec![frame_index])),
+                    }
+                }
+                FrameLookup::Gap => {}
+                FrameLookup::Unknown => unknown = true,
+            }
+        }
+        let mut bytes = 0_u64;
+        for (image, frame_indices) in &images {
+            match image.known_batch_read_bytes(frame_indices, self.slide.encoded_unit_bytes) {
+                Some(image_bytes) => bytes = bytes.saturating_add(image_bytes),
                 None => unknown = true,
             }
         }
-        // Frames not indexed yet share the one-unit bound batches always had.
+        // Frames not indexed yet reserve at least one encoded unit.
         Ok(if unknown {
-            known.max(self.slide.encoded_unit_bytes)
+            bytes.max(self.slide.encoded_unit_bytes)
         } else {
-            known
+            bytes
         })
     }
     fn display_tile_encoded_upper_bound(&self, _: &TileViewRequest) -> Result<u64, WsiError> {
@@ -111,20 +136,39 @@ impl DicomReader {
     /// per-unit limit. Sparse gaps decode no encoded bytes. `None` covers
     /// frames not indexed yet and requests the read will reject.
     fn known_frame_encoded_bytes(&self, req: &TileRequest) -> Option<u64> {
-        let level = self.slide.levels.get(req.level.get() as usize)?;
-        let col = u32::try_from(req.col).ok()?;
-        let row = u32::try_from(req.row).ok()?;
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return None;
+        match self.frame_for_request(req) {
+            FrameLookup::Frame(image, frame_index) => image
+                .known_encoded_frame_bytes(frame_index)
+                .map(|bytes| bytes.min(self.slide.encoded_unit_bytes)),
+            FrameLookup::Gap => Some(0),
+            FrameLookup::Unknown => None,
         }
-        let Some((image, frame_index)) = level
+    }
+
+    fn frame_for_request(&self, req: &TileRequest) -> FrameLookup {
+        let Some(level) = self.slide.levels.get(req.level.get() as usize) else {
+            return FrameLookup::Unknown;
+        };
+        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
+            return FrameLookup::Unknown;
+        };
+        if col >= level.tiles_across || row >= level.tiles_down {
+            return FrameLookup::Unknown;
+        }
+        level
             .image_for_tile(col, row)
             .and_then(|image| image.frame_index(col, row).map(|index| (image, index)))
-        else {
-            return Some(0);
-        };
-        image
-            .known_encoded_frame_bytes(frame_index)
-            .map(|bytes| bytes.min(self.slide.encoded_unit_bytes))
+            .map_or(FrameLookup::Gap, |(image, index)| {
+                FrameLookup::Frame(image, index)
+            })
     }
+}
+
+/// Where a tile request's encoded bytes live.
+enum FrameLookup {
+    Frame(Arc<DicomImage>, u32),
+    /// A sparse-grid position with no stored frame decodes no encoded bytes.
+    Gap,
+    /// Requests the read will reject.
+    Unknown,
 }

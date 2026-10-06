@@ -78,7 +78,7 @@ fn help_text() -> &'static str {
        coverage-changed [--base REV] [--lcov lcov.info] enforce changed-path coverage\n\
        perf-capture <label> [slides...] capture local wsi_rs benchmark JSON\n\
        perf-capture-openslide <label> [slides...] capture local OpenSlide benchmark JSON\n\
-       perf-capture-pair <label> [aliases-or-slides...] capture alternating paired JSON\n\
+       perf-capture-pair <label> [aliases-or-slides...] capture wsi_rs, OpenSlide and an optional previous release in alternating order\n\
        perf-compare <before.json> <after.json> compare captures with 5% noise guard\n\
        perf-profile <slide> [workload] print samply/xctrace profiling recipes\n\
        package      package the crate from a clean worktree with verification"

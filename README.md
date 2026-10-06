@@ -29,10 +29,12 @@ uses for this. wsi-rs does the same job, and:
   codecs ([J2K](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/) and
   [JXR](https://github.com/frames-sg/jxr)), not libjpeg or OpenJPEG.
 - **Handles bad files.** Every size, count and offset read from a file is
-  checked before use, and memory is capped. A corrupt or malicious file gets an
-  error, not a crash or a runaway allocation. The parsers are fuzzed.
-- **Never returns wrong pixels quietly.** If a tile can't be decoded correctly,
-  you get an error, not a black or half-drawn tile.
+  checked before use, and memory is capped, so a corrupt or malicious file
+  should get an error rather than a crash or a runaway allocation. The parsers
+  are fuzzed. Report any file that gets past these checks as described in
+  [SECURITY.md](SECURITY.md).
+- **Reports decode failures.** If a tile can't be decoded correctly, you get an
+  error rather than a black or half-drawn tile.
 - **Can decode on the GPU.** With the `metal` or `cuda` feature, JPEG 2000 tiles
   decode on the GPU when that is faster on your hardware.
 - **Works with existing OpenSlide programs.** The included
@@ -156,9 +158,7 @@ To display 12-bit images as 8-bit, use `read_region_rgba_windowed` with
 
 Each slide caches decoded tiles in 128 MiB by default: 64 MiB for decoded
 tiles, 32 MiB for display tiles and 32 MiB for format-specific data. Set your
-own sizes with `SlideOpenOptions::with_cache_config`, or change the first two
-defaults with the `WSI_RS_TILE_CACHE_BYTES` and
-`WSI_RS_DISPLAY_TILE_CACHE_BYTES` environment variables.
+own sizes with `SlideOpenOptions::with_cache_config`.
 
 Every slide also has hard limits that protect against bad files:
 

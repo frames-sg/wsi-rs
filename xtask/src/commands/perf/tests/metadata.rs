@@ -19,6 +19,19 @@ fn worker_matrix() -> WorkerMatrix {
     }
 }
 
+fn plan<'a>(
+    slides: &'a [SlideSpec],
+    worker_matrix: &'a WorkerMatrix,
+    planned_workloads: &'a [String],
+) -> CapturePlan<'a> {
+    CapturePlan {
+        repeats: 3,
+        slides,
+        worker_matrix,
+        planned_workloads,
+    }
+}
+
 #[test]
 fn rust_codec_dependencies_are_sorted_and_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
@@ -92,17 +105,17 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
         }]
     });
 
+    let slides = [slide(
+        "tests/fixtures/jp2k/rgb_nomct.j2k",
+        "fixture-jp2k",
+        "raw_jp2k",
+    )];
+    let matrix = worker_matrix();
+    let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "baseline-public",
-        BenchLibrary::WsiRs,
-        3,
-        &[slide(
-            "tests/fixtures/jp2k/rgb_nomct.j2k",
-            "fixture-jp2k",
-            "raw_jp2k",
-        )],
-        &worker_matrix(),
-        &["single_tile_l0".into()],
+        CaptureSubject::Current(BenchLibrary::WsiRs),
+        &plan(&slides, &matrix, &workloads),
         vec![run],
     )
     .expect("capture summary");
@@ -157,13 +170,13 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
 
 #[test]
 fn capture_summary_marks_missing_decode_controls_as_not_equalized() {
+    let slides = [slide("fixture.svs", "svs-001", "aperio")];
+    let matrix = worker_matrix();
+    let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "incomplete",
-        BenchLibrary::WsiRs,
-        3,
-        &[slide("fixture.svs", "svs-001", "aperio")],
-        &worker_matrix(),
-        &["single_tile_l0".into()],
+        CaptureSubject::Current(BenchLibrary::WsiRs),
+        &plan(&slides, &matrix, &workloads),
         vec![json!({"workloads": []})],
     )
     .expect("capture summary");
@@ -201,13 +214,13 @@ fn openslide_capture_summary_records_competitor_library() {
         }]
     });
 
+    let slides = [slide("fixture.svs", "svs-001", "aperio")];
+    let matrix = worker_matrix();
+    let workloads = ["region_2k".to_string()];
     let summary = capture_summary(
         "openslide-baseline",
-        BenchLibrary::OpenSlide,
-        3,
-        &[slide("fixture.svs", "svs-001", "aperio")],
-        &worker_matrix(),
-        &["region_2k".into()],
+        CaptureSubject::Current(BenchLibrary::OpenSlide),
+        &plan(&slides, &matrix, &workloads),
         vec![run],
     )
     .expect("OpenSlide capture summary");
@@ -219,4 +232,50 @@ fn openslide_capture_summary_records_competitor_library() {
         summary["metadata"]["benchmark"]["internal_codec_thread_budget"]["enforced_by_harness"],
         true
     );
+}
+
+#[test]
+fn previous_release_summary_records_the_shim_instead_of_the_workspace() {
+    let run = |sha: &str| {
+        json!({
+            "library_path": "/releases/0.6.0/libwsi_rs_openslide_shim.dylib",
+            "library_sha256": sha,
+            "library_version": "4.0.1 (wsi-rs 0.6.0)",
+            "workloads": [],
+        })
+    };
+    let slides = [slide("fixture.svs", "svs-001", "aperio")];
+    let matrix = worker_matrix();
+    let workloads = ["single_tile_l0".to_string()];
+
+    let summary = capture_summary(
+        "rc-previous",
+        CaptureSubject::PreviousRelease,
+        &plan(&slides, &matrix, &workloads),
+        vec![run(&"a".repeat(64)), run(&"a".repeat(64))],
+    )
+    .expect("previous-release summary");
+
+    assert_eq!(summary["metadata"]["benchmark"]["library"], "wsi_rs");
+    assert!(summary["metadata"].get("git").is_none());
+    assert!(summary["metadata"]["benchmark"]
+        .get("rust_codec_dependencies")
+        .is_none());
+    assert_eq!(
+        summary["metadata"]["previous_release"],
+        json!({
+            "library_path": "/releases/0.6.0/libwsi_rs_openslide_shim.dylib",
+            "library_sha256": "a".repeat(64),
+            "library_version": "4.0.1 (wsi-rs 0.6.0)",
+        })
+    );
+
+    let error = capture_summary(
+        "rc-previous",
+        CaptureSubject::PreviousRelease,
+        &plan(&slides, &matrix, &workloads),
+        vec![run(&"a".repeat(64)), run(&"b".repeat(64))],
+    )
+    .unwrap_err();
+    assert!(error.contains("one shim library"), "{error}");
 }

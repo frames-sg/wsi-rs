@@ -3,6 +3,68 @@ use crate::{
     DecodeAcceleration, DecodeExecutionOptions, Slide, SlideOpenOptions, TileLayout, TileRequest,
 };
 
+#[cfg(all(feature = "metal", target_os = "macos"))]
+#[test]
+#[ignore = "explicit release Metal window comparison using WSI_RS_PREPARE_PATH and WSI_RS_PREPARE_OUTPUT"]
+fn metal_window_performance() {
+    let raw = cpu_corpus_tiles(64);
+    let jobs = raw
+        .iter()
+        .map(|raw| Jp2kDecodeJob {
+            data: std::borrow::Cow::Borrowed(raw.data()),
+            expected_width: raw.width(),
+            expected_height: raw.height(),
+            rgb_color_space: raw.photometric_interpretation()
+                == crate::EncodedTilePhotometricInterpretation::Rgb,
+            backend: BackendRequest::Cpu,
+        })
+        .collect::<Vec<_>>();
+    let expected = super::super::batch::decode_batch_jp2k(&jobs)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut jobs = jobs;
+    for job in &mut jobs {
+        job.backend = BackendRequest::Metal;
+    }
+    let mut records = Vec::new();
+    for pair in 0..5 {
+        let windows = if pair % 2 == 0 {
+            [4, 8, 16]
+        } else {
+            [16, 8, 4]
+        };
+        for mib in windows {
+            let sessions = crate::output::metal::MetalBackendSessions::system_default().unwrap();
+            let run = || {
+                let tiles = super::super::metal_batch::decode_jobs_bounded(
+                    &jobs,
+                    &sessions,
+                    mib * 1024 * 1024,
+                )
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+                sessions.download_cpu_batch(&tiles).unwrap()
+            };
+            drop(run());
+            let start = std::time::Instant::now();
+            let actual = run();
+            let elapsed = start.elapsed();
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.as_u8(), expected.as_u8());
+            }
+            records.push(serde_json::json!({"window_mib": mib, "pair": pair, "elapsed_ns": elapsed.as_nanos()}));
+        }
+    }
+    std::fs::write(
+        std::env::var_os("WSI_RS_PREPARE_OUTPUT").expect("capture path"),
+        serde_json::to_vec_pretty(&records).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 #[ignore = "explicit release benchmark using WSI_RS_PREPARE_PATH and WSI_RS_PREPARE_OUTPUT"]
 fn prepared_cpu_performance() {

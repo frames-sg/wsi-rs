@@ -79,7 +79,13 @@ impl CoreLedger {
 
 static PROCESS_CORES: CoreLedger = CoreLedger::new();
 
+pub(crate) fn cpu_core_count() -> usize {
+    PROCESS_CORES.cores()
+}
+
 /// Cores that no [`share_cpu_work`] caller or helper is using right now.
+/// Other work on the shared JP2K pool, such as CPU decode or region
+/// composition, is not counted, so the pool may still be busy.
 pub(crate) fn idle_cores() -> usize {
     if let Some(cores) = crate::core::test_hooks::idle_cores_override() {
         return cores;
@@ -103,18 +109,19 @@ impl Drop for ActiveWorker {
 /// cores that other reads release mid-batch join it too. Every thread claims
 /// the next unstarted job, so the caller never waits for a helper that has not
 /// started: it waits only for jobs a running helper already claimed. Results
-/// keep job order, and a panic in any job resumes on the caller.
+/// keep job order, and a panic in any job resumes on the caller. Helpers retire
+/// between jobs when new callers occupy their previously idle cores.
 pub(crate) fn share_cpu_work<J, R>(jobs: Vec<J>, work: fn(&J) -> R) -> Vec<R>
 where
     J: Send + Sync + 'static,
     R: Send + 'static,
 {
-    share_cpu_work_on(
-        &PROCESS_CORES,
-        crate::core::decode_runtime::process_jp2k_cpu_pool(),
-        jobs,
-        work,
-    )
+    let pool = if jobs.len() > 1 {
+        crate::core::decode_runtime::process_jp2k_cpu_pool()
+    } else {
+        None
+    };
+    share_cpu_work_on(&PROCESS_CORES, pool, jobs, work)
 }
 
 fn share_cpu_work_on<J, R>(
@@ -136,7 +143,7 @@ where
         helpers: AtomicUsize::new(0),
         results: Mutex::new((0..jobs.len()).map(|_| None).collect()),
         completed: Condvar::new(),
-        jobs,
+        jobs: jobs.into_iter().map(|job| Mutex::new(Some(job))).collect(),
         work,
     });
     loop {
@@ -151,7 +158,9 @@ where
 }
 
 struct SharedWork<J, R> {
-    jobs: Vec<J>,
+    /// Each job moves out of its slot when claimed, so helpers that start
+    /// after every job is claimed hold no job data.
+    jobs: Box<[Mutex<Option<J>>]>,
     work: fn(&J) -> R,
     next: AtomicUsize,
     /// Helpers committed to this work that have not finished.
@@ -185,7 +194,11 @@ where
             pool.spawn(move || {
                 // Adopt the core `reserve_idle` committed to this helper.
                 let _helper = ActiveWorker(ledger);
-                while shared.run_next() {}
+                while ledger.active.load(Ordering::Relaxed) <= ledger.cores() {
+                    if !shared.run_next() {
+                        break;
+                    }
+                }
                 shared.helpers.fetch_sub(1, Ordering::Relaxed);
             });
         }
@@ -196,10 +209,16 @@ impl<J, R> SharedWork<J, R> {
     /// Runs the next unstarted job, or returns `false` once all are claimed.
     fn run_next(&self) -> bool {
         let index = self.next.fetch_add(1, Ordering::Relaxed);
-        let Some(job) = self.jobs.get(index) else {
+        let Some(slot) = self.jobs.get(index) else {
             return false;
         };
-        let result = catch_unwind(AssertUnwindSafe(|| (self.work)(job)));
+        let job = slot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .expect("each job index is claimed once");
+        let result = catch_unwind(AssertUnwindSafe(|| (self.work)(&job)));
+        drop(job);
         self.results.lock().unwrap_or_else(|e| e.into_inner())[index] = Some(result);
         self.completed.notify_all();
         true

@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 use wsi_rs::{ColorSpace, Level, RegionRequest, Slide, TileEntry, TileHit, TileLayout, WsiError};
 
+/// Irregular reads up to one 256x256 viewer tile are composed in one pass.
+const SINGLE_PASS_IRREGULAR_PIXELS: u64 = 256 * 256;
+/// Larger irregular reads use 8,192-pixel (32 KiB ARGB) bands.
+const IRREGULAR_BAND_PIXELS: u64 = 8 * 1024;
+/// Other reads use 262,144-pixel (1 MiB ARGB) bands.
+const BAND_PIXELS: u64 = 256 * 1024;
+
 /// Bound intermediate color and coverage images while writing the caller's
 /// complete destination. Small viewer reads retain a single composition.
 pub(crate) fn read_region_into(
@@ -32,9 +39,12 @@ pub(crate) fn read_region_into(
         );
         return Ok(());
     }
-    let irregular = matches!(level.tile_layout, TileLayout::Irregular { .. });
-    let mut bandable = !irregular;
-    if irregular && within_limits {
+    let irregular_tiles = match &level.tile_layout {
+        TileLayout::Irregular { tiles, .. } => Some(tiles),
+        _ => None,
+    };
+    let mut bandable = irregular_tiles.is_none();
+    if let Some(tiles) = irregular_tiles.filter(|_| within_limits) {
         let hits = level.tile_layout.tiles_for_region(
             request.origin_px.0,
             request.origin_px.1,
@@ -45,44 +55,42 @@ pub(crate) fn read_region_into(
             destination.fill(0);
             return Ok(());
         }
+        // Resident opaque tiles compose straight into the caller's pixels,
+        // without banded intermediate images or a conversion pass. Only
+        // whole-pixel hits whose area can cover the region qualify.
+        if may_cover_at_whole_pixels(tiles, &hits, offset, (width, height))
+            && slide.read_cached_region_argb32_into(request, offset, destination)?
+        {
+            return Ok(());
+        }
         // A rounded-up source can paint beyond its fractional placement
         // extent. Keep that complete clip so a band cannot cull its coverage.
-        if let TileLayout::Irregular { tiles, .. } = &level.tile_layout {
-            // Resident opaque tiles compose straight into the caller's pixels,
-            // without banded intermediate images or a conversion pass. Only
-            // whole-pixel hits whose area can cover the region qualify.
-            if may_cover_at_whole_pixels(tiles, &hits, offset, (width, height))
-                && slide.read_cached_region_argb32_into(request, offset, destination)?
-            {
-                return Ok(());
-            }
-            bandable = hits.iter().all(|hit| {
-                tiles.get(&(hit.col, hit.row)).is_some_and(|entry| {
-                    entry.extent() == (f64::from(entry.dimensions.0), f64::from(entry.dimensions.1))
-                        && banding_preserves_filter(
-                            (hit.dest_x_f64 - offset.0, hit.dest_y_f64 - offset.1),
-                            entry.dimensions,
-                            (width, height),
-                        )
-                })
-            });
-        }
+        bandable = hits.iter().all(|hit| {
+            tiles.get(&(hit.col, hit.row)).is_some_and(|entry| {
+                entry.extent() == (f64::from(entry.dimensions.0), f64::from(entry.dimensions.1))
+                    && banding_preserves_filter(
+                        (hit.dest_x_f64 - offset.0, hit.dest_y_f64 - offset.1),
+                        entry.dimensions,
+                        (width, height),
+                    )
+            })
+        });
     }
     // Small viewer reads need one composition. Splitting them into short
     // bands repeats tile planning and can probe source metadata for empty
-    // bands in sparse levels. Larger irregular reads retain 32 KiB buffers.
-    // The complete clip is retained when it affects Pixman's sampling.
-    let band_pixels: u64 = if irregular && pixels > 64 * 1024 {
-        8 * 1024
+    // bands in sparse levels. The complete clip is retained when it affects
+    // Pixman's sampling.
+    let band_pixels = if irregular_tiles.is_some() && pixels > SINGLE_PASS_IRREGULAR_PIXELS {
+        IRREGULAR_BAND_PIXELS
     } else {
-        256 * 1024
+        BAND_PIXELS
     };
     // Let Slide report its ordinary validation error for an oversized request;
     // splitting must not bypass the limit on the complete output.
     let band_height = if !within_limits || !bandable {
         height
     } else {
-        (band_pixels / u64::from(width.max(1)))
+        (band_pixels / u64::from(width))
             .max(1)
             .min(u64::from(height)) as u32
     };

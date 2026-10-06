@@ -368,21 +368,11 @@ impl Slide {
         req: &RegionRequest,
         offset_px: (f64, f64),
     ) -> Result<CpuTile, WsiError> {
-        if !valid_subpixel_offset(offset_px.0) || !valid_subpixel_offset(offset_px.1) {
-            return Err(WsiError::DisplayConversion(format!(
-                "subpixel offset must be finite and in [0, 1), got ({}, {})",
-                offset_px.0, offset_px.1
-            )));
-        }
+        check_subpixel_offset(offset_px)?;
         // Irregular tile maps have fractional tile placements and gaps even at
         // whole-pixel origins, so they keep the coverage-preserving plan.
         let irregular = self
-            .source
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
+            .level_for(req)
             .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
         if offset_px == (0.0, 0.0) && !irregular {
             return self.read_region(req);
@@ -432,25 +422,13 @@ impl Slide {
         offset_px: (f64, f64),
         destination: &mut [u32],
     ) -> Result<bool, WsiError> {
-        if !valid_subpixel_offset(offset_px.0) || !valid_subpixel_offset(offset_px.1) {
-            return Err(WsiError::DisplayConversion(format!(
-                "subpixel offset must be finite and in [0, 1), got ({}, {})",
-                offset_px.0, offset_px.1
-            )));
-        }
-        let tiled = self
-            .source
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-            .is_some_and(|level| {
-                matches!(
-                    level.tile_layout,
-                    TileLayout::Regular { .. } | TileLayout::Irregular { .. }
-                )
-            });
+        check_subpixel_offset(offset_px)?;
+        let tiled = self.level_for(req).is_some_and(|level| {
+            matches!(
+                level.tile_layout,
+                TileLayout::Regular { .. } | TileLayout::Irregular { .. }
+            )
+        });
         if !tiled {
             return Ok(false);
         }
@@ -588,30 +566,9 @@ impl Slide {
             if let Some(control) = control {
                 control.check_cancelled()?;
             }
-            let mut end = start;
-            let mut chunk_output_bytes = 0_u64;
-            let mut chunk_bytes = 0_u64;
-            while end < reqs.len() {
-                let next_output_bytes = estimates[end];
-                let candidate_encoded_bytes = self
-                    .source
-                    .tile_batch_encoded_upper_bound(&reqs[start..=end])?;
-                let candidate_output_bytes = chunk_output_bytes.saturating_add(next_output_bytes);
-                let candidate_bytes =
-                    ReadWork::new(candidate_encoded_bytes, candidate_output_bytes)
-                        .ordinary_bytes(u64::MAX)?;
-                if end > start && candidate_bytes > target {
-                    break;
-                }
-                let candidate_bytes =
-                    self.ordinary_work_bytes(candidate_encoded_bytes, candidate_output_bytes)?;
-                chunk_output_bytes = candidate_output_bytes;
-                chunk_bytes = candidate_bytes;
-                end += 1;
-                if chunk_bytes >= target {
-                    break;
-                }
-            }
+            let (len, chunk_bytes) =
+                self.tile_chunk_len(&reqs[start..], &estimates[start..], target)?;
+            let end = start + len;
 
             let reservation = self.admission.reserve(chunk_bytes, control)?;
             let execution = ReadExecutionContext::new(
@@ -635,6 +592,59 @@ impl Slide {
             start = end;
         }
         Ok(output)
+    }
+
+    /// The longest leading run of `reqs` whose ordinary work fits `target`,
+    /// always at least one request, with that run's work bytes. Work grows as
+    /// requests are added, so the search gallops and then bisects instead of
+    /// bounding every prefix.
+    fn tile_chunk_len(
+        &self,
+        reqs: &[TileRequest],
+        estimates: &[u64],
+        target: u64,
+    ) -> Result<(usize, u64), WsiError> {
+        let work = |len: usize| -> Result<(u64, u64), WsiError> {
+            let encoded = self.source.tile_batch_encoded_upper_bound(&reqs[..len])?;
+            let output = estimates[..len]
+                .iter()
+                .fold(0_u64, |sum, &bytes| sum.saturating_add(bytes));
+            Ok((encoded, output))
+        };
+        let fits = |len: usize| -> Result<bool, WsiError> {
+            let (encoded, output) = work(len)?;
+            Ok(ReadWork::new(encoded, output).ordinary_bytes(u64::MAX)? <= target)
+        };
+        let mut fit = 1;
+        let mut over = reqs.len() + 1;
+        let mut probe = 2;
+        while probe < over {
+            if fits(probe)? {
+                fit = probe;
+                probe = probe.saturating_mul(2);
+            } else {
+                over = probe;
+            }
+        }
+        while over - fit > 1 {
+            let mid = fit + (over - fit) / 2;
+            if fits(mid)? {
+                fit = mid;
+            } else {
+                over = mid;
+            }
+        }
+        let (encoded, output) = work(fit)?;
+        Ok((fit, self.ordinary_work_bytes(encoded, output)?))
+    }
+
+    fn level_for(&self, req: &RegionRequest) -> Option<&crate::core::types::Level> {
+        self.source
+            .dataset()
+            .scenes
+            .get(req.scene.get())
+            .and_then(|scene| scene.series.get(req.series.get()))
+            .and_then(|series| series.levels.get(req.level.get() as usize))
     }
 
     fn estimate_tile_output_bytes(&self, req: &TileRequest) -> Result<u64, WsiError> {
@@ -945,8 +955,16 @@ fn validate_dataset_limits(dataset: &Dataset, limits: SlideLimits) -> Result<(),
     Ok(())
 }
 
-fn valid_subpixel_offset(value: f64) -> bool {
-    value.is_finite() && (0.0..1.0).contains(&value)
+fn check_subpixel_offset(offset_px: (f64, f64)) -> Result<(), WsiError> {
+    let valid = |value: f64| value.is_finite() && (0.0..1.0).contains(&value);
+    if valid(offset_px.0) && valid(offset_px.1) {
+        Ok(())
+    } else {
+        Err(WsiError::DisplayConversion(format!(
+            "subpixel offset must be finite and in [0, 1), got ({}, {})",
+            offset_px.0, offset_px.1
+        )))
+    }
 }
 
 #[cfg(test)]

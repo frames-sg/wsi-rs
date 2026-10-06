@@ -545,3 +545,54 @@ fn headline_summary(benchmark_group: &str, ratio: f64) -> super::super::comparis
         ratio,
     }
 }
+
+fn record_three_way_order(capture: &mut Value, library: &str) {
+    for run in capture["runs"].as_array_mut().expect("runs") {
+        let repeat = run["repeat_index"].as_u64().expect("repeat index");
+        let order = if repeat % 2 == 0 {
+            ["wsi_rs", "openslide", "wsi_rs_previous"]
+        } else {
+            ["wsi_rs_previous", "openslide", "wsi_rs"]
+        };
+        run["engine_order"] = json!(order);
+        run["engine_position"] = json!(order
+            .iter()
+            .position(|engine| *engine == library)
+            .expect("engine in order"));
+    }
+}
+
+#[test]
+fn paired_run_order_accepts_the_three_way_interleaving() {
+    for library in ["wsi_rs", "openslide"] {
+        let mut capture = engine_capture(library, 10_000, 20_000, 30_000, 1_000);
+        validate_paired_run_order(&capture).expect("two-engine order");
+        record_three_way_order(&mut capture, library);
+        validate_paired_run_order(&capture).expect("three-engine order");
+    }
+}
+
+#[test]
+fn paired_run_order_rejects_mixed_reversed_or_mispositioned_runs() {
+    let mut mixed = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    record_three_way_order(&mut mixed, "wsi_rs");
+    let first_two_engine =
+        engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000)["runs"][0].clone();
+    mixed["runs"][0] = first_two_engine;
+    assert!(validate_paired_run_order(&mixed)
+        .unwrap_err()
+        .contains("mixes two-engine and three-engine"));
+
+    let mut reversed = engine_capture("wsi_rs", 10_000, 20_000, 30_000, 1_000);
+    reversed["runs"][0]["engine_order"] = json!(["openslide", "wsi_rs"]);
+    assert!(validate_paired_run_order(&reversed)
+        .unwrap_err()
+        .contains("has engine_order"));
+
+    let mut mispositioned = engine_capture("openslide", 10_000, 20_000, 30_000, 1_000);
+    record_three_way_order(&mut mispositioned, "openslide");
+    mispositioned["runs"][0]["engine_position"] = json!(0);
+    assert!(validate_paired_run_order(&mispositioned)
+        .unwrap_err()
+        .contains("engine_position"));
+}

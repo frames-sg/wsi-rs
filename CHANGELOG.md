@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-10-01
+## [0.8.0] - 2026-10-06
 
 ### Added
 
@@ -14,17 +14,27 @@
 ### Changed
 
 - Requires Rust 1.99 or newer.
+- Uses J2K 0.12.0 and JXR 0.3.0, including the updated CUDA and Metal batch
+  decode paths.
+- CUDA JPEG 2000 tile reads use bounded encoded-image batches for parallel
+  planning and pooled uploads. Results keep their request order and logical
+  crop; a recoverable tile failure does not discard neighboring results.
+- Metal JPEG 2000 batches share Tier-1 dispatch across compatible prepared
+  groups while retaining the existing 4 MiB execution window.
 - `.svcache` files are looked up in `~/.cache/wsi-rs/svcache/` instead of
   `~/.cache/slideviewer/svcache/`. Move existing cache files there or rebuild
   them.
+- The OpenSlide shim opens slides with a 32 MiB tile cache, matching OpenSlide
+  4.0.1, and no display cache; format-specific caches scale down with it.
+- The OpenSlide shim composes small MIRAX reads in one pass and writes cached
+  regular-grid regions directly into the caller's pixel buffer.
+- Faster XML metadata parsing when opening ARGOS, Leica, Philips and Ventana
+  slides.
+- With the `route-telemetry` feature, route tile counts are reported only in
+  the per-device sections; the `execution` section no longer repeats them.
 
 ### Fixed
 
-- The OpenSlide shim composes small MIRAX reads in one pass and writes cached
-  regular-grid regions directly into the caller's pixel buffer.
-- XML attribute parsing has less overhead when opening Ventana BIF slides.
-- Malformed DICOM file-meta headers using `SV` or `UV` no longer bypass length
-  checks and trigger oversized allocations.
 - Concurrent single-tile reads of one DICOM slide no longer queue behind each
   other under the default memory limits, and Metal decodes DICOM frames in
   groups instead of one at a time.
@@ -32,6 +42,18 @@
   transfer syntax, as some 3DHISTECH scanners do, now read in full.
 - Multi-tile JPEG reads also use CPU cores that free up while the read is
   running, so concurrent reads finish sooner.
+- CPU batch helpers yield cores when new callers need them. Concurrent tiled
+  TIFF JPEG reads avoid adding caller threads to a pool that already uses
+  every CPU core.
+- MIRAX JPEG reads reserve memory from indexed source sizes, so small tiles
+  can share a bounded batch instead of each reserving the maximum input size.
+- The first GPU calibration read no longer includes Metal kernel compilation,
+  which could make a decode route settle on the CPU.
+
+### Security
+
+- Malformed DICOM file-meta headers using `SV` or `UV` no longer bypass length
+  checks and trigger oversized allocations.
 
 ## [0.7.0] - 2026-09-28
 

@@ -201,8 +201,8 @@ pub fn execute_install_detailed(
             })?;
         }
 
-        // Every supported platform declares exactly three loader-compatible
-        // names, so the install plan is nonempty by construction.
+        // Every supported platform declares at least one loader-compatible
+        // name, so the install plan is nonempty by construction.
         let verify_target = entries[0].destination.as_path();
         verify_library_version(verify_target)?;
         write_manifest(&manifest, &entries, "installed")?;

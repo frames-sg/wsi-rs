@@ -38,22 +38,45 @@ const TRACKED_ENV_VARS: [&str; 20] = [
     "WSI_RS_PERF_PINNED_HOST_ID",
 ];
 
+/// The slides, repeats, worker counts and workloads shared by one capture run.
+pub(super) struct CapturePlan<'a> {
+    pub(super) repeats: u32,
+    pub(super) slides: &'a [SlideSpec],
+    pub(super) worker_matrix: &'a WorkerMatrix,
+    pub(super) planned_workloads: &'a [String],
+}
+
+/// The library a capture measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptureSubject {
+    /// The workspace's wsi-rs build or the pinned OpenSlide library.
+    Current(BenchLibrary),
+    /// A previous release's wsi-rs shim, run by the workspace's worker.
+    PreviousRelease,
+}
+
+impl CaptureSubject {
+    fn library(self) -> BenchLibrary {
+        match self {
+            Self::Current(library) => library,
+            Self::PreviousRelease => BenchLibrary::WsiRs,
+        }
+    }
+}
+
 pub(super) fn capture_summary(
     label: &str,
-    library: BenchLibrary,
-    repeats: u32,
-    slides: &[SlideSpec],
-    worker_matrix: &WorkerMatrix,
-    planned_workloads: &[String],
+    subject: CaptureSubject,
+    plan: &CapturePlan<'_>,
     runs: Vec<Value>,
 ) -> Result<Value, String> {
-    let metadata = capture_metadata(library, slides, worker_matrix, planned_workloads, &runs)?;
+    let metadata = capture_metadata(subject, plan, &runs)?;
     Ok(json!({
         "schema_version": PERF_CAPTURE_SCHEMA_VERSION,
         "kind": "wsi_rs-perf-capture",
         "label": label,
-        "repeat_count": repeats,
-        "slide_manifest": slides.iter().map(|slide| json!({
+        "repeat_count": plan.repeats,
+        "slide_manifest": plan.slides.iter().map(|slide| json!({
             "path": slide.path.display().to_string(),
             "alias": slide.alias,
             "format": slide.format,
@@ -66,20 +89,18 @@ pub(super) fn capture_summary(
 }
 
 fn capture_metadata(
-    library: BenchLibrary,
-    slides: &[SlideSpec],
-    worker_matrix: &WorkerMatrix,
-    planned_workloads: &[String],
+    subject: CaptureSubject,
+    plan: &CapturePlan<'_>,
     runs: &[Value],
 ) -> Result<Value, String> {
-    let rust_codec_dependencies = rust_codec_dependencies(&workspace_root().join("Cargo.lock"))?;
+    let library = subject.library();
+    let (slides, worker_matrix) = (plan.slides, plan.worker_matrix);
     let build_features = performance_gpu_feature()?.into_iter().collect::<Vec<_>>();
     let codec_thread_budget_enforced = runs
         .iter()
         .all(|run| run_decode_concurrency_matches(library, run))
         && !runs.is_empty();
-    Ok(json!({
-        "git": git_metadata(),
+    let mut metadata = json!({
         "toolchain": {
             "rustc": command_stdout("rustc", &["--version"]),
             "cargo": command_stdout("cargo", &["--version"]),
@@ -104,7 +125,6 @@ fn capture_metadata(
             "binary": library.binary(),
             "worker_package": "wsi-rs-perf",
             "worker_schema_version": wsi_rs_perf::WORKER_SCHEMA_VERSION,
-            "rust_codec_dependencies": rust_codec_dependencies,
             "required_openslide_version": library.required_version_prefix(),
             "cache_bytes": cache_bytes().unwrap_or(DEFAULT_CACHE_BYTES),
             "client_worker_matrix": worker_matrix.counts,
@@ -130,7 +150,7 @@ fn capture_metadata(
                 },
             },
             "corpus_tier": corpus_tier(slides),
-            "planned_workloads": planned_workloads,
+            "planned_workloads": plan.planned_workloads,
             "result_dir": result_dir().display().to_string(),
             "regression_ratio": REGRESSION_RATIO,
             "tail_regression_min_samples": {
@@ -145,6 +165,41 @@ fn capture_metadata(
             "macos_cpu_trace": "xcrun xctrace record --template 'Time Profiler'",
             "flamegraph": "optional diagnostic artifact; not a benchmark gate",
         }
+    });
+    // The workspace's git state and Cargo.lock describe the current build, not
+    // a previous release's prebuilt shim; that capture records the shim itself.
+    match subject {
+        CaptureSubject::Current(_) => {
+            metadata["git"] = git_metadata();
+            metadata["benchmark"]["rust_codec_dependencies"] = serde_json::to_value(
+                rust_codec_dependencies(&workspace_root().join("Cargo.lock"))?,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        CaptureSubject::PreviousRelease => {
+            metadata["previous_release"] = previous_release_identity(runs)?;
+        }
+    }
+    Ok(metadata)
+}
+
+/// The single shim every previous-release run loaded, as the worker reported it.
+fn previous_release_identity(runs: &[Value]) -> Result<Value, String> {
+    let mut identities = Vec::<[Value; 3]>::new();
+    for run in runs {
+        let identity = ["library_path", "library_sha256", "library_version"]
+            .map(|field| run.get(field).cloned().unwrap_or(Value::Null));
+        if !identities.contains(&identity) {
+            identities.push(identity);
+        }
+    }
+    let [[library_path, library_sha256, library_version]] = identities.as_slice() else {
+        return Err("previous-release runs must all load one shim library".into());
+    };
+    Ok(json!({
+        "library_path": library_path,
+        "library_sha256": library_sha256,
+        "library_version": library_version,
     }))
 }
 

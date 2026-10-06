@@ -314,7 +314,7 @@ fn parse_overlap_pairs(value: Option<&String>) -> Vec<(u32, u32)> {
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|pair| (pair[0], pair[1]))
+        .map(|&[first, second]| (first, second))
         .collect()
 }
 

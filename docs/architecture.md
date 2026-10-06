@@ -145,9 +145,13 @@ than by shrinking the full image.
 ## The OpenSlide shim
 
 `wsi-rs-openslide-shim` exports OpenSlide's C functions and forwards them to a
-`Slide`. It writes `read_region` output in horizontal bands of at most 262,144
-pixels, which keeps memory flat for large requests and gives the same pixels
-at any thread count. Slides opened through the shim start with a 32 MiB cache.
+`Slide`. Large `read_region` calls are written in horizontal bands of about
+262,144 pixels, or 8,192 pixels for large reads of irregular tile layouts such
+as MIRAX, so memory stays bounded and the pixels do not depend on thread count.
+A read is written in one piece when splitting it would change how edge pixels
+are sampled, or when it exceeds the slide's read limits. Slides opened through
+the shim use a 32 MiB tile cache, matching OpenSlide 4.0.1, and no display
+cache.
 
 ## Unsafe code
 
@@ -174,7 +178,12 @@ other file.
   checks, five-minute fuzz runs, every feature combination, the OpenSlide
   comparison, coverage, the performance gate and a package dry run. Releases
   with the `cuda` feature also need the `CUDA validation` workflow on the CUDA
-  runner.
+  runner. Source preflight takes `performance_release_tag`, a GitHub release
+  containing `current.json.gz`, `previous.json.gz` and `openslide.json.gz` from
+  the reviewed paired capture. The current capture must identify the same
+  commit and a clean checkout. To rebuild only the C artifacts, dispatch the
+  `RC Preflight` workflow with `artifacts_only` and `source_preflight_run_id`
+  set to a run whose source checks passed on the same commit.
 - **Test hooks.** Tests observe internal behavior through two modules:
   `core::execution_telemetry` counts events such as tiles decoded on each path,
   and `core::test_hooks` lets tests pause work at fixed points to force
@@ -200,7 +209,9 @@ To capture the results:
    `cargo xtask perf-capture-pair <label>`. This interleaves all three libraries
    for each sample, worker count and repeat, reversing their order on alternate
    repeats. It writes `<label>-wsi_rs.json`, `<label>-openslide.json` and
-   `<label>-previous.json`.
+   `<label>-previous.json`. Each capture records the order the libraries
+   actually ran in, and the previous-release capture records that shim's path,
+   SHA-256 and version rather than the current checkout's git state.
 3. Without the previous-library setting, the command captures only the current
    code and OpenSlide. `perf-capture` can still capture one library separately.
 4. Point `WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE` and
@@ -208,5 +219,5 @@ To capture the results:
 
 The gate fails if the current code is slower than allowed or if its pixels
 differ from OpenSlide beyond the corpus color tolerances.
-Worker schema 5 batches checksum updates without changing the checked bytes;
-recapture all engines together rather than mixing results from older workers.
+The gate rejects captures made by different worker versions, so capture all
+three in one run.

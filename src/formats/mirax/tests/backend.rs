@@ -3,6 +3,38 @@ use super::fixtures::MiraxFixture;
 use crate::core::registry::Slide;
 
 #[test]
+fn indexed_mirax_jpeg_tiles_fit_a_small_transient_budget() {
+    let fixture = MiraxFixture::complete();
+    let reqs = [
+        TileRequest::new(0, 0, 0, 1, 0),
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 0, 1),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    let expected = Slide::open(&fixture.path)
+        .unwrap()
+        .read_tiles(&reqs)
+        .unwrap();
+    let limits = crate::SlideLimits::default()
+        .with_operation_transient_bytes(64 * 1024)
+        .unwrap();
+    let slide = Slide::open_with_options(
+        &fixture.path,
+        crate::SlideOpenOptions::default().with_limits(limits),
+    )
+    .unwrap();
+    let actual = slide.read_tiles(&reqs).unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(&expected) {
+        assert_eq!(actual.as_u8(), expected.as_u8());
+    }
+    assert!(matches!(
+        slide.read_tile(&TileRequest::new(0, 0, 1, 0, 0)),
+        Err(WsiError::ResourceLimit { .. })
+    ));
+}
+
+#[test]
 fn concurrent_mirax_batches_share_one_source_miss() {
     let fixture = MiraxFixture::complete();
     let mut slide = MiraxSlide::parse(&fixture.path).unwrap();

@@ -27,10 +27,5 @@ pub(crate) fn decode_batch_jp2k_cuda(
     jobs: &[Jp2kDecodeJob<'_>],
     sessions: &crate::output::cuda::CudaBackendSessions,
 ) -> Vec<Result<crate::output::cuda::CudaDeviceTile, WsiError>> {
-    jobs.iter()
-        .map(|job| {
-            prepare_jp2k_job(job)
-                .and_then(|job| super::cuda::decode_prepared_jp2k_cuda(&job, sessions))
-        })
-        .collect()
+    super::cuda::decode_prepared_jobs(jobs.iter().map(prepare_jp2k_job).collect(), sessions)
 }

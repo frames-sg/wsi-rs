@@ -19,8 +19,8 @@ use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     cairo_subtile_surface_u8, crop_rgb_interleaved_u8_buffer, BackendOpenConfig,
-    ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader, DatasetReader,
-    FormatProbe, ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
+    ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe, ManagedSlideReader,
+    OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
@@ -122,7 +122,7 @@ impl MiraxBackend {
         &self,
         path: &Path,
         config: BackendOpenConfig,
-    ) -> Result<Box<dyn SlideReader>, WsiError> {
+    ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
         let slide = self.parse_with_config(path, config)?;
         Ok(Box::new(MiraxReader { slide }))
     }
@@ -160,15 +160,59 @@ impl ConfiguredDatasetReader for MiraxBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        Ok(Box::new(ConservativeManagedReader::builtin(
-            self.open_parsed_with_config(path, config)?,
-            config.limits.encoded_unit_bytes(),
-        )))
+        self.open_parsed_with_config(path, config)
     }
 }
 
 struct MiraxReader {
     slide: Arc<MiraxSlide>,
+}
+
+impl ManagedSlideReader for MiraxReader {
+    fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        let (_, tile) = self.tile_for_request(req)?;
+        let image = &tile.image;
+        if image.format != MiraxImageFormat::Jpeg {
+            return Ok(self.slide.encoded_unit_bytes);
+        }
+        // A logical subtile may decode a larger JPEG. Reserve its full RGB
+        // source and codec staging as well as input and possible EOI repair;
+        // ordinary admission separately accounts for the logical output.
+        Ok(image
+            .record
+            .len
+            .saturating_mul(2)
+            .saturating_add(2)
+            .saturating_add(
+                u64::from(image.expected_width)
+                    .saturating_mul(u64::from(image.expected_height))
+                    .saturating_mul(6),
+            ))
+    }
+
+    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
+        let mut seen = HashSet::with_capacity(reqs.len());
+        let mut bytes = 0_u64;
+        for req in reqs {
+            let (_, tile) = self.tile_for_request(req)?;
+            if seen.insert(tile.image.id) {
+                bytes = bytes.saturating_add(self.tile_encoded_upper_bound(req)?);
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn display_tile_encoded_upper_bound(&self, _: &TileViewRequest) -> Result<u64, WsiError> {
+        Ok(self.slide.encoded_unit_bytes)
+    }
+
+    fn associated_encoded_upper_bound(&self, _: &str) -> Result<u64, WsiError> {
+        Ok(self.slide.encoded_unit_bytes)
+    }
+
+    fn region_fastpath_encoded_upper_bound(&self, _: &RegionRequest) -> Result<u64, WsiError> {
+        Ok(self.slide.encoded_unit_bytes)
+    }
 }
 
 impl SlideReader for MiraxReader {
