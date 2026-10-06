@@ -10,6 +10,7 @@ pub(crate) struct Jp2kCodestreamInfo {
     pub multiple_component_transform: bool,
 }
 
+#[cfg(test)]
 pub(crate) fn parse_codestream_header(data: &[u8]) -> Result<Jp2kCodestreamInfo, WsiError> {
     let view = j2k::J2kView::parse(data).map_err(|e| WsiError::Jp2k(e.to_string()))?;
     codestream_header_from_view(&view)

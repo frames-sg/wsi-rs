@@ -52,6 +52,8 @@
 
 ### Security
 
+- Tiny raw JPEG 2000 files with impossible tile grids are rejected before
+  decoding can spend excessive time processing absent tiles.
 - Malformed DICOM file-meta headers using `SV` or `UV` no longer bypass length
   checks and trigger oversized allocations.
 

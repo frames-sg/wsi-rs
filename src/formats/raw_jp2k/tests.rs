@@ -397,6 +397,22 @@ fn open_rejects_truncated_packet_data_during_reduction_probing() {
 }
 
 #[test]
+fn open_rejects_tile_grids_that_cannot_fit_in_the_codestream() {
+    let mut data = RGB_CODESTREAM.to_vec();
+    // Retain the original 16x12 tile and its only tile part, but claim a
+    // 256x256 tile grid. Missing tile parts must not drive a full decode of
+    // this tiny input.
+    data[8..12].copy_from_slice(&4096_u32.to_be_bytes());
+    data[12..16].copy_from_slice(&3072_u32.to_be_bytes());
+    let fixture = write_fixture("j2k", &data);
+    let error = expect_error(
+        RawJp2kBackend.open(&fixture.path),
+        "a codestream too short to contain its declared tile grid must fail",
+    );
+    assert!(matches!(error, WsiError::Jp2k(_)), "{error}");
+}
+
+#[test]
 fn reduction_probing_preserves_shorter_component_ladders() {
     let mut data = RGB_CODESTREAM.to_vec();
     let cod = data

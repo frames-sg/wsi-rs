@@ -20,7 +20,7 @@ use crate::decode::jp2k::{
     decode_jp2k_reduced_to_sample_buffer, decode_jp2k_to_sample_buffer,
     jp2k_decodable_reduction_levels, reduced_jp2k_dimensions, Jp2kColorSpace,
 };
-use crate::decode::jp2k_codestream::{parse_codestream_header, validate_pixel_contract};
+use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_pixel_contract};
 use crate::error::WsiError;
 use crate::properties::Properties;
 
@@ -95,7 +95,19 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
                 path: path.to_path_buf(),
             }
         })?;
-        let header = parse_codestream_header(&data)?;
+        let view = j2k::J2kView::parse(&data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+        if let Some(layout) = &view.info().tile_layout {
+            // Every tile needs at least one 12-byte SOT segment and a 2-byte
+            // SOD marker. Bound the declared grid before reduction probing or
+            // decoding can allocate and process metadata for absent tiles.
+            let tile_count = u64::from(layout.tiles_x) * u64::from(layout.tiles_y);
+            if tile_count > data.len() as u64 / 14 {
+                return Err(WsiError::Jp2k(
+                    "raw JP2K input is too short for its declared tile grid".into(),
+                ));
+            }
+        }
+        let header = codestream_header_from_view(&view)?;
         validate_pixel_contract(&header)?;
         let dimensions = (header.image_width, header.image_height);
         let reader = RawJp2kReader {
