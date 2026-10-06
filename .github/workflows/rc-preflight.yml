@@ -95,8 +95,23 @@ jobs:
       - name: Install Linux OpenSlide runtime
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenslide0
+          python3 -m pip install --only-binary=:all: --no-deps \
+            --target "${RUNNER_TEMP}/openslide-runtime" openslide-bin==4.0.1.2
+          python3 - <<'PY'
+          import ctypes
+          import os
+          from pathlib import Path
+
+          library = Path(os.environ["RUNNER_TEMP"]) / "openslide-runtime/openslide_bin/libopenslide.so.1"
+          oracle = ctypes.CDLL(str(library))
+          oracle.openslide_get_version.restype = ctypes.c_char_p
+          version = oracle.openslide_get_version().decode()
+          if version != "4.0.1":
+              raise SystemExit(f"expected OpenSlide 4.0.1, got {version}")
+          print(f"Using OpenSlide {version}: {library}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"OPENSLIDE_LIB_PATH={library}\n")
+          PY
       - name: Install macOS OpenSlide runtime
         if: runner.os == 'macOS'
         run: brew install openslide

@@ -127,7 +127,10 @@ mod unix {
                 .env("PATH", &self.path)
                 .env("XTASK_FAKE_LOG", &self.log_path)
                 .env_remove("WSI_RS_UPDATE_PUBLIC_API")
-                .env_remove("WSI_RS_PARITY_ALIASES");
+                .env_remove("WSI_RS_PARITY_ALIASES")
+                .env_remove("WSI_RS_RC_OPENSLIDE_CAPTURE")
+                .env_remove("WSI_RS_RC_PREVIOUS_CAPTURE")
+                .env_remove("WSI_RS_RC_CURRENT_CAPTURE");
             command
         }
     }
