@@ -75,6 +75,9 @@ jobs:
         working-directory: wsi-rs
 
   api-stability:
+    env:
+      # The dedicated CUDA runner verifies kernel builds; this job inspects API.
+      RUSTUP_AUTO_INSTALL: "0"
     strategy:
       fail-fast: false
       matrix:

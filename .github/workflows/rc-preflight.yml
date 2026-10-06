@@ -27,6 +27,9 @@ env:
 jobs:
   source-preflight:
     if: ${{ !inputs.artifacts_only }}
+    env:
+      # CUDA kernel builds are required by the separate GPU validation workflow.
+      RUSTUP_AUTO_INSTALL: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -144,13 +147,15 @@ jobs:
 
   c-artifacts:
     name: C artifact (${{ matrix.target }})
+    env:
+      RUSTUP_AUTO_INSTALL: "0"
     needs: verify-source-preflight
-    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.verify-source-preflight.result) }}
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.verify-source-preflight.result) && github.ref == 'refs/heads/main' && github.actor == 'jcwal1516' && github.triggering_actor == 'jcwal1516' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: [self-hosted, Linux, X64, cuda]
             target: linux-x64
             architecture: x86_64
             gpu-feature: cuda
@@ -192,12 +197,20 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
-      - name: Install ELF identity tooling
+      - name: Configure CUDA Oxide bindgen
         if: runner.os == 'Linux'
+        working-directory: wsi-rs
+        run: scripts/configure-cuda-oxide.sh
+      - name: Build Linux shim with required CUDA kernels
+        if: runner.os == 'Linux'
+        working-directory: wsi-rs
+        env:
+          J2K_REQUIRE_CUDA_OXIDE_BUILD: "1"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y patchelf
-      - name: Build GPU-enabled shim
+          cargo rustc --locked --release --lib -p wsi-rs-openslide-shim \
+            --features wsi-rs/cuda -- -C link-arg=-Wl,-soname,libopenslide.so.1
+      - name: Build platform shim
+        if: runner.os != 'Linux'
         working-directory: wsi-rs
         run: cargo build --locked --release -p wsi-rs-openslide-shim --features wsi-rs/${{ matrix.gpu-feature }}
       - name: Prepare official OpenSlide 4.0.1 headers
@@ -217,7 +230,6 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/wsi-rs-artifact"
           mkdir -p "${artifact_dir}"
           cp "target/release/${{ matrix.cargo-library }}" "${artifact_dir}/${{ matrix.artifact }}"
-          patchelf --set-soname '${{ matrix.artifact }}' "${artifact_dir}/${{ matrix.artifact }}"
       - name: Prepare Mach-O artifact
         if: runner.os == 'macOS'
         working-directory: wsi-rs
@@ -239,7 +251,7 @@ jobs:
         working-directory: wsi-rs
         shell: bash
         run: |
-          cargo metadata --locked --format-version 1 > "${RUNNER_TEMP}/cargo-metadata.json"
+          cargo metadata --locked --format-version 1 --features wsi-rs/${{ matrix.gpu-feature }} > "${RUNNER_TEMP}/cargo-metadata.json"
           python3 scripts/generate-release-artifact-metadata.py \
             --artifact "${RUNNER_TEMP}/wsi-rs-artifact/${{ matrix.artifact }}" \
             --target '${{ matrix.target }}' \
