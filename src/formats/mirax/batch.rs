@@ -1,6 +1,5 @@
 //! Ordered logical outputs from bounded, unique MIRAX source images.
 use super::*;
-use rayon::prelude::*;
 
 impl MiraxReader {
     pub(super) fn read_cpu_batch(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
@@ -101,16 +100,37 @@ impl MiraxReader {
             let resolve = |(index, claim): (usize, crate::core::cache::TileClaim<'_, u32>)| {
                 (index, self.slide.resolve_image_claim(images[index], claim))
             };
-            let mut results = if owned
-                .iter()
-                .filter(|(_, claim)| !matches!(claim, crate::core::cache::TileClaim::Ready(_)))
-                .count()
-                <= 1
-            {
-                owned.into_iter().map(resolve).collect::<Vec<_>>()
+            let mut results = (0..owned.len()).map(|_| None).collect::<Vec<_>>();
+            let pool = (owned.len() > 1)
+                .then(crate::core::decode_runtime::process_jp2k_cpu_pool)
+                .flatten();
+            if let Some(pool) = pool {
+                crate::core::execution_telemetry::record(
+                    crate::core::execution_telemetry::Event::CpuPoolDispatches,
+                    1,
+                );
+                // Start one source on the caller while the shared pool helps
+                // with the rest; the whole read need not queue for a worker.
+                pool.in_place_scope(|scope| {
+                    let mut jobs = owned.into_iter().zip(results.iter_mut());
+                    let first = jobs.next();
+                    for (job, result) in jobs {
+                        let resolve = &resolve;
+                        scope.spawn(move |_| *result = Some(resolve(job)));
+                    }
+                    if let Some((job, result)) = first {
+                        *result = Some(resolve(job));
+                    }
+                });
             } else {
-                runtime.install_jp2k_cpu(|| owned.into_par_iter().map(resolve).collect::<Vec<_>>())
-            };
+                for (job, result) in owned.into_iter().zip(results.iter_mut()) {
+                    *result = Some(resolve(job));
+                }
+            }
+            let mut results = results
+                .into_iter()
+                .map(|result| result.expect("every owned source resolved"))
+                .collect::<Vec<_>>();
             results.extend(waiting.into_iter().map(|(index, claim)| {
                 (index, self.slide.resolve_image_claim(images[index], claim))
             }));

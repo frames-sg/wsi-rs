@@ -52,6 +52,29 @@ fn decode_valid_jpeg() {
 }
 
 #[test]
+fn expected_size_hints_preserve_rgb_and_grayscale_edge_crops() {
+    let rgb = image::RgbImage::from_fn(8, 8, |x, y| {
+        image::Rgb([(x * 29) as u8, (y * 31) as u8, 160])
+    });
+    let gray = (0..64).map(|value| value * 4).collect::<Vec<u8>>();
+    let mut grayscale_jpeg = Vec::new();
+    JpegEncoder::new(&mut grayscale_jpeg, 90)
+        .encode(&gray, 8, 8, JpegColorType::Luma)
+        .unwrap();
+    for data in [encode_test_jpeg(&rgb), grayscale_jpeg] {
+        let decoded = decode_jpeg_rgb(&data, None, 0, 0).unwrap();
+        let decoded = image::RgbImage::from_raw(8, 8, decoded.pixels).unwrap();
+        for (width, height) in [(8, 8), (4, 4), (16, 16), (4, 16), (16, 4)] {
+            let actual = decode_jpeg_rgb(&data, None, width, height).unwrap();
+            let expected =
+                image::imageops::crop_imm(&decoded, 0, 0, width.min(8), height.min(8)).to_image();
+            assert_eq!((actual.width, actual.height), expected.dimensions());
+            assert_eq!(actual.pixels, expected.into_raw());
+        }
+    }
+}
+
+#[test]
 fn decode_with_jpeg_tables() {
     // Create a valid JPEG
     let mut rgb = image::RgbImage::new(8, 8);

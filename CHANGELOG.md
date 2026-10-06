@@ -47,6 +47,9 @@
   every CPU core.
 - MIRAX JPEG reads reserve memory from indexed source sizes, so small tiles
   can share a bounded batch instead of each reserving the maximum input size.
+- MIRAX source batches decode on the caller with help from the shared CPU
+  pool. JPEG tiles with known dimensions use J2K's direct output API and
+  reusable decode scratch.
 - The first GPU calibration read no longer includes Metal kernel compilation,
   which could make a decode route settle on the CPU.
 

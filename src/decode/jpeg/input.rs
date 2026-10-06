@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 
 use crate::core::limits::MAX_COMPRESSED_INPUT_BYTES;
 use crate::error::WsiError;
@@ -11,6 +12,11 @@ use j2k_jpeg::{
 use super::{
     is_sof_marker, DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES,
 };
+
+thread_local! {
+    static JPEG_TILE_SCRATCH: RefCell<j2k_jpeg::ScratchPool> =
+        RefCell::new(j2k_jpeg::ScratchPool::new());
+}
 
 pub(super) fn checked_jpeg_preparation_len(
     data_len: usize,
@@ -219,6 +225,15 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_height,
         force_dimensions,
     )?;
+    // Known tile sizes let the codec parse and lease its cached plan once.
+    // Mismatched container sizes retain the owned-output path below.
+    if color_transform == J2kColorTransform::Auto {
+        if let Some(decoded) =
+            try_decode_known_jpeg_tile(input.as_ref(), expected_width, expected_height)
+        {
+            return decoded;
+        }
+    }
     let view = parse_jpeg_view(input.as_ref(), color_transform)?;
     let _ = checked_jpeg_rgb_len(view.info().dimensions.0, view.info().dimensions.1)?;
     let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
@@ -244,6 +259,49 @@ pub(super) fn decode_jpeg_rgb_with_color_transform_and_patch(
         expected_width,
         expected_height,
     )
+}
+
+fn try_decode_known_jpeg_tile(
+    input: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<Result<DecodedJpegRgb, WsiError>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let len = checked_jpeg_rgb_len(width, height).ok()?;
+    let mut pixels = Vec::new();
+    if pixels.try_reserve_exact(len).is_err() {
+        return Some(Err(WsiError::ResourceLimit {
+            resource: "JPEG decode output",
+            requested: len as u64,
+            limit: MAX_JPEG_DECODE_BYTES,
+        }));
+    }
+    pixels.resize(len, 0);
+    let outcome = JPEG_TILE_SCRATCH.with(|scratch| {
+        j2k_jpeg::decode_tile_into(
+            input,
+            &mut scratch.borrow_mut(),
+            &mut pixels,
+            width as usize * 3,
+            J2kPixelFormat::Rgb8,
+        )
+    });
+    match outcome {
+        Ok(outcome) if (outcome.decoded.w, outcome.decoded.h) == (width, height) => {
+            Some(Ok(DecodedJpegRgb {
+                width,
+                height,
+                pixels,
+            }))
+        }
+        Ok(_)
+        | Err(J2kJpegError::OutputBufferTooSmall { .. } | J2kJpegError::InvalidStride { .. }) => {
+            None
+        }
+        Err(error) => Some(Err(WsiError::Jpeg(error.to_string()))),
+    }
 }
 
 /// Full-size decode of a 12-bit JPEG to interleaved RGB16 samples in the
