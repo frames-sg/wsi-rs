@@ -1,16 +1,10 @@
 use super::super::*;
+use crate::Slide;
 
 #[test]
+#[ignore = "requires WSI_RS_NDPI_WRAPPED_FIXTURE; see cargo xtask conformance-test"]
 fn opens_legacy_wrapped_offset_ndpi_when_corpus_is_available() {
-    use crate::core::registry::Slide;
-
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    let path = workspace_root.join("downloads/openslide-testdata/Hamamatsu/Hamamatsu-1.ndpi");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_fixture_path("WSI_RS_NDPI_WRAPPED_FIXTURE");
 
     let slide = Slide::open(&path).expect("open legacy NDPI");
     assert_eq!(

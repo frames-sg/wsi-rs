@@ -12,6 +12,7 @@ fn configured_wsi_edges_have_identical_cpu_and_metal_dimensions() {
     let sessions = MetalBackendSessions::system_default().expect("a Metal device is required");
 
     for path in paths {
+        let mut checked = 0;
         let slide = Slide::open(&path).expect("open WSI fixture");
         let levels = &slide.dataset().scenes[0].series[0].levels;
         for (level_index, level) in levels.iter().enumerate() {
@@ -46,6 +47,7 @@ fn configured_wsi_edges_have_identical_cpu_and_metal_dimensions() {
                 raw.width(),
                 raw.height(),
             );
+            checked += 1;
             eprintln!(
                 "{} level {level_index}: {}x{}",
                 path.display(),
@@ -53,5 +55,10 @@ fn configured_wsi_edges_have_identical_cpu_and_metal_dimensions() {
                 metal.height
             );
         }
+        assert!(
+            checked > 0,
+            "{} has no eligible regular edge tiles",
+            path.display()
+        );
     }
 }

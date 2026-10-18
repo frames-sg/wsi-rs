@@ -139,7 +139,26 @@ fn controlled_batch_of_eight_reaches_dicom_once_in_original_order() {
 fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("jp2k-cpu-batch.dcm");
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let frames = [[10, 30, 50].repeat(16 * 12), [70, 90, 110].repeat(16 * 12)];
+    let codestreams = frames
+        .iter()
+        .map(|pixels| {
+            j2k_native::encode(
+                pixels,
+                16,
+                12,
+                3,
+                8,
+                false,
+                &j2k_native::EncodeOptions {
+                    reversible: true,
+                    num_decomposition_levels: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+        .collect();
     let mut options = TestDicomOptions::native(Vec::new());
     options.transfer_syntax = uids::JPEG2000_LOSSLESS;
     options.rows = 12;
@@ -147,7 +166,7 @@ fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
     options.total_pixel_matrix_rows = 12;
     options.total_pixel_matrix_columns = 32;
     options.number_of_frames = 2;
-    options.pixel_data = TestPixelData::EncapsulatedFrames(vec![codestream.clone(), codestream]);
+    options.pixel_data = TestPixelData::EncapsulatedFrames(codestreams);
     write_test_dicom(&path, options);
 
     let slide = Slide::open(&path).expect("open generated DICOM JP2K slide");
@@ -158,7 +177,9 @@ fn read_tiles_cpu_decodes_jp2k_frames_in_request_order() {
         )
         .expect("read JP2K CPU tile batch");
 
-    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles.len(), frames.len());
+    assert_eq!(tiles[0].data.as_u8(), Some(frames[1].as_slice()));
+    assert_eq!(tiles[1].data.as_u8(), Some(frames[0].as_slice()));
 }
 
 #[test]

@@ -164,23 +164,41 @@ fn eviction_by_byte_size() {
 #[test]
 fn different_datasets_are_independent() {
     let cache = TileCache::new(1024);
-    cache.put(make_key(1, 0, 0, 0), Arc::new(make_sample_buffer(10)));
-    cache.put(make_key(2, 0, 0, 0), Arc::new(make_sample_buffer(10)));
-    assert!(cache.get(&make_key(1, 0, 0, 0)).is_some());
-    assert!(cache.get(&make_key(2, 0, 0, 0)).is_some());
+    let mut first = make_sample_buffer(10);
+    first.data = CpuTileData::u8(vec![1; 10]);
+    let mut second = make_sample_buffer(10);
+    second.data = CpuTileData::u8(vec![2; 10]);
+    cache.put(make_key(1, 0, 0, 0), Arc::new(first));
+    cache.put(make_key(2, 0, 0, 0), Arc::new(second));
+    assert_eq!(
+        cache.get(&make_key(1, 0, 0, 0)).unwrap().as_u8(),
+        Some(&[1; 10][..])
+    );
+    assert_eq!(
+        cache.get(&make_key(2, 0, 0, 0)).unwrap().as_u8(),
+        Some(&[2; 10][..])
+    );
+    assert!(cache.get(&make_key(3, 0, 0, 0)).is_none());
 }
 
 #[test]
 fn axis_aware_keys() {
     let cache = TileCache::new(1024);
-    let mut key_z0 = make_key(1, 0, 0, 0);
-    key_z0.z = 0;
-    let mut key_z1 = make_key(1, 0, 0, 0);
-    key_z1.z = 1;
-    cache.put(key_z0.clone(), Arc::new(make_sample_buffer(10)));
-    cache.put(key_z1.clone(), Arc::new(make_sample_buffer(10)));
-    assert!(cache.get(&key_z0).is_some());
-    assert!(cache.get(&key_z1).is_some());
+    let mut first = make_key(1, 0, 0, 0);
+    first.z = 1;
+    let mut second = first.clone();
+    second.z = 2;
+    let mut a = make_sample_buffer(10);
+    a.data = CpuTileData::u8(vec![1; 10]);
+    let mut b = make_sample_buffer(10);
+    b.data = CpuTileData::u8(vec![2; 10]);
+    cache.put(first.clone(), Arc::new(a));
+    cache.put(second, Arc::new(b));
+    assert_eq!(cache.get(&first).unwrap().as_u8(), Some(&[1; 10][..]));
+    first.z = 2;
+    assert_eq!(cache.get(&first).unwrap().as_u8(), Some(&[2; 10][..]));
+    first.z = 3;
+    assert!(cache.get(&first).is_none());
 }
 
 #[test]

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use openslide_test_support::OpenSlide;
+use support::compare::{compare_rgba, Tolerance};
 use wsi_rs::{PlaneSelection, Slide};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -339,7 +340,7 @@ fn compare_level0_regions(
 
         match mode {
             PixelCompareMode::Exact => {
-                assert_rgba_visible_exact(path, region, &ours, &theirs);
+                assert_rgba_exact(path, region, &ours, &theirs);
             }
             PixelCompareMode::JpegTolerance => {
                 assert_rgba_with_tolerance(path, region, &ours, &theirs, 12, 200, "JPEG")
@@ -527,67 +528,30 @@ fn assert_rgba_with_tolerance(
     avg_allowed_delta_x100: u64,
     label: &str,
 ) {
-    assert_eq!(
-        ours.len(),
-        theirs.len(),
-        "pixel buffer length mismatch for {} region {}",
-        path.display(),
-        region.label
-    );
-
-    let mut total_delta = 0u64;
-    let mut max_delta = 0u8;
-    for (idx, (ours, theirs)) in ours.iter().zip(theirs.iter()).enumerate() {
-        if idx % 4 == 3 {
-            continue;
-        }
-        let delta = ours.abs_diff(*theirs);
-        total_delta += u64::from(delta);
-        max_delta = max_delta.max(delta);
-    }
-
-    let compared_channels = ours.len().saturating_sub(ours.len() / 4);
-    let avg_delta_x100 = if compared_channels == 0 {
-        0
-    } else {
-        (total_delta * 100) / compared_channels as u64
-    };
-
-    assert!(
-        max_delta <= max_allowed_delta,
-        "{} region drift too large for {} region {}: max channel delta {} > {}",
-        label,
-        path.display(),
-        region.label,
-        max_delta,
-        max_allowed_delta
+    let report = compare_rgba(
+        ours,
+        theirs,
+        Tolerance {
+            max_abs: max_allowed_delta,
+            mean_abs: avg_allowed_delta_x100 as f64 / 100.0,
+        },
     );
     assert!(
-        avg_delta_x100 <= avg_allowed_delta_x100,
-        "{} region drift too large for {} region {}: average channel delta {:.2} > {:.2}",
-        label,
+        report.passed,
+        "{label} pixel mismatch for {} region {}: max_abs={} mean_abs={} alpha_exact={}",
         path.display(),
         region.label,
-        avg_delta_x100 as f64 / 100.0,
-        avg_allowed_delta_x100 as f64 / 100.0
+        report.max_abs,
+        report.mean_abs,
+        report.alpha_exact
     );
 }
 
-fn assert_rgba_visible_exact(path: &Path, region: RegionCase, ours: &[u8], theirs: &[u8]) {
-    assert_eq!(
-        ours.len(),
-        theirs.len(),
-        "pixel buffer length mismatch for {} region {}",
-        path.display(),
-        region.label
-    );
-
-    let ours_rgb = rgba_visible_bytes(ours);
-    let theirs_rgb = rgba_visible_bytes(theirs);
-    assert_eq!(
-        ours_rgb,
-        theirs_rgb,
-        "visible pixel mismatch for {} region {} at ({}, {}) {}x{}",
+fn assert_rgba_exact(path: &Path, region: RegionCase, ours: &[u8], theirs: &[u8]) {
+    let report = compare_rgba(ours, theirs, Tolerance::EXACT);
+    assert!(
+        report.passed,
+        "pixel mismatch for {} region {} at ({}, {}) {}x{}: {report:?}",
         path.display(),
         region.label,
         region.x,
@@ -595,14 +559,6 @@ fn assert_rgba_visible_exact(path: &Path, region: RegionCase, ours: &[u8], their
         region.w,
         region.h
     );
-}
-
-fn rgba_visible_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut visible = Vec::with_capacity(bytes.len().saturating_sub(bytes.len() / 4));
-    for pixel in bytes.as_chunks::<4>().0 {
-        visible.extend_from_slice(&pixel[..3]);
-    }
-    visible
 }
 
 fn compare_exact_property(
@@ -648,4 +604,26 @@ fn compare_float_property(
         ours,
         theirs
     );
+}
+
+#[test]
+fn region_parity_rejects_coverage_mismatch_even_when_rgb_matches() {
+    let path = Path::new("coverage-probe.svs");
+    let region = RegionCase {
+        label: "coverage",
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+    };
+    let opaque = [10, 20, 30, 255];
+    let transparent = [10, 20, 30, 0];
+    assert!(std::panic::catch_unwind(|| {
+        assert_rgba_with_tolerance(path, region, &opaque, &transparent, 4, 100, "coverage");
+    })
+    .is_err());
+    assert!(std::panic::catch_unwind(|| {
+        assert_rgba_exact(path, region, &opaque, &transparent);
+    })
+    .is_err());
 }

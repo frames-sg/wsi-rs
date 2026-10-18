@@ -2,7 +2,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::Deserialize;
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
@@ -32,6 +32,8 @@ fn vendor_native_pixels_match_independent_reference() {
         !probes.is_empty(),
         "independent reference cases must not be empty"
     );
+    let mut compared_rgb = false;
+    let mut compared_zvi_channels = BTreeSet::new();
     for probe in probes {
         let slide = Slide::open(&probe.path).expect("open public vendor sample");
         let actual = slide
@@ -50,6 +52,8 @@ fn vendor_native_pixels_match_independent_reference() {
         let expected = std::fs::read(root.join(&probe.pixels)).expect("read reference pixels");
         match probe.sample_type.as_str() {
             "u16" => {
+                assert_eq!(slide.dataset().properties.get("zeiss.format"), Some("zvi"));
+                compared_zvi_channels.insert(probe.channel);
                 let CpuTileData::U16(values) = actual.data() else {
                     panic!("{}: expected native U16 pixels", probe.pixels);
                 };
@@ -64,6 +68,8 @@ fn vendor_native_pixels_match_independent_reference() {
                 );
             }
             "u8" => {
+                assert_eq!(slide.dataset().properties.vendor(), Some("olympus"));
+                compared_rgb = true;
                 assert_eq!(
                     expected.len(),
                     probe.size.0 as usize * probe.size.1 as usize * 3
@@ -85,5 +91,20 @@ fn vendor_native_pixels_match_independent_reference() {
             }
             other => panic!("unsupported reference sample type {other}"),
         }
+    }
+    let selected = |alias: &str| {
+        std::env::var("WSI_RS_PARITY_ALIASES").map_or(true, |aliases| {
+            aliases.split(',').any(|value| value.trim() == alias)
+        })
+    };
+    if selected("olympus-vsi-001") {
+        assert!(compared_rgb, "missing independent Olympus RGB probes");
+    }
+    if selected("zeiss-zvi-001") {
+        assert_eq!(
+            compared_zvi_channels,
+            BTreeSet::from([0, 1, 2]),
+            "independent Zeiss probes must cover all three channels"
+        );
     }
 }

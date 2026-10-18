@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in cooperative CPU and Metal JPEG 2000 batch decoding through
+  `MetalBackendSessions::with_cooperative_cpu_workers`. Cloned sessions share
+  one cooperative slot and fall back to ordinary Metal while it is busy.
+  Automatic slide acceleration retains its existing policy.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added

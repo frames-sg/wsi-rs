@@ -293,8 +293,279 @@ EOF
     }
 
     #[test]
+    fn explicit_suites_reject_missing_tests_and_invalid_arguments() {
+        let fixture = FakeRepository::new();
+        let output = fixture.run("conformance-test", &["czi"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("matched no tests"));
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert!(log.contains("--ignored --list"));
+        assert!(!log.contains("--exact"));
+
+        for (task, arguments, diagnostic) in [
+            ("conformance-test", vec![], "usage:"),
+            (
+                "conformance-test",
+                vec!["unknown"],
+                "unknown conformance suite",
+            ),
+            ("perf-experiment", vec![], "usage:"),
+            (
+                "perf-experiment",
+                vec!["unknown"],
+                "unknown performance experiment",
+            ),
+        ] {
+            fs::write(&fixture.log_path, "").unwrap();
+            let output = fixture.run(task, &arguments);
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains(diagnostic));
+            assert!(fs::read_to_string(&fixture.log_path).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn conformance_suites_select_exact_tests_and_required_features() {
+        let suites = [
+            (
+                "czi",
+                vec![
+                    ("--lib", "uncompressed_sentinel_"),
+                    ("--test zeiss_czi", "real_jpegxr_czi_"),
+                ],
+                None,
+            ),
+            (
+                "vendor",
+                vec![("--test vendor_reference", "vendor_native_pixels_")],
+                None,
+            ),
+            (
+                "zvi-variants",
+                vec![("--test zeiss_zvi", "builtin_registry_opens_zeiss_zvi_")],
+                None,
+            ),
+            (
+                "vmu",
+                vec![("--test hamamatsu_vmu", "vmu_")],
+                Some("parity-openslide"),
+            ),
+            (
+                "openslide",
+                vec![
+                    ("--test openslide_compare", "compare_against_openslide_"),
+                    ("--test openslide_compare", "aperio_jpeg_rgb_pyramid_"),
+                ],
+                None,
+            ),
+            (
+                "metal-color",
+                vec![("--lib", "all_ycbcr8_values_")],
+                Some("metal"),
+            ),
+            (
+                "metal-edges",
+                vec![("--test metal_edge_conformance", "configured_wsi_edges_")],
+                Some("metal"),
+            ),
+            (
+                "local-htj2k",
+                vec![("--lib", "local_htj2k_device_pixels_match_cpu")],
+                Some("metal"),
+            ),
+            (
+                "legacy-slides",
+                vec![
+                    (
+                        "--lib",
+                        "opens_wrapped_first_ifd_ndpi_when_corpus_is_available",
+                    ),
+                    (
+                        "--lib",
+                        "opens_legacy_wrapped_offset_ndpi_when_corpus_is_available",
+                    ),
+                    (
+                        "--lib",
+                        "opens_dissimilar_leica_scenes_when_corpus_is_available",
+                    ),
+                    (
+                        "--lib",
+                        "opens_fluorescence_leica_channels_when_corpus_is_available",
+                    ),
+                    (
+                        "--lib",
+                        "opens_3dhistech_split_sparse_level_when_corpus_is_available",
+                    ),
+                ],
+                None,
+            ),
+        ];
+        for (suite, selections, features) in suites {
+            let fixture = FakeRepository::new();
+            let listing = selections
+                .iter()
+                .map(|(_, filter)| format!("'fixture::{filter}probe: test'"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let script = format!(
+                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n",
+                fs::read_to_string(&fixture.cargo).unwrap()
+            );
+            write_executable(&fixture.cargo, &script);
+            let output = fixture.run("conformance-test", &[suite]);
+            let log = fs::read_to_string(&fixture.log_path).unwrap();
+            if features == Some("metal") && !cfg!(target_os = "macos") {
+                assert!(!output.status.success(), "{suite}");
+                assert!(String::from_utf8_lossy(&output.stderr)
+                    .contains("requires a macOS Metal runtime"));
+                assert!(log.is_empty());
+                continue;
+            }
+            assert!(
+                output.status.success(),
+                "{suite}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(log.lines().count(), selections.len() * 2, "{suite}: {log}");
+            let features = features.map_or(String::new(), |value| format!(" --features {value}"));
+            for (target, filter) in selections {
+                assert!(
+                    log.contains(&format!(
+                        "test --locked {target}{features} -- --ignored --list\n"
+                    )),
+                    "{suite}: {log}"
+                );
+                assert!(log.contains(&format!("test --locked {target}{features} -- fixture::{filter}probe --exact --ignored --test-threads=1\n")), "{suite}: {log}");
+            }
+        }
+    }
+
+    #[test]
+    fn performance_experiments_use_release_mode_and_explicit_targets() {
+        let device_features = if cfg!(target_os = "macos") {
+            "metal,route-telemetry"
+        } else {
+            "route-telemetry"
+        };
+        for (name, target, features, mac_only) in [
+            (
+                "metal_window_performance",
+                "--lib",
+                "metal,route-telemetry",
+                true,
+            ),
+            (
+                "metal_cooperative_performance",
+                "--lib",
+                "metal,route-telemetry",
+                true,
+            ),
+            (
+                "ycbcr_selected_u32_stays_within_five_percent_of_reference",
+                "--lib",
+                "metal,route-telemetry",
+                true,
+            ),
+            (
+                "local_htj2k_dicom_level_preparation_meets_interactive_budget",
+                "--lib",
+                "metal,route-telemetry",
+                true,
+            ),
+            (
+                "prepared_cpu_performance",
+                "--lib",
+                "route-telemetry",
+                false,
+            ),
+            (
+                "pooled_cpu_scheduling_performance",
+                "--lib",
+                "route-telemetry",
+                false,
+            ),
+            ("composition_performance", "--lib", "route-telemetry", false),
+            (
+                "native_decode_matrix",
+                "--test decode_performance",
+                device_features,
+                false,
+            ),
+            (
+                "native_decode_revisits",
+                "--test decode_performance",
+                device_features,
+                false,
+            ),
+            (
+                "native_decode_fresh_readers",
+                "--test decode_performance",
+                device_features,
+                false,
+            ),
+            (
+                "panning_matrix",
+                "--test panning_performance",
+                device_features,
+                false,
+            ),
+            (
+                "warm_region_revisits",
+                "--test panning_performance",
+                device_features,
+                false,
+            ),
+            (
+                "czi_reader_workloads",
+                "--test czi_performance",
+                "route-telemetry",
+                false,
+            ),
+        ] {
+            let fixture = FakeRepository::new();
+            let script = format!(
+                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' 'fixture::{name}: test' 'unrelated::test: test';; esac\n",
+                fs::read_to_string(&fixture.cargo).unwrap()
+            );
+            write_executable(&fixture.cargo, &script);
+            let output = fixture.run("perf-experiment", &[name]);
+            let log = fs::read_to_string(&fixture.log_path).unwrap();
+            if mac_only && !cfg!(target_os = "macos") {
+                assert!(!output.status.success(), "{name}");
+                assert!(String::from_utf8_lossy(&output.stderr)
+                    .contains("requires a macOS Metal runtime"));
+                assert!(log.is_empty());
+                continue;
+            }
+            assert!(
+                output.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(log.lines().count(), 2, "{name}: {log}");
+            assert!(
+                log.contains(&format!(
+                    "test --locked {target} --features {features} --release -- --ignored --list\n"
+                )),
+                "{name}: {log}"
+            );
+            assert!(log.contains(&format!("test --locked {target} --features {features} --release -- fixture::{name} --exact --ignored --test-threads=1\n")), "{name}: {log}");
+        }
+    }
+
+    #[test]
     fn engineering_commands_execute_their_complete_orchestration_contracts() {
         let fixture = FakeRepository::new();
+        let script = fs::read_to_string(&fixture.cargo).unwrap();
+        let script = format!(
+            "{script}{}",
+            r#"
+case "$*" in
+    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+esac
+"#
+        );
+        write_executable(&fixture.cargo, &script);
         for (task, arguments) in [
             ("ci", vec![]),
             ("test", vec![]),

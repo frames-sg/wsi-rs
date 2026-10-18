@@ -198,7 +198,183 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
         "real_wsi_behavior",
         "--",
         "--ignored",
-    ])
+    ])?;
+    for (alias, test) in [
+        (
+            "dicom-jp2k-001",
+            "opens_public_dicom_folder_and_member_with_matching_levels_when_available",
+        ),
+        (
+            "olympus-vsi-001",
+            "opens_olympus_vsi_when_corpus_is_available",
+        ),
+    ] {
+        if corpus_alias_selected(alias) {
+            run_ignored(&["--lib"], test, None, false)?;
+        }
+    }
+    if corpus_alias_selected("olympus-vsi-001") || corpus_alias_selected("zeiss-zvi-001") {
+        conformance_test(vec!["vendor".into()])?;
+    }
+    Ok(())
+}
+
+fn corpus_alias_selected(alias: &str) -> bool {
+    env::var("WSI_RS_PARITY_ALIASES").map_or(true, |aliases| {
+        aliases.split(',').any(|value| value.trim() == alias)
+    })
+}
+
+/// Explicit lanes for fixtures and hardware excluded from quick correctness runs.
+pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
+    let [suite] = arguments.as_slice() else {
+        return Err("usage: cargo xtask conformance-test <czi|vendor|zvi-variants|vmu|openslide|metal-color|metal-edges|local-htj2k|legacy-slides>".into());
+    };
+    match suite.as_str() {
+        "czi" => {
+            run_ignored(&["--lib"], "uncompressed_sentinel_", None, false)?;
+            run_ignored(&["--test", "zeiss_czi"], "real_jpegxr_czi_", None, false)
+        }
+        "vendor" => run_ignored(
+            &["--test", "vendor_reference"],
+            "vendor_native_pixels_",
+            None,
+            false,
+        ),
+        "zvi-variants" => run_ignored(
+            &["--test", "zeiss_zvi"],
+            "builtin_registry_opens_zeiss_zvi_",
+            None,
+            false,
+        ),
+        "vmu" => run_ignored(
+            &["--test", "hamamatsu_vmu"],
+            "vmu_",
+            Some("parity-openslide"),
+            false,
+        ),
+        "openslide" => {
+            run_ignored(
+                &["--test", "openslide_compare"],
+                "compare_against_openslide_",
+                None,
+                false,
+            )?;
+            run_ignored(
+                &["--test", "openslide_compare"],
+                "aperio_jpeg_rgb_pyramid_",
+                None,
+                false,
+            )
+        }
+        "metal-color" => run_ignored(&["--lib"], "all_ycbcr8_values_", Some("metal"), false),
+        "metal-edges" => run_ignored(
+            &["--test", "metal_edge_conformance"],
+            "configured_wsi_edges_",
+            Some("metal"),
+            false,
+        ),
+        "local-htj2k" => run_ignored(
+            &["--lib"],
+            "local_htj2k_device_pixels_match_cpu",
+            Some("metal"),
+            false,
+        ),
+        "legacy-slides" => {
+            for name in [
+                "opens_wrapped_first_ifd_ndpi_when_corpus_is_available",
+                "opens_legacy_wrapped_offset_ndpi_when_corpus_is_available",
+                "opens_dissimilar_leica_scenes_when_corpus_is_available",
+                "opens_fluorescence_leica_channels_when_corpus_is_available",
+                "opens_3dhistech_split_sparse_level_when_corpus_is_available",
+            ] {
+                run_ignored(&["--lib"], name, None, false)?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("unknown conformance suite `{suite}`")),
+    }
+}
+
+/// Preserve the specialized experiments as maintained release benchmark recipes.
+pub(super) fn perf_experiment(arguments: Vec<String>) -> Result<(), String> {
+    let [name] = arguments.as_slice() else {
+        return Err("usage: cargo xtask perf-experiment <test-name>; see README.md".into());
+    };
+    let (target, features): (&[&str], &str) = match name.as_str() {
+        "metal_window_performance"
+        | "metal_cooperative_performance"
+        | "ycbcr_selected_u32_stays_within_five_percent_of_reference"
+        | "local_htj2k_dicom_level_preparation_meets_interactive_budget" => {
+            (&["--lib"], "metal,route-telemetry")
+        }
+        "prepared_cpu_performance"
+        | "pooled_cpu_scheduling_performance"
+        | "composition_performance" => (&["--lib"], "route-telemetry"),
+        "native_decode_matrix" | "native_decode_revisits" | "native_decode_fresh_readers" => {
+            (&["--test", "decode_performance"], "metal,route-telemetry")
+        }
+        "panning_matrix" | "warm_region_revisits" => {
+            (&["--test", "panning_performance"], "metal,route-telemetry")
+        }
+        "czi_reader_workloads" => (&["--test", "czi_performance"], "route-telemetry"),
+        _ => {
+            return Err(format!(
+                "unknown performance experiment `{name}`; see README.md"
+            ))
+        }
+    };
+    // Host-output experiments can run CPU routes on non-Metal hosts.
+    let features = if cfg!(target_os = "macos") || target == ["--lib"] {
+        features
+    } else {
+        "route-telemetry"
+    };
+    run_ignored(target, name, Some(features), true)
+}
+
+fn run_ignored(
+    target: &[&str],
+    filter: &str,
+    features: Option<&str>,
+    release: bool,
+) -> Result<(), String> {
+    if features.is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
+        && !cfg!(target_os = "macos")
+    {
+        return Err("this lane requires a macOS Metal runtime".into());
+    }
+    let mut base = vec!["test", "--locked"];
+    base.extend_from_slice(target);
+    if let Some(features) = features {
+        base.extend(["--features", features]);
+    }
+    if release {
+        base.push("--release");
+    }
+    let mut list = base.clone();
+    list.extend(["--", "--ignored", "--list"]);
+    let output = run_program_capture(
+        env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+        &list,
+        &[],
+    )?;
+    let names: Vec<_> = output
+        .lines()
+        .filter_map(|line| line.strip_suffix(": test"))
+        .filter(|name| name.rsplit("::").next().unwrap_or(name).starts_with(filter))
+        .collect();
+    if names.is_empty() {
+        return Err(format!(
+            "ignored test selection `{filter}` matched no tests"
+        ));
+    }
+    for name in names {
+        let mut args = base.clone();
+        args.extend(["--", name, "--exact", "--ignored", "--test-threads=1"]);
+        run_cargo(&args)?;
+    }
+    Ok(())
 }
 
 pub(super) fn doc() -> Result<(), String> {

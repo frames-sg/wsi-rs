@@ -109,6 +109,7 @@ fn strict_metal_groups_duplicate_crops_and_converts_once() {
         1,
         "one actual codec group submitted"
     );
+    assert_eq!(actual.len(), expected.len());
     for (actual, expected) in actual.into_iter().zip(expected) {
         let actual = actual.unwrap();
         let expected = expected.unwrap();

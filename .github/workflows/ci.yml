@@ -176,7 +176,17 @@ jobs:
           olympus-vsi-001
           zeiss-zvi-001
         working-directory: wsi-rs
+      - name: Generate independent native vendor pixels
+        env:
+          WSI_RS_VENDOR_REFERENCE_ROOT: ${{ runner.temp }}/vendor-reference
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vendor-reference-venv"
+          "$RUNNER_TEMP/vendor-reference-venv/bin/python" -m pip install slideio==2.9.0
+          "$RUNNER_TEMP/vendor-reference-venv/bin/python" scripts/prepare-vendor-reference.py --output "$WSI_RS_VENDOR_REFERENCE_ROOT"
+        working-directory: wsi-rs
       - run: cargo xtask parity-corpus-test
+        env:
+          WSI_RS_VENDOR_REFERENCE_ROOT: ${{ runner.temp }}/vendor-reference
         working-directory: wsi-rs
 
   typos:

@@ -775,13 +775,9 @@ fn ets_limits_validate_header_table_axes_and_extents() {
 }
 
 #[test]
+#[ignore = "requires olympus-vsi-001; see cargo xtask conformance-test"]
 fn opens_olympus_vsi_when_corpus_is_available() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path =
-        workspace_root.join("downloads/openslide-testdata-extracted/full/Olympus/OS-1/OS-1.vsi");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_corpus_fixture("olympus-vsi-001");
 
     let slide = Slide::open(&path).expect("open Olympus VSI");
     let dataset = slide.dataset();

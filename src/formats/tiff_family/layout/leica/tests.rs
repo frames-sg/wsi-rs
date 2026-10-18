@@ -2,7 +2,6 @@ use super::*;
 use crate::core::registry::Slide;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 fn minimal_dataset(scene_count: usize) -> Dataset {
     Dataset {
@@ -528,12 +527,9 @@ fn source_icc_profiles_are_attached_per_scene() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_LEICA_MULTI_SCENE_FIXTURE; see cargo xtask conformance-test"]
 fn opens_dissimilar_leica_scenes_when_corpus_is_available() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path = workspace_root.join("downloads/openslide-testdata/Leica/Leica-3.scn");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_fixture_path("WSI_RS_LEICA_MULTI_SCENE_FIXTURE");
 
     let slide = Slide::open(&path).expect("open Leica multi-scene SCN");
     let dataset = slide.dataset();
@@ -545,12 +541,9 @@ fn opens_dissimilar_leica_scenes_when_corpus_is_available() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_LEICA_FLUORESCENCE_FIXTURE; see cargo xtask conformance-test"]
 fn opens_fluorescence_leica_channels_when_corpus_is_available() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path = workspace_root.join("downloads/openslide-testdata/Leica/Leica-Fluorescence-1.scn");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_fixture_path("WSI_RS_LEICA_FLUORESCENCE_FIXTURE");
 
     let slide = Slide::open(&path).expect("open Leica fluorescence SCN");
     let dataset = slide.dataset();

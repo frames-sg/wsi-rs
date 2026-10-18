@@ -113,3 +113,30 @@ pub(crate) fn region_request(
         size_px: (w, h),
     }
 }
+
+pub(crate) fn required_fixture_path(variable: &str) -> std::path::PathBuf {
+    let path = std::env::var_os(variable)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| panic!("{variable} must name the required fixture"));
+    assert!(
+        path.exists(),
+        "configured {variable} is missing: {}",
+        path.display()
+    );
+    path
+}
+
+pub(crate) fn required_corpus_fixture(alias: &str) -> std::path::PathBuf {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = wsi_rs_test_support::corpus::load_manifest(
+        &root.join("tests/fixtures/parity_corpus.public.toml"),
+    )
+    .expect("public corpus manifest");
+    let entry = manifest
+        .slides
+        .iter()
+        .find(|entry| entry.alias == alias)
+        .unwrap_or_else(|| panic!("corpus alias {alias} is missing from the manifest"));
+    wsi_rs_test_support::corpus::resolve_entry_path(entry, root)
+        .unwrap_or_else(|| panic!("required corpus fixture {alias} is missing; run scripts/parity-corpus-fetch.sh {alias}"))
+}

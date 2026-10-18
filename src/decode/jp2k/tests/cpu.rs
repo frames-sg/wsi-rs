@@ -8,6 +8,23 @@ fn fixture_rgb_nomct_decodes_to_reference_rgb() {
 }
 
 #[test]
+fn fixture_reversible_rct_preserves_reference_pixels_exactly() {
+    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.j2k");
+    let expected = load_fixture_rgb(include_bytes!(
+        "../../../../tests/fixtures/jp2k/rgb_rct.ppm"
+    ));
+    let decoded = decode_jp2k_to_sample_buffer(
+        codestream,
+        expected.width(),
+        expected.height(),
+        Jp2kColorSpace::Rgb,
+    )
+    .unwrap();
+    assert_eq!((decoded.width(), decoded.height()), expected.dimensions());
+    assert_eq!(decoded.as_u8(), Some(expected.as_raw().as_slice()));
+}
+
+#[test]
 fn fixture_rgb_nomct_sample_buffer_matches_rgba_decode_exactly() {
     let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
     let header = parse_codestream_header(codestream).unwrap();

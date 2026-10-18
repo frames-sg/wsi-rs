@@ -146,6 +146,9 @@ fn precomputed_fractional_sampling_matches_reference_pixels_and_alpha() {
 #[test]
 #[ignore = "explicit release benchmark; WSI_RS_COMPOSITION_OUTPUT selects the JSON capture"]
 fn composition_performance() {
+    if cfg!(debug_assertions) {
+        panic!("run timing gates with cargo xtask perf-experiment in release mode");
+    }
     let mut records = Vec::new();
     for size in [256, 512, 1024, 2048] {
         let shape = CompositionShape {

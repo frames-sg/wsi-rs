@@ -18,17 +18,31 @@ do not establish whole-image or pyramid parity or authorize redistribution.
 import argparse
 import importlib.metadata
 import json
+import os
 from pathlib import Path
-
-import slideio
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--zvi", required=True, type=Path)
-    parser.add_argument("--vsi", required=True, type=Path)
+    parser.add_argument("--zvi", type=Path)
+    parser.add_argument("--vsi", type=Path)
+    parser.add_argument(
+        "--corpus-cache",
+        type=Path,
+        default=Path(os.environ.get(
+            "WSI_RS_PARITY_CORPUS_CACHE", Path.home() / ".cache/wsi-rs/parity-corpus"
+        )),
+    )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    if args.zvi is None:
+        args.zvi = args.corpus_cache / "zeiss-zvi-001.zvi"
+    if args.vsi is None:
+        matches = list((args.corpus_cache / "olympus-vsi-001.d").rglob("OS-1.vsi"))
+        if len(matches) != 1:
+            raise ValueError("expected one OS-1.vsi in the fetched Olympus corpus")
+        args.vsi = matches[0]
+    import slideio
     if importlib.metadata.version("slideio") != "2.9.0":
         raise ValueError("reference generation requires SlideIO 2.9.0")
     args.output.mkdir(parents=True, exist_ok=True)

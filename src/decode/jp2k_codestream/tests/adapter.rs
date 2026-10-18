@@ -9,7 +9,7 @@ fn codec_metadata_agrees_with_the_independent_fixture_oracle() {
         include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.j2k").as_slice(),
         include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.j2k").as_slice(),
     ] {
-        let expected = reference::parse_codestream_header(bytes).unwrap();
+        let expected = reference::fixture_metadata(bytes);
         let actual = parse_codestream_header(bytes).unwrap();
         assert_eq!(
             (actual.image_width, actual.image_height),
@@ -17,19 +17,11 @@ fn codec_metadata_agrees_with_the_independent_fixture_oracle() {
         );
         assert_eq!(
             actual.multiple_component_transform,
-            expected.coding_style.multiple_component_transform
+            expected.multiple_component_transform
         );
         assert_eq!(actual.components.len(), expected.components.len());
         for (a, e) in actual.components.iter().zip(&expected.components) {
-            assert_eq!(
-                (a.bit_depth, a.signed, a.x_rsiz, a.y_rsiz),
-                (
-                    e.precision_bits,
-                    e.is_signed,
-                    e.horizontal_sample_separation,
-                    e.vertical_sample_separation
-                )
-            );
+            assert_eq!((a.bit_depth, a.signed, a.x_rsiz, a.y_rsiz), *e);
         }
         validate_pixel_contract(&actual).unwrap();
     }
