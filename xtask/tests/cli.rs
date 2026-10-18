@@ -293,8 +293,29 @@ EOF
     }
 
     #[test]
+    fn explicit_conformance_rejects_a_missing_compiled_test() {
+        let fixture = FakeRepository::new();
+        let output = fixture.run("conformance-test", &["czi"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("matched no tests"));
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert!(log.contains("--ignored --list"));
+        assert!(!log.contains("--exact"));
+    }
+
+    #[test]
     fn engineering_commands_execute_their_complete_orchestration_contracts() {
         let fixture = FakeRepository::new();
+        let script = fs::read_to_string(&fixture.cargo).unwrap();
+        let script = format!(
+            "{script}{}",
+            r#"
+case "$*" in
+    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+esac
+"#
+        );
+        write_executable(&fixture.cargo, &script);
         for (task, arguments) in [
             ("ci", vec![]),
             ("test", vec![]),

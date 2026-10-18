@@ -189,6 +189,7 @@ fn prepared_cpu_performance() {
             let expected = super::super::batch::decode_batch_jp2k(jobs).into_iter().collect::<Result<Vec<_>, _>>().unwrap();
             let prepared = PreparedJp2kBatch::new(jobs, runtime.cpu_worker_count()).unwrap();
             let actual = prepared.read_cpu().unwrap();
+            assert_eq!(actual.len(), expected.len());
             for (a, b) in actual.iter().zip(&expected) { assert!(a.as_u8() == b.as_u8(), "prepared CPU output differs from established CPU bytes"); }
             for pair in 0..5 {
                 for candidate in [pair % 2 == 1, pair % 2 == 0] {
@@ -197,6 +198,7 @@ fn prepared_cpu_performance() {
                         PreparedJp2kBatch::new(jobs, runtime.cpu_worker_count()).unwrap().read_cpu().unwrap()
                     } else { super::super::batch::decode_batch_jp2k(jobs).into_iter().collect::<Result<Vec<_>, _>>().unwrap() };
                     let elapsed = start.elapsed();
+                    assert_eq!(output.len(), expected.len());
                     for (a, b) in output.iter().zip(&expected) { assert!(a.as_u8() == b.as_u8(), "prepared CPU output differs from established CPU bytes"); }
                     results.push(serde_json::json!({"batch":count,"pair":pair,"candidate":candidate,"elapsed_ns":elapsed.as_nanos()}));
                 }
@@ -206,46 +208,6 @@ fn prepared_cpu_performance() {
     std::fs::write(
         std::env::var_os("WSI_RS_PREPARE_OUTPUT").expect("capture path"),
         serde_json::to_vec_pretty(&results).unwrap(),
-    )
-    .unwrap();
-}
-
-#[test]
-#[ignore = "explicit release experiment using WSI_RS_PREPARE_PATH and WSI_RS_PREPARE_OUTPUT"]
-fn two_tile_cpu_scheduling_performance() {
-    use rayon::prelude::*;
-    let raw = cpu_corpus_tiles(8);
-    let jobs = raw
-        .iter()
-        .map(|r| Jp2kDecodeJob {
-            data: std::borrow::Cow::Borrowed(r.data()),
-            expected_width: r.width(),
-            expected_height: r.height(),
-            rgb_color_space: r.photometric_interpretation()
-                == crate::EncodedTilePhotometricInterpretation::Rgb,
-            backend: BackendRequest::Cpu,
-        })
-        .collect::<Vec<_>>();
-    let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
-    let mut records = Vec::new();
-    runtime.install_jp2k_cpu(|| {
-        for jobs in jobs.as_chunks::<2>().0 {
-            let run = |candidate| {
-                if candidate { jobs.par_iter().map(|job| super::super::cpu::decode_one_jp2k_job_with_parallelism(job,j2k::CpuDecodeParallelism::Serial)).collect::<Result<Vec<_>,_>>().unwrap() }
-                else { super::super::tests::try_decode_batch_jp2k_with_j2k(jobs).unwrap() }
-            };
-            let expected=run(false);
-            for (a,b) in run(true).iter().zip(&expected) { assert!(a.as_u8()==b.as_u8(),"short batch CPU pixels differ"); }
-            for pair in 0..5 { for candidate in [pair%2==1,pair%2==0] {
-                let start=std::time::Instant::now(); let actual=run(candidate); let elapsed=start.elapsed();
-                for (a,b) in actual.iter().zip(&expected) { assert!(a.as_u8()==b.as_u8()); }
-                records.push(serde_json::json!({"pair":pair,"candidate":candidate,"elapsed_ns":elapsed.as_nanos()}));
-            } }
-        }
-    });
-    std::fs::write(
-        std::env::var_os("WSI_RS_PREPARE_OUTPUT").unwrap(),
-        serde_json::to_vec_pretty(&records).unwrap(),
     )
     .unwrap();
 }

@@ -8,6 +8,9 @@ use super::*;
 #[test]
 #[ignore = "run explicitly in release mode for the five-run Metal address-width gate"]
 fn ycbcr_selected_u32_stays_within_five_percent_of_reference() {
+    if cfg!(debug_assertions) {
+        panic!("run timing gates with cargo xtask perf-experiment in release mode");
+    }
     const DIMENSION: u32 = 2_048;
     // Millisecond-scale samples varied by 40% even between the two equivalent
     // u32 kernels. Amortize submission jitter without changing the 5% ceiling.

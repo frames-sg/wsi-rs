@@ -256,6 +256,66 @@ cargo xtask rc-preflight  # every release check
 and what the release checks need. Dependency rules are in
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
 
+## Explicit conformance and performance runs
+
+Generated correctness regressions, including cooperative Metal decoding, run in
+normal tests under their relevant platform and feature. Real-slide checks and
+controlled timing experiments use the explicit commands below. Missing required
+inputs or hardware fail the run. The commands list the selected ignored tests
+first and reject a selection that matches no tests.
+
+`cargo xtask parity-corpus-test` covers the public manifest plus DICOM folder
+opening and Olympus VSI reading. When Olympus or ZVI is selected, it also runs
+independent native-pixel probes. Generate those probes with the existing
+SlideIO 2.9.0 environment after fetching the two samples:
+
+```sh
+scripts/parity-corpus-fetch.sh olympus-vsi-001 zeiss-zvi-001
+python scripts/prepare-vendor-reference.py --output target/vendor-reference
+WSI_RS_VENDOR_REFERENCE_ROOT=target/vendor-reference cargo xtask conformance-test vendor
+```
+
+The generator resolves these two sources from `WSI_RS_PARITY_CORPUS_CACHE`,
+with explicit `--vsi` and `--zvi` overrides available. Corpus CI and source
+release preflight create an isolated pinned SlideIO environment and run the
+comparison. ZVI references must cover all three native U16 channels. No source
+file is changed by generation.
+
+| `cargo xtask conformance-test` suite | Required input and checks |
+| --- | --- |
+| `czi` | `WSI_RS_ZEISS_CZI_PATH` for Zeiss-5-Uncompressed.czi and `WSI_RS_CZI_JXR_PATH` for Zeiss-5-JXR.czi; five canvas/cache regressions and the JPEG XR readback case. |
+| `vendor` | `WSI_RS_VENDOR_REFERENCE_ROOT` from the generator; independent VSI RGB and ZVI U16 pixels. |
+| `zvi-variants` | `WSI_RS_ZVI_ROOT` containing the six filenames listed in `tests/zeiss_zvi.rs`; channels, Z planes, mosaic geometry and thumbnail decoding. |
+| `vmu` | Independent libopenslide and `WSI_RS_VMU_SHIM_LIBRARY` naming the freshly built shim; generated RGB12 geometry and ABI pixel parity. |
+| `openslide` | Independent libopenslide, `WSI_RS_OPENSLIDE_COMPARE_PATHS`, and `WSI_RS_APERIO_JPEG_RGB_PATH`; region and reduced-level RGBA comparisons. |
+| `metal-color` | macOS Metal; exhaustive YCbCr8 parity for both addressing kernels. |
+| `metal-edges` | macOS Metal and `WSI_RS_METAL_EDGE_PATHS`; each source must have a regular eligible edge tile. |
+| `local-htj2k` | macOS Metal and `WSI_RS_LOCAL_HTJ2K_DICOM`; real HTJ2K resident pixel parity. |
+| `legacy-slides` | `WSI_RS_NDPI_WRAPPED_FIXTURE` (Hamamatsu-1.ndpi), `WSI_RS_LEICA_MULTI_SCENE_FIXTURE` (Leica-3.scn), `WSI_RS_LEICA_FLUORESCENCE_FIXTURE` (Leica-Fluorescence-1.scn), and `WSI_RS_DICOM_SPLIT_FIXTURE` (3DHISTECH-2 split-level folder); retained format regressions using explicit paths. |
+
+Use `cargo xtask perf-experiment <test-name>` for the following retained
+workloads. This builds the selected target in release mode with route telemetry
+and runs only the named experiment. Use separate output files for each run and
+compare captures only under controlled corpus, cache and thread conditions.
+These timing runs are outside ordinary correctness counts.
+
+| Experiment name | Required environment |
+| --- | --- |
+| `metal_window_performance`, `metal_cooperative_performance` | macOS Metal, `WSI_RS_PREPARE_PATH`, `WSI_RS_PREPARE_OUTPUT` |
+| `prepared_cpu_performance`, `pooled_cpu_scheduling_performance` | `WSI_RS_PREPARE_PATH`, `WSI_RS_PREPARE_OUTPUT` |
+| `ycbcr_selected_u32_stays_within_five_percent_of_reference` | macOS Metal; controlled five-run address-width gate |
+| `composition_performance` | `WSI_RS_COMPOSITION_OUTPUT` |
+| `native_decode_matrix` | `WSI_RS_DECODE_PATH`, `WSI_RS_DECODE_OUTPUT`; optional CPU/automatic/device modes documented in the test |
+| `native_decode_revisits`, `native_decode_fresh_readers` | `WSI_RS_DECODE_STEADY_INPUT`, `WSI_RS_DECODE_OUTPUT` |
+| `panning_matrix` | `WSI_RS_PAN_PATH`, `WSI_RS_PAN_OUTPUT` |
+| `warm_region_revisits` | `WSI_RS_PAN_WARM_INPUT`, `WSI_RS_PAN_WARM_OUTPUT` |
+| `czi_reader_workloads` | `WSI_RS_CZI_JXR_PATH`, `WSI_RS_CZI_PERF_OUTPUT` |
+| `local_htj2k_dicom_level_preparation_meets_interactive_budget` | macOS build and `WSI_RS_LOCAL_HTJ2K_DICOM`; controlled 75 ms preparation check |
+
+The historical two-tile scheduling comparison and fixture-export test were
+removed. Production batch regressions and the maintained workloads above cover
+their relevant behavior.
+
 ## Security
 
 Report vulnerabilities privately through GitHub. See [SECURITY.md](SECURITY.md).

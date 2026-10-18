@@ -145,49 +145,6 @@ fn jpeg_fixture() -> tempfile::NamedTempFile {
 }
 
 #[test]
-#[ignore = "exports a synthetic corpus using existing CZI fixture facilities for native performance comparisons"]
-fn export_czi_batch_performance_fixture() {
-    let output = std::env::var_os("WSI_RS_CZI_PERF_FIXTURE").expect("fixture output path");
-    let blocks: Vec<_> = (0..4)
-        .map(|index| {
-            let rgb: Vec<_> = (0..1024 * 1024)
-                .flat_map(|pixel| {
-                    let x = pixel % 1024;
-                    let y = pixel / 1024;
-                    [
-                        ((x / 7 + y / 11 + index * 41) % 251) as u8,
-                        ((x / 13 + y / 3 + 63) % 251) as u8,
-                        ((x / 5 + y / 17 + 113) % 251) as u8,
-                    ]
-                })
-                .collect();
-            let mut block = SubblockSpec::bgr24(
-                index % 2 * 1024,
-                index / 2 * 1024,
-                1024,
-                1024,
-                jpeg_rgb(1024, 1024, &rgb),
-            );
-            block.compression = 1;
-            block
-        })
-        .collect();
-    let fixture = write_fixture(&blocks, &[], &metadata_xml(2048, 2048));
-    let reader = ZeissReader {
-        slide: Arc::new(ZeissSlide::parse(fixture.path()).unwrap()),
-    };
-    let reqs: Vec<_> = (0..8)
-        .flat_map(|row| (0..8).map(move |col| TileRequest::new(0, 0, 0, col, row)))
-        .collect();
-    let actual = reader.read_tiles_cpu(&reqs).unwrap();
-    assert_eq!(actual.len(), 64);
-    assert!(actual
-        .iter()
-        .all(|tile| (tile.width(), tile.height()) == (256, 256)));
-    std::fs::copy(fixture.path(), output).unwrap();
-}
-
-#[test]
 fn neighboring_tiles_decode_a_shared_compressed_subblock_once() {
     let fixture = jpeg_fixture();
     let slide = ZeissSlide::parse(fixture.path()).unwrap();

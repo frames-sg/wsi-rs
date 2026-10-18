@@ -170,6 +170,7 @@ fn native_decode_matrix() {
             }
         }
     }
+    assert!(!results.is_empty(), "selected experiment ran no workloads");
     let output = std::env::var_os("WSI_RS_DECODE_OUTPUT").expect("benchmark output path");
     std::fs::write(output, serde_json::to_vec_pretty(&json!({"source": path,
         "mode": mode, "threads": rayon::current_num_threads(),

@@ -204,6 +204,9 @@ other file.
 - **OpenSlide comparison.** `scripts/parity-corpus-fetch.sh` downloads a public
   corpus of real slides; `cargo xtask parity-corpus-test` reads every slide with
   wsi-rs and compares pixels with OpenSlide where it supports the format.
+  Independent VSI/ZVI native-pixel probes are generated with SlideIO 2.9.0
+  and required by corpus CI and source release preflight. Explicit conformance
+  and release benchmark commands are listed in the README.
   Release preflight covers the available public samples. VMU/NGR currently has
   synthetic-test coverage only. CI runs the public corpus checks.
 - **Fuzzing.** `fuzz/fuzz_targets` has one target per parser.

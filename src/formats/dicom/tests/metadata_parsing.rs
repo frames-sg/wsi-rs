@@ -12,16 +12,11 @@ fn test_metadata_object() -> DefaultDicomObject {
 
 #[test]
 fn level0_properties_from_metadata_match_full_parse() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path = workspace_root
-        .join("downloads/openslide-testdata-extracted/dicom/dicom-cmu1-jp2k/DCM_0.dcm");
-    if !path.is_file() {
-        eprintln!(
-            "skipping corpus-backed DICOM metadata test; missing {}",
-            path.display()
-        );
-        return;
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("level0-properties.dcm");
+    let mut options = TestDicomOptions::native(test_rgb_pixel_data());
+    options.pixel_spacing = Some("0.0005\\0.00025");
+    write_test_dicom(&path, options);
     let meta = parse_metadata_object_full(&path).expect("full metadata parse");
     let properties_from_metadata = (
         optional_pixel_spacing_mpp(&meta.obj).unwrap_or(None),

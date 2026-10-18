@@ -45,38 +45,16 @@ fn record_read_does_not_move_another_readers_shared_file_position() {
     });
 }
 
-fn mirax_sentinel_path() -> PathBuf {
-    let cache = std::env::var_os("WSI_RS_PARITY_CORPUS_CACHE")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                PathBuf::from(home)
-                    .join(".cache")
-                    .join("wsi-rs")
-                    .join("parity-corpus")
-            })
-        });
-    cache
-        .map(|cache| cache.join("mirax-001.d").join("CMU-1.mrxs"))
-        .unwrap_or_else(|| PathBuf::from("mirax-001.d/CMU-1.mrxs"))
-}
-
 #[test]
 fn associated_thumbnail_is_cached_after_first_read() {
-    let sentinel_path = mirax_sentinel_path();
-    if !sentinel_path.is_file() {
-        eprintln!(
-            "skipping corpus-backed MIRAX thumbnail cache test; missing {}",
-            sentinel_path.display()
-        );
-        return;
-    }
+    let fixture = fixtures::MiraxFixture::complete();
+    let sentinel_path = &fixture.path;
     let cache_hits = || {
         crate::core::execution_telemetry::test_count(
             crate::core::execution_telemetry::Event::MiraxAssociatedCacheHits,
         )
     };
-    let slide = MiraxSlide::parse(&sentinel_path).expect("parse MIRAX sentinel");
+    let slide = MiraxSlide::parse(sentinel_path).expect("parse generated MIRAX fixture");
     let first = slide
         .read_associated("thumbnail")
         .expect("read thumbnail once");

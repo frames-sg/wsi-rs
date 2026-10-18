@@ -6,6 +6,8 @@ fn help_lists_supported_tasks_without_obsolete_guidance() {
 
     for required in [
         "bench-check",
+        "conformance-test",
+        "perf-experiment",
         "perf-capture",
         "perf-capture-openslide",
         "perf-capture-pair",

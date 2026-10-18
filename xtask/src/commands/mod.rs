@@ -16,6 +16,8 @@ pub(crate) fn run() -> Result<(), String> {
         "bench-check" => checks::bench_check(),
         "feature-check" => checks::feature_check(),
         "parity-corpus-test" => checks::parity_corpus_test(),
+        "conformance-test" => checks::conformance_test(env::args().skip(2).collect()),
+        "perf-experiment" => checks::perf_experiment(env::args().skip(2).collect()),
         "doc" | "docs" => checks::doc(),
         "doc-test" => checks::doc_test(),
         "typos" => checks::typos(),
@@ -63,6 +65,8 @@ fn help_text() -> &'static str {
        bench-check  compile the performance worker and wsi-rs OpenSlide shim\n\
        feature-check check supported feature combinations with cargo-hack\n\
        parity-corpus-test run strict corpus-backed ignored integration tests\n\
+       conformance-test <suite> run required fixture and hardware checks\n\
+       perf-experiment <test-name> run a controlled release benchmark\n\
        doc          build docs with warnings denied\n\
        doc-test     compile rustdoc examples with doctest\n\
        typos        run typos\n\

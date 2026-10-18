@@ -1,6 +1,7 @@
 use super::batch::{
     materialize_jp2k_batch_outputs, try_decode_prepared_batch_jp2k_with_j2k, PreparedJp2kBatchJob,
 };
+#[cfg(feature = "cuda")]
 use super::cpu::decode_one_jp2k_job_with_parallelism;
 use super::prepare::prepare_jp2k_job;
 use super::*;
@@ -11,17 +12,9 @@ use crate::decode::jp2k_codestream::parse_codestream_header;
 use crate::error::WsiError;
 use crate::test_support::assert_cpu_tile_matches_rgb_fixture_with_tolerance;
 use image::{DynamicImage, ImageFormat, RgbaImage};
+#[cfg(feature = "cuda")]
 use j2k::CpuDecodeParallelism;
 use std::io::Cursor;
-
-pub(super) fn decode_jp2k_tile_batch_to_sample_buffers(
-    reqs: &[Jp2kDecodeJob<'_>],
-) -> Result<Vec<CpuTile>, WsiError> {
-    if reqs.is_empty() {
-        return Ok(Vec::new());
-    }
-    decode_jp2k_tile_batch_with_j2k(reqs)
-}
 
 pub(super) fn try_decode_batch_jp2k_with_j2k(jobs: &[Jp2kDecodeJob<'_>]) -> Option<Vec<CpuTile>> {
     let prepared = jobs
@@ -32,12 +25,7 @@ pub(super) fn try_decode_batch_jp2k_with_j2k(jobs: &[Jp2kDecodeJob<'_>]) -> Opti
     try_decode_prepared_batch_jp2k_with_j2k(&prepared)
 }
 
-pub(super) fn decode_jp2k_tile_batch_with_j2k(
-    reqs: &[Jp2kDecodeJob<'_>],
-) -> Result<Vec<CpuTile>, WsiError> {
-    reqs.iter().map(decode_one_jp2k_job).collect()
-}
-
+#[cfg(feature = "cuda")]
 pub(super) fn decode_one_jp2k_job(job: &Jp2kDecodeJob<'_>) -> Result<CpuTile, WsiError> {
     decode_one_jp2k_job_with_parallelism(job, CpuDecodeParallelism::Auto)
 }
@@ -67,8 +55,8 @@ fn load_fixture_rgb(ppm_bytes: &[u8]) -> image::RgbImage {
     }
 }
 
-const MAX_CHANNEL_DELTA: u8 = 50;
-const MAX_AVG_CHANNEL_DELTA_X100: u64 = 1600;
+const MAX_CHANNEL_DELTA: u8 = 4;
+const MAX_AVG_CHANNEL_DELTA_X100: u64 = 100;
 
 #[inline]
 fn dimensions_from_bounds(x0: u32, x1: u32, y0: u32, y1: u32) -> Option<(u32, u32)> {

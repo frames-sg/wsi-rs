@@ -372,26 +372,12 @@ fn opens_directory_containing_one_dicom_series() {
 }
 
 #[test]
+#[ignore = "requires dicom-jp2k-001; cargo xtask parity-corpus-test"]
 fn opens_public_dicom_folder_and_member_with_matching_levels_when_available() {
-    let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("downloads/openslide-testdata-extracted/full/DICOM/CMU-1-JP2K-33005");
-    if !folder.is_dir() {
-        eprintln!("skipping public DICOM folder test; CMU-1-JP2K-33005 not found");
-        return;
-    }
-    let member = std::fs::read_dir(&folder)
-        .expect("read DICOM folder")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("dcm"))
-        })
-        .expect("public DICOM folder contains a .dcm member");
+    let member = crate::test_support::required_corpus_fixture("dicom-jp2k-001");
+    let folder = member.parent().expect("DICOM corpus folder");
 
-    let from_folder = Slide::open(&folder).expect("open public DICOM folder");
+    let from_folder = Slide::open(folder).expect("open public DICOM folder");
     let from_member = Slide::open(&member).expect("open public DICOM member");
 
     assert!(
@@ -405,13 +391,9 @@ fn opens_public_dicom_folder_and_member_with_matching_levels_when_available() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_DICOM_SPLIT_FIXTURE; see cargo xtask conformance-test"]
 fn opens_3dhistech_split_sparse_level_when_corpus_is_available() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path =
-        workspace_root.join("downloads/openslide-testdata-extracted/full/DICOM/3DHISTECH-2/2");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_fixture_path("WSI_RS_DICOM_SPLIT_FIXTURE");
 
     let slide = Slide::open(&path).expect("open split-level DICOM slide");
     let dataset = slide.dataset();

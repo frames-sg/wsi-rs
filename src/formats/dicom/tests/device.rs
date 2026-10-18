@@ -78,19 +78,14 @@ fn read_slide_device(
     slide.read_tiles_cuda(requests, sessions)
 }
 
-fn local_htj2k_dicom_fixture() -> Option<PathBuf> {
-    let Some(path) = std::env::var_os("WSI_RS_LOCAL_HTJ2K_DICOM").map(PathBuf::from) else {
-        eprintln!("skipping local HTJ2K DICOM device test; WSI_RS_LOCAL_HTJ2K_DICOM unset");
-        return None;
-    };
-    if !path.is_file() {
-        eprintln!(
-            "skipping local HTJ2K DICOM device test; missing {}",
-            path.display()
-        );
-        return None;
-    }
-    Some(path)
+fn local_htj2k_dicom_fixture() -> PathBuf {
+    let path = crate::test_support::required_fixture_path("WSI_RS_LOCAL_HTJ2K_DICOM");
+    assert!(
+        path.is_file(),
+        "configured WSI_RS_LOCAL_HTJ2K_DICOM is missing: {}",
+        path.display()
+    );
+    path
 }
 
 #[test]
@@ -217,13 +212,11 @@ fn twelve_bit_dicom_jpeg_stays_on_cpu_with_device_acceleration() {
 }
 
 #[test]
+#[ignore = "cargo xtask conformance-test local-htj2k; requires WSI_RS_LOCAL_HTJ2K_DICOM"]
 fn local_htj2k_device_pixels_match_cpu() {
-    let Some(path) = local_htj2k_dicom_fixture() else {
-        return;
-    };
-    let Some(sessions) = test_device_sessions() else {
-        return;
-    };
+    let path = local_htj2k_dicom_fixture();
+    let sessions =
+        test_device_sessions().expect("local HTJ2K conformance requires device sessions");
     let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
     let requests = [tile_request(0, 0)];
     let cpu = slide.read_tiles(&requests).expect("read CPU parity tile");
@@ -248,10 +241,12 @@ fn local_htj2k_device_pixels_match_cpu() {
 }
 
 #[test]
+#[ignore = "cargo xtask perf-experiment local_htj2k_dicom_level_preparation_meets_interactive_budget"]
 fn local_htj2k_dicom_level_preparation_meets_interactive_budget() {
-    let Some(path) = local_htj2k_dicom_fixture() else {
-        return;
-    };
+    if cfg!(debug_assertions) {
+        panic!("run the preparation timing gate with cargo xtask perf-experiment in release mode");
+    }
+    let path = local_htj2k_dicom_fixture();
     let slide = Slide::open(&path).expect("open local HTJ2K DICOM slide");
     let started = std::time::Instant::now();
     slide

@@ -36,12 +36,9 @@ fn ndpi_fixup_zero_diroff() {
 }
 
 #[test]
+#[ignore = "requires WSI_RS_NDPI_WRAPPED_FIXTURE; see cargo xtask conformance-test"]
 fn opens_wrapped_first_ifd_ndpi_when_corpus_is_available() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let path = workspace_root.join("downloads/openslide-testdata/Hamamatsu/Hamamatsu-1.ndpi");
-    if !path.exists() {
-        return;
-    }
+    let path = crate::test_support::required_fixture_path("WSI_RS_NDPI_WRAPPED_FIXTURE");
 
     let container = TiffContainer::open(&path).expect("open wrapped-offset NDPI");
     assert!(container.is_ndpi());

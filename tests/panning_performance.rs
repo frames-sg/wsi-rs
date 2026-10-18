@@ -249,6 +249,7 @@ fn panning_matrix() {
             }
         }
     }
+    assert!(!results.is_empty(), "selected experiment ran no workloads");
     let output = std::env::var_os("WSI_RS_PAN_OUTPUT").expect("output path");
     std::fs::write(output, serde_json::to_vec_pretty(&json!({"source": path,
         "levels": levels.iter().map(|l| json!({"dimensions": l.dimensions, "downsample": l.downsample, "layout": format!("{:?}", l.tile_layout)})).collect::<Vec<_>>(),
