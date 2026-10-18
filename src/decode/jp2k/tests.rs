@@ -187,6 +187,9 @@ fn assert_fixture_decodes_to_expected(
 
 #[path = "tests/batch.rs"]
 mod batch;
+#[cfg(all(feature = "metal", target_os = "macos"))]
+#[path = "tests/cooperative.rs"]
+mod cooperative;
 #[path = "tests/cpu.rs"]
 mod cpu;
 #[cfg(any(feature = "metal", feature = "cuda", feature = "parity-metal"))]

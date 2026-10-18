@@ -102,9 +102,46 @@ GPU and return an error when they can't.
 
 On Metal, compatible tiles decode together in groups of up to 16 images and
 4 MiB of output. Color conversion from YCbCr to RGB also runs on the GPU, using
-the same lookup tables as the CPU path, so the colors match exactly. CUDA
-decodes one image per submission and rejects YCbCr tiles that the CPU would
-convert.
+the same lookup tables as the CPU path, so the colors match exactly.
+
+`MetalBackendSessions::with_cooperative_cpu_workers` opts that session into
+J2K's cooperative batch decoder. Eligible classic reversible RGB8 batches
+overlap CPU entropy decoding with Metal work; reconstruction remains on Metal.
+The requested CPU width is capped by the WSI pool width. Clones share one
+nonblocking cooperative slot, so overlapping reads use ordinary Metal while
+another cooperative read holds it. The setting does not change automatic
+slide acceleration, which uses its own default session.
+
+The 4 MiB window and 16-image cap remain in force. J2K requires at least eight
+eligible, distinct images, so 512×512 tiles cannot reach that threshold within
+the default window. A larger window is a benchmark parameter for now. Neither
+a wider window nor cooperative decoding is enabled automatically without slide
+latency measurements. `metal_cpu_tier1_images` in route telemetry reports
+actual CPU participation, including zero when the codec uses its GPU fallback.
+
+The cooperative correctness tests run normally with the `metal` feature on
+macOS. The comparison benchmark is ignored until requested. To run only the
+correctness tests on a Mac with a live Metal device:
+
+```sh
+cargo test --locked -p wsi-rs --features metal --lib cooperative_metal_ -- --test-threads=1
+```
+
+Then set `WSI_RS_PREPARE_PATH` to a JPEG 2000 slide and
+`WSI_RS_PREPARE_OUTPUT` to a fresh JSON output path before running:
+
+```sh
+cargo test --locked --release -p wsi-rs --features metal --lib metal_cooperative_performance -- --ignored --test-threads=1
+```
+
+The benchmark alternates ordinary and cooperative Metal over five pairs for
+4/8/16 tiles, 4/8/16 MiB windows, and several worker budgets. It checks pixels
+against CPU decoding outside the timed interval and records CPU participation
+for every measurement. A report with `cooperative_was_exercised: false` is a
+fallback comparison, not evidence of cooperative performance.
+
+CUDA uses bounded encoded-image batches and rejects YCbCr tiles that the CPU
+would convert.
 
 ## Formats
 

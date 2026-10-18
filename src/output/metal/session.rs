@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "macos")]
+use std::{num::NonZeroUsize, sync::MutexGuard};
 
 use crate::error::WsiError;
 use objc2_metal::MTLDevice;
@@ -12,6 +14,10 @@ pub struct MetalBackendSessions {
     pub(crate) j2k: Arc<j2k_metal::MetalBackendSession>,
     ycbcr_to_rgb8: Arc<Mutex<Option<Arc<YcbcrToRgb8Converter>>>>,
     readback_queue: Arc<super::interop::ReadbackQueueCache>,
+    #[cfg(target_os = "macos")]
+    cooperative_cpu_workers: Option<NonZeroUsize>,
+    #[cfg(target_os = "macos")]
+    cooperative_decode_slot: Arc<Mutex<()>>,
 }
 
 impl MetalBackendSessions {
@@ -31,7 +37,43 @@ impl MetalBackendSessions {
             j2k: Arc::new(j2k),
             ycbcr_to_rgb8: Arc::new(Mutex::new(None)),
             readback_queue: Arc::new(super::interop::ReadbackQueueCache::default()),
+            #[cfg(target_os = "macos")]
+            cooperative_cpu_workers: None,
+            #[cfg(target_os = "macos")]
+            cooperative_decode_slot: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Opts eligible JPEG 2000 batches into overlapping CPU entropy decoding
+    /// with Metal. The worker count is capped by the WSI CPU pool's width.
+    ///
+    /// Clones share one nonblocking cooperative slot: concurrent batches use
+    /// ordinary Metal while it is occupied. A budget of one, small batches,
+    /// and unsupported codec profiles also retain ordinary Metal decoding.
+    /// Existing batch size and memory limits still apply.
+    ///
+    /// This mode is disabled by default and is not guaranteed to reduce
+    /// latency. It applies to reads using this session; automatic slide
+    /// acceleration keeps its own default session and calibration policy.
+    #[cfg(target_os = "macos")]
+    pub fn with_cooperative_cpu_workers(mut self, workers: NonZeroUsize) -> Self {
+        self.cooperative_cpu_workers = Some(workers);
+        self
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn try_cooperative_decode(&self) -> Option<(NonZeroUsize, MutexGuard<'_, ()>)> {
+        let requested = self.cooperative_cpu_workers?;
+        let workers = requested
+            .get()
+            .min(crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count());
+        if workers < 2 {
+            return None;
+        }
+        Some((
+            NonZeroUsize::new(workers)?,
+            self.cooperative_decode_slot.try_lock().ok()?,
+        ))
     }
 
     /// Builds this session's JPEG 2000 decode kernels now, so the first slide

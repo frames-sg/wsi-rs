@@ -61,6 +61,7 @@ impl wsi_rs::output::metal::MetalBackendSessions
 pub fn wsi_rs::output::metal::MetalBackendSessions::new(wsi_rs::output::metal::MetalDevice) -> Self
 pub fn wsi_rs::output::metal::MetalBackendSessions::prewarm(&self) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::output::metal::MetalBackendSessions::system_default() -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::output::metal::MetalBackendSessions::with_cooperative_cpu_workers(self, core::num::nonzero::NonZeroUsize) -> Self
 #[non_exhaustive] pub struct wsi_rs::output::metal::MetalDeviceTile
 pub wsi_rs::output::metal::MetalDeviceTile::format: wsi_rs::PixelFormat
 pub wsi_rs::output::metal::MetalDeviceTile::height: u32

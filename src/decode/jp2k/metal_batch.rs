@@ -197,20 +197,24 @@ pub(super) fn execute_groups(
     decoder: &mut MetalBatchDecoder,
 ) -> Result<(), WsiError> {
     record(Event::MetalBatchSubmissions, 1);
-    let pending = decoder
-        .submit_prepared(prepared)
-        .map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    let result = if let Some((workers, _slot)) = sessions.try_cooperative_decode() {
+        record(Event::MetalCompletionWaits, 1);
+        decoder.decode_prepared_cooperative(prepared, workers)
+    } else {
+        let pending = decoder
+            .submit_prepared(prepared)
+            .map_err(|error| WsiError::Jp2k(error.to_string()))?;
+        record(Event::MetalCompletionWaits, 1);
+        pending.wait()
+    }
+    .map_err(|error| WsiError::Jp2k(error.to_string()))?;
     record(
         Event::MetalBatchGroups,
         decoder
             .submissions()
             .map_err(|error| WsiError::Jp2k(error.to_string()))? as usize,
     );
-    record(Event::MetalCompletionWaits, 1);
-    let (groups, errors, group_errors) = pending
-        .wait()
-        .map_err(|error| WsiError::Jp2k(error.to_string()))?
-        .into_parts();
+    let (groups, errors, group_errors) = result.into_parts();
     apply_indexed_errors(&errors, slots, metadata, output, sessions);
     for error in group_errors {
         let (indices, error) = error.into_parts();
@@ -232,6 +236,10 @@ pub(super) fn execute_groups(
         }
     }
     for group in groups {
+        record(
+            Event::MetalCpuTier1Images,
+            group.dispatch_report().cpu_tier1_images,
+        );
         let (info, indices, _, _, surfaces) = group.into_parts();
         if info.layout != BatchLayout::Nhwc
             || info.color != BatchColor::Rgb
