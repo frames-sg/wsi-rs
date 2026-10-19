@@ -31,6 +31,12 @@ criteria = "safe-to-deploy"
 delta = "0.2.1 -> 0.3.0"
 notes = "Reviewed the release checkout delta against v0.2.1. Facade runtime source is unchanged. Package metadata moves the exact JXR dependency cohort to 0.3.0, J2K to 0.12.0, and the host Rust requirement to 1.99. No runtime capability or unsafe-code policy change. Optional accelerator implementations remain separate dependencies."
 
+[[audits.jxr]]
+who = "Claude-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.1"
+notes = "Reviewed the exact published 0.3.0 and 0.3.1 package contents; the published source matches VCS commit c296c11. CPU-route facade changes are limited to making CpuBatchDecoder::install public, which runs a caller closure on the decoder's existing bounded worker pool. The remaining source changes pipeline Metal batch preparation behind the optional metal feature. Exact JXR dependencies move to 0.3.1. No new dependencies, build script, unsafe code, or runtime filesystem, network, subprocess or environment access."
+
 [[audits.jxr-core]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
@@ -102,6 +108,12 @@ who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 delta = "0.2.1 -> 0.3.0"
 notes = "Reviewed all changed decoder source against v0.2.1. The private highpass path writes coefficients directly into the existing adaptive scan; checked coefficient advancement bounds each index and count, and errors discard the partial tile and scan state. The public run/level decoder retains its prior behavior. Other runtime changes are inlining hints, fixed-size slice chunks, and an equivalent bounded integer midpoint. The crate still forbids unsafe code and adds no filesystem, network, subprocess, or environment access. The added differential test covers 4096 complete, malformed, and truncated entropy blocks. This source review does not claim formal verification or complete format conformance."
+
+[[audits.jxr-native]]
+who = "Claude-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.1"
+notes = "Reviewed the exact published 0.3.0 and 0.3.1 package contents; the published source matches VCS commit c296c11 and still forbids unsafe code, with no new dependencies, build script, or runtime filesystem, network, subprocess or environment access. Reviewed the cached entropy bit reader (cache never exceeds the remaining packet bits; reads past the end are zero-filled and bounded), compile-time run-prefix tables, per-tile coefficient windows (split with checked bounds, overruns return errors, and a window must be fully written before it is accepted), four-lane transform and overlap kernels (wrapping fast paths only after a proven magnitude bound, otherwise the checked scalar path), and row-parallel packing behind existing plane validation. Request limits in prepare are unchanged. The release passed the T.834/T.835 CPU comparison on 517 in-scope cases and 15-minute runs of both CPU fuzz targets without failure; this is a source review, not a claim of exhaustive conformance."
 
 [[audits.sha2-asm]]
 who = "Codex-assisted source review"
