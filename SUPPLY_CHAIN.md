@@ -21,10 +21,10 @@ explicit `safe-to-deploy` exemption. Any dependency change must pass
 Some dependencies are reviewed here for one exact version. Upgrading any of
 them needs a new review:
 
-- **J2K 0.11.3** (JPEG and JPEG 2000 codecs): exemptions cover its `objc2`,
+- **J2K 0.12.0** (JPEG and JPEG 2000 codecs): exemptions cover its `objc2`,
   SIMD and CUDA engine dependencies.
-- **JXR** (`jxr`, `jxr-core` and `jxr-native` 0.2.1, `jxr-math` 0.1.0; JPEG XR
-  codec, source at https://github.com/frames-sg/jxr): audited in
+- **JXR** (`jxr` and `jxr-native` 0.3.1, `jxr-core` 0.3.0, `jxr-math` 0.1.1;
+  JPEG XR codec, source at https://github.com/frames-sg/jxr): audited in
   `supply-chain/audits.toml`. The audit covers the CPU decoder only.
 - **`sha2-asm` 0.6.4**: on Apple Silicon Macs, `sha2` uses its `asm` feature so
   slide fingerprints (dataset IDs and `.svcache` checks) use the CPU's SHA-256

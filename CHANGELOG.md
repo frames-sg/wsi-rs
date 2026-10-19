@@ -11,6 +11,12 @@
   one cooperative slot and fall back to ordinary Metal while it is busy.
   Automatic slide acceleration retains its existing policy.
 
+### Changed
+
+- Uses JXR 0.3.1, whose faster CPU entropy decoding and direct coefficient
+  storage speed up JPEG XR tiles in Zeiss CZI slides and tiled TIFF files.
+  Decoded pixels are unchanged.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
