@@ -1,8 +1,6 @@
 use super::*;
 
-pub(super) fn bitmap_from_raw_uncompressed_subblock(
-    raw: &czi_rs::RawSubBlock,
-) -> Result<czi_rs::Bitmap, WsiError> {
+pub(super) fn bitmap_from_raw_uncompressed_subblock(raw: &RawSubBlock) -> Result<Bitmap, WsiError> {
     if raw.info.compression != CziCompressionMode::UnCompressed {
         return Err(WsiError::DisplayConversion(format!(
             "unsupported Zeiss compression {}",
@@ -27,7 +25,7 @@ pub(super) fn bitmap_from_raw_uncompressed_subblock(
             raw.data.len()
         )));
     }
-    Ok(czi_rs::Bitmap {
+    Ok(Bitmap {
         pixel_type: raw.info.pixel_type,
         width: raw.info.stored_size.w,
         height: raw.info.stored_size.h,
@@ -37,9 +35,9 @@ pub(super) fn bitmap_from_raw_uncompressed_subblock(
 }
 
 pub(super) fn bitmap_from_raw_subblock(
-    raw: &czi_rs::RawSubBlock,
+    raw: &RawSubBlock,
     limits: crate::SlideLimits,
-) -> Result<czi_rs::Bitmap, WsiError> {
+) -> Result<Bitmap, WsiError> {
     if raw.info.compression == CziCompressionMode::UnCompressed {
         return bitmap_from_raw_uncompressed_subblock(raw);
     }
@@ -66,12 +64,12 @@ pub(super) fn bitmap_from_raw_subblock(
             ))
         }
     };
-    czi_rs::Bitmap::new(raw.info.pixel_type, tile.width, tile.height, bgr)
+    Bitmap::new(raw.info.pixel_type, tile.width, tile.height, bgr)
         .map_err(|e| WsiError::DisplayConversion(e.to_string()))
 }
 
 pub(super) fn tile_from_raw_subblock(
-    raw: &czi_rs::RawSubBlock,
+    raw: &RawSubBlock,
     limits: crate::SlideLimits,
 ) -> Result<CpuTile, WsiError> {
     match raw.info.compression {
@@ -87,7 +85,7 @@ pub(super) fn tile_from_raw_subblock(
     }
 }
 
-fn tile_from_raw_jpeg_subblock(raw: &czi_rs::RawSubBlock) -> Result<CpuTile, WsiError> {
+fn tile_from_raw_jpeg_subblock(raw: &RawSubBlock) -> Result<CpuTile, WsiError> {
     if raw.info.pixel_type != CziPixelType::Bgr24 {
         return Err(WsiError::DisplayConversion(format!(
             "Zeiss JPEG subblocks require Bgr24 pixels, got {:?}",
@@ -135,7 +133,7 @@ fn tile_from_raw_jpeg_subblock(raw: &czi_rs::RawSubBlock) -> Result<CpuTile, Wsi
 }
 
 fn tile_from_raw_jpegxr_subblock(
-    raw: &czi_rs::RawSubBlock,
+    raw: &RawSubBlock,
     limits: crate::SlideLimits,
 ) -> Result<CpuTile, WsiError> {
     let sample_type = match raw.info.pixel_type {

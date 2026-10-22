@@ -353,7 +353,8 @@ impl TiffContainer {
 
     // ── Typed array accessors (cached decode) ──────────────────
 
-    /// Read a u64 array. Accepts SHORT, LONG, LONG8 types. Cached via OnceLock.
+    /// Read a u64 array. Accepts SHORT, LONG, LONG8 types, plus IFD and IFD8
+    /// (offset-typed LONG/LONG8, as written for SubIFDs). Cached via OnceLock.
     pub(crate) fn get_u64_array(&self, ifd_id: IfdId, tag: u16) -> Result<&[u64], TiffParseError> {
         let ifd = self.ifd_by_id(ifd_id)?;
         let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
@@ -379,7 +380,7 @@ impl TiffContainer {
                     Endian::Big => u16::from_be_bytes(*c) as u64,
                 })
                 .collect(),
-            TiffType::Long => bytes
+            TiffType::Long | TiffType::Ifd => bytes
                 .as_chunks::<4>()
                 .0
                 .iter()
@@ -396,7 +397,7 @@ impl TiffContainer {
                     }
                 })
                 .collect(),
-            TiffType::Long8 => bytes
+            TiffType::Long8 | TiffType::Ifd8 => bytes
                 .as_chunks::<8>()
                 .0
                 .iter()
@@ -411,7 +412,7 @@ impl TiffContainer {
                     ifd_offset: ifd.offset,
                     tag,
                     message: format!(
-                        "get_u64_array expects SHORT/LONG/LONG8, got {:?}",
+                        "get_u64_array expects SHORT/LONG/LONG8/IFD/IFD8, got {:?}",
                         entry.tiff_type
                     ),
                 });
@@ -439,6 +440,7 @@ impl TiffContainer {
         self.ndpi
     }
 
+    #[cfg(test)]
     pub(crate) fn ifd_count(&self) -> usize {
         self.ifds.len()
     }
@@ -449,6 +451,11 @@ impl TiffContainer {
 
     pub(crate) fn ifd_by_id(&self, id: IfdId) -> Result<&Ifd, TiffParseError> {
         self.ifds.get(&id).ok_or(TiffParseError::IfdNotFound(id))
+    }
+
+    /// SubIFD children of a top-level IFD, in tag order; empty when it has none.
+    pub(crate) fn sub_ifds(&self, parent: IfdId) -> &[IfdId] {
+        self.sub_ifds.get(&parent).map_or(&[], Vec::as_slice)
     }
 
     fn fix_ndpi_data_offset(&self, ifd_offset: u64, raw_offset: u64) -> u64 {

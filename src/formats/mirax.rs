@@ -29,7 +29,6 @@ use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
-use flate2::read::ZlibDecoder;
 use j2k_core::BackendRequest;
 
 const MRXS_EXT: &str = "mrxs";

@@ -186,7 +186,12 @@ impl MiraxSlide {
                 )?
             }
             MiraxImageFormat::Png | MiraxImageFormat::Bmp24 => {
-                let image = image::load_from_memory(&bytes)
+                let image_format = match format {
+                    MiraxImageFormat::Png => image::ImageFormat::Png,
+                    MiraxImageFormat::Bmp24 => image::ImageFormat::Bmp,
+                    MiraxImageFormat::Jpeg => unreachable!("JPEG uses the first-party codec"),
+                };
+                let image = image::load_from_memory_with_format(&bytes, image_format)
                     .map_err(|err| {
                         WsiError::DisplayConversion(format!("failed to decode MIRAX image: {err}"))
                     })?

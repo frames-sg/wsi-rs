@@ -27,6 +27,7 @@ use self::layout::generic::GenericTiffInterpreter;
 use self::layout::huron::HuronInterpreter;
 use self::layout::leica::LeicaInterpreter;
 use self::layout::ndpi::NdpiInterpreter;
+use self::layout::ome::OmeTiffInterpreter;
 use self::layout::philips::PhilipsInterpreter;
 use self::layout::trestle::TrestleInterpreter;
 use self::layout::ventana::VentanaInterpreter;
@@ -62,6 +63,7 @@ impl TiffFamilyBackend {
                 Box::new(PhilipsInterpreter),
                 Box::new(TrestleInterpreter),
                 Box::new(VentanaInterpreter),
+                Box::new(OmeTiffInterpreter),
                 Box::new(GenericTiffInterpreter), // must be last: catches any tiled TIFF
             ],
         }

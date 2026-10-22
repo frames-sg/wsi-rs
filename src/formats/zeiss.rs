@@ -1,6 +1,7 @@
 mod attachments;
 mod batch;
 mod composition;
+mod container;
 mod level;
 mod metadata;
 mod preflight;
@@ -21,9 +22,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use czi_rs::{
-    AttachmentBlob, CompressionMode as CziCompressionMode, CziFile, Dimension as CziDimension,
-    IntRect, PixelType as CziPixelType,
+use container::{
+    AttachmentBlob, AttachmentInfo, Bitmap, CompressionMode as CziCompressionMode, CziContainer,
+    Dimension as CziDimension, DirectorySubBlockInfo, FileHeaderInfo, IntRect, MetadataSummary,
+    PixelType as CziPixelType, RawSubBlock, SubBlockStatistics,
 };
 
 use j2k_core::BackendRequest;

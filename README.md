@@ -7,6 +7,9 @@
 [![docs.rs](https://img.shields.io/docsrs/wsi-rs)](https://docs.rs/wsi-rs)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-orange.svg)](#license)
 
+[Project website](https://frames-sg.com/whole-slide-imaging-rust/) ·
+[API documentation](https://docs.rs/wsi-rs)
+
 wsi-rs is a Rust library for reading whole-slide images.
 
 A whole-slide image is a scan of an entire microscope slide, usually a tissue
@@ -26,8 +29,8 @@ uses for this. wsi-rs does the same job, and:
 
 - **Is memory-safe.** The library denies `unsafe` code everywhere except one
   module that calls Apple's Metal API. JPEG, JPEG 2000 and JPEG XR are decoded by Rust
-  codecs ([J2K](https://frames-sg.github.io/j2k/rust-jpeg2000-codec/) and
-  [JXR](https://github.com/frames-sg/jxr)), not libjpeg or OpenJPEG.
+  codecs ([J2K](https://frames-sg.com/j2k/rust-jpeg2000-codec/) and
+  [JXR](https://frames-sg.com/rust-jpeg-xr-codec/)), not libjpeg or OpenJPEG.
 - **Handles bad files.** Every size, count and offset read from a file is
   checked before use, and memory is capped, so a corrupt or malicious file
   should get an error rather than a crash or a runaway allocation. The parsers
@@ -42,6 +45,13 @@ uses for this. wsi-rs does the same job, and:
   software built on OpenSlide use wsi-rs without code changes.
 
 CI compares wsi-rs output with OpenSlide on a public corpus of real slides.
+
+DICOM metadata uses [dicom-rs](https://github.com/Enet4/dicom-rs). CZI reading is implemented
+in this repository; LZW, DEFLATE, and Zstd decoding use the Frames
+`j2k-tilecodec` crate. ICC profiles are presented unmodified, with their source
+and provenance, through the dataset; wsi-rs does not apply them. PNG/BMP decoding, public RGB/RGBA display
+buffers, and image saving use the `image` crate. Display methods retain their
+`image::RgbImage` and `image::RgbaImage` return types and `.save()` support.
 
 ## Install
 
@@ -130,6 +140,7 @@ Ways to read pixels:
 | Olympus VSI | `.vsi` with its `.ets` files |
 | Zeiss CZI and ZVI | `.czi`, `.zvi` |
 | DICOM whole-slide images | `.dcm` files or a folder of them |
+| OME-TIFF | `.ome.tif`, `.ome.tiff` |
 | Other tiled TIFF | `.tif`, `.tiff` |
 | Raw JPEG 2000 | `.j2k`, `.j2c` |
 | wsi-rs pre-decoded cache | `.svcache` (see below) |
@@ -141,6 +152,12 @@ Sakura is not supported: there is no public sample file to test against.
 - **Zeiss CZI:** single-plane RGB brightfield scans, stored uncompressed, as
   JPEG or as JPEG XR. Fluorescence channels, z-stacks and other pixel types
   return an error. Multiple scenes are combined onto one canvas.
+- **OME-TIFF:** single-file OME-TIFF with tiled planes. Each plane's SubIFDs
+  are its pyramid levels. Planes can be 8-bit RGB, or 8-bit, 16-bit or float
+  channels, with Z planes and time points. Images named `label`, `macro` or
+  `thumbnail` become associated images; other images become scenes.
+  Multi-file datasets, `.companion.ome` metadata and stripped planes return an
+  error.
 - **Other tiled TIFF:** any tiled TIFF, or a single uncompressed 8-bit RGB
   image stored in strips. JPEG XR tiles must be 8-bit gray or RGB without alpha.
 - **DICOM:** 8-bit images in every supported transfer syntax. JPEG Extended and
@@ -292,6 +309,7 @@ file is changed by generation.
 | `metal-edges` | macOS Metal and `WSI_RS_METAL_EDGE_PATHS`; each source must have a regular eligible edge tile. |
 | `local-htj2k` | macOS Metal and `WSI_RS_LOCAL_HTJ2K_DICOM`; real HTJ2K resident pixel parity. |
 | `legacy-slides` | `WSI_RS_NDPI_WRAPPED_FIXTURE` (Hamamatsu-1.ndpi), `WSI_RS_LEICA_MULTI_SCENE_FIXTURE` (Leica-3.scn), `WSI_RS_LEICA_FLUORESCENCE_FIXTURE` (Leica-Fluorescence-1.scn), and `WSI_RS_DICOM_SPLIT_FIXTURE` (3DHISTECH-2 split-level folder); retained format regressions using explicit paths. |
+| `ome-tiff` | `WSI_RS_OME_TIFF_FIXTURE` naming a single-file OME-TIFF; SubIFD pyramid levels and full- and lowest-resolution tiles of every channel. |
 
 Use `cargo xtask perf-experiment <test-name>` for the following retained
 workloads. This builds the selected target in release mode with route telemetry

@@ -32,8 +32,8 @@ impl ZeissSlide {
 
     pub(super) fn read_source_subblock(
         &self,
-        info: &czi_rs::DirectorySubBlockInfo,
-    ) -> Result<czi_rs::RawSubBlock, WsiError> {
+        info: &DirectorySubBlockInfo,
+    ) -> Result<RawSubBlock, WsiError> {
         self.preflight_source_subblock(info.file_position)?;
         self.czi
             .lock()
@@ -44,14 +44,14 @@ impl ZeissSlide {
 
     pub(super) fn decoded_subblock(
         &self,
-        info: &czi_rs::DirectorySubBlockInfo,
+        info: &DirectorySubBlockInfo,
     ) -> Result<Arc<CpuTile>, WsiError> {
         self.resolve_subblock_claim(info, self.claim_subblock(info))
     }
 
     pub(super) fn claim_subblock(
         &self,
-        info: &czi_rs::DirectorySubBlockInfo,
+        info: &DirectorySubBlockInfo,
     ) -> crate::core::cache::TileClaim<'_, u64> {
         let cached = || {
             self.subblock_cache
@@ -69,7 +69,7 @@ impl ZeissSlide {
 
     pub(super) fn resolve_subblock_claim(
         &self,
-        info: &czi_rs::DirectorySubBlockInfo,
+        info: &DirectorySubBlockInfo,
         claim: crate::core::cache::TileClaim<'_, u64>,
     ) -> Result<Arc<CpuTile>, WsiError> {
         use crate::core::cache::TileClaim;

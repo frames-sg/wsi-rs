@@ -146,9 +146,10 @@ would convert.
 ## Formats
 
 **TIFF family** (Aperio, NDPI, Leica, Ventana, Philips, Trestle, ARGOS, Huron,
-generic TIFF). `container` reads TIFF and BigTIFF structure. Each module under
-`layout` recognizes one vendor and maps its images to pyramid levels and
-associated images. A generic layout catches any other tiled TIFF.
+OME-TIFF, generic TIFF). `container` reads TIFF and BigTIFF structure,
+including SubIFDs. Each module under `layout` recognizes one vendor and maps
+its images to pyramid levels and associated images. A generic layout catches
+any other tiled TIFF.
 
 **NDPI** stores each level as one huge JPEG with restart markers. wsi-rs presents
 it as virtual tiles of at most 256 x 256 pixels and decodes only the strips

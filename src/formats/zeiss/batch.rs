@@ -3,7 +3,7 @@ use super::*;
 use rayon::prelude::*;
 
 pub(super) enum PreparedSubblock {
-    Raw(czi_rs::RawSubBlock),
+    Raw(RawSubBlock),
     Decoded(Arc<CpuTile>),
 }
 pub(super) type PreparedSubblocks = HashMap<u64, PreparedSubblock>;
@@ -68,7 +68,7 @@ impl ZeissReader {
                 else {
                     break;
                 };
-                let mut additions: Vec<czi_rs::DirectorySubBlockInfo> = Vec::new();
+                let mut additions: Vec<DirectorySubBlockInfo> = Vec::new();
                 let mut next_live = live_bytes;
                 let mut next_largest = largest_source;
                 let mut next_work = work.saturating_add(u64::from(width) * u64::from(height) * 3);
@@ -265,7 +265,7 @@ impl ZeissReader {
         req: &TileRequest,
         (x, y, width, height): (i64, i64, u32, u32),
         ratio: i64,
-    ) -> Result<Option<Vec<czi_rs::DirectorySubBlockInfo>>, WsiError> {
+    ) -> Result<Option<Vec<DirectorySubBlockInfo>>, WsiError> {
         let indices = self
             .slide
             .canvas_level_tile_subblocks

@@ -1,6 +1,7 @@
 use super::*;
 
 fn with_adobe_rgb_marker(jpeg: &[u8]) -> Vec<u8> {
+    let jpeg = crate::test_support::jpeg_without_jfif(jpeg);
     assert!(jpeg.starts_with(&[0xFF, 0xD8]));
     let mut marked = Vec::with_capacity(jpeg.len() + 16);
     marked.extend_from_slice(&jpeg[..2]);

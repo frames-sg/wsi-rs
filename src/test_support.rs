@@ -3,6 +3,17 @@ use crate::{
     RegionRequest, SampleType, Scene, SceneId, Series, SeriesId, TileLayout,
 };
 
+/// Remove the leading JFIF declaration from a jpeg-encoder fixture before
+/// assigning untransformed RGB semantics to its component samples.
+pub(crate) fn jpeg_without_jfif(jpeg: &[u8]) -> Vec<u8> {
+    assert_eq!(&jpeg[..4], &[0xff, 0xd8, 0xff, 0xe0]);
+    assert_eq!(&jpeg[6..11], b"JFIF\0");
+    let end = 4 + usize::from(u16::from_be_bytes([jpeg[4], jpeg[5]]));
+    let mut output = jpeg[..2].to_vec();
+    output.extend_from_slice(&jpeg[end..]);
+    output
+}
+
 pub(crate) struct RegularLevelForTest {
     pub(crate) dimensions: (u64, u64),
     pub(crate) tile_width: u32,

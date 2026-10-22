@@ -13,12 +13,10 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             return false;
         }
 
-        // Reject obvious OME-TIFF: ImageDescription on first IFD contains
-        // the OME XML namespace marker.
+        // Reject OME-TIFF; OmeTiffInterpreter handles it.
         if let Some(&first_id) = container.top_ifds().first() {
             if let Ok(desc) = container.get_string(first_id, tags::IMAGE_DESCRIPTION) {
-                let lower = desc.to_ascii_lowercase();
-                if lower.contains("<ome") || lower.contains("ome.xsd") {
+                if super::super::ome::is_ome_xml_description(desc) {
                     return false;
                 }
             }

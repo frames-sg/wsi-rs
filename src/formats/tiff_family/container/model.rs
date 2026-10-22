@@ -239,6 +239,9 @@ pub(crate) struct TiffContainer {
     pub(super) top_ifds: Vec<IfdId>,
     /// Flat arena: every parsed IFD lives here exactly once, keyed by byte offset.
     pub(super) ifds: HashMap<IfdId, Ifd>,
+    /// SubIFD children (tag 330) of each top-level IFD, in tag order. Children
+    /// live in `ifds` but never in `top_ifds`.
+    pub(super) sub_ifds: HashMap<IfdId, Vec<IfdId>>,
     pub(super) parsed_ifd_entries: u64,
     pub(super) declared_tag_payload_bytes: u64,
     pub(super) open_budget: Arc<OpenBudget>,

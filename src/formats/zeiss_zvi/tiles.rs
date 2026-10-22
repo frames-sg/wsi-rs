@@ -1,6 +1,6 @@
 use super::model::{RawReadWindow, ZviCompression, ZviPlane, ZviSlide};
 use super::*;
-use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
+use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 
 impl ZviSlide {
     pub(super) fn read_plane_window(
@@ -138,11 +138,13 @@ impl ZviSlide {
         h: u32,
     ) -> Result<CpuTile, WsiError> {
         let compressed = self.read_plane_payload(plane)?;
-        let mut decoder = ZlibDecoder::new(compressed.as_slice());
         let expected_len =
             zvi_image_len(plane.width, plane.height, u64::from(plane.bytes_per_sample))?;
-        let decompressed =
-            read_to_end_bounded(&mut decoder, expected_len as u64, "ZVI inflated plane")?;
+        let decompressed = crate::core::compression::decode_zlib_bounded(&compressed, expected_len)
+            .map_err(|error| WsiError::Codec {
+                codec: "zvi-zlib",
+                source: Box::new(error),
+            })?;
         if decompressed.len() != expected_len {
             return Err(WsiError::InvalidSlide {
                 path: PathBuf::from(&plane.stream_path),

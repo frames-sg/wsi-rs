@@ -197,12 +197,12 @@ impl SvcacheReader {
         }
         let decoded = match tile.codec {
             PayloadCodec::Zstd => {
-                zstd::bulk::decompress(&encoded, tile.decoded_len).map_err(|err| {
-                    WsiError::Codec {
+                crate::core::compression::decode_zstd_bounded(&encoded, tile.decoded_len).map_err(
+                    |err| WsiError::Codec {
                         codec: "svcache-zstd",
                         source: Box::new(err),
-                    }
-                })?
+                    },
+                )?
             }
         };
         CpuTile::from_u8_interleaved(

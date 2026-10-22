@@ -152,54 +152,84 @@ fn ndpi_restart_tile_decodes_zero_sof_segment_from_mcu_table() {
 
 #[test]
 fn ndpi_raw_compressed_display_tile_retiles_restart_jpeg_segments_without_pixel_reencode() {
-    let colors = [[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]];
-    let (file, jpeg_header, strip_byte_count) =
-        build_ndpi_scan_data_tiff_from_blobs(128, 16, &colors, false);
-    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-    let ifd_id = *container.top_ifds().first().unwrap();
-    let layout = build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
-        ifd_id,
-        dimensions: (128, 16),
-        virtual_tile: (64, 8),
-        tile_grid: (2, 2),
-        jpeg_header,
-        strip_byte_count,
-    });
-    let reader = TiffPixelReader::new(container, layout);
-    let request = TileViewRequest {
-        scene: 0usize.into(),
-        series: 0usize.into(),
-        level: 0u32.into(),
-        plane: PlaneSelection::default().into(),
-        col: 0,
-        row: 0,
-        tile_width: 128,
-        tile_height: 16,
-    };
+    for rgb_components in [false, true] {
+        let colors = [[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]];
+        let (file, mut jpeg_header, strip_byte_count) =
+            build_ndpi_scan_data_tiff_from_blobs(128, 16, &colors, false);
+        if rgb_components {
+            // Treat the fixture's component samples as untransformed RGB. The
+            // reader and the retiled codestream must preserve that interpretation.
+            jpeg_header = crate::test_support::jpeg_without_jfif(&jpeg_header);
+            jpeg_header.splice(
+                2..2,
+                [
+                    0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, 0,
+                ],
+            );
+        }
+        let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+        let ifd_id = *container.top_ifds().first().unwrap();
+        let layout = build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
+            ifd_id,
+            dimensions: (128, 16),
+            virtual_tile: (64, 8),
+            tile_grid: (2, 2),
+            jpeg_header,
+            strip_byte_count,
+        });
+        let reader = TiffPixelReader::new(container, layout);
+        let request = TileViewRequest {
+            scene: 0usize.into(),
+            series: 0usize.into(),
+            level: 0u32.into(),
+            plane: PlaneSelection::default().into(),
+            col: 0,
+            row: 0,
+            tile_width: 128,
+            tile_height: 16,
+        };
 
-    let raw = reader.read_raw_compressed_display_tile(&request).unwrap();
+        let raw = reader.read_raw_compressed_display_tile(&request).unwrap();
 
-    assert_eq!(raw.compression(), Compression::Jpeg);
-    assert_eq!((raw.width(), raw.height()), (128, 16));
-    assert_eq!(raw.bits_allocated(), 8);
-    assert_eq!(raw.samples_per_pixel(), 3);
-    assert!(raw.data().starts_with(&[0xFF, 0xD8]));
-    assert!(raw.data().ends_with(&[0xFF, 0xD9]));
+        assert_eq!(raw.compression(), Compression::Jpeg);
+        assert_eq!((raw.width(), raw.height()), (128, 16));
+        assert_eq!(raw.bits_allocated(), 8);
+        assert_eq!(raw.samples_per_pixel(), 3);
+        assert_eq!(
+            jpeg_segment_color_hint(raw.data()),
+            if rgb_components {
+                JpegBitstreamColorHint::Rgb
+            } else {
+                JpegBitstreamColorHint::YCbCr
+            },
+            "retiling must retain explicit JPEG color semantics for downstream consumers"
+        );
+        assert_eq!(
+            raw.photometric_interpretation(),
+            if rgb_components {
+                EncodedTilePhotometricInterpretation::Rgb
+            } else {
+                EncodedTilePhotometricInterpretation::YbrFull422
+            }
+        );
+        assert!(raw.data().starts_with(&[0xFF, 0xD8]));
+        assert!(raw.data().ends_with(&[0xFF, 0xD9]));
 
-    let decoded = decode_jpeg_rgb_with_size_override(
-        raw.data(),
-        None,
-        raw.width(),
-        raw.height(),
-        None,
-        None,
-        J2kColorTransform::Auto,
-    )
-    .expect("decode retiled NDPI JPEG frame");
-    let expected = reader.read_display_tile(&request).unwrap();
-    assert_eq!(
-        (decoded.width, decoded.height),
-        (expected.width, expected.height)
-    );
-    assert_eq!(decoded.pixels, *expected.data.as_u8().unwrap());
+        let decoded = decode_jpeg_rgb_with_size_override(
+            raw.data(),
+            None,
+            raw.width(),
+            raw.height(),
+            None,
+            None,
+            J2kColorTransform::Auto,
+        )
+        .expect("decode retiled NDPI JPEG frame");
+        let expected = reader.read_display_tile(&request).unwrap();
+        assert_eq!(
+            (decoded.width, decoded.height),
+            (expected.width, expected.height)
+        );
+        assert_eq!(decoded.pixels, *expected.data.as_u8().unwrap());
+    }
 }

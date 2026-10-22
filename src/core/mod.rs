@@ -1,5 +1,6 @@
 pub(crate) mod batch;
 pub(crate) mod cache;
+pub(crate) mod compression;
 pub(crate) mod decode_runtime;
 pub(crate) mod environment;
 pub(crate) mod execution_telemetry;

@@ -1,6 +1,6 @@
 use super::helpers::*;
 use super::*;
-use crate::core::limits::{checked_product_to_usize, read_to_end_bounded, MAX_DECODED_IMAGE_BYTES};
+use crate::core::limits::{checked_product_to_usize, MAX_DECODED_IMAGE_BYTES};
 use crate::formats::geometry::irregular_extra_tiles;
 use crate::formats::ini::parse_ini_file_with_budget;
 
@@ -392,18 +392,13 @@ pub(super) fn load_slide_positions(
         let record = read_nonhier_record(path, index_file, datafile_paths, nonhier_root, record)?;
         let mut buffer = read_record_bytes_fields(&record.path, record.offset, record.len)?;
         if stitching_record == Some(record.index) {
-            let mut decoder = ZlibDecoder::new(buffer.as_slice());
-            let inflated = read_to_end_bounded(
-                &mut decoder,
-                expected_size as u64,
-                "MIRAX inflated position buffer",
-            )
-            .map_err(|err| {
-                invalid_slide(
-                    path,
-                    format!("failed to inflate MIRAX position buffer: {err}"),
-                )
-            })?;
+            let inflated = crate::core::compression::decode_zlib_bounded(&buffer, expected_size)
+                .map_err(|err| {
+                    invalid_slide(
+                        path,
+                        format!("failed to inflate MIRAX position buffer: {err}"),
+                    )
+                })?;
             buffer = inflated;
         }
         if buffer.len() != expected_size {

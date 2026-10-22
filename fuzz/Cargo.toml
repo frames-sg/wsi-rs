@@ -76,3 +76,22 @@ doc = false
 bench = false
 
 [workspace]
+
+# J2K is consumed from its main branch until a release contains the TIFF LZW
+# decoder used for TIFF-flavored LZW (frames-sg/j2k main). Remove this section once
+# that release is on crates.io; crates.io rejects git dependencies.
+[patch.crates-io]
+j2k = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-codec-math = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-core = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-cuda = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-cuda-build-support = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-cuda-j2k-engine = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-cuda-runtime = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-jpeg = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-metal = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-metal-support = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-native = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-profile = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-tilecodec = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }
+j2k-types = { git = "https://github.com/frames-sg/j2k", rev = "9e5d66ed61d07746f357fa17138e6538bcc3ae14" }

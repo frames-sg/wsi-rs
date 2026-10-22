@@ -574,7 +574,7 @@ pub(super) fn write_tile_payload(file: &mut File, tile: &CpuTile) -> Result<Tile
         }
     };
     let color_space = ColorSpaceMeta::try_from(&tile.color_space)?;
-    let encoded = zstd::bulk::compress(raw, 1).map_err(|err| WsiError::Codec {
+    let encoded = crate::core::compression::encode_zstd(raw).map_err(|err| WsiError::Codec {
         codec: "svcache-zstd",
         source: Box::new(err),
     })?;

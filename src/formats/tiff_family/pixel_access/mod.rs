@@ -16,7 +16,9 @@ use j2k_jpeg::{
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
     JpegView as J2kJpegView, PixelFormat as J2kPixelFormat,
 };
-use j2k_tilecodec::{DeflateCodec, DeflatePool, TileDecompress, ZstdCodec, ZstdPool};
+use j2k_tilecodec::{
+    DeflateCodec, DeflatePool, LzwCodec, LzwPool, TileDecompress, ZstdCodec, ZstdPool,
+};
 use rayon::prelude::*;
 
 use crate::core::cache::{CacheKey, CacheKeyKind, WeightedLru};

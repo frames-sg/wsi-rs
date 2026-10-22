@@ -4,8 +4,9 @@ use super::fractional_u8::{
     RgbaBandScratch,
 };
 use super::integral::{
-    blit_integral_rgb_saturating_rgba, blit_integral_samples, compose_dense_integral_rgb_argb32,
-    has_integral_position, hit_covers_output, is_integral_hit, mark_integral_tile_opaque,
+    blit_integral_rgb_into_rgba, blit_integral_rgb_saturating_rgba, blit_integral_samples,
+    compose_dense_integral_rgb_argb32, has_integral_position, hit_covers_output,
+    integral_tile_rect, is_integral_hit, mark_integral_tile_opaque,
     try_compose_dense_integral_u8_region,
 };
 use super::output::{
@@ -262,6 +263,22 @@ fn compose_region_tiles(
             "planar compositing not supported".into(),
         ));
     }
+    if hits.iter().all(is_integral_hit)
+        && hit_tiles
+            .iter()
+            .any(|tile| tile.channels == 3 && tile.color_space == ColorSpace::Rgb)
+    {
+        if let Some(alpha_tile) = hit_tiles.iter().find(|tile| is_alpha_source(tile)) {
+            return compose_general_region(
+                hits,
+                hit_tiles,
+                width,
+                height,
+                alpha_tile,
+                preserve_alpha,
+            );
+        }
+    }
     // Coverage-carrying RGBA tiles never take the copy fast paths; the
     // composer validates each against its RGB output as it blits.
     if composes_alpha_sources(hits, hit_tiles.iter().map(Arc::as_ref)) {
@@ -354,6 +371,9 @@ struct RegionComposer {
     direct_rgba: bool,
     rgba_needs_unpremultiply: bool,
     rgba_scratch: RgbaBandScratch,
+    // Streaming reads can encounter their first RGBA tile after opaque RGB.
+    // Retain only painted rectangles so promotion preserves transparent gaps.
+    integral_rgb_regions: Option<Vec<(usize, usize, usize, usize)>>,
 }
 
 impl RegionComposer {
@@ -404,6 +424,11 @@ impl RegionComposer {
         } else {
             None
         };
+        let integral_rgb_regions = (template.channels == 3
+            && template.color_space == ColorSpace::Rgb
+            && matches!(template.data, CpuTileData::U8(_))
+            && hits.iter().all(is_integral_hit))
+        .then(Vec::new);
         Ok(Self {
             width,
             height,
@@ -418,11 +443,67 @@ impl RegionComposer {
             direct_rgba,
             rgba_needs_unpremultiply: false,
             rgba_scratch: RgbaBandScratch::default(),
+            integral_rgb_regions,
         })
+    }
+
+    fn promote_integral_rgb_to_rgba(&mut self) -> Result<(), WsiError> {
+        let total_samples = checked_total_samples(self.width, self.height, 4)?;
+        let CpuTileData::U8(bytes) = &mut self.out_data else {
+            unreachable!("integral RGB promotion requires u8 storage");
+        };
+        let bytes = Arc::make_mut(bytes);
+        bytes.resize(total_samples, 0);
+        for pixel in (0..total_samples / 4).rev() {
+            let rgb = [bytes[pixel * 3], bytes[pixel * 3 + 1], bytes[pixel * 3 + 2]];
+            bytes[pixel * 4..pixel * 4 + 3].copy_from_slice(&rgb);
+            bytes[pixel * 4 + 3] = 0;
+        }
+        for (x0, y0, x1, y1) in self
+            .integral_rgb_regions
+            .take()
+            .expect("integral RGB promotion retains painted rectangles")
+        {
+            for y in y0..y1 {
+                let start = (y * self.shape.width + x0) * 4;
+                let end = (y * self.shape.width + x1) * 4;
+                for pixel in bytes[start..end].as_chunks_mut::<4>().0 {
+                    pixel[3] = 255;
+                }
+            }
+        }
+        self.channels = 4;
+        self.color_space = ColorSpace::Rgba;
+        self.shape.channels = 4;
+        Ok(())
     }
 
     fn blit(&mut self, hit: &TileHit, tile: &CpuTile) -> Result<(), WsiError> {
         tile.validate_invariants()?;
+        if self.integral_rgb_regions.is_some() && is_alpha_source(tile) {
+            self.promote_integral_rgb_to_rgba()?;
+        }
+        if !self.pixman_compatible
+            && self.channels == 4
+            && self.color_space == ColorSpace::Rgba
+            && is_integral_hit(hit)
+            && tile.channels == 3
+            && tile.color_space == ColorSpace::Rgb
+            && tile.layout == CpuTileLayout::Interleaved
+        {
+            if let (CpuTileData::U8(out), CpuTileData::U8(source)) =
+                (&mut self.out_data, &tile.data)
+            {
+                blit_integral_rgb_into_rgba(
+                    Arc::make_mut(out).as_mut_slice(),
+                    source,
+                    tile,
+                    hit,
+                    self.shape,
+                );
+                return Ok(());
+            }
+        }
         if self.direct_rgba {
             let CpuTileData::U8(out) = &mut self.out_data else {
                 unreachable!()
@@ -480,7 +561,13 @@ impl RegionComposer {
             tile,
             hit,
             self.shape,
-        )
+        )?;
+        if let Some(regions) = &mut self.integral_rgb_regions {
+            if let Some(rect) = integral_tile_rect(tile, hit, self.shape) {
+                regions.push(rect);
+            }
+        }
+        Ok(())
     }
 
     fn finish(mut self) -> Result<CpuTile, WsiError> {

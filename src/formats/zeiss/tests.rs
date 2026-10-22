@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 mod attachment_cases;
+mod container_cases;
 mod error_cases;
 mod fixtures;
 mod generated;

@@ -10,66 +10,6 @@ fn codec_error(
     }
 }
 
-fn tiff_lzw_error(kind: std::io::ErrorKind, message: impl Into<String>) -> WsiError {
-    codec_error("tiff-lzw", std::io::Error::new(kind, message.into()))
-}
-
-fn decode_tiff_lzw(input: &[u8], out: &mut [u8]) -> Result<usize, WsiError> {
-    let scratch_len = out
-        .len()
-        .checked_add(1)
-        .ok_or_else(|| WsiError::UnsupportedFormat("TIFF LZW output length overflow".into()))?;
-    let mut scratch = vec![0u8; scratch_len];
-    let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-    let mut input_offset = 0usize;
-    let mut output_offset = 0usize;
-
-    loop {
-        if output_offset == scratch.len() {
-            return Err(tiff_lzw_error(
-                std::io::ErrorKind::InvalidData,
-                "decoded data exceeds expected TIFF strip size",
-            ));
-        }
-        let result = decoder.decode_bytes(&input[input_offset..], &mut scratch[output_offset..]);
-        input_offset += result.consumed_in;
-        output_offset += result.consumed_out;
-        if output_offset > out.len() {
-            return Err(tiff_lzw_error(
-                std::io::ErrorKind::InvalidData,
-                "decoded data exceeds expected TIFF strip size",
-            ));
-        }
-
-        match result.status {
-            Ok(weezl::LzwStatus::Done) => {
-                out[..output_offset].copy_from_slice(&scratch[..output_offset]);
-                return Ok(output_offset);
-            }
-            Ok(weezl::LzwStatus::Ok) => {
-                if input_offset == input.len() {
-                    return Err(tiff_lzw_error(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "truncated TIFF LZW strip",
-                    ));
-                }
-            }
-            Ok(weezl::LzwStatus::NoProgress) => {
-                return Err(tiff_lzw_error(
-                    std::io::ErrorKind::InvalidData,
-                    "TIFF LZW decoder made no progress",
-                ));
-            }
-            Err(error) => {
-                return Err(tiff_lzw_error(
-                    std::io::ErrorKind::InvalidData,
-                    format!("TIFF LZW decoder error: {error:?}"),
-                ));
-            }
-        }
-    }
-}
-
 impl TiffPixelReader {
     pub(in super::super) fn tiff_jpeg_decode_options_for_data(
         &self,
@@ -379,7 +319,11 @@ impl TiffPixelReader {
     ) -> Result<Vec<u8>, WsiError> {
         let mut out = vec![0_u8; expected_bytes];
         let written = match compression {
-            Compression::Lzw => decode_tiff_lzw(input, &mut out)?,
+            Compression::Lzw => {
+                let mut pool = LzwPool::new();
+                LzwCodec::decompress_into(&mut pool, input, &mut out)
+                    .map_err(|error| codec_error("tiff-lzw", error))?
+            }
             Compression::Deflate => {
                 let mut pool = DeflatePool::new();
                 DeflateCodec::decompress_into(&mut pool, input, &mut out)

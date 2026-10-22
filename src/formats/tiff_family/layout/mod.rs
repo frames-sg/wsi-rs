@@ -23,6 +23,7 @@ pub(crate) mod generic;
 pub(crate) mod huron;
 pub(crate) mod leica;
 pub(crate) mod ndpi;
+pub(crate) mod ome;
 pub(crate) mod philips;
 pub(crate) mod trestle;
 pub(crate) mod ventana;
@@ -232,7 +233,8 @@ pub(crate) struct TileSourceKey {
 /// Describes how to access a level's or associated image's pixel data.
 #[derive(Debug, Clone)]
 pub(crate) enum TileSource {
-    /// Standard tiled TIFF IFD (Aperio SVS, OME-TIFF, etc.).
+    /// Standard tiled TIFF IFD, including SubIFD pyramid levels (Aperio SVS,
+    /// OME-TIFF, etc.).
     TiledIfd {
         ifd_id: IfdId,
         /// JPEG tables from JPEGTables tag (tag 347), if present.
@@ -501,7 +503,9 @@ fn fallback_dataset_id(
     extra_strings: &[&str],
 ) -> Result<DatasetId, TiffParseError> {
     let mut hash = Quickhash1::new();
-    hash.update(&container.ifd_count().to_le_bytes());
+    // Main-chain count twice: these bytes predate SubIFD parsing, when the
+    // IFD arena held only the main chain, and must stay stable.
+    hash.update(&container.top_ifds().len().to_le_bytes());
     hash.update(&(container.top_ifds().len() as u64).to_le_bytes());
     hash.update(&[match container.endian() {
         crate::formats::tiff_family::container::Endian::Little => 0,

@@ -273,7 +273,10 @@ impl TiffPixelReader {
         )?;
         let data = encode_baseline_dct_image(&image)
             .map_err(|err| WsiError::Jpeg(format!("NDPI raw JPEG retile encode failed: {err}")))?;
-        let info = parse_baseline_jpeg_frame_info(&data)?;
+        let mut info = parse_baseline_jpeg_frame_info(&data)?;
+        if image.color_space == j2k_jpeg::ColorSpace::Rgb {
+            info.photometric_interpretation = EncodedTilePhotometricInterpretation::Rgb;
+        }
         Ok(RawCompressedTile::builder(Compression::Jpeg)
             .dimensions(info.width, info.height)
             .bits_allocated(info.bits_allocated)

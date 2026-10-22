@@ -9,7 +9,7 @@ impl ZeissSlide {
     pub(super) fn exact_raw_jpeg_subblock(
         &self,
         req: &TileRequest,
-    ) -> Result<Option<czi_rs::DirectorySubBlockInfo>, WsiError> {
+    ) -> Result<Option<DirectorySubBlockInfo>, WsiError> {
         if req.plane.get() != PlaneSelection::default() {
             return Ok(None);
         }
@@ -353,7 +353,7 @@ impl ZeissSlide {
             // The candidate loop either returns early or selects every input,
             // and this branch is only reached from a nonempty candidate list.
             let pixel_type = candidate_infos[0].pixel_type;
-            return czi_rs::Bitmap::zeros(pixel_type, tile_w, tile_h)
+            return Bitmap::zeros(pixel_type, tile_w, tile_h)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))
                 .and_then(bitmap_to_sample_buffer)
                 .map(Some);

@@ -179,6 +179,7 @@ impl TiffContainer {
             ndpi: initial_ndpi,
             top_ifds: Vec::new(),
             ifds: HashMap::new(),
+            sub_ifds: HashMap::new(),
             parsed_ifd_entries: 0,
             declared_tag_payload_bytes: 0,
             open_budget,
@@ -186,6 +187,10 @@ impl TiffContainer {
 
         // Walk the IFD chain
         container.walk_ifd_chain(&mut reader, first_ifd_offset)?;
+        // NDPI never uses SubIFDs, and its offset fixups do not apply to them.
+        if !container.ndpi {
+            container.walk_sub_ifds(&mut reader)?;
+        }
 
         debug!(
             path = %path.display(),
@@ -212,12 +217,7 @@ impl TiffContainer {
         let mut is_first = true;
 
         while ifd_offset != 0 {
-            // Global safety limit
-            if self.ifds.len() >= 10_000 {
-                return Err(TiffParseError::Structure(
-                    "too many IFDs (>10000), possible corrupt file".into(),
-                ));
-            }
+            check_ifd_count(self.ifds.len())?;
 
             // Main-chain loop detection
             let ifd_id = IfdId(ifd_offset);
@@ -228,20 +228,8 @@ impl TiffContainer {
                 )));
             }
 
-            let ifd_owner_bytes =
-                u64::try_from(std::mem::size_of::<IfdId>() + std::mem::size_of::<(IfdId, Ifd)>())
-                    .unwrap_or(u64::MAX);
-            self.open_budget
-                .retain_index(ifd_owner_bytes)
-                .map_err(tiff_resource_limit)?;
+            let ifd_owner_bytes = self.reserve_ifd_slot()?;
             self.top_ifds
-                .try_reserve(1)
-                .map_err(|_| TiffParseError::ResourceLimit {
-                    resource: "TIFF IFD index",
-                    requested: ifd_owner_bytes,
-                    limit: self.open_budget.limits().tile_index_bytes(),
-                })?;
-            self.ifds
                 .try_reserve(1)
                 .map_err(|_| TiffParseError::ResourceLimit {
                     resource: "TIFF IFD index",
@@ -264,6 +252,72 @@ impl TiffContainer {
         }
 
         Ok(())
+    }
+
+    /// Parse the SubIFDs (tag 330) of every top-level IFD. Only one level is
+    /// followed: SubIFDs of SubIFDs and next-IFD pointers inside SubIFDs are
+    /// ignored, matching how pyramidal OME-TIFF writers use the tag.
+    fn walk_sub_ifds(&mut self, reader: &mut ParseReader) -> Result<(), TiffParseError> {
+        for parent in self.top_ifds.clone() {
+            let offsets = match self.get_u64_array(parent, tags::SUB_IFDS) {
+                Ok(offsets) => offsets.to_vec(),
+                Err(TiffParseError::TagNotFound { .. }) => continue,
+                Err(err) => return Err(err),
+            };
+            if offsets.is_empty() {
+                continue;
+            }
+
+            let children_bytes = u64::try_from(offsets.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(u64::try_from(std::mem::size_of::<IfdId>()).unwrap_or(u64::MAX));
+            self.open_budget
+                .retain_index(children_bytes)
+                .map_err(tiff_resource_limit)?;
+            let mut children = Vec::new();
+            children.try_reserve_exact(offsets.len()).map_err(|_| {
+                TiffParseError::ResourceLimit {
+                    resource: "TIFF SubIFD index",
+                    requested: children_bytes,
+                    limit: self.open_budget.limits().tile_index_bytes(),
+                }
+            })?;
+
+            for offset in offsets {
+                check_ifd_count(self.ifds.len())?;
+                let ifd_id = IfdId(offset);
+                if offset == 0 || self.ifds.contains_key(&ifd_id) {
+                    return Err(TiffParseError::Structure(format!(
+                        "SubIFD offset {offset} of {parent} is zero or already parsed"
+                    )));
+                }
+                self.reserve_ifd_slot()?;
+                let (ifd, _next_offset) = self.parse_ifd(reader, offset)?;
+                self.ifds.insert(ifd_id, ifd);
+                children.push(ifd_id);
+            }
+            self.sub_ifds.insert(parent, children);
+        }
+        Ok(())
+    }
+
+    /// Charge one IFD arena slot to the open budget and reserve it.
+    /// Returns the bytes charged so callers can report further reservations.
+    fn reserve_ifd_slot(&mut self) -> Result<u64, TiffParseError> {
+        let ifd_owner_bytes =
+            u64::try_from(std::mem::size_of::<IfdId>() + std::mem::size_of::<(IfdId, Ifd)>())
+                .unwrap_or(u64::MAX);
+        self.open_budget
+            .retain_index(ifd_owner_bytes)
+            .map_err(tiff_resource_limit)?;
+        self.ifds
+            .try_reserve(1)
+            .map_err(|_| TiffParseError::ResourceLimit {
+                resource: "TIFF IFD index",
+                requested: ifd_owner_bytes,
+                limit: self.open_budget.limits().tile_index_bytes(),
+            })?;
+        Ok(ifd_owner_bytes)
     }
 
     /// Parse a single IFD at the given offset. Returns the Ifd and the next-IFD offset.
@@ -453,6 +507,16 @@ impl TiffContainer {
 
         Ok((ifd, next_offset))
     }
+}
+
+/// Global safety limit on parsed IFDs, shared by the main chain and SubIFDs.
+fn check_ifd_count(parsed: usize) -> Result<(), TiffParseError> {
+    if parsed >= 10_000 {
+        return Err(TiffParseError::Structure(
+            "too many IFDs (>10000), possible corrupt file".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn is_tiff_index_tag(tag: u16) -> bool {

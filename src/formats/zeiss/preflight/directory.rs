@@ -1,4 +1,4 @@
-//! Admit directory geometry before czi-rs computes signed bounding rectangles.
+//! Admit directory geometry before the native container parser builds rectangles.
 
 use std::io::{Read, Seek};
 
@@ -54,8 +54,8 @@ pub(super) fn validate_entries(
             };
             let combined =
                 bounds[axis].map_or(range, |prior| (prior.0.min(range.0), prior.1.max(range.1)));
-            // czi-rs also stores the union's width/height in i32. Checking
-            // individual ends alone does not establish that union invariant.
+            // The container model stores the union's width/height in i32. Checking
+            // individual ends alone does not establish that invariant.
             combined
                 .1
                 .checked_sub(combined.0)

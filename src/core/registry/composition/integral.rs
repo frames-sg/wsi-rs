@@ -31,6 +31,47 @@ pub(super) fn blit_integral_samples<T: Copy>(
     }
 }
 
+pub(super) fn integral_tile_rect(
+    tile: &CpuTile,
+    hit: &TileHit,
+    shape: CompositionShape,
+) -> Option<(usize, usize, usize, usize)> {
+    let x0 = hit.dest_x.max(0);
+    let y0 = hit.dest_y.max(0);
+    let x1 = hit
+        .dest_x
+        .saturating_add(i64::from(tile.width))
+        .min(shape.width as i64);
+    let y1 = hit
+        .dest_y
+        .saturating_add(i64::from(tile.height))
+        .min(shape.height as i64);
+    (x0 < x1 && y0 < y1).then_some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
+}
+
+pub(super) fn blit_integral_rgb_into_rgba(
+    out: &mut [u8],
+    source: &[u8],
+    tile: &CpuTile,
+    hit: &TileHit,
+    shape: CompositionShape,
+) {
+    let Some((x0, y0, x1, y1)) = integral_tile_rect(tile, hit, shape) else {
+        return;
+    };
+    for y in y0..y1 {
+        let start = ((y as i64 - hit.dest_y) as usize * tile.width as usize
+            + (x0 as i64 - hit.dest_x) as usize)
+            * 3;
+        let target = (y * shape.width + x0) * 4;
+        let source = source[start..start + (x1 - x0) * 3].as_chunks::<3>().0;
+        let output = out[target..target + (x1 - x0) * 4].as_chunks_mut::<4>().0;
+        for (pixel, &[r, g, b]) in output.iter_mut().zip(source) {
+            *pixel = [r, g, b, 255];
+        }
+    }
+}
+
 pub(super) fn mark_integral_tile_opaque(
     alpha: &mut [f32],
     tile: &CpuTile,

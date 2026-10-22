@@ -120,6 +120,69 @@ fn streaming_region_resolves_one_source_tile_at_a_time() {
 }
 
 #[test]
+fn regular_regions_preserve_mixed_rgb_and_rgba_tiles_in_either_read_order() {
+    struct MixedSource {
+        dataset: Dataset,
+        rgba_first: bool,
+    }
+    impl SlideReader for MixedSource {
+        fn dataset(&self) -> &Dataset {
+            &self.dataset
+        }
+        fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+            if (req.col == 0) == self.rgba_first {
+                CpuTile::from_u8_interleaved(
+                    2,
+                    1,
+                    4,
+                    ColorSpace::Rgba,
+                    vec![0, 0, 0, 0, 70, 80, 90, 128],
+                )
+            } else {
+                CpuTile::from_u8_interleaved(2, 1, 3, ColorSpace::Rgb, [10, 20, 30].repeat(2))
+            }
+        }
+    }
+    for rgba_first in [false, true] {
+        let source = MixedSource {
+            dataset: crate::test_support::regular_rgb_dataset_for_test(
+                DatasetId::new(80),
+                "s0",
+                "ser0",
+                crate::test_support::RegularLevelForTest {
+                    dimensions: (4, 1),
+                    tile_width: 2,
+                    tile_height: 1,
+                    tiles_across: 2,
+                    tiles_down: 1,
+                },
+            ),
+            rgba_first,
+        };
+        let request = RegionRequest::new(0usize, 0usize, 0u32, (-1, 0), (6, 1));
+        let rgb = [10, 20, 30, 255].repeat(2);
+        let rgba = vec![0, 0, 0, 0, 70, 80, 90, 128];
+        let mut expected = vec![0; 4];
+        for part in if rgba_first {
+            [&rgba, &rgb]
+        } else {
+            [&rgb, &rgba]
+        } {
+            expected.extend_from_slice(part);
+        }
+        expected.extend_from_slice(&[0; 4]);
+        for region in [
+            composite_region_from_source(&source, None, &request, 16),
+            composite_region_from_source_in_batches(&source, None, &request, 16, 1),
+        ] {
+            let region = region.unwrap();
+            assert_eq!((region.channels, region.color_space), (4, ColorSpace::Rgba));
+            assert_eq!(region.data.as_u8().unwrap(), &expected);
+        }
+    }
+}
+
+#[test]
 fn fractional_u8_composition_saturates_prior_integral_tile() {
     let hits = [hit(0, 0.0), hit(2, 1.5)];
     let tiles = [

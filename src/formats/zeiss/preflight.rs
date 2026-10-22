@@ -338,7 +338,7 @@ fn preflight_czi_subblock_reader_with_limits(
     Ok(actual_bytes)
 }
 
-fn read_segment_header(
+pub(super) fn read_segment_header(
     reader: &mut (impl Read + Seek),
     file_len: u64,
     offset: u64,
@@ -380,7 +380,7 @@ fn read_segment_header(
     Ok(effective_size)
 }
 
-fn read_exact_at(
+pub(super) fn read_exact_at(
     reader: &mut (impl Read + Seek),
     file_len: u64,
     offset: u64,
@@ -401,12 +401,12 @@ fn read_exact_at(
     Ok(bytes)
 }
 
-fn checked_add(left: u64, right: u64, label: &str) -> Result<u64, WsiError> {
+pub(super) fn checked_add(left: u64, right: u64, label: &str) -> Result<u64, WsiError> {
     left.checked_add(right)
         .ok_or_else(|| preflight_error(format!("CZI {label} offset overflows")))
 }
 
-fn read_u32(bytes: &[u8], offset: usize, label: &str) -> Result<u32, WsiError> {
+pub(super) fn read_u32(bytes: &[u8], offset: usize, label: &str) -> Result<u32, WsiError> {
     let value = bytes
         .get(offset..offset + 4)
         .ok_or_else(|| preflight_error(format!("CZI {label} is truncated")))?;
@@ -415,11 +415,11 @@ fn read_u32(bytes: &[u8], offset: usize, label: &str) -> Result<u32, WsiError> {
     })?))
 }
 
-fn read_i32(bytes: &[u8], offset: usize, label: &str) -> Result<i32, WsiError> {
+pub(super) fn read_i32(bytes: &[u8], offset: usize, label: &str) -> Result<i32, WsiError> {
     read_u32(bytes, offset, label).map(|value| i32::from_le_bytes(value.to_le_bytes()))
 }
 
-fn read_u64(bytes: &[u8], offset: usize, label: &str) -> Result<u64, WsiError> {
+pub(super) fn read_u64(bytes: &[u8], offset: usize, label: &str) -> Result<u64, WsiError> {
     let value = bytes
         .get(offset..offset + 8)
         .ok_or_else(|| preflight_error(format!("CZI {label} is truncated")))?;
@@ -428,7 +428,7 @@ fn read_u64(bytes: &[u8], offset: usize, label: &str) -> Result<u64, WsiError> {
     })?))
 }
 
-fn preflight_error(message: impl Into<String>) -> WsiError {
+pub(super) fn preflight_error(message: impl Into<String>) -> WsiError {
     WsiError::DisplayConversion(message.into())
 }
 

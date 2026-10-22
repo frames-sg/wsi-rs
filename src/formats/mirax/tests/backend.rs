@@ -258,6 +258,21 @@ fn objective_magnification_is_optional_and_accepts_legacy_x_suffix() {
 }
 
 #[test]
+fn reader_rejects_raster_payloads_that_do_not_match_the_declared_codec() {
+    let fixture = MiraxFixture::complete();
+    fixture.write_slidedat(
+        &fixture
+            .complete_slidedat()
+            .replace("IMAGE_FORMAT=PNG", "IMAGE_FORMAT=BMP24"),
+    );
+    let slide = Slide::open(&fixture.path).unwrap();
+    let error = slide
+        .read_tile(&TileRequest::new(0, 0, 1, 0, 0))
+        .expect_err("PNG bytes declared as BMP must not select another decoder");
+    assert!(error.to_string().contains("failed to decode MIRAX image"));
+}
+
+#[test]
 fn reader_decodes_jpeg_png_bmp_crops_batches_and_caches() {
     let fixture = MiraxFixture::complete();
     let slide = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");

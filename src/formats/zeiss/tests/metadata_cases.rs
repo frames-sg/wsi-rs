@@ -1,12 +1,12 @@
 use crate::core::types::{Level, TileLayout};
 use crate::error::WsiError;
-use crate::formats::zeiss::metadata::*;
-use crate::formats::zeiss::MAX_CZI_SCENES;
-use czi_rs::{
-    BoundingBoxes, ChannelInfo as CziChannelInfo, CompressionMode, Coordinate, Dimension,
-    DirectorySubBlockInfo, FileHeaderInfo, IntRect, IntSize, MetadataSummary, PixelType,
+use crate::formats::zeiss::container::{
+    BoundingBoxes, CompressionMode, Coordinate, Dimension, DirectorySubBlockInfo, FileHeaderInfo,
+    IntRect, IntSize, Interval, MetadataChannelInfo as CziChannelInfo, MetadataSummary, PixelType,
     SubBlockStatistics,
 };
+use crate::formats::zeiss::metadata::*;
+use crate::formats::zeiss::MAX_CZI_SCENES;
 use std::collections::BTreeSet;
 
 fn subblock(
@@ -310,9 +310,7 @@ fn default_plane_filter_excludes_other_z_c_t_coordinates() {
     let mut info = subblock(0, Some(0), IntRect::new(0, 0, 1, 1), IntSize { w: 1, h: 1 });
     let mut stats = SubBlockStatistics::default();
     for dim in [Dimension::Z, Dimension::C, Dimension::T] {
-        stats
-            .dim_bounds
-            .set(dim, czi_rs::Interval { start: 4, size: 2 });
+        stats.dim_bounds.set(dim, Interval { start: 4, size: 2 });
         info.coordinate.set(dim, 4);
         assert!(subblock_matches_default_plane(&info, &stats));
         info.coordinate.set(dim, 5);
@@ -322,7 +320,7 @@ fn default_plane_filter_excludes_other_z_c_t_coordinates() {
 }
 
 fn build_canvas_level_tile_subblocks(
-    subblocks: &[czi_rs::DirectorySubBlockInfo],
+    subblocks: &[DirectorySubBlockInfo],
     canvas_level_subblocks: &[Vec<usize>],
     levels: &[Level],
     subblock_origin: (i32, i32),

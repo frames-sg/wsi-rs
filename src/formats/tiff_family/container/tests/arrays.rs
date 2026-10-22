@@ -68,6 +68,46 @@ fn get_u64_array_cached_pointer_equality() {
 }
 
 #[test]
+fn get_u64_array_accepts_ifd_offset_types() {
+    let mut ifd8 = Vec::new();
+    ifd8.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+    ifd8.extend_from_slice(&6_000_000_000u64.to_le_bytes());
+    let bigtiff = make_bigtiff_single(
+        Endian::Little,
+        &[SyntheticEntry {
+            tag: tags::TILE_OFFSETS,
+            tiff_type: 18, // IFD8
+            count: 2,
+            inline_data: None,
+            out_of_line_data: Some(ifd8),
+        }],
+    );
+    let classic = make_classic_tiff_single(
+        Endian::Little,
+        &[SyntheticEntry {
+            tag: tags::TILE_OFFSETS,
+            tiff_type: 13, // IFD
+            count: 1,
+            inline_data: Some(300u32.to_le_bytes().to_vec()),
+            out_of_line_data: None,
+        }],
+    );
+
+    for (data, expected) in [
+        (bigtiff, vec![5_000_000_000, 6_000_000_000]),
+        (classic, vec![300]),
+    ] {
+        let tmp = write_tiff_tempfile(&data);
+        let container = TiffContainer::open(tmp.path()).unwrap();
+        let ifd_id = container.top_ifds()[0];
+        assert_eq!(
+            container.get_u64_array(ifd_id, tags::TILE_OFFSETS).unwrap(),
+            expected.as_slice()
+        );
+    }
+}
+
+#[test]
 fn get_u64_array_type_mismatch() {
     let entries = vec![SyntheticEntry {
         tag: tags::IMAGE_DESCRIPTION,

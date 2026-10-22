@@ -6,6 +6,10 @@
 
 ### Added
 
+- Reads single-file OME-TIFF. Pyramid levels come from each plane's SubIFDs;
+  channels, Z planes and time points follow the OME-XML `TiffData` mapping, and
+  `label`, `macro` and `thumbnail` images become associated images. Multi-file
+  datasets return an error.
 - Opt-in cooperative CPU and Metal JPEG 2000 batch decoding through
   `MetalBackendSessions::with_cooperative_cpu_workers`. Cloned sessions share
   one cooperative slot and fall back to ordinary Metal while it is busy.
@@ -16,6 +20,8 @@
 - Uses JXR 0.3.1, whose faster CPU entropy decoding and direct coefficient
   storage speed up JPEG XR tiles in Zeiss CZI slides and tiled TIFF files.
   Decoded pixels are unchanged.
+- TIFF files have their SubIFDs parsed when opened. A TIFF whose SubIFDs tag
+  points at an IFD that was already parsed, or outside the file, fails to open.
 
 ## [0.8.0] - 2026-10-06
 
@@ -75,7 +81,7 @@
 - Malformed DICOM file-meta headers using `SV` or `UV` no longer bypass length
   checks and trigger oversized allocations.
 
-## [0.7.0] - 2026-09-28
+## 0.7.0 (unpublished) - 2026-09-28
 
 ### Added
 
@@ -271,11 +277,10 @@ Speed and memory:
   size.
 - Reads check for cancellation around tile I/O and decoding.
 
-## [0.5.0] - 2026-07-14
+## [0.5.0] - 2026-07-15
 
 ### Changed
 
-- The crate is renamed from `statumen` to `wsi-rs`.
 - Requires the `j2k` 0.7.2 codec crates; the old `signinum-*` aliases are gone.
 - Metal outputs keep their GPU memory alive through `ResidentMetalImage`.
   Raw-buffer storage whose lifetime can't be checked is rejected.
@@ -290,8 +295,10 @@ Speed and memory:
   outside the slide's files. The shim installer rolls back cleanly when it
   fails.
 
-## [0.4.0] - 2026-05-27
+## [0.4.0] - 2026-06-20
 
+- First release under the `wsi-rs` name. Earlier versions were published as
+  `statumen` and are now yanked.
 - Public constructors and request builders check their inputs.
 
 ## [0.3.1] - 2026-05-26
@@ -325,17 +332,16 @@ Speed and memory:
 - First public release.
 
 [Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/frames-sg/wsi-rs/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.7.0
+[0.8.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/frames-sg/wsi-rs/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/frames-sg/wsi-rs/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/frames-sg/wsi-rs/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/frames-sg/wsi-rs/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/frames-sg/wsi-rs/compare/v0.1.5...v0.3.0
-[0.1.5]: https://github.com/frames-sg/wsi-rs/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/frames-sg/wsi-rs/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/frames-sg/wsi-rs/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/frames-sg/wsi-rs/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/frames-sg/wsi-rs/releases/tag/v0.1.1
+[0.5.0]: https://github.com/frames-sg/wsi-rs/compare/398dd681fc7c27b7020d9b35ae066c9ecbf127f2...v0.5.0
+[0.4.0]: https://github.com/frames-sg/wsi-rs/tree/398dd681fc7c27b7020d9b35ae066c9ecbf127f2
+[0.3.1]: https://docs.rs/statumen/0.3.1/statumen/
+[0.3.0]: https://docs.rs/statumen/0.3.0/statumen/
+[0.1.5]: https://docs.rs/statumen/0.1.5/statumen/
+[0.1.4]: https://docs.rs/statumen/0.1.4/statumen/
+[0.1.3]: https://docs.rs/statumen/0.1.3/statumen/
+[0.1.2]: https://docs.rs/statumen/0.1.2/statumen/
+[0.1.1]: https://docs.rs/statumen/0.1.1/statumen/

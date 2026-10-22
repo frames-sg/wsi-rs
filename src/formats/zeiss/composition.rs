@@ -10,7 +10,7 @@ use crate::core::execution_telemetry::{record, Event};
 impl ZeissSlide {
     pub(super) fn compose_subblocks(
         &self,
-        subblocks: &[czi_rs::DirectorySubBlockInfo],
+        subblocks: &[DirectorySubBlockInfo],
         size: (u32, u32),
         origin: (i32, i32),
         ratio: i32,
@@ -20,7 +20,7 @@ impl ZeissSlide {
 
     pub(super) fn compose_subblocks_with_sources(
         &self,
-        subblocks: &[czi_rs::DirectorySubBlockInfo],
+        subblocks: &[DirectorySubBlockInfo],
         size: (u32, u32),
         origin: (i32, i32),
         ratio: i32,
@@ -49,7 +49,7 @@ impl ZeissSlide {
             None
         } else {
             Some(
-                czi_rs::Bitmap::zeros(first.pixel_type, size.0, size.1)
+                Bitmap::zeros(first.pixel_type, size.0, size.1)
                     .map_err(|e| WsiError::DisplayConversion(e.to_string()))?,
             )
         };

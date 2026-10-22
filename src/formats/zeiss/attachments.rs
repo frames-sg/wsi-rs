@@ -16,7 +16,7 @@ pub(super) fn associated_name(name: &str) -> Option<&'static str> {
 }
 
 fn check_attachment_size(
-    attachment: &czi_rs::AttachmentInfo,
+    attachment: &AttachmentInfo,
     limits: crate::SlideLimits,
 ) -> Result<(), WsiError> {
     if attachment.data_size > limits.encoded_unit_bytes() {
@@ -30,8 +30,8 @@ fn check_attachment_size(
 }
 
 pub(super) fn decode_associated_attachment(
-    czi: &mut CziFile,
-    attachment: &czi_rs::AttachmentInfo,
+    czi: &mut CziContainer,
+    attachment: &AttachmentInfo,
     limits: crate::SlideLimits,
 ) -> Result<Option<(AssociatedImage, CpuTile)>, WsiError> {
     check_attachment_size(attachment, limits)?;
@@ -82,7 +82,7 @@ fn read_embedded_czi_blob(
 ) -> Result<(AssociatedImage, Option<CpuTile>), WsiError> {
     with_temporary_czi_blob(data, |temp_path| {
         preflight_czi_file_with_limits(temp_path, limits)?;
-        let mut embedded = CziFile::open(temp_path)
+        let mut embedded = CziContainer::open(temp_path)
             .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
         ensure_supported_embedded_czi(embedded.subblocks().iter().map(|info| info.compression))?;
         let plane_rect = embedded
@@ -125,7 +125,7 @@ fn ensure_supported_embedded_czi(
 }
 
 fn read_embedded_czi_plane(
-    embedded: &mut CziFile,
+    embedded: &mut CziContainer,
     plane_rect: IntRect,
     path: &Path,
     limits: crate::SlideLimits,
@@ -175,7 +175,7 @@ fn read_embedded_czi_plane(
             width as usize * height as usize,
         );
         Some(
-            czi_rs::Bitmap::zeros(pixel_type, width, height)
+            Bitmap::zeros(pixel_type, width, height)
                 .map_err(|source| WsiError::DisplayConversion(source.to_string()))?,
         )
     } else {
@@ -248,8 +248,8 @@ fn ensure_embedded_czi_plane_budget_with_limit(
 
 pub(super) fn probe_associated_attachment(
     path: &Path,
-    czi: &mut CziFile,
-    attachment: &czi_rs::AttachmentInfo,
+    czi: &mut CziContainer,
+    attachment: &AttachmentInfo,
     limits: crate::SlideLimits,
 ) -> Result<Option<AssociatedImage>, WsiError> {
     check_attachment_size(attachment, limits)?;
@@ -279,7 +279,7 @@ pub(super) fn probe_associated_attachment(
 
 fn read_attachment_prefix(
     path: &Path,
-    attachment: &czi_rs::AttachmentInfo,
+    attachment: &AttachmentInfo,
     max_bytes: u64,
 ) -> Result<Vec<u8>, WsiError> {
     let payload_offset = attachment

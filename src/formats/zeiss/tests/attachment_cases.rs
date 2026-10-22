@@ -2,6 +2,7 @@ use super::fixtures::main_fixture;
 use crate::formats::zeiss::attachments::{
     associated_name, decode_associated_attachment, guid_bytes, probe_associated_attachment,
 };
+use crate::formats::zeiss::container::CziContainer;
 
 #[test]
 fn associated_names_match_only_the_three_supported_zeiss_roles() {
@@ -34,7 +35,7 @@ fn guid_bytes_follow_czi_field_endianness_and_reject_malformed_values() {
 #[test]
 fn unknown_attachments_are_ignored_and_jpeg_probe_falls_back_to_decode() {
     let fixture = main_fixture();
-    let mut czi = czi_rs::CziFile::open(fixture.path()).expect("open fixture with attachments");
+    let mut czi = CziContainer::open(fixture.path()).expect("open fixture with attachments");
     let unknown = czi
         .attachments()
         .iter()
@@ -86,7 +87,7 @@ fn embedded_attachment_probe_preserves_typed_metadata_without_composing_pixels()
             }],
             &metadata_xml(1, 1),
         );
-        let mut czi = czi_rs::CziFile::open(fixture.path()).unwrap();
+        let mut czi = CziContainer::open(fixture.path()).unwrap();
         let attachment = czi.attachments()[0].clone();
         let (expected, pixels) =
             decode_associated_attachment(&mut czi, &attachment, crate::SlideLimits::default())
@@ -148,7 +149,7 @@ fn embedded_attachment_probe_keeps_payload_and_pixel_contract_errors() {
             }],
             &metadata_xml(1, 1),
         );
-        let mut czi = czi_rs::CziFile::open(fixture.path()).unwrap();
+        let mut czi = CziContainer::open(fixture.path()).unwrap();
         let attachment = czi.attachments()[0].clone();
         let expected =
             decode_associated_attachment(&mut czi, &attachment, crate::SlideLimits::default())

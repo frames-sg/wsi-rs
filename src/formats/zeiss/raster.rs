@@ -12,8 +12,8 @@ pub(super) fn rgb_u8_tile(width: u32, height: u32, data: Vec<u8>) -> Result<CpuT
 }
 
 pub(super) fn blit_tile(
-    destination: &mut czi_rs::Bitmap,
-    source: &czi_rs::Bitmap,
+    destination: &mut Bitmap,
+    source: &Bitmap,
     offset_x: i32,
     offset_y: i32,
 ) -> Result<(), WsiError> {
@@ -119,7 +119,7 @@ pub(super) fn blit_raw_uncompressed_rgb_subblock(
     destination: &mut [u8],
     dest_width: u32,
     dest_height: u32,
-    raw: &czi_rs::RawSubBlock,
+    raw: &RawSubBlock,
     offset_x: i32,
     offset_y: i32,
 ) -> Result<(), WsiError> {
@@ -215,7 +215,7 @@ pub(super) fn blit_raw_uncompressed_rgb_subblock(
     Ok(())
 }
 
-pub(super) fn bitmap_to_sample_buffer(bitmap: czi_rs::Bitmap) -> Result<CpuTile, WsiError> {
+pub(super) fn bitmap_to_sample_buffer(bitmap: Bitmap) -> Result<CpuTile, WsiError> {
     match bitmap.pixel_type {
         CziPixelType::Bgr24 => {
             let mut rgb = Vec::with_capacity(bitmap.data.len());

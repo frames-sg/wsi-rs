@@ -75,8 +75,8 @@ fn precreated_symlink_cannot_redirect_temporary_attachment_write() {
 
 #[test]
 fn attachment_prefix_read_reports_offset_open_and_truncation_failures() {
-    fn attachment(file_position: u64) -> czi_rs::AttachmentInfo {
-        czi_rs::AttachmentInfo {
+    fn attachment(file_position: u64) -> AttachmentInfo {
+        AttachmentInfo {
             index: 0,
             file_position,
             file_part: 0,

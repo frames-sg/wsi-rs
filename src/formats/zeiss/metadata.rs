@@ -5,7 +5,7 @@ pub(super) type CanvasTileSubblockMap = StdHashMap<(i64, i64), Vec<usize>>;
 
 const DEFAULT_TILE_PX: u32 = 256;
 
-pub(super) fn build_channels(summary: &czi_rs::MetadataSummary) -> Vec<ChannelInfo> {
+pub(super) fn build_channels(summary: &MetadataSummary) -> Vec<ChannelInfo> {
     summary
         .channels
         .first()
@@ -37,8 +37,8 @@ fn parse_channel_color(value: &str) -> Option<[u8; 3]> {
 }
 
 pub(super) fn scene_indices(
-    statistics: &czi_rs::SubBlockStatistics,
-    summary: &czi_rs::MetadataSummary,
+    statistics: &SubBlockStatistics,
+    summary: &MetadataSummary,
 ) -> Result<Vec<usize>, WsiError> {
     let mut indices = BTreeSet::new();
     for scene in statistics.scene_bounding_boxes.keys().copied() {
@@ -78,7 +78,7 @@ pub(super) fn scene_indices(
 
 pub(super) fn scene_slot_for_subblock(
     scene_coords: &[usize],
-    subblock: &czi_rs::DirectorySubBlockInfo,
+    subblock: &DirectorySubBlockInfo,
 ) -> Option<usize> {
     match subblock.coordinate.get(CziDimension::S) {
         Some(scene) if scene >= 0 => scene_coords
@@ -91,8 +91,8 @@ pub(super) fn scene_slot_for_subblock(
 }
 
 pub(super) fn subblock_matches_default_plane(
-    subblock: &czi_rs::DirectorySubBlockInfo,
-    statistics: &czi_rs::SubBlockStatistics,
+    subblock: &DirectorySubBlockInfo,
+    statistics: &SubBlockStatistics,
 ) -> bool {
     CziDimension::FRAME_ORDER
         .into_iter()
@@ -107,8 +107,8 @@ pub(super) fn subblock_matches_default_plane(
 }
 
 pub(super) fn canvas_dimensions(
-    statistics: &czi_rs::SubBlockStatistics,
-    summary: &czi_rs::MetadataSummary,
+    statistics: &SubBlockStatistics,
+    summary: &MetadataSummary,
     path: &Path,
 ) -> Result<(u64, u64), WsiError> {
     let w = summary
@@ -159,7 +159,7 @@ pub(super) fn canvas_dimensions(
     Err(invalid_slide(path, "missing Zeiss canvas dimensions"))
 }
 
-pub(super) fn canvas_origin(statistics: &czi_rs::SubBlockStatistics) -> (i32, i32) {
+pub(super) fn canvas_origin(statistics: &SubBlockStatistics) -> (i32, i32) {
     let mut min_x = 0i32;
     let mut min_y = 0i32;
     let mut seen = false;
@@ -183,16 +183,16 @@ pub(super) fn canvas_origin(statistics: &czi_rs::SubBlockStatistics) -> (i32, i3
     (min_x, min_y)
 }
 
-pub(super) fn subblock_origin(subblocks: &[czi_rs::DirectorySubBlockInfo]) -> (i32, i32) {
+pub(super) fn subblock_origin(subblocks: &[DirectorySubBlockInfo]) -> (i32, i32) {
     let min_x = subblocks.iter().map(|info| info.rect.x).min().unwrap_or(0);
     let min_y = subblocks.iter().map(|info| info.rect.y).min().unwrap_or(0);
     (min_x, min_y)
 }
 
 pub(super) fn common_level_ratios(
-    subblocks: &[czi_rs::DirectorySubBlockInfo],
+    subblocks: &[DirectorySubBlockInfo],
     scene_indices: &[usize],
-    statistics: &czi_rs::SubBlockStatistics,
+    statistics: &SubBlockStatistics,
 ) -> Result<Vec<u32>, WsiError> {
     let mut scene_sets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); scene_indices.len()];
     for sb in subblocks {
@@ -231,7 +231,7 @@ pub(super) fn common_level_ratios(
 }
 
 pub(super) fn build_canvas_level_tile_subblocks_with_budget(
-    subblocks: &[czi_rs::DirectorySubBlockInfo],
+    subblocks: &[DirectorySubBlockInfo],
     canvas_level_subblocks: &[Vec<usize>],
     levels: &[Level],
     subblock_origin: (i32, i32),
@@ -304,7 +304,7 @@ pub(super) fn build_canvas_level_tile_subblocks_with_budget(
     Ok(out)
 }
 
-pub(super) fn subblock_ratio(subblock: &czi_rs::DirectorySubBlockInfo) -> Option<u32> {
+pub(super) fn subblock_ratio(subblock: &DirectorySubBlockInfo) -> Option<u32> {
     if subblock.rect.w <= 0
         || subblock.rect.h <= 0
         || subblock.stored_size.w == 0
@@ -342,10 +342,7 @@ pub(super) fn build_levels((width, height): (u64, u64), ratios: &[u32]) -> Vec<L
         .collect()
 }
 
-pub(super) fn quickhash_for_zeiss(
-    header: &czi_rs::FileHeaderInfo,
-    xml: &str,
-) -> Result<String, WsiError> {
+pub(super) fn quickhash_for_zeiss(header: &FileHeaderInfo, xml: &str) -> Result<String, WsiError> {
     let mut quickhash = Quickhash1::new();
     quickhash.update(&guid_bytes(&header.primary_file_guid)?);
     quickhash.update(&guid_bytes(&header.file_guid)?);

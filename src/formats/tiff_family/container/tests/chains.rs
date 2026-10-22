@@ -155,4 +155,51 @@ fn ifd_by_id_not_found() {
     ));
 }
 
+#[test]
+fn sub_ifds_are_parsed_beside_the_main_chain() {
+    use crate::formats::tiff_family::test_support::{build_tiff_tree, SyntheticIfd, SyntheticTag};
+
+    let ifd = |width| vec![SyntheticTag::long(tags::IMAGE_WIDTH, width)];
+    let tmp = build_tiff_tree(&[
+        SyntheticIfd {
+            tags: ifd(400),
+            sub_ifds: vec![ifd(200), ifd(100)],
+        },
+        SyntheticIfd {
+            tags: ifd(50),
+            sub_ifds: Vec::new(),
+        },
+    ]);
+    let container = TiffContainer::open(tmp.path()).unwrap();
+
+    assert_eq!(container.top_ifds().len(), 2);
+    assert_eq!(container.ifd_count(), 4);
+    let [first, second] = container.top_ifds() else {
+        panic!("expected two top-level IFDs");
+    };
+    let widths = container
+        .sub_ifds(*first)
+        .iter()
+        .map(|&child| container.get_u64(child, tags::IMAGE_WIDTH).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(widths, [200, 100]);
+    assert!(container.sub_ifds(*second).is_empty());
+    assert_eq!(container.get_u64(*second, tags::IMAGE_WIDTH).unwrap(), 50);
+}
+
+#[test]
+fn sub_ifd_pointing_at_a_parsed_ifd_is_rejected() {
+    use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
+
+    // build_tiff writes the only IFD right after the 8-byte header.
+    let tmp = build_tiff(&[vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, 1),
+        SyntheticTag::long(tags::SUB_IFDS, 8),
+    ]]);
+    match TiffContainer::open(tmp.path()).unwrap_err() {
+        TiffParseError::Structure(msg) => assert!(msg.contains("already parsed"), "got: {msg}"),
+        other => panic!("expected Structure, got: {other:?}"),
+    }
+}
+
 // ── NDPI offset fixup tests ───────────────────────────────

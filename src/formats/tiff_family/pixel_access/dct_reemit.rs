@@ -74,6 +74,16 @@ pub(super) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>,
             ),
         });
     }
+    let color_transform = match (component_count, image.color_space) {
+        (1, j2k_jpeg::ColorSpace::Grayscale) => None,
+        (3, j2k_jpeg::ColorSpace::Rgb) => Some(0),
+        (3, j2k_jpeg::ColorSpace::YCbCr) => Some(1),
+        _ => {
+            return Err(WsiError::Unsupported {
+                reason: "DCT JPEG re-emission has inconsistent color components".into(),
+            });
+        }
+    };
 
     let max_h = image
         .components
@@ -145,7 +155,21 @@ pub(super) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>,
         options,
         JpegBackend::Cpu,
     )
-    .map(|encoded| encoded.data)
+    .map(|encoded| {
+        let mut data = encoded.data;
+        if let Some(transform) = color_transform {
+            // Re-emission writes numeric component IDs and drops source APP
+            // markers. Preserve the resolved component semantics explicitly,
+            // including 4:4:4 YCbCr, whose sampling alone is ambiguous.
+            data.splice(
+                2..2,
+                [
+                    0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, transform,
+                ],
+            );
+        }
+        data
+    })
     .map_err(|err| WsiError::Jpeg(format!("DCT JPEG frame assembly failed: {err}")))
 }
 

@@ -228,7 +228,7 @@ fn corpus_alias_selected(alias: &str) -> bool {
 /// Explicit lanes for fixtures and hardware excluded from quick correctness runs.
 pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
     let [suite] = arguments.as_slice() else {
-        return Err("usage: cargo xtask conformance-test <czi|vendor|zvi-variants|vmu|openslide|metal-color|metal-edges|local-htj2k|legacy-slides>".into());
+        return Err("usage: cargo xtask conformance-test <czi|vendor|zvi-variants|vmu|openslide|metal-color|metal-edges|local-htj2k|legacy-slides|ome-tiff>".into());
     };
     match suite.as_str() {
         "czi" => {
@@ -292,6 +292,12 @@ pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
             }
             Ok(())
         }
+        "ome-tiff" => run_ignored(
+            &["--lib"],
+            "opens_ome_tiff_sub_ifd_pyramid_when_corpus_is_available",
+            None,
+            false,
+        ),
         _ => Err(format!("unknown conformance suite `{suite}`")),
     }
 }

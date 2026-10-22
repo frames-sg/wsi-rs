@@ -4,22 +4,22 @@ use super::super::preflight::preflight_czi_file_with_limits;
 use super::super::*;
 
 struct ValidatedCzi {
-    czi: CziFile,
+    czi: CziContainer,
     preflight_file: File,
     source_identity: FileIdentity,
-    header: czi_rs::FileHeaderInfo,
+    header: FileHeaderInfo,
     xml: String,
-    summary: czi_rs::MetadataSummary,
-    statistics: czi_rs::SubBlockStatistics,
-    attachments: Vec<czi_rs::AttachmentInfo>,
-    subblocks: Vec<czi_rs::DirectorySubBlockInfo>,
+    summary: MetadataSummary,
+    statistics: SubBlockStatistics,
+    attachments: Vec<AttachmentInfo>,
+    subblocks: Vec<DirectorySubBlockInfo>,
 }
 
 struct CziDatasetParts {
-    czi: CziFile,
+    czi: CziContainer,
     preflight_file: File,
     source_identity: FileIdentity,
-    attachments: Vec<czi_rs::AttachmentInfo>,
+    attachments: Vec<AttachmentInfo>,
     dataset_id: DatasetId,
     scenes: Vec<Scene>,
     properties: Properties,
@@ -30,7 +30,7 @@ struct CziDatasetParts {
 
 struct CziAssociatedImages {
     metadata: HashMap<String, AssociatedImage>,
-    sources: HashMap<String, czi_rs::AttachmentInfo>,
+    sources: HashMap<String, AttachmentInfo>,
 }
 
 impl ZeissSlide {
@@ -73,8 +73,8 @@ fn open_and_validate_czi(
             "CZI source identity changed before subblock preflight",
         ));
     }
-    let mut czi =
-        CziFile::open(path).map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+    let mut czi = CziContainer::open(path)
+        .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
     if FileIdentity::from_path(path)? != source_identity {
         return Err(invalid_slide(
             path,
@@ -306,9 +306,9 @@ fn build_dataset_parts(
 }
 
 fn build_properties(
-    summary: &mut czi_rs::MetadataSummary,
+    summary: &mut MetadataSummary,
     xml: &str,
-    statistics: &czi_rs::SubBlockStatistics,
+    statistics: &SubBlockStatistics,
     scene_indices: &[usize],
     canvas_origin: (i32, i32),
     quickhash: &str,
@@ -380,8 +380,8 @@ fn build_properties(
 
 fn probe_associated_images(
     path: &Path,
-    czi: &mut CziFile,
-    attachments: &[czi_rs::AttachmentInfo],
+    czi: &mut CziContainer,
+    attachments: &[AttachmentInfo],
     limits: crate::SlideLimits,
 ) -> Result<CziAssociatedImages, WsiError> {
     let mut associated_images = HashMap::new();

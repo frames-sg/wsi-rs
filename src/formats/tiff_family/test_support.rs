@@ -22,6 +22,9 @@ pub(crate) struct SyntheticTag {
     count: u32,
     inline_value: [u8; 4],
     ool_data: Option<Vec<u8>>,
+    /// Payloads `build_tiff_tree` writes into the file; the tag's values are
+    /// their offsets.
+    blobs: Vec<Vec<u8>>,
 }
 
 impl SyntheticTag {
@@ -32,6 +35,7 @@ impl SyntheticTag {
             count: 1,
             inline_value: value.to_le_bytes(),
             ool_data: None,
+            blobs: Vec::new(),
         }
     }
 
@@ -53,6 +57,7 @@ impl SyntheticTag {
             count: values.len() as u32,
             inline_value,
             ool_data,
+            blobs: Vec::new(),
         }
     }
 
@@ -65,6 +70,7 @@ impl SyntheticTag {
             count: 1,
             inline_value,
             ool_data: None,
+            blobs: Vec::new(),
         }
     }
 
@@ -77,6 +83,7 @@ impl SyntheticTag {
             count: data.len() as u32,
             inline_value: [0; 4],
             ool_data: Some(data),
+            blobs: Vec::new(),
         }
     }
 
@@ -95,11 +102,138 @@ impl SyntheticTag {
             count,
             inline_value,
             ool_data,
+            blobs: Vec::new(),
+        }
+    }
+
+    /// LONG array holding the file offsets of `blobs`, which
+    /// `build_tiff_tree` writes into the file. Use for tile or strip offsets.
+    pub(crate) fn blob_offsets(tag: u16, blobs: Vec<Vec<u8>>) -> Self {
+        Self {
+            tag,
+            tiff_type: 4,
+            count: blobs.len() as u32,
+            inline_value: [0; 4],
+            ool_data: None,
+            blobs,
+        }
+    }
+
+    fn ifd_offsets(tag: u16, offsets: &[u32]) -> Self {
+        Self {
+            tiff_type: 13,
+            ..Self::long_array(tag, offsets)
         }
     }
 }
 
+/// A top-level IFD for `build_tiff_tree` and the SubIFDs written beneath it.
+pub(crate) struct SyntheticIfd {
+    pub(crate) tags: Vec<SyntheticTag>,
+    pub(crate) sub_ifds: Vec<Vec<SyntheticTag>>,
+}
+
+/// Build a little-endian classic TIFF whose top-level IFDs may carry SubIFDs
+/// (tag 330, type IFD). All IFDs come first; out-of-line values and blobs follow.
+pub(crate) fn build_tiff_tree(ifds: &[SyntheticIfd]) -> NamedTempFile {
+    const HEADER_LEN: u32 = 8;
+    let ifd_len = |tag_count: usize| 2 + 12 * tag_count as u32 + 4;
+
+    let mut offset = HEADER_LEN;
+    let mut top_offsets = Vec::new();
+    let mut sub_offsets = Vec::new();
+    for ifd in ifds {
+        top_offsets.push(offset);
+        offset += ifd_len(ifd.tags.len() + usize::from(!ifd.sub_ifds.is_empty()));
+        let mut subs = Vec::new();
+        for sub in &ifd.sub_ifds {
+            subs.push(offset);
+            offset += ifd_len(sub.len());
+        }
+        sub_offsets.push(subs);
+    }
+    let data_start = offset;
+
+    let mut ifd_bytes = Vec::new();
+    let mut data = Vec::new();
+    for (index, ifd) in ifds.iter().enumerate() {
+        let sub_tag = (!ifd.sub_ifds.is_empty()).then(|| {
+            SyntheticTag::ifd_offsets(
+                crate::formats::tiff_family::container::tags::SUB_IFDS,
+                &sub_offsets[index],
+            )
+        });
+        let next = top_offsets.get(index + 1).copied().unwrap_or(0);
+        let tags = ifd.tags.iter().chain(sub_tag.as_ref()).collect();
+        write_tree_ifd(&mut ifd_bytes, &mut data, data_start, tags, next);
+        for sub in &ifd.sub_ifds {
+            write_tree_ifd(
+                &mut ifd_bytes,
+                &mut data,
+                data_start,
+                sub.iter().collect(),
+                0,
+            );
+        }
+    }
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&42u16.to_le_bytes());
+    buf.extend_from_slice(&top_offsets.first().copied().unwrap_or(0).to_le_bytes());
+    buf.extend_from_slice(&ifd_bytes);
+    assert_eq!(buf.len() as u32, data_start);
+    buf.extend_from_slice(&data);
+
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(&buf).unwrap();
+    file.flush().unwrap();
+    file
+}
+
+fn write_tree_ifd(
+    out: &mut Vec<u8>,
+    data: &mut Vec<u8>,
+    data_start: u32,
+    mut tags: Vec<&SyntheticTag>,
+    next: u32,
+) {
+    tags.sort_by_key(|tag| tag.tag);
+    out.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+    for tag in tags {
+        let mut inline_value = tag.inline_value;
+        let mut ool_data = tag.ool_data.clone();
+        if !tag.blobs.is_empty() {
+            let mut offsets = Vec::new();
+            for blob in &tag.blobs {
+                offsets.extend_from_slice(&(data_start + data.len() as u32).to_le_bytes());
+                data.extend_from_slice(blob);
+            }
+            if offsets.len() <= inline_value.len() {
+                inline_value[..offsets.len()].copy_from_slice(&offsets);
+            } else {
+                ool_data = Some(offsets);
+            }
+        }
+        out.extend_from_slice(&tag.tag.to_le_bytes());
+        out.extend_from_slice(&tag.tiff_type.to_le_bytes());
+        out.extend_from_slice(&tag.count.to_le_bytes());
+        match ool_data {
+            Some(bytes) => {
+                out.extend_from_slice(&(data_start + data.len() as u32).to_le_bytes());
+                data.extend_from_slice(&bytes);
+            }
+            None => out.extend_from_slice(&inline_value),
+        }
+    }
+    out.extend_from_slice(&next.to_le_bytes());
+}
+
 pub(crate) fn build_tiff(ifds: &[Vec<SyntheticTag>]) -> NamedTempFile {
+    assert!(
+        ifds.iter().flatten().all(|tag| tag.blobs.is_empty()),
+        "blob offsets need build_tiff_tree"
+    );
     let mut buf = Vec::new();
     buf.extend_from_slice(b"II");
     buf.extend_from_slice(&42u16.to_le_bytes());

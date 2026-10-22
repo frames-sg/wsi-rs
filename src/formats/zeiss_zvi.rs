@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cfb::CompoundFile;
-use flate2::read::ZlibDecoder;
 use image::ImageFormat;
 
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
