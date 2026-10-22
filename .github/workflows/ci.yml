@@ -97,7 +97,7 @@ jobs:
           toolchain: "1.99.0"
       - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
         with:
-          tool: cargo-public-api@0.52.0,cargo-semver-checks@0.50.0
+          tool: cargo-public-api@0.52.0,cargo-semver-checks@0.51.0
       - run: cargo xtask api-check
         working-directory: wsi-rs
 
