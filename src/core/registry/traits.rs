@@ -270,9 +270,16 @@ pub trait SlideReader: Send + Sync {
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         Err(WsiError::AssociatedImageNotFound(name.into()))
     }
+    /// Whether a source tile contains acquired pixels, without decoding it.
+    /// `None` means the format cannot establish presence from its metadata.
+    /// Pixel color, including black, is never evidence that a tile is absent.
+    fn tile_is_present(&self, _req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        Ok(None)
+    }
+
     /// How the named associated image is stored, when the format reports it.
-    fn associated_encoding(&self, _name: &str) -> Option<SourceEncoding> {
-        None
+    fn associated_encoding(&self, _name: &str) -> Result<Option<SourceEncoding>, WsiError> {
+        Ok(None)
     }
     /// How one level's pixels are stored, when the format reports a single
     /// codec for the level without exposing raw tiles.
@@ -281,8 +288,8 @@ pub trait SlideReader: Send + Sync {
         _scene: SceneId,
         _series: SeriesId,
         _level: LevelIdx,
-    ) -> Option<SourceEncoding> {
-        None
+    ) -> Result<Option<SourceEncoding>, WsiError> {
+        Ok(None)
     }
 }
 
@@ -484,8 +491,12 @@ impl SlideReader for ConservativeManagedReader {
         self.inner.read_associated(name)
     }
 
-    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         self.inner.associated_encoding(name)
+    }
+
+    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        self.inner.tile_is_present(req)
     }
 
     fn level_encoding(
@@ -493,7 +504,7 @@ impl SlideReader for ConservativeManagedReader {
         scene: SceneId,
         series: SeriesId,
         level: LevelIdx,
-    ) -> Option<SourceEncoding> {
+    ) -> Result<Option<SourceEncoding>, WsiError> {
         self.inner.level_encoding(scene, series, level)
     }
 }

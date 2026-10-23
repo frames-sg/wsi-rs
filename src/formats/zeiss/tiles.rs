@@ -68,14 +68,28 @@ impl ZeissSlide {
         let Some([index]) = candidate_indices.map(Vec::as_slice) else {
             return Ok(None);
         };
-        let info = {
-            let czi = self.czi.lock().unwrap_or_else(|error| error.into_inner());
-            czi.subblocks().get(*index).cloned().ok_or_else(|| {
-                WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
-            })?
-        };
+        let czi = self.czi.lock().unwrap_or_else(|error| error.into_inner());
+        let info = czi.subblocks().get(*index).ok_or_else(|| {
+            WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
+        })?;
+        Ok(self
+            .subblock_is_exact_tile(info, level, tile_width, tile_height, req.col, req.row)
+            .then(|| info.clone()))
+    }
+
+    /// Whether `info` is one classic-JPEG subblock covering tile (`col`, `row`)
+    /// of `level` exactly, so its bytes can be served as that tile.
+    pub(super) fn subblock_is_exact_tile(
+        &self,
+        info: &DirectorySubBlockInfo,
+        level: &Level,
+        tile_width: u32,
+        tile_height: u32,
+        col: i64,
+        row: i64,
+    ) -> bool {
         if info.compression != CziCompressionMode::Jpg {
-            return Ok(None);
+            return false;
         }
 
         let downsample = level.downsample;
@@ -84,13 +98,13 @@ impl ZeissSlide {
             || downsample > i64::MAX as f64
             || downsample.fract() != 0.0
         {
-            return Ok(None);
+            return false;
         }
         let ratio = downsample as i64;
-        let tile_x = req.col.checked_mul(i64::from(tile_width));
-        let tile_y = req.row.checked_mul(i64::from(tile_height));
+        let tile_x = col.checked_mul(i64::from(tile_width));
+        let tile_y = row.checked_mul(i64::from(tile_height));
         let Some((tile_x, tile_y)) = tile_x.zip(tile_y) else {
-            return Ok(None);
+            return false;
         };
         let tile_w = level
             .dimensions
@@ -114,17 +128,12 @@ impl ZeissSlide {
         let expected_rect_h = i64::try_from(tile_h)
             .ok()
             .and_then(|height| height.checked_mul(ratio));
-        if expected_x != Some(i64::from(info.rect.x))
-            || expected_y != Some(i64::from(info.rect.y))
-            || expected_rect_w != Some(i64::from(info.rect.w))
-            || expected_rect_h != Some(i64::from(info.rect.h))
-            || u64::from(info.stored_size.w) != tile_w
-            || u64::from(info.stored_size.h) != tile_h
-        {
-            return Ok(None);
-        }
-
-        Ok(Some(info))
+        expected_x == Some(i64::from(info.rect.x))
+            && expected_y == Some(i64::from(info.rect.y))
+            && expected_rect_w == Some(i64::from(info.rect.w))
+            && expected_rect_h == Some(i64::from(info.rect.h))
+            && u64::from(info.stored_size.w) == tile_w
+            && u64::from(info.stored_size.h) == tile_h
     }
 
     pub(super) fn read_raw_jpeg_tile(

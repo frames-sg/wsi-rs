@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn tile_presence_distinguishes_missing_payload_from_acquired_black_pixels() {
+    let tiles = [Vec::new(), encode_solid_rgb_jpeg(8, 8, [0, 0, 0])];
+    let reader = build_tiled_jpeg_reader(16, 8, 8, 8, &tiles);
+    assert_eq!(
+        reader
+            .tile_is_present(&TileRequest::new(0, 0, 0, 0, 0))
+            .unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        reader
+            .tile_is_present(&TileRequest::new(0, 0, 0, 1, 0))
+            .unwrap(),
+        Some(true)
+    );
+    assert!(reader
+        .tile_is_present(&TileRequest::new(0, 0, 0, 2, 0))
+        .is_err());
+}
+
+#[test]
 fn tiled_input_bounds_account_for_every_encoded_payload_and_duplicate() {
     use crate::core::registry::ManagedSlideReader;
     let tiles = [

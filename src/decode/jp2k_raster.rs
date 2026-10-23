@@ -12,7 +12,7 @@ struct YcbcrTables {
     blue_from_cb: [i16; CHROMA_VALUES],
 }
 
-const fn round_ratio(numerator: i64, denominator: i64) -> i64 {
+pub(crate) const fn round_ratio(numerator: i64, denominator: i64) -> i64 {
     if numerator >= 0 {
         (numerator + denominator / 2) / denominator
     } else {

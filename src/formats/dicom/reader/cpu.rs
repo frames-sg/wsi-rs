@@ -15,8 +15,9 @@ use super::batch_plan::{
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::{
-    crop_or_keep_sample_buffer_rgb, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
-    dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
+    crop_or_keep_sample_buffer_rgb, decode_dicom_jp2k_u16, decode_dicom_jpeg_batch,
+    decode_rle_lossless_frame, dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr,
+    validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::metadata::DicomBitDepth;
 use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
@@ -85,37 +86,53 @@ impl DicomReader {
 
         let jpeg_jobs =
             attach_encapsulated_frame_bytes(jpeg_metas, false, control, DicomFrameBatchKind::Cpu)?;
-        // Pyramid levels share one precision, so one of these groups is empty.
-        let (jpeg12_jobs, jpeg8_jobs) = jpeg_jobs
-            .into_iter()
-            .partition::<Vec<_>, _>(|(meta, _)| meta.image.bit_depth == DicomBitDepth::Twelve);
-        for (bit_depth, jobs) in [
-            (DicomBitDepth::Eight, jpeg8_jobs),
-            (DicomBitDepth::Twelve, jpeg12_jobs),
-        ] {
-            if !jobs.is_empty() {
-                decode_jpeg_frames_into(bit_depth, jobs, control, &mut results)?;
-            }
+        // Pyramid levels share one precision, so the whole batch has one output type.
+        if let Some(bit_depth) = jpeg_jobs.first().map(|(meta, _)| meta.image.bit_depth) {
+            decode_jpeg_frames_into(bit_depth, jpeg_jobs, control, &mut results)?;
         }
 
         let jp2k_jobs =
             attach_encapsulated_frame_bytes(jp2k_metas, false, control, DicomFrameBatchKind::Cpu)?;
-        let jp2k_decode_jobs = jp2k_jobs
-            .iter()
-            .map(|(meta, bytes)| Jp2kDecodeJob {
-                data: Cow::Borrowed(bytes.as_slice()),
-                expected_width: meta.image.tile_width,
-                expected_height: meta.image.tile_height,
-                rgb_color_space: !jp2k_photometric_is_ycbcr(
-                    meta.image.photometric_interpretation.as_str(),
-                ),
-                backend,
-            })
-            .collect::<Vec<_>>();
         check_read_control(control)?;
+        let jp2k_decoded = if jp2k_jobs
+            .first()
+            .is_some_and(|(meta, _)| matches!(meta.image.bit_depth, DicomBitDepth::Uint16 { .. }))
+        {
+            crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+                use rayon::prelude::*;
+                jp2k_jobs
+                    .par_iter()
+                    .map(|(meta, bytes)| {
+                        decode_dicom_jp2k_u16(
+                            bytes.as_slice(),
+                            meta.image.tile_width,
+                            meta.image.tile_height,
+                            meta.image.samples_per_pixel,
+                            &meta.image.photometric_interpretation,
+                            meta.image.bit_depth.bits_stored(),
+                            j2k::CpuDecodeParallelism::Serial,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            let jp2k_decode_jobs = jp2k_jobs
+                .iter()
+                .map(|(meta, bytes)| Jp2kDecodeJob {
+                    data: Cow::Borrowed(bytes.as_slice()),
+                    expected_width: meta.image.tile_width,
+                    expected_height: meta.image.tile_height,
+                    rgb_color_space: !jp2k_photometric_is_ycbcr(
+                        meta.image.photometric_interpretation.as_str(),
+                    ),
+                    backend,
+                })
+                .collect::<Vec<_>>();
+            decode_batch_jp2k(&jp2k_decode_jobs)
+        };
         let jp2k_decoded = crate::core::batch::expect_exact_count(
-            decode_batch_jp2k(&jp2k_decode_jobs),
-            jp2k_decode_jobs.len(),
+            jp2k_decoded,
+            jp2k_jobs.len(),
             "DICOM JP2K batch decode",
         )?;
         check_read_control(control)?;
@@ -147,6 +164,7 @@ impl DicomReader {
                 meta.image.tile_height,
                 meta.image.samples_per_pixel,
                 &meta.image.photometric_interpretation,
+                meta.image.bit_depth,
             )
             .map_err(|err| WsiError::TileRead {
                 col: meta.req.col,

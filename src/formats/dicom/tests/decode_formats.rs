@@ -141,6 +141,59 @@ fn opens_explicit_vr_big_endian_native_rgb_8bit() {
 }
 
 #[test]
+fn opens_explicit_vr_big_endian_native_rgb_16bit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big-endian16.dcm");
+    let samples = [
+        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
+        0x3536,
+    ];
+    let pixels = samples
+        .iter()
+        .flat_map(|sample| sample.to_be_bytes())
+        .collect();
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX,
+            ..TestDicomOptions::uint16(TestPixelData::Native(pixels))
+        },
+    );
+
+    assert_eq!(
+        read_first_tile(&path).data.as_u16(),
+        Some(samples.as_slice())
+    );
+}
+
+#[test]
+fn native_twelve_bit_words_clear_unused_high_bits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native12.dcm");
+    let stored = [
+        0xf102_u16, 0xe304, 0xd506, 0xc112, 0xb314, 0xa516, 0x9122, 0x8324, 0x7526, 0x6132, 0x5334,
+        0x4536,
+    ];
+    let expected = stored.map(|sample| sample & 0x0fff);
+    let pixels = le_words(&stored);
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            bits_allocated: 16,
+            bits_stored: 12,
+            high_bit: 11,
+            pixel_data: TestPixelData::Native(pixels),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+
+    assert_eq!(
+        read_first_tile(&path).data.as_u16(),
+        Some(expected.as_slice())
+    );
+}
+
+#[test]
 fn converts_planar_rgb_native_frames_to_interleaved_rgb() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("planar.dcm");
@@ -269,13 +322,271 @@ fn decodes_rle_lossless_rgb_frame() {
 }
 
 #[test]
+fn decodes_sixteen_bit_rle_lossless_rgb_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rle16.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::RLE_LOSSLESS,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(1),
+            bits_allocated: 16,
+            bits_stored: 16,
+            high_bit: 15,
+            pixel_data: TestPixelData::Encapsulated(rle_rgb16_frame(
+                &[0x0102, 0x1112, 0x2122, 0x3132],
+                &[0x0304, 0x1314, 0x2324, 0x3334],
+                &[0x0506, 0x1516, 0x2526, 0x3536],
+            )),
+            ..TestDicomOptions::native(Vec::new())
+        },
+    );
+
+    let tile = read_first_tile(&path);
+    assert_eq!(
+        tile.data.as_u16().unwrap(),
+        [
+            0x0102, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
+            0x3536,
+        ]
+    );
+}
+
+#[test]
+fn decodes_sixteen_bit_jpeg2000_rgb_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jp2k16.dcm");
+    let samples = [
+        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
+        0x3536,
+    ];
+    let pixels = le_words(&samples);
+    let codestream = j2k_native::encode(
+        &pixels,
+        2,
+        2,
+        3,
+        16,
+        false,
+        &j2k_native::EncodeOptions {
+            reversible: true,
+            num_decomposition_levels: 0,
+            ..Default::default()
+        },
+    )
+    .expect("encode 16-bit JPEG 2000 fixture");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::JPEG2000_LOSSLESS,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            total_pixel_matrix_columns: 4,
+            number_of_frames: 2,
+            ..TestDicomOptions::uint16(TestPixelData::EncapsulatedFrames(vec![
+                codestream.clone(),
+                codestream,
+            ]))
+        },
+    );
+
+    let slide = Slide::open(&path).expect("open 16-bit JPEG 2000 DICOM");
+    let tiles = slide
+        .read_tiles(&[
+            TileRequest::new(0usize, 0usize, 0u32, 1, 0),
+            TileRequest::new(0usize, 0usize, 0u32, 0, 0),
+        ])
+        .expect("read 16-bit JPEG 2000 batch");
+    for tile in tiles {
+        assert_eq!(tile.data.as_u16(), Some(samples.as_slice()));
+    }
+}
+
+#[test]
+fn decodes_sixteen_bit_lossless_jpeg_rgb_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jpeg-lossless16.dcm");
+    let samples = [
+        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
+        0x3536,
+    ];
+    let encoded = j2k_jpeg::encode_jpeg_lossless(
+        j2k_jpeg::JpegLosslessSamples::Rgb16 {
+            data: &samples,
+            width: 2,
+            height: 2,
+        },
+        j2k_jpeg::JpegLosslessEncodeOptions::new(16),
+    )
+    .expect("encode 16-bit lossless JPEG fixture");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::JPEG_LOSSLESS_SV1,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB",
+            planar_configuration: Some(0),
+            ..TestDicomOptions::uint16(TestPixelData::Encapsulated(encoded.data))
+        },
+    );
+
+    let tile = read_first_tile(&path);
+    assert_eq!(tile.data.as_u16(), Some(samples.as_slice()));
+}
+
+#[test]
+fn reads_monochrome16_jpeg2000_and_htj2k_as_rgb16() {
+    let gray = [0_u16, 1, 32_768, u16::MAX];
+    let encoded_samples: Vec<u8> = le_words(&gray);
+    let classic = j2k::encode_j2k_lossless(
+        j2k::J2kLosslessSamples {
+            data: &encoded_samples,
+            width: 2,
+            height: 2,
+            components: 1,
+            bit_depth: 16,
+            signed: false,
+        },
+        &j2k::J2kLosslessEncodeOptions::default(),
+    )
+    .expect("encode monochrome16 JPEG 2000 fixture")
+    .codestream;
+    let htj2k = j2k::recode_j2k_to_htj2k_lossless(&classic, j2k::J2kToHtj2kOptions::default())
+        .expect("recode monochrome16 HTJ2K fixture")
+        .bytes;
+    let expected: Vec<u16> = gray
+        .into_iter()
+        .flat_map(|sample| [sample, sample, sample])
+        .collect();
+
+    for (name, transfer_syntax, codestream) in [
+        ("jpeg2000", uids::JPEG2000_LOSSLESS, classic),
+        ("htj2k", HTJ2K_LOSSLESS_TRANSFER_SYNTAX, htj2k),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("monochrome16-{name}.dcm"));
+        write_test_dicom(
+            &path,
+            TestDicomOptions {
+                transfer_syntax,
+                samples_per_pixel: 1,
+                photometric_interpretation: "MONOCHROME2",
+                planar_configuration: None,
+                ..TestDicomOptions::uint16(TestPixelData::Encapsulated(codestream))
+            },
+        );
+
+        let tile = read_first_tile(&path);
+        assert_eq!(tile.channels, 3);
+        assert_eq!(tile.color_space, ColorSpace::Rgb);
+        assert_eq!(tile.data.as_u16(), Some(expected.as_slice()), "{name}");
+    }
+}
+
+#[test]
+fn converts_sixteen_bit_jpeg2000_ybr_to_rgb16_once() {
+    let ybr = [
+        0_u16,
+        32_768,
+        32_768,
+        32_768,
+        32_768,
+        32_768,
+        u16::MAX,
+        32_768,
+        32_768,
+        30_000,
+        20_000,
+        50_000,
+    ];
+    let encoded_samples: Vec<u8> = le_words(&ybr);
+    let mut options = j2k::J2kLosslessEncodeOptions::default();
+    options.reversible_transform = j2k::ReversibleTransform::None53;
+    let ybr_full = j2k::encode_j2k_lossless(
+        j2k::J2kLosslessSamples {
+            data: &encoded_samples,
+            width: 2,
+            height: 2,
+            components: 3,
+            bit_depth: 16,
+            signed: false,
+        },
+        &options,
+    )
+    .expect("encode YBR_FULL JPEG 2000 fixture")
+    .codestream;
+    let expected = [
+        0_u16,
+        0,
+        0,
+        32_768,
+        32_768,
+        32_768,
+        u16::MAX,
+        u16::MAX,
+        u16::MAX,
+        54_159,
+        22_088,
+        7_375,
+    ];
+    let rgb_samples: Vec<u8> = le_words(&expected);
+    let ybr_rct = j2k::encode_j2k_lossless(
+        j2k::J2kLosslessSamples {
+            data: &rgb_samples,
+            width: 2,
+            height: 2,
+            components: 3,
+            bit_depth: 16,
+            signed: false,
+        },
+        &j2k::J2kLosslessEncodeOptions::default(),
+    )
+    .expect("encode YBR_RCT JPEG 2000 fixture")
+    .codestream;
+
+    for (name, photometric_interpretation, codestream) in [
+        ("ybr-full", "YBR_FULL", ybr_full),
+        ("ybr-rct", "YBR_RCT", ybr_rct),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{name}16.dcm"));
+        write_test_dicom(
+            &path,
+            TestDicomOptions {
+                transfer_syntax: uids::JPEG2000_LOSSLESS,
+                samples_per_pixel: 3,
+                photometric_interpretation,
+                planar_configuration: Some(0),
+                ..TestDicomOptions::uint16(TestPixelData::Encapsulated(codestream))
+            },
+        );
+
+        assert_eq!(
+            read_first_tile(&path).data.as_u16(),
+            Some(expected.as_slice()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn rejects_rle_working_set_above_decoded_image_budget() {
     let mut frame = vec![0; 64];
     frame[0..4].copy_from_slice(&1u32.to_le_bytes());
     frame[4..8].copy_from_slice(&64u32.to_le_bytes());
 
-    let error = decode_rle_lossless_frame(&frame, 16_384, 8_193, 1, "MONOCHROME2")
-        .expect_err("oversized RLE working set must be rejected before allocation");
+    let error = decode_rle_lossless_frame(
+        &frame,
+        16_384,
+        8_193,
+        1,
+        "MONOCHROME2",
+        DicomBitDepth::Eight,
+    )
+    .expect_err("oversized RLE working set must be rejected before allocation");
     assert!(
         matches!(error, WsiError::ResourceLimit { .. }),
         "unexpected error: {error}"

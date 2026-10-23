@@ -1,5 +1,8 @@
+use std::borrow::Cow;
+
 use super::*;
 use crate::decode::jpeg::{decode_batch_jpeg, decode_batch_jpeg_rgb16, JpegDecodeJob};
+use j2k::CpuDecodeParallelism;
 
 pub(super) fn validate_jpeg_transfer_syntax_frame(
     transfer_syntax_uid: &str,
@@ -71,14 +74,14 @@ fn jpeg_process_header(frame: &[u8]) -> Result<(j2k_jpeg::SofKind, u8, Option<u8
 }
 
 /// Decode JPEG frames at their validated DICOM precision: 8-bit frames keep the
-/// U8 RGB path, 12-bit frames decode to U16 RGB.
+/// U8 RGB path, frames stored in 16-bit words decode to U16 RGB.
 pub(super) fn decode_dicom_jpeg_batch(
     bit_depth: DicomBitDepth,
     jobs: &[JpegDecodeJob<'_>],
 ) -> Vec<Result<CpuTile, WsiError>> {
     match bit_depth {
         DicomBitDepth::Eight => decode_batch_jpeg(jobs),
-        DicomBitDepth::Twelve => decode_batch_jpeg_rgb16(jobs),
+        DicomBitDepth::Uint16 { .. } => decode_batch_jpeg_rgb16(jobs),
     }
 }
 
@@ -92,6 +95,127 @@ pub(super) fn dicom_jpeg_color_transform(
     }
 }
 
+pub(super) fn decode_dicom_jp2k_u16(
+    data: &[u8],
+    expected_width: u32,
+    expected_height: u32,
+    samples_per_pixel: u16,
+    photometric_interpretation: &str,
+    bits_stored: u8,
+    parallelism: CpuDecodeParallelism,
+) -> Result<CpuTile, WsiError> {
+    let view = j2k::J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    let header = crate::decode::jp2k_codestream::codestream_header_from_view(&view)?;
+    if header.image_width < expected_width || header.image_height < expected_height {
+        return Err(WsiError::Jp2k(format!(
+            "dimension mismatch: expected at least {expected_width}x{expected_height}, got {}x{}",
+            header.image_width, header.image_height
+        )));
+    }
+    let component_count = match (samples_per_pixel, photometric_interpretation) {
+        (1, "MONOCHROME1" | "MONOCHROME2") => 1usize,
+        (3, "RGB" | "YBR_FULL" | "YBR_FULL_422" | "YBR_ICT" | "YBR_RCT") => 3usize,
+        _ => {
+            return Err(WsiError::Jp2k(format!(
+                "unsupported DICOM JPEG 2000 16-bit pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}"
+            )));
+        }
+    };
+    if header.components.len() != component_count
+        || header
+            .components
+            .iter()
+            .any(|component| component.signed || component.bit_depth != bits_stored)
+    {
+        return Err(WsiError::Jp2k(format!(
+            "DICOM JPEG 2000 output requires {component_count} unsigned {bits_stored}-bit component(s)"
+        )));
+    }
+    let decoded_len = crate::core::limits::checked_product_to_usize(
+        &[
+            u64::from(header.image_width),
+            u64::from(header.image_height),
+            component_count as u64,
+            2,
+        ],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        "decoded DICOM JPEG 2000 source image",
+    )
+    .map_err(WsiError::Jp2k)?;
+    let rgb_output_samples = crate::core::limits::checked_product_to_usize(
+        &[
+            u64::from(header.image_width),
+            u64::from(header.image_height),
+            3,
+            2,
+        ],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        "decoded DICOM JPEG 2000 image",
+    )
+    .map_err(WsiError::Jp2k)?
+        / 2;
+    let row_bytes = usize::try_from(header.image_width)
+        .ok()
+        .and_then(|width| width.checked_mul(component_count * 2))
+        .ok_or_else(|| WsiError::Jp2k("DICOM JPEG 2000 row byte count overflow".into()))?;
+    let mut bytes = vec![0; decoded_len];
+    let mut decoder =
+        j2k::J2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    decoder.set_cpu_decode_parallelism(parallelism);
+    decoder
+        .decode_into(
+            &mut bytes,
+            row_bytes,
+            if component_count == 1 {
+                j2k_core::PixelFormat::Gray16
+            } else {
+                j2k_core::PixelFormat::Rgb16
+            },
+        )
+        .map_err(|error| WsiError::Jp2k(format!("j2k JP2K decode failed: {error}")))?;
+    let mut samples = Vec::with_capacity(rgb_output_samples);
+    for sample in bytes.as_chunks::<2>().0 {
+        let sample = u16::from_le_bytes(*sample);
+        if component_count == 1 {
+            samples.extend_from_slice(&[sample, sample, sample]);
+        } else {
+            samples.push(sample);
+        }
+    }
+    if component_count == 3
+        && jp2k_photometric_is_ycbcr(photometric_interpretation)
+        && !header.multiple_component_transform
+    {
+        convert_ybr_full_u16_to_rgb(&mut samples, bits_stored);
+    }
+    CpuTile::new(
+        header.image_width,
+        header.image_height,
+        3,
+        ColorSpace::Rgb,
+        CpuTileLayout::Interleaved,
+        CpuTileData::u16(samples),
+    )
+}
+
+fn convert_ybr_full_u16_to_rgb(samples: &mut [u16], bits_stored: u8) {
+    let midpoint = 1_i64 << (bits_stored - 1);
+    let max = (1_i64 << bits_stored) - 1;
+    for pixel in samples.as_chunks_mut::<3>().0 {
+        let y = i64::from(pixel[0]);
+        let cb = i64::from(pixel[1]) - midpoint;
+        let cr = i64::from(pixel[2]) - midpoint;
+        let red = y + crate::decode::jp2k_raster::round_ratio(1_402 * cr, 1_000);
+        let green = y - crate::decode::jp2k_raster::round_ratio(34_414 * cb + 71_414 * cr, 100_000);
+        let blue = y + crate::decode::jp2k_raster::round_ratio(1_772 * cb, 1_000);
+        pixel.copy_from_slice(&[
+            red.clamp(0, max) as u16,
+            green.clamp(0, max) as u16,
+            blue.clamp(0, max) as u16,
+        ]);
+    }
+}
+
 pub(super) fn frame_bytes_to_rgb_tile(
     frame_bytes: &[u8],
     width: u32,
@@ -100,65 +224,14 @@ pub(super) fn frame_bytes_to_rgb_tile(
     planar_configuration: u16,
     photometric_interpretation: &str,
 ) -> Result<CpuTile, WsiError> {
-    let pixel_count = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| WsiError::DisplayConversion("DICOM frame dimensions overflow".into()))?;
-    let rgb = match (samples_per_pixel, photometric_interpretation) {
-        (3, "RGB") if planar_configuration == 0 => {
-            let expected = pixel_count.checked_mul(3).ok_or_else(|| {
-                WsiError::DisplayConversion("DICOM RGB frame size overflow".into())
-            })?;
-            if frame_bytes.len() != expected {
-                return Err(WsiError::DisplayConversion(format!(
-                    "DICOM RGB frame has {} bytes, expected {expected}",
-                    frame_bytes.len()
-                )));
-            }
-            frame_bytes.to_vec()
-        }
-        (3, "RGB") if planar_configuration == 1 => {
-            let expected = pixel_count.checked_mul(3).ok_or_else(|| {
-                WsiError::DisplayConversion("DICOM planar RGB frame size overflow".into())
-            })?;
-            if frame_bytes.len() != expected {
-                return Err(WsiError::DisplayConversion(format!(
-                    "DICOM planar RGB frame has {} bytes, expected {expected}",
-                    frame_bytes.len()
-                )));
-            }
-            let (r_plane, rest) = frame_bytes.split_at(pixel_count);
-            let (g_plane, b_plane) = rest.split_at(pixel_count);
-            let mut rgb = vec![0; expected];
-            for idx in 0..pixel_count {
-                let offset = idx * 3;
-                rgb[offset] = r_plane[idx];
-                rgb[offset + 1] = g_plane[idx];
-                rgb[offset + 2] = b_plane[idx];
-            }
-            rgb
-        }
-        (1, "MONOCHROME1" | "MONOCHROME2") => {
-            if frame_bytes.len() != pixel_count {
-                return Err(WsiError::DisplayConversion(format!(
-                    "DICOM monochrome frame has {} bytes, expected {pixel_count}",
-                    frame_bytes.len()
-                )));
-            }
-            let mut rgb = Vec::with_capacity(pixel_count * 3);
-            for &gray in frame_bytes {
-                // Preserve the legacy sv-slide behavior for consolidation:
-                // MONOCHROME1 and MONOCHROME2 are both expanded without inversion.
-                rgb.extend_from_slice(&[gray, gray, gray]);
-            }
-            rgb
-        }
-        _ => {
-            return Err(WsiError::DisplayConversion(format!(
-                "unsupported DICOM pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}, planar_configuration={planar_configuration}"
-            )));
-        }
-    };
-
+    let rgb = interleaved_rgb_samples(
+        Cow::Borrowed(frame_bytes),
+        width,
+        height,
+        samples_per_pixel,
+        planar_configuration,
+        photometric_interpretation,
+    )?;
     CpuTile::new(
         width,
         height,
@@ -169,12 +242,101 @@ pub(super) fn frame_bytes_to_rgb_tile(
     )
 }
 
+pub(super) fn frame_words_to_rgb_tile(
+    frame_words: Vec<u16>,
+    width: u32,
+    height: u32,
+    samples_per_pixel: u16,
+    planar_configuration: u16,
+    photometric_interpretation: &str,
+) -> Result<CpuTile, WsiError> {
+    let rgb = interleaved_rgb_samples(
+        Cow::Owned(frame_words),
+        width,
+        height,
+        samples_per_pixel,
+        planar_configuration,
+        photometric_interpretation,
+    )?;
+    CpuTile::new(
+        width,
+        height,
+        3,
+        ColorSpace::Rgb,
+        CpuTileLayout::Interleaved,
+        CpuTileData::u16(rgb),
+    )
+}
+
+/// Interleaved RGB samples of a native frame: RGB as stored, planar RGB
+/// interleaved, or monochrome expanded to gray RGB.
+fn interleaved_rgb_samples<T: Copy>(
+    samples: Cow<'_, [T]>,
+    width: u32,
+    height: u32,
+    samples_per_pixel: u16,
+    planar_configuration: u16,
+    photometric_interpretation: &str,
+) -> Result<Vec<T>, WsiError> {
+    let bits = size_of::<T>() * 8;
+    let rgb_len = crate::core::limits::checked_product_to_usize(
+        &[
+            u64::from(width),
+            u64::from(height),
+            3,
+            size_of::<T>() as u64,
+        ],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        "decoded DICOM RGB frame",
+    )
+    .map_err(WsiError::DisplayConversion)?
+        / size_of::<T>();
+    let pixel_count = rgb_len / 3;
+    let expect_len = |what: &str, expected: usize| {
+        if samples.len() == expected {
+            Ok(())
+        } else {
+            Err(WsiError::DisplayConversion(format!(
+                "DICOM {bits}-bit {what} frame has {} samples, expected {expected}",
+                samples.len()
+            )))
+        }
+    };
+    match (samples_per_pixel, photometric_interpretation) {
+        (3, "RGB") if planar_configuration == 0 => {
+            expect_len("RGB", rgb_len)?;
+            Ok(samples.into_owned())
+        }
+        (3, "RGB") if planar_configuration == 1 => {
+            expect_len("planar RGB", rgb_len)?;
+            let (r_plane, rest) = samples.split_at(pixel_count);
+            let (g_plane, b_plane) = rest.split_at(pixel_count);
+            Ok(r_plane
+                .iter()
+                .zip(g_plane)
+                .zip(b_plane)
+                .flat_map(|((&r, &g), &b)| [r, g, b])
+                .collect())
+        }
+        (1, "MONOCHROME1" | "MONOCHROME2") => {
+            expect_len("monochrome", pixel_count)?;
+            // MONOCHROME1 and MONOCHROME2 are both expanded without inversion,
+            // preserving the legacy sv-slide behavior.
+            Ok(samples.iter().flat_map(|&gray| [gray, gray, gray]).collect())
+        }
+        _ => Err(WsiError::DisplayConversion(format!(
+            "unsupported DICOM {bits}-bit pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}, planar_configuration={planar_configuration}"
+        ))),
+    }
+}
+
 pub(super) fn decode_rle_lossless_frame(
     frame_bytes: &[u8],
     width: u32,
     height: u32,
     samples_per_pixel: u16,
     photometric_interpretation: &str,
+    bit_depth: DicomBitDepth,
 ) -> Result<CpuTile, WsiError> {
     if frame_bytes.len() < 64 {
         return Err(WsiError::DisplayConversion(
@@ -187,7 +349,7 @@ pub(super) fn decode_rle_lossless_frame(
             "DICOM RLE segment count {segment_count} is invalid"
         )));
     }
-    let expected_segments = match (samples_per_pixel, photometric_interpretation) {
+    let stored_components = match (samples_per_pixel, photometric_interpretation) {
         (3, "RGB") => 3usize,
         (1, "MONOCHROME1" | "MONOCHROME2") => 1usize,
         _ => {
@@ -196,13 +358,17 @@ pub(super) fn decode_rle_lossless_frame(
             )));
         }
     };
+    let bytes_per_sample = usize::from(bit_depth.bytes_per_sample());
+    let expected_segments = stored_components * bytes_per_sample;
     if segment_count < expected_segments {
         return Err(WsiError::DisplayConversion(format!(
             "DICOM RLE has {segment_count} segments, expected at least {expected_segments}"
         )));
     }
     let pixel_count_u64 = u64::from(width) * u64::from(height);
-    let working_set_bytes = pixel_count_u64.saturating_mul(u64::from(samples_per_pixel) + 3);
+    let working_set_bytes = pixel_count_u64
+        .saturating_mul(u64::from(samples_per_pixel) + 3)
+        .saturating_mul(bytes_per_sample as u64);
     if working_set_bytes > crate::core::limits::MAX_DECODED_IMAGE_BYTES {
         return Err(WsiError::ResourceLimit {
             resource: "DICOM RLE decoded working set",
@@ -244,8 +410,8 @@ pub(super) fn decode_rle_lossless_frame(
         )?);
     }
 
-    let rgb = match (samples_per_pixel, photometric_interpretation) {
-        (3, "RGB") => {
+    let data = match (bit_depth, samples_per_pixel, photometric_interpretation) {
+        (DicomBitDepth::Eight, 3, "RGB") => {
             let rgb_len = pixel_count
                 .checked_mul(3)
                 .ok_or_else(|| WsiError::DisplayConversion("DICOM RLE RGB size overflow".into()))?;
@@ -258,9 +424,9 @@ pub(super) fn decode_rle_lossless_frame(
                 rgb[offset + 1] = green;
                 rgb[offset + 2] = blue;
             }
-            rgb
+            CpuTileData::u8(rgb)
         }
-        (1, "MONOCHROME1" | "MONOCHROME2") => {
+        (DicomBitDepth::Eight, 1, "MONOCHROME1" | "MONOCHROME2") => {
             let rgb_len = pixel_count
                 .checked_mul(3)
                 .ok_or_else(|| WsiError::DisplayConversion("DICOM RLE RGB size overflow".into()))?;
@@ -268,7 +434,36 @@ pub(super) fn decode_rle_lossless_frame(
             for &gray in &planes[0] {
                 rgb.extend_from_slice(&[gray, gray, gray]);
             }
-            rgb
+            CpuTileData::u8(rgb)
+        }
+        (DicomBitDepth::Uint16 { .. }, _, _) => {
+            let mask = bit_depth.unsigned_sample_mask();
+            let rgb_len = pixel_count.checked_mul(3).ok_or_else(|| {
+                WsiError::DisplayConversion("DICOM RLE RGB16 size overflow".into())
+            })?;
+            let mut rgb = Vec::new();
+            rgb.try_reserve_exact(rgb_len).map_err(|_| {
+                WsiError::DisplayConversion(format!(
+                    "unable to allocate {rgb_len} samples for DICOM RLE16 decode"
+                ))
+            })?;
+            match (samples_per_pixel, photometric_interpretation) {
+                (3, "RGB") => {
+                    for (idx, &red_high) in planes[0].iter().enumerate() {
+                        rgb.push(u16::from_be_bytes([red_high, planes[1][idx]]) & mask);
+                        rgb.push(u16::from_be_bytes([planes[2][idx], planes[3][idx]]) & mask);
+                        rgb.push(u16::from_be_bytes([planes[4][idx], planes[5][idx]]) & mask);
+                    }
+                }
+                (1, "MONOCHROME1" | "MONOCHROME2") => {
+                    for (&high, &low) in planes[0].iter().zip(&planes[1]) {
+                        let gray = u16::from_be_bytes([high, low]) & mask;
+                        rgb.extend_from_slice(&[gray, gray, gray]);
+                    }
+                }
+                _ => unreachable!("DICOM RLE pixel format was validated before allocation"),
+            }
+            CpuTileData::u16(rgb)
         }
         _ => unreachable!("DICOM RLE pixel format was validated before allocation"),
     };
@@ -279,7 +474,7 @@ pub(super) fn decode_rle_lossless_frame(
         3,
         ColorSpace::Rgb,
         CpuTileLayout::Interleaved,
-        CpuTileData::u8(rgb),
+        data,
     )
 }
 
@@ -455,21 +650,28 @@ pub(super) fn trim_encapsulated_frame_padding(data: &mut Vec<u8>) {
 }
 
 /// Black RGB tile in the image's decoded sample type, so sparse gaps composite
-/// with decoded 8-bit or 12-bit frames.
+/// with decoded 8-bit or 16-bit-word frames.
 pub(super) fn black_sample_buffer(
     width: u32,
     height: u32,
     bit_depth: DicomBitDepth,
 ) -> Result<CpuTile, WsiError> {
-    let len = crate::core::limits::checked_product_to_usize(
-        &[u64::from(width), u64::from(height), 3],
+    let bytes_per_sample = usize::from(bit_depth.bytes_per_sample());
+    let byte_len = crate::core::limits::checked_product_to_usize(
+        &[
+            u64::from(width),
+            u64::from(height),
+            3,
+            bytes_per_sample as u64,
+        ],
         crate::core::limits::MAX_DECODED_IMAGE_BYTES,
         "DICOM black tile",
     )
     .map_err(WsiError::DisplayConversion)?;
+    let len = byte_len / bytes_per_sample;
     let data = match bit_depth {
         DicomBitDepth::Eight => CpuTileData::u8(vec![0; len]),
-        DicomBitDepth::Twelve => CpuTileData::u16(vec![0; len]),
+        DicomBitDepth::Uint16 { .. } => CpuTileData::u16(vec![0; len]),
     };
     CpuTile::new(
         width,

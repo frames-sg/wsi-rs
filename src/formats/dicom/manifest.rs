@@ -140,6 +140,26 @@ impl DicomSlide {
             properties.insert("openslide.barcode", barcode_value);
         }
         properties.insert("dicom.source-file-count", source_file_count.to_string());
+        // Source paths that are not UTF-8 cannot be listed as text; their
+        // property is omitted rather than failing the open.
+        for (level_index, level) in levels.iter().enumerate() {
+            let source_files = level
+                .parts
+                .iter()
+                .map(|part| canonicalize_or_fallback(&part.frame_store.path))
+                .collect::<std::collections::BTreeSet<_>>();
+            if let Ok(source_files) = serde_json::to_string(&source_files) {
+                properties.insert(
+                    format!("dicom.level.{level_index}.source-files"),
+                    source_files,
+                );
+            }
+        }
+        for (name, image) in &associated_images {
+            if let Some(source_file) = canonicalize_or_fallback(&image.frame_store.path).to_str() {
+                properties.insert(format!("dicom.associated.{name}.source-file"), source_file);
+            }
+        }
         for (kind, reason) in &unsupported_associated_images {
             properties.insert(
                 format!("dicom.unsupported-associated.{}", kind.name()),

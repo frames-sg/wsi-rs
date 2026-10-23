@@ -21,6 +21,95 @@ fn u16_samples(tile: &CpuTile) -> &[u16] {
     tile.data.as_u16().expect("12-bit DICOM decodes to U16 RGB")
 }
 
+fn rgb16_pixels(values: &[[u16; 3]]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|pixel| pixel.iter().flat_map(|sample| sample.to_le_bytes()))
+        .collect()
+}
+
+fn native_rgb16(pixel_data: Vec<u8>) -> TestDicomOptions {
+    TestDicomOptions::uint16(TestPixelData::Native(pixel_data))
+}
+
+#[test]
+fn native_sixteen_bit_pyramid_levels_and_associated_images_preserve_u16_samples() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_frames = (0..4_u16)
+        .flat_map(|frame| {
+            rgb16_pixels(&[
+                [frame * 1000 + 1, frame * 1000 + 2, frame * 1000 + 3],
+                [frame * 1000 + 4, frame * 1000 + 5, frame * 1000 + 6],
+                [frame * 1000 + 7, frame * 1000 + 8, frame * 1000 + 9],
+                [frame * 1000 + 10, frame * 1000 + 11, frame * 1000 + 12],
+            ])
+        })
+        .collect();
+    write_test_dicom(
+        &dir.path().join("a-level0.dcm"),
+        TestDicomOptions {
+            total_pixel_matrix_rows: 4,
+            total_pixel_matrix_columns: 4,
+            number_of_frames: 4,
+            ..native_rgb16(base_frames)
+        },
+    );
+    let reduced = rgb16_pixels(&[
+        [10_001, 10_002, 10_003],
+        [10_004, 10_005, 10_006],
+        [10_007, 10_008, 10_009],
+        [10_010, 10_011, 10_012],
+    ]);
+    write_test_dicom(
+        &dir.path().join("b-level1.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
+            image_type: "DERIVED\\PRIMARY\\VOLUME\\RESAMPLED",
+            ..native_rgb16(reduced.clone())
+        },
+    );
+    let label = rgb16_pixels(&[
+        [20_001, 20_002, 20_003],
+        [20_004, 20_005, 20_006],
+        [20_007, 20_008, 20_009],
+        [20_010, 20_011, 20_012],
+    ]);
+    write_test_dicom(
+        &dir.path().join("c-label.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.3",
+            image_type: "ORIGINAL\\PRIMARY\\LABEL\\NONE",
+            ..native_rgb16(label)
+        },
+    );
+
+    let slide = Slide::open(dir.path()).expect("open native 16-bit DICOM series");
+    let series = &slide.dataset().scenes[0].series[0];
+    assert_eq!(series.sample_type, SampleType::Uint16);
+    assert_eq!(series.levels.len(), 2);
+    assert_eq!(
+        slide.dataset().associated_images["label"].sample_type,
+        SampleType::Uint16
+    );
+
+    let base = slide
+        .read_tile(&TileRequest::new(0usize, 0usize, 0u32, 1, 1))
+        .expect("read base tile");
+    assert_eq!(base.data.as_u16().unwrap()[0..3], [3001, 3002, 3003]);
+    let reduced_tile = slide
+        .read_tile(&TileRequest::new(0usize, 0usize, 1u32, 0, 0))
+        .expect("read reduced tile");
+    assert_eq!(
+        reduced_tile.data.as_u16().unwrap()[0..3],
+        [10_001, 10_002, 10_003]
+    );
+    let label_tile = slide.read_associated("label").expect("read 16-bit label");
+    assert_eq!(
+        label_tile.data.as_u16().unwrap()[0..3],
+        [20_001, 20_002, 20_003]
+    );
+}
+
 #[test]
 fn twelve_bit_levels_and_associated_images_keep_their_sample_types() {
     let dir = tempfile::tempdir().unwrap();
@@ -75,7 +164,7 @@ fn twelve_bit_levels_and_associated_images_keep_their_sample_types() {
 }
 
 #[test]
-fn an_associated_image_in_an_unsupported_pixel_format_does_not_block_the_pyramid() {
+fn native_sixteen_bit_associated_image_is_available_with_an_eight_bit_pyramid() {
     let dir = tempfile::tempdir().unwrap();
     write_test_dicom(
         &dir.path().join("a-level.dcm"),
@@ -102,15 +191,17 @@ fn an_associated_image_in_an_unsupported_pixel_format_does_not_block_the_pyramid
         },
     );
 
-    let slide = DicomSlide::parse(dir.path()).expect("the 8-bit pyramid opens");
-    let dataset = &slide.dataset;
+    let slide = Slide::open(dir.path()).expect("the 8-bit pyramid opens");
+    let dataset = slide.dataset();
     assert!(dataset.associated_images.contains_key("label"));
-    assert!(!dataset.associated_images.contains_key("macro"));
-    let reason = dataset
-        .properties
-        .get("dicom.unsupported-associated.macro")
-        .expect("the skipped overview is named");
-    assert!(reason.contains("BitsAllocated"), "{reason}");
+    assert_eq!(
+        dataset.associated_images["macro"].sample_type,
+        SampleType::Uint16
+    );
+    let overview = slide
+        .read_associated("macro")
+        .expect("read 16-bit overview");
+    assert_eq!(overview.data.as_u16(), Some([0; 12].as_slice()));
 }
 
 #[test]
@@ -159,58 +250,88 @@ fn rejects_pyramids_that_mix_8bit_and_12bit_levels() {
 }
 
 #[test]
-fn twelve_bit_samples_are_rejected_outside_lossy_jpeg_syntaxes() {
-    for (file_name, transfer_syntax, pixel_data) in [
-        (
-            "native.dcm",
-            uids::EXPLICIT_VR_LITTLE_ENDIAN,
-            TestPixelData::Native(vec![0; 16 * 16 * 2]),
-        ),
-        (
-            "rle.dcm",
-            RLE_TRANSFER_SYNTAX,
-            TestPixelData::Encapsulated(vec![0; 64]),
-        ),
-        (
-            "jpeg2000.dcm",
-            uids::JPEG2000,
-            TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-        ),
-        (
-            "htj2k.dcm",
-            HTJ2K_TRANSFER_SYNTAX,
-            TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-        ),
-        (
-            "baseline.dcm",
-            uids::JPEG_BASELINE8_BIT,
-            TestPixelData::Encapsulated(mono_12bit_frame()),
-        ),
-        (
-            "lossless.dcm",
-            uids::JPEG_LOSSLESS_SV1,
-            TestPixelData::Encapsulated(mono_12bit_frame()),
-        ),
+fn an_associated_image_in_an_unsupported_pixel_format_does_not_block_the_pyramid() {
+    let dir = tempfile::tempdir().unwrap();
+    write_test_dicom(
+        &dir.path().join("a-level.dcm"),
+        TestDicomOptions::native(vec![10; 2 * 2 * 3]),
+    );
+    // 32-bit samples are outside the reader's supported precisions.
+    write_test_dicom(
+        &dir.path().join("b-overview.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
+            image_type: "ORIGINAL\\PRIMARY\\OVERVIEW\\NONE",
+            bits_allocated: 32,
+            bits_stored: 32,
+            high_bit: 31,
+            ..TestDicomOptions::native(vec![0; 2 * 2 * 3 * 4])
+        },
+    );
+    write_test_dicom(
+        &dir.path().join("c-label.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.3",
+            image_type: "ORIGINAL\\PRIMARY\\LABEL\\NONE",
+            ..TestDicomOptions::native(vec![20; 2 * 2 * 3])
+        },
+    );
+
+    let slide = DicomSlide::parse(dir.path()).expect("the 8-bit pyramid opens");
+    let dataset = &slide.dataset;
+    assert!(dataset.associated_images.contains_key("label"));
+    assert!(!dataset.associated_images.contains_key("macro"));
+    let reason = dataset
+        .properties
+        .get("dicom.unsupported-associated.macro")
+        .expect("the skipped overview is named");
+    assert!(reason.contains("BitsAllocated"), "{reason}");
+}
+
+#[test]
+fn sixteen_bit_samples_are_rejected_for_eight_bit_jpeg_syntaxes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("baseline.dcm");
+    write_test_dicom(
+        &path,
+        TestDicomOptions {
+            transfer_syntax: uids::JPEG_BASELINE8_BIT,
+            pixel_data: TestPixelData::Encapsulated(mono_12bit_frame()),
+            ..TestDicomOptions::jpeg_12bit(Vec::new(), "MONOCHROME2")
+        },
+    );
+    let error = open_error(&path);
+    assert!(
+        error.contains(&format!(
+            "BitsAllocated value 16 is not supported for transfer syntax {}",
+            uids::JPEG_BASELINE8_BIT
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn invalid_sixteen_bit_metadata_is_rejected_before_decode() {
+    for (bits_stored, high_bit, expected) in [
+        (17, 16, "BitsStored value 17 is not supported"),
+        (16, 14, "Attribute HighBit value 14 != 15"),
+        (8, 7, "BitsStored value 8 is not supported"),
+        (0, 0, "BitsStored value 0 is not supported"),
     ] {
-        // Separate directories keep same-series siblings out of each open.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(file_name);
+        let path = dir
+            .path()
+            .join(format!("stored-{bits_stored}-high-{high_bit}.dcm"));
         write_test_dicom(
             &path,
             TestDicomOptions {
-                transfer_syntax,
-                pixel_data,
-                ..TestDicomOptions::jpeg_12bit(Vec::new(), "MONOCHROME2")
+                bits_allocated: 16,
+                bits_stored,
+                high_bit,
+                ..TestDicomOptions::native(vec![0; 2 * 2 * 3 * 2])
             },
         );
-        assert_eq!(
-            open_error(&path),
-            format!(
-                "invalid slide {}: Attribute BitsAllocated value 16 != 8",
-                path.display()
-            ),
-            "{file_name}"
-        );
+        assert!(open_error(&path).contains(expected));
     }
 }
 
@@ -368,7 +489,8 @@ fn eight_bit_extended_frames_still_decode_to_identical_u8_samples() {
 fn sparse_black_tiles_follow_the_decoded_sample_type() {
     let eight = black_sample_buffer(2, 2, DicomBitDepth::Eight).expect("8-bit black tile");
     assert_eq!(eight.data.as_u8(), Some([0; 12].as_slice()));
-    let twelve = black_sample_buffer(2, 2, DicomBitDepth::Twelve).expect("12-bit black tile");
+    let twelve = black_sample_buffer(2, 2, DicomBitDepth::Uint16 { bits_stored: 12 })
+        .expect("12-bit black tile");
     assert_eq!(twelve.data.as_u16(), Some([0; 12].as_slice()));
     assert_eq!((twelve.width, twelve.height, twelve.channels), (2, 2, 3));
 }

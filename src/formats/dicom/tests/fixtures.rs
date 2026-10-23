@@ -58,6 +58,17 @@ impl TestDicomOptions {
         }
     }
 
+    /// The native fixture with unsigned samples in 16-bit words.
+    pub(super) fn uint16(pixel_data: TestPixelData) -> Self {
+        Self {
+            bits_allocated: 16,
+            bits_stored: 16,
+            high_bit: 15,
+            pixel_data,
+            ..Self::native(Vec::new())
+        }
+    }
+
     /// A single-frame 16x16 DICOM with 12-bit JPEG Extended samples.
     pub(super) fn jpeg_12bit(frame: Vec<u8>, photometric_interpretation: &'static str) -> Self {
         let samples_per_pixel = if photometric_interpretation.starts_with("MONOCHROME") {
@@ -325,13 +336,34 @@ fn literal_rle_segment(bytes: &[u8]) -> Vec<u8> {
 }
 
 pub(super) fn rle_rgb_frame(r: &[u8], g: &[u8], b: &[u8]) -> Vec<u8> {
-    let segments = [
-        literal_rle_segment(r),
-        literal_rle_segment(g),
-        literal_rle_segment(b),
-    ];
+    rle_frame(&[r.to_vec(), g.to_vec(), b.to_vec()])
+}
+
+/// Each 16-bit plane is stored as its high-byte segment, then its low-byte one.
+pub(super) fn rle_rgb16_frame(r: &[u16], g: &[u16], b: &[u16]) -> Vec<u8> {
+    let byte_plane = |samples: &[u16], byte: usize| {
+        samples
+            .iter()
+            .map(|sample| sample.to_be_bytes()[byte])
+            .collect::<Vec<_>>()
+    };
+    rle_frame(&[
+        byte_plane(r, 0),
+        byte_plane(r, 1),
+        byte_plane(g, 0),
+        byte_plane(g, 1),
+        byte_plane(b, 0),
+        byte_plane(b, 1),
+    ])
+}
+
+fn rle_frame(planes: &[Vec<u8>]) -> Vec<u8> {
+    let segments = planes
+        .iter()
+        .map(|plane| literal_rle_segment(plane))
+        .collect::<Vec<_>>();
     let mut frame = vec![0; 64];
-    frame[0..4].copy_from_slice(&3u32.to_le_bytes());
+    frame[0..4].copy_from_slice(&(segments.len() as u32).to_le_bytes());
     let mut offset = 64u32;
     for (idx, segment) in segments.iter().enumerate() {
         let start = 4 + idx * 4;
@@ -342,4 +374,11 @@ pub(super) fn rle_rgb_frame(r: &[u8], g: &[u8], b: &[u8]) -> Vec<u8> {
         frame.extend_from_slice(&segment);
     }
     frame
+}
+
+pub(super) fn le_words(samples: &[u16]) -> Vec<u8> {
+    samples
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect()
 }

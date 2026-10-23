@@ -108,16 +108,25 @@ impl SlideReader for VmsReader {
         })
     }
 
-    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         // VMS associated images are standalone JPEG files.
-        let path = self.slide.associated_paths.get(name)?;
-        let encoded = std::fs::metadata(path).ok()?.len();
         let decoded = self
             .dataset()
             .associated_images
-            .get(name)?
-            .decoded_bytes()?;
-        Some(SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, encoded))
+            .get(name)
+            .and_then(|image| image.decoded_bytes());
+        let (Some(path), Some(decoded)) = (self.slide.associated_paths.get(name), decoded) else {
+            return Ok(None);
+        };
+        let encoded = std::fs::metadata(path)
+            .map_err(|source| WsiError::IoWithPath {
+                source: std::sync::Arc::new(source),
+                path: path.clone(),
+            })?
+            .len();
+        Ok(Some(
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, encoded),
+        ))
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

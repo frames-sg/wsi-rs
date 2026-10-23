@@ -160,16 +160,18 @@ Sakura is not supported: there is no public sample file to test against.
   error.
 - **Other tiled TIFF:** any tiled TIFF, or a single uncompressed 8-bit RGB
   image stored in strips. JPEG XR tiles must be 8-bit gray or RGB without alpha.
-- **DICOM:** 8-bit images in every supported transfer syntax. JPEG Extended and
-  progressive JPEG images can also be 12-bit; those come back as 16-bit samples
-  holding the original 12-bit values, and decode on the CPU.
+- **DICOM:** unsigned 8-bit images and images stored in 16-bit words. Native,
+  RLE, lossless JPEG, JPEG 2000 and HTJ2K frames keep 9- through 16-bit samples
+  as `Uint16`; JPEG Extended and progressive JPEG frames keep their 12-bit
+  precision. Higher-bit compressed frames decode on the CPU.
 - **Hamamatsu VMU:** samples are 12-bit and come back as 16-bit samples with all
   bits kept. Test files are generated from
   [OpenSlide's NGR layout description](https://github.com/openslide/openslide/blob/main/misc/imhex/hamamatsu-vmu-ngr.hexpat);
   no real VMU scan is in the test corpus.
 
-To display 12-bit images as 8-bit, use `read_region_rgba_windowed` with
-`DisplayWindow::new(0.0, 4095.0)?`.
+To display higher-bit samples as 8-bit RGBA, use `read_region_rgba_windowed`
+with an explicit range, such as `DisplayWindow::new(0.0, 4095.0)?` for 12-bit
+data.
 
 ## Memory
 
