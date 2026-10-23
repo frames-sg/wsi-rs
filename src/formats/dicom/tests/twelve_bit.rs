@@ -75,6 +75,45 @@ fn twelve_bit_levels_and_associated_images_keep_their_sample_types() {
 }
 
 #[test]
+fn an_associated_image_in_an_unsupported_pixel_format_does_not_block_the_pyramid() {
+    let dir = tempfile::tempdir().unwrap();
+    write_test_dicom(
+        &dir.path().join("a-level.dcm"),
+        TestDicomOptions::native(vec![10; 2 * 2 * 3]),
+    );
+    // A 16-bit native overview, as wsi-dicom writes for Zeiss slide previews.
+    write_test_dicom(
+        &dir.path().join("b-overview.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
+            image_type: "ORIGINAL\\PRIMARY\\OVERVIEW\\NONE",
+            bits_allocated: 16,
+            bits_stored: 16,
+            high_bit: 15,
+            ..TestDicomOptions::native(vec![0; 2 * 2 * 3 * 2])
+        },
+    );
+    write_test_dicom(
+        &dir.path().join("c-label.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.3",
+            image_type: "ORIGINAL\\PRIMARY\\LABEL\\NONE",
+            ..TestDicomOptions::native(vec![20; 2 * 2 * 3])
+        },
+    );
+
+    let slide = DicomSlide::parse(dir.path()).expect("the 8-bit pyramid opens");
+    let dataset = &slide.dataset;
+    assert!(dataset.associated_images.contains_key("label"));
+    assert!(!dataset.associated_images.contains_key("macro"));
+    let reason = dataset
+        .properties
+        .get("dicom.unsupported-associated.macro")
+        .expect("the skipped overview is named");
+    assert!(reason.contains("BitsAllocated"), "{reason}");
+}
+
+#[test]
 fn rejects_pyramids_that_mix_8bit_and_12bit_levels() {
     let dir = tempfile::tempdir().unwrap();
     write_test_dicom(

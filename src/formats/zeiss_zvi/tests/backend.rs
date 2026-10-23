@@ -120,6 +120,11 @@ fn whole_image_opens_with_metadata_channels_and_associated_thumbnail() {
         .expect("read ZVI thumbnail");
     assert_eq!((thumbnail.width(), thumbnail.height()), (2, 1));
     assert_eq!(thumbnail.channels(), 3);
+    assert_eq!(
+        reader.associated_encoding("thumbnail"),
+        Some(SourceEncoding::new(Compression::None))
+    );
+    assert_eq!(reader.associated_encoding("missing"), None);
     assert!(matches!(
         reader.read_associated("missing"),
         Err(WsiError::AssociatedImageNotFound(name)) if name == "missing"

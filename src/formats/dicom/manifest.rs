@@ -46,6 +46,7 @@ impl DicomSlide {
             barcode_value,
             volume_images,
             associated_images,
+            unsupported_associated_images,
             source_file_count,
         } = manifest;
         let private_cache_count = volume_images
@@ -139,6 +140,12 @@ impl DicomSlide {
             properties.insert("openslide.barcode", barcode_value);
         }
         properties.insert("dicom.source-file-count", source_file_count.to_string());
+        for (kind, reason) in &unsupported_associated_images {
+            properties.insert(
+                format!("dicom.unsupported-associated.{}", kind.name()),
+                reason,
+            );
+        }
         let (shared_pixel_spacing, shared_objective_lens_power) =
             if level0.pixel_spacing.is_none() || level0.objective_lens_power.is_none() {
                 parse_level0_properties(&level0.path).unwrap_or((None, None))
@@ -498,6 +505,9 @@ pub(super) struct DicomSeriesManifest {
     pub(super) barcode_value: Option<String>,
     pub(super) volume_images: Vec<ParsedDicomMetadata>,
     pub(super) associated_images: Vec<(AssociatedKind, ParsedDicomMetadata)>,
+    /// Associated images left out because their pixel format is unsupported,
+    /// with the reason.
+    pub(super) unsupported_associated_images: Vec<(AssociatedKind, String)>,
     pub(super) source_file_count: usize,
 }
 
@@ -613,11 +623,21 @@ impl DicomSeriesManifest {
 
         let mut volume_images = Vec::new();
         let mut associated_images = Vec::new();
+        let mut unsupported_associated_images = Vec::new();
         for mut meta in metas {
-            match meta.classify()? {
-                ImageRole::Ignore => {}
-                ImageRole::Level => volume_images.push(meta),
-                ImageRole::Associated(kind) => associated_images.push((kind, meta)),
+            match meta.classify() {
+                Ok(ImageRole::Ignore) => {}
+                Ok(ImageRole::Level) => volume_images.push(meta),
+                Ok(ImageRole::Associated(kind)) => associated_images.push((kind, meta)),
+                // An associated image whose pixel format this reader cannot
+                // decode (a 16-bit overview, say) does not make the pyramid
+                // unreadable; it is left out and named in the properties.
+                Err(error) => match meta.role() {
+                    ImageRole::Associated(kind) => {
+                        unsupported_associated_images.push((kind, error.to_string()));
+                    }
+                    ImageRole::Level | ImageRole::Ignore => return Err(error),
+                },
             }
         }
 
@@ -630,6 +650,7 @@ impl DicomSeriesManifest {
             barcode_value,
             volume_images,
             associated_images,
+            unsupported_associated_images,
             source_file_count,
         })
     }

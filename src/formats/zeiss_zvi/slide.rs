@@ -29,6 +29,14 @@ impl SlideReader for ZviReader {
             .cloned()
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))
     }
+
+    /// The thumbnail is a BMP stream, stored without lossy compression.
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        self.slide
+            .associated
+            .contains_key(name)
+            .then_some(SourceEncoding::new(Compression::None))
+    }
 }
 
 impl ZviSlide {

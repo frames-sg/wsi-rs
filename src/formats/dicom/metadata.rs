@@ -65,15 +65,14 @@ impl DicomBitDepth {
 }
 
 impl ParsedDicomMetadata {
-    /// Classify the image and, for supported roles, validate its pixel format
-    /// and record its sample precision.
-    pub(super) fn classify(&mut self) -> Result<ImageRole, WsiError> {
+    /// The image's role, from its Image Type alone.
+    pub(super) fn role(&self) -> ImageRole {
         let image_type_refs = self
             .image_type
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let role = if matches_type(&image_type_refs, LEVEL_IMAGE_TYPES) {
+        if matches_type(&image_type_refs, LEVEL_IMAGE_TYPES) {
             ImageRole::Level
         } else if matches_type(&image_type_refs, LABEL_IMAGE_TYPES) {
             ImageRole::Associated(AssociatedKind::Label)
@@ -82,9 +81,17 @@ impl ParsedDicomMetadata {
         } else if matches_type(&image_type_refs, THUMBNAIL_IMAGE_TYPES) {
             ImageRole::Associated(AssociatedKind::Thumbnail)
         } else {
-            return Ok(ImageRole::Ignore);
-        };
-        self.bit_depth = validate_supported_pixel_format(self)?;
+            ImageRole::Ignore
+        }
+    }
+
+    /// Classify the image and, for supported roles, validate its pixel format
+    /// and record its sample precision.
+    pub(super) fn classify(&mut self) -> Result<ImageRole, WsiError> {
+        let role = self.role();
+        if role != ImageRole::Ignore {
+            self.bit_depth = validate_supported_pixel_format(self)?;
+        }
         Ok(role)
     }
 }
