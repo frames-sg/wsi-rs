@@ -276,6 +276,18 @@ impl SlideReader for MiraxReader {
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.slide.read_associated(name)
     }
+
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        // Associated MIRAX images are JPEG records; see `read_associated`.
+        let shared = &self.slide.shared;
+        let record = shared.associated.get(name)?;
+        let decoded = shared
+            .dataset
+            .associated_images
+            .get(name)?
+            .decoded_bytes()?;
+        Some(SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, record.len))
+    }
 }
 
 impl MiraxReader {

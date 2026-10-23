@@ -319,6 +319,11 @@ impl SlideReader for VmuReader {
             "VMU macro JPEG decode",
         )?
     }
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        let bytes = self.macro_bytes.as_ref().filter(|_| name == "macro")?;
+        let decoded = self.dataset.associated_images.get(name)?.decoded_bytes()?;
+        Some(SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, bytes.len() as u64))
+    }
 }
 impl ManagedSlideReader for VmuReader {
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {

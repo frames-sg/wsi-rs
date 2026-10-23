@@ -504,3 +504,57 @@ fn read_associated_decodes_jp2k_ycbcr_tile_from_tiled_ifd() {
     let image = reader.read_associated("label").unwrap();
     assert_sample_buffer_matches_rgb_fixture(&image, &expected);
 }
+
+#[test]
+fn associated_encoding_reports_stripped_jpeg_codec_and_stored_bytes() {
+    let mut source = image::RgbImage::new(4, 3);
+    for pixel in source.pixels_mut() {
+        *pixel = image::Rgb([45, 125, 215]);
+    }
+    let mut jpeg = Vec::new();
+    JpegEncoder::new(&mut jpeg, 90)
+        .encode(source.as_raw().as_slice(), 4, 3, JpegColorType::Rgb)
+        .unwrap();
+    let file = build_stripped_jpeg_tiff(4, 3, &jpeg);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = *container.top_ifds().first().unwrap();
+    let layout = associated_image_layout(
+        DatasetId::new(40),
+        "macro",
+        (4, 3),
+        3,
+        stripped_associated_source(&container, ifd_id, Compression::Jpeg),
+    );
+    let reader = TiffPixelReader::new(container, layout);
+
+    let encoding = reader.associated_encoding("macro").unwrap();
+    assert_eq!(encoding.compression, Compression::Jpeg);
+    assert_eq!(encoding.decoded_bytes, Some(4 * 3 * 3));
+    assert_eq!(encoding.encoded_bytes, Some(jpeg.len() as u64));
+    assert!(reader.associated_encoding("label").is_none());
+}
+
+#[test]
+fn associated_encoding_sums_tiled_ifd_byte_counts() {
+    let tiles = [vec![10u8; 4], vec![20u8; 4], vec![30u8; 4], vec![40u8; 4]];
+    let file = build_tiled_associated_tiff(4, 4, 2, 2, &tiles);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = *container.top_ifds().first().unwrap();
+    let layout = associated_image_layout(
+        DatasetId::new(41),
+        "label",
+        (4, 4),
+        1,
+        TileSource::TiledIfd {
+            ifd_id,
+            jpeg_tables: None,
+            compression: Compression::None,
+        },
+    );
+    let reader = TiffPixelReader::new(container, layout);
+
+    let encoding = reader.associated_encoding("label").unwrap();
+    assert_eq!(encoding.compression, Compression::None);
+    assert_eq!(encoding.decoded_bytes, Some(4 * 4));
+    assert_eq!(encoding.encoded_bytes, Some(16));
+}

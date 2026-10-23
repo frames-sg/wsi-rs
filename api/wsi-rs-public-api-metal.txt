@@ -172,6 +172,7 @@ pub wsi_rs::prelude::AssociatedImage::dimensions: (u32, u32)
 pub wsi_rs::prelude::AssociatedImage::icc_profile: alloc::vec::Vec<u8>
 pub wsi_rs::prelude::AssociatedImage::sample_type: wsi_rs::SampleType
 impl wsi_rs::AssociatedImage
+pub fn wsi_rs::AssociatedImage::decoded_bytes(&self) -> core::option::Option<u64>
 pub fn wsi_rs::AssociatedImage::icc_profile(&self) -> core::option::Option<&[u8]>
 pub const fn wsi_rs::AssociatedImage::new((u32, u32), wsi_rs::SampleType, u16) -> Self
 pub fn wsi_rs::AssociatedImage::with_icc_profile(self, alloc::vec::Vec<u8>) -> Self
@@ -289,10 +290,12 @@ impl core::convert::From<usize> for wsi_rs::SeriesId
 pub fn wsi_rs::SeriesId::from(usize) -> Self
 pub struct wsi_rs::prelude::Slide
 impl wsi_rs::Slide
+pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
 pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
 pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
+pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::limits(&self) -> wsi_rs::SlideLimits
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
@@ -592,6 +595,7 @@ pub wsi_rs::AssociatedImage::dimensions: (u32, u32)
 pub wsi_rs::AssociatedImage::icc_profile: alloc::vec::Vec<u8>
 pub wsi_rs::AssociatedImage::sample_type: wsi_rs::SampleType
 impl wsi_rs::AssociatedImage
+pub fn wsi_rs::AssociatedImage::decoded_bytes(&self) -> core::option::Option<u64>
 pub fn wsi_rs::AssociatedImage::icc_profile(&self) -> core::option::Option<&[u8]>
 pub const fn wsi_rs::AssociatedImage::new((u32, u32), wsi_rs::SampleType, u16) -> Self
 pub fn wsi_rs::AssociatedImage::with_icc_profile(self, alloc::vec::Vec<u8>) -> Self
@@ -821,10 +825,12 @@ impl core::convert::From<usize> for wsi_rs::SeriesId
 pub fn wsi_rs::SeriesId::from(usize) -> Self
 pub struct wsi_rs::Slide
 impl wsi_rs::Slide
+pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
 pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
 pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
+pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::limits(&self) -> wsi_rs::SlideLimits
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
@@ -897,6 +903,13 @@ pub fn wsi_rs::SlideOpenOptions::default() -> Self
 pub struct wsi_rs::SlideReadContext<'a>
 impl<'a> wsi_rs::SlideReadContext<'a>
 pub fn wsi_rs::SlideReadContext<'a>::max_region_pixels(&self) -> u64
+#[non_exhaustive] pub struct wsi_rs::SourceEncoding
+pub wsi_rs::SourceEncoding::compression: wsi_rs::Compression
+pub wsi_rs::SourceEncoding::decoded_bytes: core::option::Option<u64>
+pub wsi_rs::SourceEncoding::encoded_bytes: core::option::Option<u64>
+impl wsi_rs::SourceEncoding
+pub const fn wsi_rs::SourceEncoding::new(wsi_rs::Compression) -> Self
+pub const fn wsi_rs::SourceEncoding::with_sizes(self, u64, u64) -> Self
 #[non_exhaustive] pub struct wsi_rs::SourceIccProfile
 pub wsi_rs::SourceIccProfile::bytes: alloc::vec::Vec<u8>
 pub wsi_rs::SourceIccProfile::key: wsi_rs::SourceIccProfileKey
@@ -1011,8 +1024,10 @@ pub fn wsi_rs::FormatProbe::probe(&self, &std::path::Path) -> core::result::Resu
 impl<T: wsi_rs::FormatProbe> wsi_rs::FormatProbe for alloc::sync::Arc<T>
 pub fn alloc::sync::Arc<T>::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
 pub trait wsi_rs::SlideReader: core::marker::Send + core::marker::Sync
+pub fn wsi_rs::SlideReader::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::SlideReader::associated_image(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
+pub fn wsi_rs::SlideReader::level_encoding(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::option::Option<wsi_rs::SourceEncoding>
 pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::prepare_level_controlled(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>

@@ -75,6 +75,28 @@ pub(super) fn decode_associated_attachment(
     Ok(None)
 }
 
+/// The single codec of an embedded-CZI attachment's subblocks, when uniform.
+pub(super) fn embedded_czi_compression(
+    czi: &mut CziContainer,
+    attachment: &AttachmentInfo,
+    limits: crate::SlideLimits,
+) -> Option<Compression> {
+    check_attachment_size(attachment, limits).ok()?;
+    let blob = czi.read_attachment(attachment.index).ok()?;
+    with_temporary_czi_blob(&blob.data, |temp_path| {
+        preflight_czi_file_with_limits(temp_path, limits)?;
+        let embedded = CziContainer::open(temp_path)
+            .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
+        let mut codecs = embedded.subblocks().iter().map(|info| info.compression);
+        let first = codecs.next();
+        Ok(first
+            .filter(|first| codecs.all(|codec| codec == *first))
+            .map(CziCompressionMode::compression))
+    })
+    .ok()
+    .flatten()
+}
+
 fn read_embedded_czi_blob(
     data: &[u8],
     limits: crate::SlideLimits,

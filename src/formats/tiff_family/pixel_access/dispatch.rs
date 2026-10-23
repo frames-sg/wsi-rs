@@ -212,6 +212,40 @@ impl SlideReader for TiffPixelReader {
         &self.layout.dataset
     }
 
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        let decoded = self
+            .layout
+            .dataset
+            .associated_images
+            .get(name)?
+            .decoded_bytes()?;
+        let (compression, encoded) = match self.layout.associated_sources.get(name)? {
+            TileSource::Stripped {
+                compression,
+                strip_byte_counts,
+                ..
+            } => (*compression, strip_byte_counts.iter().copied().sum::<u64>()),
+            TileSource::NdpiFullDecode {
+                strip_byte_count, ..
+            } => (Compression::Jpeg, *strip_byte_count),
+            TileSource::TiledIfd {
+                ifd_id,
+                compression,
+                ..
+            } => (
+                *compression,
+                self.container
+                    .get_u64_array(*ifd_id, tags::TILE_BYTE_COUNTS)
+                    .ok()?
+                    .iter()
+                    .copied()
+                    .sum::<u64>(),
+            ),
+            _ => return None,
+        };
+        Some(SourceEncoding::new(compression).with_sizes(decoded, encoded))
+    }
+
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
         match self.tile_source_for(req) {
             Ok(TileSource::NdpiJpeg { .. } | TileSource::NdpiFullDecode { .. }) => {

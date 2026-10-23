@@ -136,9 +136,9 @@ pub use core::types::{
     IccProfileKey, IccProfileProvenance, Level, LevelIdx, LevelSourceKind, PixelFormat, PlaneIdx,
     PlaneSelection, RawCompressedTile, RawCompressedTileBuildError, RawCompressedTileBuilder,
     RegionRequest, RegionRequestBuilder, RequestBuildError, SampleType, Scene, SceneId, Series,
-    SeriesId, SourceIccProfile, SourceIccProfileConflict, SourceIccProfileKey, TileCodecKind,
-    TileEntry, TileHit, TileLayout, TileRequest, TileRequestBuilder, TileViewRequest,
-    TileViewRequestBuilder,
+    SeriesId, SourceEncoding, SourceIccProfile, SourceIccProfileConflict, SourceIccProfileKey,
+    TileCodecKind, TileEntry, TileHit, TileLayout, TileRequest, TileRequestBuilder,
+    TileViewRequest, TileViewRequestBuilder,
 };
 
 pub mod prelude {

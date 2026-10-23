@@ -103,6 +103,35 @@ pub(super) fn read_attachment_blob(
     })
 }
 
+/// Stored data bytes of one subblock, read from its fixed header alone.
+pub(super) fn read_subblock_data_size(
+    reader: &mut (impl Read + Seek),
+    file_len: u64,
+    info: &DirectorySubBlockInfo,
+) -> Result<u64, WsiError> {
+    read_segment_header(
+        reader,
+        file_len,
+        info.file_position,
+        SUBBLOCK_MAGIC,
+        SUBBLOCK_FIXED_BYTES,
+        "subblock",
+    )?;
+    let fixed_offset = checked_add(info.file_position, SEGMENT_HEADER_BYTES, "subblock header")?;
+    let fixed = read_exact_at(
+        reader,
+        file_len,
+        fixed_offset,
+        SUBBLOCK_FIXED_BYTES as usize,
+        "subblock header",
+    )?;
+    let data_bytes = read_u64(&fixed, 8, "subblock data length")?;
+    if data_bytes > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
+        return Err(invalid("CZI subblock payload exceeds its safety limit"));
+    }
+    Ok(data_bytes)
+}
+
 pub(super) fn read_raw_subblock(
     reader: &mut (impl Read + Seek),
     file_len: u64,

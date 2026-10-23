@@ -147,6 +147,25 @@ impl Slide {
             .level_source_kind(scene.into(), series.into(), level.into())
     }
 
+    /// How the named associated image is stored in the source, when the
+    /// format reports it.
+    pub fn associated_encoding(&self, name: &str) -> Option<crate::SourceEncoding> {
+        self.source.associated_encoding(name)
+    }
+
+    /// How a level's pixels are stored in the source, when the format reports
+    /// one codec for the level. Formats with raw compressed tiles report them
+    /// through [`Slide::read_raw_compressed_tile`] instead.
+    pub fn level_encoding(
+        &self,
+        scene: impl Into<SceneId>,
+        series: impl Into<SeriesId>,
+        level: impl Into<LevelIdx>,
+    ) -> Option<crate::SourceEncoding> {
+        self.source
+            .level_encoding(scene.into(), series.into(), level.into())
+    }
+
     /// Prepares format-specific level state without decoding any pixels.
     pub fn prepare_level_controlled(
         &self,

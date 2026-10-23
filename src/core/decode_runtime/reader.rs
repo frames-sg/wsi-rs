@@ -168,6 +168,19 @@ impl SlideReader for AdaptiveDecodeReader {
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.inner.read_associated(name)
     }
+
+    fn associated_encoding(&self, name: &str) -> Option<crate::core::types::SourceEncoding> {
+        self.inner.associated_encoding(name)
+    }
+
+    fn level_encoding(
+        &self,
+        scene: crate::core::types::SceneId,
+        series: crate::core::types::SeriesId,
+        level: crate::core::types::LevelIdx,
+    ) -> Option<crate::core::types::SourceEncoding> {
+        self.inner.level_encoding(scene, series, level)
+    }
 }
 
 impl ManagedSlideReader for AdaptiveDecodeReader {

@@ -108,6 +108,16 @@ impl CziContainer {
         payload::read_raw_subblock(&mut self.reader, self.file_len, &info)
     }
 
+    pub(super) fn subblock_data_size(&mut self, index: usize) -> Result<u64, WsiError> {
+        let info = self.subblocks.get(index).cloned().ok_or_else(|| {
+            WsiError::DisplayConversion(format!(
+                "CZI subblock index {index} exceeds count {}",
+                self.subblocks.len()
+            ))
+        })?;
+        payload::read_subblock_data_size(&mut self.reader, self.file_len, &info)
+    }
+
     pub(super) fn read_attachment(&mut self, index: usize) -> Result<AttachmentBlob, WsiError> {
         let info = self.attachments.get(index).cloned().ok_or_else(|| {
             WsiError::DisplayConversion(format!(

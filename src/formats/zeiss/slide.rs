@@ -5,6 +5,9 @@ use super::*;
 mod parse;
 
 type LevelImageCache = Mutex<PrivateCache<(usize, usize), Arc<CpuTile>>>;
+
+/// Subblock headers read to estimate one level's compression ratio.
+const ENCODING_SAMPLE_SUBBLOCKS: usize = 64;
 type LocalTileCache = Mutex<PrivateCache<(usize, usize, i64, i64), CpuTile>>;
 
 pub(super) struct ZeissReader {
@@ -33,6 +36,20 @@ impl SlideReader for ZeissReader {
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         self.slide.read_raw_jpeg_tile(req)
+    }
+
+    fn level_encoding(
+        &self,
+        _scene: SceneId,
+        _series: SeriesId,
+        level: LevelIdx,
+    ) -> Option<SourceEncoding> {
+        self.slide
+            .level_encoding(usize::try_from(level.get()).ok()?)
+    }
+
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        self.slide.associated_encoding(name)
     }
 
     fn read_raw_compressed_display_tile(
@@ -148,6 +165,48 @@ impl ZeissSlide {
             return Err(WsiError::UnsupportedFormat("CZI WSI reads currently require Bgr24 with uncompressed, JPEG, or JPEG XR subblocks".into()));
         }
         Ok(())
+    }
+
+    /// One codec and an estimated compression ratio for a level, measured on
+    /// at most [`ENCODING_SAMPLE_SUBBLOCKS`] evenly spaced subblocks.
+    pub(super) fn level_encoding(&self, level: usize) -> Option<SourceEncoding> {
+        let indices = self.canvas_level_subblocks.get(level)?;
+        let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
+        let codec = czi.subblocks().get(*indices.first()?)?.compression;
+        if indices
+            .iter()
+            .any(|&index| czi.subblocks().get(index).map(|info| info.compression) != Some(codec))
+        {
+            return None;
+        }
+        let step = indices.len().div_ceil(ENCODING_SAMPLE_SUBBLOCKS).max(1);
+        let (mut decoded, mut encoded) = (0_u64, 0_u64);
+        for &index in indices.iter().step_by(step) {
+            let info = czi.subblocks().get(index)?;
+            let pixels =
+                u64::from(info.stored_size.w).checked_mul(u64::from(info.stored_size.h))?;
+            decoded = decoded.checked_add(
+                pixels.checked_mul(u64::try_from(info.pixel_type.bytes_per_pixel()).ok()?)?,
+            )?;
+            encoded = encoded.checked_add(czi.subblock_data_size(index).ok()?)?;
+        }
+        Some(SourceEncoding::new(codec.compression()).with_sizes(decoded, encoded))
+    }
+
+    /// Codec and sizes of an associated attachment; its stored size includes
+    /// any embedded-CZI container overhead, so the ratio is a lower bound.
+    pub(super) fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        let attachment = self.associated_sources.get(name)?;
+        let decoded = self.dataset.associated_images.get(name)?.decoded_bytes()?;
+        let compression = if attachment.content_file_type.eq_ignore_ascii_case("JPG") {
+            Compression::Jpeg
+        } else if attachment.content_file_type.eq_ignore_ascii_case("CZI") {
+            let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
+            super::attachments::embedded_czi_compression(&mut czi, attachment, self.limits)?
+        } else {
+            return None;
+        };
+        Some(SourceEncoding::new(compression).with_sizes(decoded, attachment.data_size))
     }
 
     pub(super) fn parse(path: &Path) -> Result<Self, WsiError> {

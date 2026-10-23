@@ -413,6 +413,15 @@ impl AssociatedImage {
     pub fn icc_profile(&self) -> Option<&[u8]> {
         (!self.icc_profile.is_empty()).then_some(self.icc_profile.as_slice())
     }
+
+    /// Decoded size of the whole image in bytes.
+    #[must_use]
+    pub fn decoded_bytes(&self) -> Option<u64> {
+        u64::from(self.dimensions.0)
+            .checked_mul(u64::from(self.dimensions.1))?
+            .checked_mul(u64::from(self.channels))?
+            .checked_mul(self.sample_type.byte_size() as u64)
+    }
 }
 
 // ── Identity / Compression ─────────────────────────────────────────
@@ -530,6 +539,42 @@ pub enum Compression {
     JpegLs,
     JpegXr,
     Other(u16),
+}
+
+/// How an image's pixels are stored in the source file.
+///
+/// Readers report it without decoding pixels, so callers can record
+/// compression history for pixels that are decoded and re-encoded. Byte
+/// totals may describe a bounded sample of a large level rather than every
+/// stored unit; their ratio estimates the source compression ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SourceEncoding {
+    /// Codec that stored the pixels.
+    pub compression: Compression,
+    /// Decoded bytes of the measured units, when stored sizes are known.
+    pub decoded_bytes: Option<u64>,
+    /// Stored bytes of the same units.
+    pub encoded_bytes: Option<u64>,
+}
+
+impl SourceEncoding {
+    /// An encoding whose stored sizes are unknown.
+    pub const fn new(compression: Compression) -> Self {
+        Self {
+            compression,
+            decoded_bytes: None,
+            encoded_bytes: None,
+        }
+    }
+
+    /// Records the decoded and stored byte totals of the measured units.
+    #[must_use]
+    pub const fn with_sizes(mut self, decoded_bytes: u64, encoded_bytes: u64) -> Self {
+        self.decoded_bytes = Some(decoded_bytes);
+        self.encoded_bytes = Some(encoded_bytes);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash)]

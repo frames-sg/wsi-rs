@@ -270,6 +270,20 @@ pub trait SlideReader: Send + Sync {
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         Err(WsiError::AssociatedImageNotFound(name.into()))
     }
+    /// How the named associated image is stored, when the format reports it.
+    fn associated_encoding(&self, _name: &str) -> Option<SourceEncoding> {
+        None
+    }
+    /// How one level's pixels are stored, when the format reports a single
+    /// codec for the level without exposing raw tiles.
+    fn level_encoding(
+        &self,
+        _scene: SceneId,
+        _series: SeriesId,
+        _level: LevelIdx,
+    ) -> Option<SourceEncoding> {
+        None
+    }
 }
 
 /// Internal resource-accounting boundary around public and built-in readers.
@@ -468,6 +482,19 @@ impl SlideReader for ConservativeManagedReader {
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.inner.read_associated(name)
+    }
+
+    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+        self.inner.associated_encoding(name)
+    }
+
+    fn level_encoding(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Option<SourceEncoding> {
+        self.inner.level_encoding(scene, series, level)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::core::types::Compression;
 use crate::error::WsiError;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -97,6 +98,15 @@ pub(in crate::formats::zeiss) enum CompressionMode {
 }
 
 impl CompressionMode {
+    pub(in crate::formats::zeiss) fn compression(self) -> Compression {
+        match self {
+            Self::UnCompressed => Compression::None,
+            Self::Jpg => Compression::Jpeg,
+            Self::JpgXr => Compression::JpegXr,
+            Self::Zstd0 | Self::Zstd1 => Compression::Zstd,
+        }
+    }
+
     pub(in crate::formats::zeiss) fn from_raw(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::UnCompressed),
