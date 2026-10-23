@@ -9,7 +9,7 @@ use crate::formats::zeiss::raster::{
 };
 use crate::formats::zeiss::slide::ZeissSlide;
 use crate::formats::zeiss::subblock::bitmap_from_raw_uncompressed_subblock;
-use crate::TileLayout;
+use crate::{Compression, TileLayout, TileRequest};
 use j2k_core::BackendRequest;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -250,6 +250,26 @@ fn direct_raw_blit_converts_bgr_and_bgra_and_validates_payloads() {
 }
 
 #[test]
+fn tile_presence_preserves_sparse_czi_coverage() {
+    let acquired = SubblockSpec::bgr24(0, 0, 256, 256, vec![0; 256 * 256 * 3]);
+    let fixture = write_fixture(&[acquired], &[], &metadata_xml(512, 256));
+    let slide = crate::Slide::open(fixture.path()).unwrap();
+
+    assert_eq!(
+        slide
+            .tile_is_present(&TileRequest::new(0, 0, 0, 0, 0))
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        slide
+            .tile_is_present(&TileRequest::new(0, 0, 0, 1, 0))
+            .unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
 fn parsed_slide_returns_blank_for_empty_and_nonintersecting_local_candidates() {
     let fixture = main_fixture();
     let mut slide = ZeissSlide::parse(fixture.path()).expect("parse generated CZI");
@@ -324,10 +344,17 @@ fn compressed_level_zero_declines_unsafe_fallback_without_decoding() {
 #[test]
 fn classic_jpeg_subblock_decodes_with_czi_geometry_and_rgb_color() {
     let rgb = [200, 80, 20].repeat(8 * 8);
-    let mut compressed = SubblockSpec::bgr24(0, 0, 8, 8, jpeg_rgb(8, 8, &rgb));
+    let jpeg = jpeg_rgb(8, 8, &rgb);
+    let mut compressed = SubblockSpec::bgr24(0, 0, 8, 8, jpeg.clone());
     compressed.compression = 1;
     let fixture = write_fixture(&[compressed], &[], &metadata_xml(8, 8));
     let slide = ZeissSlide::parse(fixture.path()).expect("parse JPEG-compressed CZI");
+
+    let raw = slide
+        .read_raw_jpeg_tile(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
+        .expect("exact raw JPEG tile");
+    assert_eq!(raw.data(), jpeg);
+    assert_eq!(slide.level_encoding(0), None);
 
     let tile = slide
         .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
@@ -344,6 +371,27 @@ fn classic_jpeg_subblock_decodes_with_czi_geometry_and_rgb_color() {
         .expect("compose JPEG-compressed CZI level");
     assert_eq!((level.width, level.height, level.channels), (8, 8, 3));
     assert_eq!(level.data.as_u8(), tile.data.as_u8());
+}
+
+#[test]
+fn multi_subblock_jpeg_level_keeps_sampled_encoding_metadata() {
+    let rgb = [200, 80, 20].repeat(8 * 8);
+    let mut left = SubblockSpec::bgr24(0, 0, 8, 8, jpeg_rgb(8, 8, &rgb));
+    left.compression = 1;
+    let mut right = SubblockSpec::bgr24(8, 0, 8, 8, jpeg_rgb(8, 8, &rgb));
+    right.compression = 1;
+    let fixture = write_fixture(&[left, right], &[], &metadata_xml(16, 8));
+    let slide = ZeissSlide::parse(fixture.path()).expect("parse tiled JPEG CZI");
+
+    assert!(slide
+        .exact_raw_jpeg_subblock(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
+        .unwrap()
+        .is_none());
+    let encoding = slide
+        .level_encoding(0)
+        .expect("sampled encoding for composed JPEG level");
+    assert_eq!(encoding.compression, Compression::Jpeg);
+    assert!(encoding.encoded_bytes.is_some_and(|bytes| bytes > 0));
 }
 
 #[test]

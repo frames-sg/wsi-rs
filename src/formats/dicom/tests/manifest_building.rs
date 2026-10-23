@@ -275,13 +275,15 @@ pub(super) fn write_series_level(
     total_rows: u32,
     total_columns: u32,
 ) {
-    let mut options = TestDicomOptions::native(vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    let frame = vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
+    let frame_count = total_rows.div_ceil(2) * total_columns.div_ceil(2);
+    let mut options = TestDicomOptions::native(frame.repeat(frame_count as usize));
     options.sop_instance_uid = sop_instance_uid;
     options.rows = 2;
     options.columns = 2;
     options.total_pixel_matrix_rows = total_rows;
     options.total_pixel_matrix_columns = total_columns;
-    options.number_of_frames = total_rows.div_ceil(2) * total_columns.div_ceil(2);
+    options.number_of_frames = frame_count;
     write_test_dicom(path, options);
 }
 
@@ -331,6 +333,62 @@ fn opens_complete_sibling_series_from_any_member_file() {
         from_associated.dataset().associated_images["thumbnail"].icc_profile(),
         Some(&[3, 1, 4, 1, 5, 9][..])
     );
+
+    for slide in [&from_base, &from_coarse, &from_associated] {
+        let level0_sources: Vec<String> = serde_json::from_str(
+            slide
+                .dataset()
+                .properties
+                .get("dicom.level.0.source-files")
+                .expect("level 0 source paths"),
+        )
+        .unwrap();
+        let level1_sources: Vec<String> = serde_json::from_str(
+            slide
+                .dataset()
+                .properties
+                .get("dicom.level.1.source-files")
+                .expect("level 1 source paths"),
+        )
+        .unwrap();
+        assert_eq!(
+            level0_sources,
+            [std::fs::canonicalize(&level0).unwrap().to_string_lossy()]
+        );
+        assert_eq!(
+            level1_sources,
+            [std::fs::canonicalize(&level1).unwrap().to_string_lossy()]
+        );
+        assert_eq!(
+            slide
+                .dataset()
+                .properties
+                .get("dicom.associated.thumbnail.source-file"),
+            Some(
+                std::fs::canonicalize(&thumbnail)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+
+        assert_eq!(
+            slide.level_encoding(0usize, 0usize, 0u32).unwrap(),
+            Some(
+                SourceEncoding::new(Compression::None)
+                    .with_sizes(16 * 16 * 3, 16 * 16 * 3)
+                    .with_lossy(false)
+            )
+        );
+        assert_eq!(
+            slide.associated_encoding("thumbnail").unwrap(),
+            Some(
+                SourceEncoding::new(Compression::None)
+                    .with_sizes(2 * 2 * 3, 2 * 2 * 3)
+                    .with_lossy(false)
+            )
+        );
+    }
 }
 
 #[test]

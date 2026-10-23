@@ -525,7 +525,7 @@ impl From<PlaneSelection> for PlaneIdx {
     }
 }
 
-/// Compression codec for TIFF tile/strip data.
+/// Compression codec for source pixel data.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Compression {
@@ -537,6 +537,8 @@ pub enum Compression {
     Jp2kYcbcr,
     Jp2kRgb,
     JpegLs,
+    /// DICOM run-length encoding (lossless).
+    Rle,
     JpegXr,
     Other(u16),
 }
@@ -556,6 +558,10 @@ pub struct SourceEncoding {
     pub decoded_bytes: Option<u64>,
     /// Stored bytes of the same units.
     pub encoded_bytes: Option<u64>,
+    /// Whether this encoding discarded information, when established from
+    /// authoritative metadata or the codestream. `None` means unknown.
+    /// This describes the current encoding, not any earlier lossy generations.
+    pub lossy: Option<bool>,
 }
 
 impl SourceEncoding {
@@ -565,6 +571,7 @@ impl SourceEncoding {
             compression,
             decoded_bytes: None,
             encoded_bytes: None,
+            lossy: None,
         }
     }
 
@@ -573,6 +580,13 @@ impl SourceEncoding {
     pub const fn with_sizes(mut self, decoded_bytes: u64, encoded_bytes: u64) -> Self {
         self.decoded_bytes = Some(decoded_bytes);
         self.encoded_bytes = Some(encoded_bytes);
+        self
+    }
+
+    /// Records whether this encoding is lossy.
+    #[must_use]
+    pub const fn with_lossy(mut self, lossy: bool) -> Self {
+        self.lossy = Some(lossy);
         self
     }
 }

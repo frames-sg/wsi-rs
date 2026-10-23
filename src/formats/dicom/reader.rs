@@ -4,7 +4,8 @@ use j2k_core::BackendRequest;
 
 use crate::core::registry::SlideReader;
 use crate::core::types::{
-    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, TileCodecKind, TileRequest,
+    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, SourceEncoding,
+    TileCodecKind, TileRequest,
 };
 use crate::error::WsiError;
 
@@ -135,6 +136,77 @@ impl SlideReader for DicomReader {
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
         image.read_associated(name)
+    }
+
+    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        let level =
+            self.slide
+                .levels
+                .get(req.level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: req.level.get(),
+                    count: self.slide.levels.len() as u32,
+                })?;
+        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
+            return Ok(Some(false));
+        };
+        if col >= level.tiles_across || row >= level.tiles_down {
+            return Ok(Some(false));
+        }
+        Ok(Some(level.image_for_tile(col, row).is_some()))
+    }
+
+    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
+        match self.slide.associated.get(name) {
+            Some(image) => image.source_encoding(),
+            None => Ok(None),
+        }
+    }
+
+    /// One encoding for the level when every part shares its codec and
+    /// lossiness; the sizes are summed over the parts.
+    fn level_encoding(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Result<Option<SourceEncoding>, WsiError> {
+        if scene.get() != 0 || series.get() != 0 {
+            return Ok(None);
+        }
+        let Some(level) = self.slide.levels.get(level.get() as usize) else {
+            return Ok(None);
+        };
+        let mut total: Option<SourceEncoding> = None;
+        for part in &level.parts {
+            let Some(encoding) = part.source_encoding()? else {
+                return Ok(None);
+            };
+            total = match total {
+                None => Some(encoding),
+                Some(total)
+                    if (total.compression, total.lossy)
+                        == (encoding.compression, encoding.lossy) =>
+                {
+                    let sizes = total
+                        .decoded_bytes
+                        .zip(encoding.decoded_bytes)
+                        .and_then(|(a, b)| a.checked_add(b))
+                        .zip(
+                            total
+                                .encoded_bytes
+                                .zip(encoding.encoded_bytes)
+                                .and_then(|(a, b)| a.checked_add(b)),
+                        );
+                    let Some((decoded, encoded)) = sizes else {
+                        return Ok(None);
+                    };
+                    Some(total.with_sizes(decoded, encoded))
+                }
+                Some(_) => return Ok(None),
+            };
+        }
+        Ok(total)
     }
 }
 

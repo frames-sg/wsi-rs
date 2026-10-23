@@ -16,6 +16,14 @@ use crate::formats::dicom::frame_index::{
 use crate::formats::dicom::metadata::optional_u32;
 
 impl DicomImage {
+    pub(in super::super) fn source_encoded_bytes(&self) -> Result<u64, WsiError> {
+        if let Some(native) = &self.frame_store.native_pixel_data {
+            return Ok(u64::from(native.value_len));
+        }
+        let frames = self.ensure_encapsulated_frames()?;
+        Ok(fragment_payload_bytes(&frames.fragments))
+    }
+
     pub(in super::super) fn extract_encapsulated_frame(
         &self,
         frame_index: u32,

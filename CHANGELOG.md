@@ -14,6 +14,22 @@
   `MetalBackendSessions::with_cooperative_cpu_workers`. Cloned sessions share
   one cooperative slot and fall back to ordinary Metal while it is busy.
   Automatic slide acceleration retains its existing policy.
+- `Slide::level_encoding` and `Slide::associated_encoding` report how source
+  pixels are stored: the codec, decoded and stored sizes, and
+  `SourceEncoding::lossy` when the transfer syntax or format establishes it.
+  DICOM reports each associated image and each level, summed over the level's
+  files when they share codec and lossiness. Both return an error when the
+  source sizes cannot be read.
+- `Slide::tile_is_present` reports whether metadata marks a tile as acquired,
+  without decoding it: tiled TIFF (a zero byte count is absent), Zeiss CZI and
+  sparsely tiled DICOM answer; other formats return `None`, to be treated as
+  present.
+- DICOM reads images stored in 16-bit words with 9 to 16 bits stored, in the
+  native, RLE, lossless JPEG, JPEG 2000 and HTJ2K transfer syntaxes, as `Uint16`
+  samples. RLE sources report `Compression::Rle`.
+- DICOM slides list the files behind each level and associated image in the
+  `dicom.level.<n>.source-files` and `dicom.associated.<name>.source-file`
+  properties.
 
 ### Changed
 
@@ -22,6 +38,11 @@
   Decoded pixels are unchanged.
 - TIFF files have their SubIFDs parsed when opened. A TIFF whose SubIFDs tag
   points at an IFD that was already parsed, or outside the file, fails to open.
+
+### Fixed
+
+- JPEG XR tiles decode inside the codec thread pool. A caller holding slide
+  admission no longer waits on global Rayon workers blocked on the same slide.
 
 ## [0.8.0] - 2026-10-06
 

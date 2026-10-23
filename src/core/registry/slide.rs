@@ -149,8 +149,17 @@ impl Slide {
 
     /// How the named associated image is stored in the source, when the
     /// format reports it.
-    pub fn associated_encoding(&self, name: &str) -> Option<crate::SourceEncoding> {
+    pub fn associated_encoding(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::SourceEncoding>, WsiError> {
         self.source.associated_encoding(name)
+    }
+
+    /// Whether metadata identifies a tile as present or absent. An unknown
+    /// result must be treated as present when preserving source coverage.
+    pub fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        self.source.tile_is_present(req)
     }
 
     /// How a level's pixels are stored in the source, when the format reports
@@ -161,7 +170,7 @@ impl Slide {
         scene: impl Into<SceneId>,
         series: impl Into<SeriesId>,
         level: impl Into<LevelIdx>,
-    ) -> Option<crate::SourceEncoding> {
+    ) -> Result<Option<crate::SourceEncoding>, WsiError> {
         self.source
             .level_encoding(scene.into(), series.into(), level.into())
     }

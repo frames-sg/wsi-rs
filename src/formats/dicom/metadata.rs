@@ -36,31 +36,38 @@ pub(super) struct ParsedDicomMetadata {
 pub(super) enum DicomBitDepth {
     /// BitsAllocated 8, BitsStored 8, HighBit 7.
     Eight,
-    /// BitsAllocated 16, BitsStored 12, HighBit 11 (JPEG Extended or
-    /// progressive frames only).
-    Twelve,
+    /// Unsigned samples in 16-bit words, of which `bits_stored` are significant.
+    Uint16 { bits_stored: u8 },
 }
 
 impl DicomBitDepth {
     pub(super) fn bits_allocated(self) -> u16 {
         match self {
             Self::Eight => 8,
-            Self::Twelve => 16,
+            Self::Uint16 { .. } => 16,
         }
+    }
+
+    pub(super) fn bytes_per_sample(self) -> u16 {
+        self.bits_allocated() / 8
     }
 
     pub(super) fn bits_stored(self) -> u8 {
         match self {
             Self::Eight => 8,
-            Self::Twelve => 12,
+            Self::Uint16 { bits_stored } => bits_stored,
         }
     }
 
     pub(super) fn sample_type(self) -> SampleType {
         match self {
             Self::Eight => SampleType::Uint8,
-            Self::Twelve => SampleType::Uint16,
+            Self::Uint16 { .. } => SampleType::Uint16,
         }
+    }
+
+    pub(super) fn unsigned_sample_mask(self) -> u16 {
+        u16::MAX >> (16 - self.bits_stored())
     }
 }
 
@@ -525,28 +532,55 @@ pub(super) fn validate_supported_pixel_format(
     }
 }
 
-/// Accept 12-bit samples only for the JPEG processes that encode them.
-///
-/// Every other transfer syntax keeps the 8/8/7 contract and its exact error
-/// messages: native, RLE, JPEG lossless and JPEG 2000 frames would otherwise
-/// open and then fail on read.
 fn validate_sample_bit_depth(meta: &ParsedDicomMetadata) -> Result<DicomBitDepth, WsiError> {
     let bits_allocated = required_u32(&meta.obj, tags::BITS_ALLOCATED, "BitsAllocated")?;
-    if bits_allocated == 16 && is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid) {
-        verify_required_int(&meta.obj, tags::BITS_STORED, 12, "BitsStored", &meta.path)?;
-        verify_required_int(&meta.obj, tags::HIGH_BIT, 11, "HighBit", &meta.path)?;
-        return Ok(DicomBitDepth::Twelve);
+    if bits_allocated == 8 {
+        verify_required_int(&meta.obj, tags::BITS_STORED, 8, "BitsStored", &meta.path)?;
+        verify_required_int(&meta.obj, tags::HIGH_BIT, 7, "HighBit", &meta.path)?;
+        return Ok(DicomBitDepth::Eight);
+    }
+    if bits_allocated != 16 {
+        return Err(invalid_slide(
+            &meta.path,
+            format!("Attribute BitsAllocated value {bits_allocated} is not supported"),
+        ));
+    }
+
+    let bits_stored = required_u32(&meta.obj, tags::BITS_STORED, "BitsStored")?;
+    if is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid) && bits_stored != 12 {
+        return Err(invalid_slide(
+            &meta.path,
+            format!("Attribute BitsStored value {bits_stored} != 12"),
+        ));
+    }
+    if !(9..=16).contains(&bits_stored) {
+        return Err(invalid_slide(
+            &meta.path,
+            format!("Attribute BitsStored value {bits_stored} is not supported"),
+        ));
+    }
+    if is_jpeg_transfer_syntax(&meta.transfer_syntax_uid)
+        && !is_lossless_jpeg_transfer_syntax(&meta.transfer_syntax_uid)
+        && !is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid)
+    {
+        return Err(invalid_slide(
+            &meta.path,
+            format!(
+                "Attribute BitsAllocated value 16 is not supported for transfer syntax {}",
+                meta.transfer_syntax_uid
+            ),
+        ));
     }
     verify_required_int(
         &meta.obj,
-        tags::BITS_ALLOCATED,
-        8,
-        "BitsAllocated",
+        tags::HIGH_BIT,
+        bits_stored - 1,
+        "HighBit",
         &meta.path,
     )?;
-    verify_required_int(&meta.obj, tags::BITS_STORED, 8, "BitsStored", &meta.path)?;
-    verify_required_int(&meta.obj, tags::HIGH_BIT, 7, "HighBit", &meta.path)?;
-    Ok(DicomBitDepth::Eight)
+    Ok(DicomBitDepth::Uint16 {
+        bits_stored: bits_stored as u8,
+    })
 }
 
 fn is_twelve_bit_jpeg_transfer_syntax(transfer_syntax_uid: &str) -> bool {

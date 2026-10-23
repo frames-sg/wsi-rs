@@ -105,4 +105,16 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
         reader.tile_codec_kind(&tile_request(2, 0)),
         TileCodecKind::Other
     );
+    assert_eq!(
+        reader.tile_is_present(&tile_request(0, 0)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        reader.tile_is_present(&tile_request(1, 0)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        reader.tile_is_present(&tile_request(2, 0)).unwrap(),
+        Some(false)
+    );
 }

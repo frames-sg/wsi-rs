@@ -169,8 +169,15 @@ impl SlideReader for AdaptiveDecodeReader {
         self.inner.read_associated(name)
     }
 
-    fn associated_encoding(&self, name: &str) -> Option<crate::core::types::SourceEncoding> {
+    fn associated_encoding(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
         self.inner.associated_encoding(name)
+    }
+
+    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        self.inner.tile_is_present(req)
     }
 
     fn level_encoding(
@@ -178,7 +185,7 @@ impl SlideReader for AdaptiveDecodeReader {
         scene: crate::core::types::SceneId,
         series: crate::core::types::SeriesId,
         level: crate::core::types::LevelIdx,
-    ) -> Option<crate::core::types::SourceEncoding> {
+    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
         self.inner.level_encoding(scene, series, level)
     }
 }

@@ -262,6 +262,13 @@ fn vmu_macro_and_parallel_reads_use_bound_sources() {
         slide.dataset().associated_images["macro"].dimensions,
         (4, 3)
     );
+    let encoding = slide.associated_encoding("macro").unwrap().unwrap();
+    assert_eq!(encoding.compression, wsi_rs::Compression::Jpeg);
+    assert_eq!(
+        (encoding.decoded_bytes, encoding.encoded_bytes),
+        (Some(4 * 3 * 3), Some(jpeg.len() as u64))
+    );
+    assert_eq!(slide.associated_encoding("label").unwrap(), None);
     let expected = jpeg_decoder::Decoder::new(std::io::Cursor::new(&jpeg))
         .decode()
         .unwrap();
@@ -277,6 +284,7 @@ fn vmu_macro_and_parallel_reads_use_bound_sources() {
         slide.read_associated("macro").unwrap().to_rgb().unwrap(),
         actual
     );
+    assert_eq!(slide.associated_encoding("macro").unwrap(), Some(encoding));
     std::thread::scope(|scope| {
         for col in 0..3 {
             let slide = &slide;

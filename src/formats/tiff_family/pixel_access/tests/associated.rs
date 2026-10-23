@@ -527,11 +527,11 @@ fn associated_encoding_reports_stripped_jpeg_codec_and_stored_bytes() {
     );
     let reader = TiffPixelReader::new(container, layout);
 
-    let encoding = reader.associated_encoding("macro").unwrap();
+    let encoding = reader.associated_encoding("macro").unwrap().unwrap();
     assert_eq!(encoding.compression, Compression::Jpeg);
     assert_eq!(encoding.decoded_bytes, Some(4 * 3 * 3));
     assert_eq!(encoding.encoded_bytes, Some(jpeg.len() as u64));
-    assert!(reader.associated_encoding("label").is_none());
+    assert!(reader.associated_encoding("label").unwrap().is_none());
 }
 
 #[test]
@@ -553,7 +553,7 @@ fn associated_encoding_sums_tiled_ifd_byte_counts() {
     );
     let reader = TiffPixelReader::new(container, layout);
 
-    let encoding = reader.associated_encoding("label").unwrap();
+    let encoding = reader.associated_encoding("label").unwrap().unwrap();
     assert_eq!(encoding.compression, Compression::None);
     assert_eq!(encoding.decoded_bytes, Some(4 * 4));
     assert_eq!(encoding.encoded_bytes, Some(16));

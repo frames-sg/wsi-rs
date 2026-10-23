@@ -9,10 +9,13 @@ use crate::core::cache::{PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::positioned_file::PositionedFile;
 use crate::core::registry::OpenBudget;
-use crate::core::types::{CpuTile, RawCompressedTile};
+use crate::core::types::{CpuTile, RawCompressedTile, SourceEncoding};
 use crate::error::WsiError;
 
-use super::backend::{is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax};
+use super::backend::{
+    is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax,
+    source_compression_for_transfer_syntax, transfer_syntax_is_lossy,
+};
 use super::decode::{
     black_sample_buffer, checked_dicom_tile_coordinates, crop_or_keep_sample_buffer_rgb,
     dicom_actual_tile_dimensions, raw_compression_for_transfer_syntax,
@@ -315,6 +318,33 @@ impl DicomImage {
                 .unwrap_or_else(|e| e.into_inner())
                 .capacity_bytes()
     }
+
+    pub(super) fn source_encoding(&self) -> Result<Option<SourceEncoding>, WsiError> {
+        let Some(compression) = source_compression_for_transfer_syntax(
+            &self.transfer_syntax_uid,
+            &self.photometric_interpretation,
+        ) else {
+            return Ok(None);
+        };
+        let decoded_bytes = [
+            u64::from(self.tile_width),
+            u64::from(self.tile_height),
+            u64::from(self.samples_per_pixel),
+            u64::from(self.bit_depth.bytes_per_sample()),
+        ]
+        .into_iter()
+        .try_fold(u64::from(self.number_of_frames), u64::checked_mul)
+        .ok_or_else(|| {
+            invalid_slide(
+                &self.frame_store.path,
+                "DICOM decoded image size overflows u64",
+            )
+        })?;
+        let mut encoding = SourceEncoding::new(compression)
+            .with_sizes(decoded_bytes, self.source_encoded_bytes()?);
+        encoding.lossy = transfer_syntax_is_lossy(&self.transfer_syntax_uid);
+        Ok(Some(encoding))
+    }
 }
 
 pub(super) fn dicom_frame_cache_entry_bytes(
@@ -330,7 +360,7 @@ pub(super) fn dicom_frame_cache_entry_bytes(
         DicomBitDepth::Eight => pixels
             .saturating_mul(u64::from(samples_per_pixel))
             .saturating_mul(2),
-        // Decoded 12-bit frames, monochrome included, are always RGB16.
-        DicomBitDepth::Twelve => pixels.saturating_mul(3 * 2),
+        // Decoded 16-bit-word frames, monochrome included, are always RGB16.
+        DicomBitDepth::Uint16 { .. } => pixels.saturating_mul(3 * 2),
     }
 }

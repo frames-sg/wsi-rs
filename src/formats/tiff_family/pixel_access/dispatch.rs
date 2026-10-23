@@ -212,14 +212,27 @@ impl SlideReader for TiffPixelReader {
         &self.layout.dataset
     }
 
-    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
+    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        match self.tile_source_for(req)? {
+            TileSource::TiledIfd { ifd_id, .. } => Ok(Some(
+                self.tiled_ifd_tile_span(req, *ifd_id)?.byte_count != 0,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         let decoded = self
             .layout
             .dataset
             .associated_images
-            .get(name)?
-            .decoded_bytes()?;
-        let (compression, encoded) = match self.layout.associated_sources.get(name)? {
+            .get(name)
+            .and_then(|image| image.decoded_bytes());
+        let (Some(decoded), Some(source)) = (decoded, self.layout.associated_sources.get(name))
+        else {
+            return Ok(None);
+        };
+        let (compression, encoded) = match source {
             TileSource::Stripped {
                 compression,
                 strip_byte_counts,
@@ -236,14 +249,16 @@ impl SlideReader for TiffPixelReader {
                 *compression,
                 self.container
                     .get_u64_array(*ifd_id, tags::TILE_BYTE_COUNTS)
-                    .ok()?
+                    .map_err(|e| e.into_wsi_error(self.container.path()))?
                     .iter()
                     .copied()
                     .sum::<u64>(),
             ),
-            _ => return None,
+            _ => return Ok(None),
         };
-        Some(SourceEncoding::new(compression).with_sizes(decoded, encoded))
+        Ok(Some(
+            SourceEncoding::new(compression).with_sizes(decoded, encoded),
+        ))
     }
 
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {

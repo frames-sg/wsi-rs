@@ -15,6 +15,48 @@ pub(super) fn is_lossless_jpeg_transfer_syntax(uid: &str) -> bool {
     matches!(uid, uids::JPEG_LOSSLESS | uids::JPEG_LOSSLESS_SV1)
 }
 
+fn is_native_transfer_syntax(uid: &str) -> bool {
+    matches!(
+        uid,
+        uids::IMPLICIT_VR_LITTLE_ENDIAN
+            | uids::EXPLICIT_VR_LITTLE_ENDIAN
+            | EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX
+    )
+}
+
+pub(super) fn source_compression_for_transfer_syntax(
+    uid: &str,
+    photometric_interpretation: &str,
+) -> Option<Compression> {
+    if is_native_transfer_syntax(uid) {
+        Some(Compression::None)
+    } else if uid == RLE_TRANSFER_SYNTAX {
+        Some(Compression::Rle)
+    } else {
+        raw_compression_for_transfer_syntax(uid, photometric_interpretation).ok()
+    }
+}
+
+/// Whether the transfer syntax itself is lossy; `None` for JPEG 2000 and
+/// HTJ2K, whose codestreams may be either.
+pub(super) fn transfer_syntax_is_lossy(uid: &str) -> Option<bool> {
+    if is_jpeg_transfer_syntax(uid) {
+        Some(!is_lossless_jpeg_transfer_syntax(uid))
+    } else if is_native_transfer_syntax(uid)
+        || matches!(
+            uid,
+            uids::JPEG2000_LOSSLESS
+                | HTJ2K_LOSSLESS_TRANSFER_SYNTAX
+                | HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX
+                | RLE_TRANSFER_SYNTAX
+        )
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub(crate) struct DicomBackend {
     pub(super) probe_cache: ConfiguredProbeCache<DicomSlide>,
 }

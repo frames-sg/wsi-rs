@@ -19,6 +19,28 @@ impl SlideReader for ZeissReader {
         &self.slide.dataset
     }
 
+    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
+        if req.scene.get() != 0
+            || req.series.get() != 0
+            || req.plane.get() != PlaneSelection::default()
+        {
+            return Ok(None);
+        }
+        let tiles = self
+            .slide
+            .canvas_level_tile_subblocks
+            .get(req.level.get() as usize)
+            .ok_or(WsiError::LevelOutOfRange {
+                level: req.level.get(),
+                count: self.slide.canvas_level_tile_subblocks.len() as u32,
+            })?;
+        Ok(Some(
+            tiles
+                .get(&(req.col, req.row))
+                .is_some_and(|indices| !indices.is_empty()),
+        ))
+    }
+
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
         match self.slide.exact_raw_jpeg_subblock(req) {
             Ok(Some(_)) => TileCodecKind::Jpeg,
@@ -43,13 +65,14 @@ impl SlideReader for ZeissReader {
         _scene: SceneId,
         _series: SeriesId,
         level: LevelIdx,
-    ) -> Option<SourceEncoding> {
-        self.slide
-            .level_encoding(usize::try_from(level.get()).ok()?)
+    ) -> Result<Option<SourceEncoding>, WsiError> {
+        Ok(usize::try_from(level.get())
+            .ok()
+            .and_then(|level| self.slide.level_encoding(level)))
     }
 
-    fn associated_encoding(&self, name: &str) -> Option<SourceEncoding> {
-        self.slide.associated_encoding(name)
+    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
+        Ok(self.slide.associated_encoding(name))
     }
 
     fn read_raw_compressed_display_tile(
@@ -170,6 +193,10 @@ impl ZeissSlide {
     /// One codec and an estimated compression ratio for a level, measured on
     /// at most [`ENCODING_SAMPLE_SUBBLOCKS`] evenly spaced subblocks.
     pub(super) fn level_encoding(&self, level: usize) -> Option<SourceEncoding> {
+        if self.dataset.scenes.len() == 1 && self.level_tiles_are_raw_jpeg(level) {
+            // Every tile is served raw, so callers measure exact per-tile sizes.
+            return None;
+        }
         let indices = self.canvas_level_subblocks.get(level)?;
         let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         let codec = czi.subblocks().get(*indices.first()?)?.compression;
@@ -191,6 +218,42 @@ impl ZeissSlide {
             encoded = encoded.checked_add(czi.subblock_data_size(index).ok()?)?;
         }
         Some(SourceEncoding::new(codec.compression()).with_sizes(decoded, encoded))
+    }
+
+    fn level_tiles_are_raw_jpeg(&self, level_idx: usize) -> bool {
+        let Some(tiles) = self
+            .canvas_level_tile_subblocks
+            .get(level_idx)
+            .filter(|tiles| !tiles.is_empty())
+        else {
+            return false;
+        };
+        let Some(level) = self
+            .dataset
+            .scenes
+            .first()
+            .and_then(|scene| scene.series.first())
+            .and_then(|series| series.levels.get(level_idx))
+        else {
+            return false;
+        };
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            ..
+        } = level.tile_layout
+        else {
+            return false;
+        };
+        let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
+        tiles
+            .iter()
+            .all(|(&(col, row), indices)| match indices.as_slice() {
+                [index] => czi.subblocks().get(*index).is_some_and(|info| {
+                    self.subblock_is_exact_tile(info, level, tile_width, tile_height, col, row)
+                }),
+                _ => false,
+            })
     }
 
     /// Codec and sizes of an associated attachment; its stored size includes

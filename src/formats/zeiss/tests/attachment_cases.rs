@@ -173,6 +173,7 @@ fn source_encodings_report_level_and_attachment_codecs_with_stored_sizes() {
     // Level 0: two uncompressed 2x2 Bgr24 subblocks of 12 stored bytes each.
     let level0 = slide
         .level_encoding(0usize, 0usize, 0u32)
+        .unwrap()
         .expect("level 0 encoding");
     assert_eq!(level0.compression, crate::Compression::None);
     assert_eq!(level0.decoded_bytes, Some(24));
@@ -180,17 +181,24 @@ fn source_encodings_report_level_and_attachment_codecs_with_stored_sizes() {
     // Level 1: one 2x1 downsampled subblock.
     let level1 = slide
         .level_encoding(0usize, 0usize, 1u32)
+        .unwrap()
         .expect("level 1 encoding");
     assert_eq!(
         (level1.decoded_bytes, level1.encoded_bytes),
         (Some(6), Some(6))
     );
 
-    let label = slide.associated_encoding("label").expect("label encoding");
+    let label = slide
+        .associated_encoding("label")
+        .unwrap()
+        .expect("label encoding");
     assert_eq!(label.compression, crate::Compression::Jpeg);
     assert_eq!(label.decoded_bytes, Some(2 * 3));
     // The macro is an embedded CZI whose single subblock is uncompressed.
-    let preview = slide.associated_encoding("macro").expect("macro encoding");
+    let preview = slide
+        .associated_encoding("macro")
+        .unwrap()
+        .expect("macro encoding");
     assert_eq!(preview.compression, crate::Compression::None);
-    assert!(slide.associated_encoding("thumbnail").is_none());
+    assert!(slide.associated_encoding("thumbnail").unwrap().is_none());
 }

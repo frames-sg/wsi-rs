@@ -290,12 +290,12 @@ impl core::convert::From<usize> for wsi_rs::SeriesId
 pub fn wsi_rs::SeriesId::from(usize) -> Self
 pub struct wsi_rs::prelude::Slide
 impl wsi_rs::Slide
-pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
 pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
 pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
-pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::limits(&self) -> wsi_rs::SlideLimits
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
@@ -319,6 +319,7 @@ pub fn wsi_rs::Slide::read_tiles_metal(&self, &[wsi_rs::TileRequest], &wsi_rs::o
 pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::TileCache>) -> alloc::sync::Arc<wsi_rs::TileCache>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+pub fn wsi_rs::Slide::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
 impl core::fmt::Debug for wsi_rs::Slide
 pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct wsi_rs::prelude::SlideLimits
@@ -405,6 +406,7 @@ pub wsi_rs::Compression::JpegXr
 pub wsi_rs::Compression::Lzw
 pub wsi_rs::Compression::None
 pub wsi_rs::Compression::Other(u16)
+pub wsi_rs::Compression::Rle
 pub wsi_rs::Compression::Zstd
 #[non_exhaustive] pub enum wsi_rs::CpuTileData
 pub wsi_rs::CpuTileData::F32(alloc::sync::Arc<alloc::vec::Vec<f32>>)
@@ -825,12 +827,12 @@ impl core::convert::From<usize> for wsi_rs::SeriesId
 pub fn wsi_rs::SeriesId::from(usize) -> Self
 pub struct wsi_rs::Slide
 impl wsi_rs::Slide
-pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::Slide::associated_encoding(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::cached_tile_present(&self, &wsi_rs::TileRequest) -> bool
 pub fn wsi_rs::Slide::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::Slide::decode_execution_options(&self) -> wsi_rs::DecodeExecutionOptions
 pub fn wsi_rs::Slide::from_source_with_cache_bytes(alloc::boxed::Box<dyn wsi_rs::SlideReader>, u64) -> Self
-pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::Slide::level_encoding(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::level_source_kind(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::Slide::limits(&self) -> wsi_rs::SlideLimits
 pub fn wsi_rs::Slide::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, wsi_rs::error::WsiError>
@@ -854,6 +856,7 @@ pub fn wsi_rs::Slide::read_tiles_metal(&self, &[wsi_rs::TileRequest], &wsi_rs::o
 pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::TileCache>) -> alloc::sync::Arc<wsi_rs::TileCache>
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+pub fn wsi_rs::Slide::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
 impl core::fmt::Debug for wsi_rs::Slide
 pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct wsi_rs::SlideLimitError
@@ -907,8 +910,10 @@ pub fn wsi_rs::SlideReadContext<'a>::max_region_pixels(&self) -> u64
 pub wsi_rs::SourceEncoding::compression: wsi_rs::Compression
 pub wsi_rs::SourceEncoding::decoded_bytes: core::option::Option<u64>
 pub wsi_rs::SourceEncoding::encoded_bytes: core::option::Option<u64>
+pub wsi_rs::SourceEncoding::lossy: core::option::Option<bool>
 impl wsi_rs::SourceEncoding
 pub const fn wsi_rs::SourceEncoding::new(wsi_rs::Compression) -> Self
+pub const fn wsi_rs::SourceEncoding::with_lossy(self, bool) -> Self
 pub const fn wsi_rs::SourceEncoding::with_sizes(self, u64, u64) -> Self
 #[non_exhaustive] pub struct wsi_rs::SourceIccProfile
 pub wsi_rs::SourceIccProfile::bytes: alloc::vec::Vec<u8>
@@ -1024,10 +1029,10 @@ pub fn wsi_rs::FormatProbe::probe(&self, &std::path::Path) -> core::result::Resu
 impl<T: wsi_rs::FormatProbe> wsi_rs::FormatProbe for alloc::sync::Arc<T>
 pub fn alloc::sync::Arc<T>::probe(&self, &std::path::Path) -> core::result::Result<wsi_rs::ProbeResult, wsi_rs::error::WsiError>
 pub trait wsi_rs::SlideReader: core::marker::Send + core::marker::Sync
-pub fn wsi_rs::SlideReader::associated_encoding(&self, &str) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::SlideReader::associated_encoding(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::associated_image(&self, &str) -> core::result::Result<core::option::Option<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
-pub fn wsi_rs::SlideReader::level_encoding(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::option::Option<wsi_rs::SourceEncoding>
+pub fn wsi_rs::SlideReader::level_encoding(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::prepare_level_controlled(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
@@ -1041,6 +1046,7 @@ pub fn wsi_rs::SlideReader::read_tiles_cpu(&self, &[wsi_rs::TileRequest]) -> cor
 pub fn wsi_rs::SlideReader::read_tiles_cpu_controlled(&self, &[wsi_rs::TileRequest], &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_tiles_metal(&self, &[wsi_rs::TileRequest], &wsi_rs::output::metal::MetalBackendSessions) -> core::result::Result<alloc::vec::Vec<wsi_rs::output::metal::MetalDeviceTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
+pub fn wsi_rs::SlideReader::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::use_display_tile_cache(&self, &wsi_rs::TileViewRequest) -> bool
 pub fn wsi_rs::build_svcache(&std::path::Path, &std::path::Path) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::build_svcache_tile_payloads_merge(&std::path::Path, &std::path::Path, &[(wsi_rs::SvcacheTileSelection, wsi_rs::CpuTile)]) -> core::result::Result<usize, wsi_rs::error::WsiError>
