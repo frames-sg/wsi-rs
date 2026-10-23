@@ -4,6 +4,7 @@
 //! of any top-level IFD. Builds an irregular tile grid from the embedded
 //! XML tile layout metadata (`SlideStitchInfo` / `ImageInfo` / `TileJointInfo`).
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
@@ -14,7 +15,7 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, DatasetLayout,
     TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 

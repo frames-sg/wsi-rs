@@ -131,11 +131,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             ));
         }
 
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Phase 3: Find level 0 XML (EncodeInfo) for public level-0 bounds.
         let level0_tile_width = pyramid_ifds[0].tile_width as i64;

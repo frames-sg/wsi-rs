@@ -1,5 +1,5 @@
 use super::*;
-use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
+use crate::formats::tiff_family::test_support::{build_bigtiff, build_tiff, SyntheticTag};
 
 fn philips_description() -> &'static str {
     r#"<DataObject ObjectType="DPUfsImport">
@@ -87,6 +87,34 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
         Some("20200101120000")
     );
     assert_eq!(layout.tile_sources.len(), 2);
+}
+
+#[test]
+fn interpret_sorts_levels_whose_area_overflows_u64() {
+    // BigTIFF LONG8 sizes: the 2^32 x 2^32 level's area does not fit in u64.
+    let level = |side: u64| {
+        vec![
+            SyntheticTag::long8(tags::IMAGE_WIDTH, side),
+            SyntheticTag::long8(tags::IMAGE_LENGTH, side),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+        ]
+    };
+    let mut small = level(1 << 31);
+    small.push(SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"));
+    small.push(SyntheticTag::ascii(
+        tags::IMAGE_DESCRIPTION,
+        philips_description(),
+    ));
+    let file = build_bigtiff(&[small, level(1 << 32)]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = PhilipsInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels[0].dimensions, (1 << 32, 1 << 32));
+    assert_eq!(levels[1].dimensions, (1 << 31, 1 << 31));
 }
 
 #[test]

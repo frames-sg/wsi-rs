@@ -18,8 +18,8 @@ use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compression_from_tag, compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter,
-    TileSource, TileSourceKey,
+    compression_from_tag, compute_tiff_dataset_identity, level_area, DatasetLayout,
+    TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 const LEICA_NS_2010_03: &str = "http://www.leica-microsystems.com/scn/2010/03/10";
@@ -125,7 +125,7 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
             let best = image
                 .ifd_levels
                 .iter()
-                .max_by_key(|level| level.width * level.height)
+                .max_by_key(|level| level_area(level.width, level.height))
                 .ok_or_else(|| {
                     TiffParseError::Structure("Leica SCN macro image has no levels".into())
                 })?;
@@ -305,7 +305,7 @@ impl LeicaInterpreter {
             let representative = dims
                 .iter()
                 .copied()
-                .max_by_key(|dim| dim.width * dim.height)
+                .max_by_key(|dim| level_area(dim.width, dim.height))
                 .ok_or_else(|| {
                     TiffParseError::Structure(format!(
                         "Leica SCN image has empty resolution group {r}"

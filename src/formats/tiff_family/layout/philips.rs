@@ -10,6 +10,7 @@
 //! that logical pyramid. The XML metadata is still used for properties such as
 //! MPP, but not for public level dimensions.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
@@ -21,7 +22,7 @@ use crate::properties::Properties;
 use base64::Engine;
 
 use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, DatasetLayout,
     TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
@@ -163,11 +164,7 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
         }
 
         // Sort tiled IFDs by area descending (largest = level 0).
-        tiled_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
-            area_b.cmp(&area_a)
-        });
+        tiled_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Phase 2: Extract DICOM_PIXEL_SPACING from XML for public properties.
         let spacings = extract_pixel_spacings(container, &tiled_ifds);

@@ -5,6 +5,7 @@
 //! last in the interpreter chain so it only fires when all specific vendors
 //! decline.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::limits::MAX_DECODED_IMAGE_BYTES;
@@ -14,8 +15,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, regular_tiff_level, DatasetLayout,
-    TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level,
+    DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 // ── Interpreter ──────────────────────────────────────────────────────

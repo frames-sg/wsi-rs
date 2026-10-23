@@ -102,11 +102,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
         }
 
         // Phase 2: Sort tiled IFDs by area descending (largest = level 0).
-        tiled_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
-            area_b.cmp(&area_a)
-        });
+        tiled_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         let (base_w, base_h) = if let Some(first) = tiled_ifds.first() {
             (first.width, first.height)

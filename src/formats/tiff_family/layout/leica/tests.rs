@@ -178,6 +178,49 @@ fn interpret_builds_multichannel_scene_macro_and_public_metadata() {
 }
 
 #[test]
+fn interpret_picks_largest_ifd_when_area_overflows_u64() {
+    // 2^32 x 2^32 does not fit in a u64 area; the smaller IFDs must not win.
+    let xml = r#"<scn xmlns="http://www.leica-microsystems.com/scn/2010/10/01">
+        <collection sizeX="1000" sizeY="1000">
+            <image>
+                <dimension ifd="0" sizeX="4294967296" sizeY="4294967296" r="0" c="0"/>
+                <dimension ifd="1" sizeX="2147483648" sizeY="2147483648" r="0" c="1"/>
+                <view sizeX="500" sizeY="500" offsetX="1" offsetY="1"/>
+            </image>
+            <image>
+                <dimension ifd="2" sizeX="4294967296" sizeY="4294967296" r="0"/>
+                <dimension ifd="3" sizeX="64" sizeY="64" r="1"/>
+                <view type="macro" sizeX="1000" sizeY="1000" offsetX="0" offsetY="0"/>
+            </image>
+        </collection>
+    </scn>"#;
+    let tiled = |tile_width: u32| {
+        vec![
+            SyntheticTag::long(tags::TILE_WIDTH, tile_width),
+            SyntheticTag::long(tags::TILE_LENGTH, 64),
+        ]
+    };
+    let mut first = tiled(128);
+    first.push(SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, xml));
+    let stripped = || vec![SyntheticTag::short(tags::COMPRESSION, 7)];
+    let file = build_tiff(&[first, tiled(256), stripped(), stripped()]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = LeicaInterpreter.interpret(&container).unwrap();
+
+    let level0 = &layout.dataset.scenes[0].series[0].levels[0];
+    assert_eq!(level0.dimensions, (1 << 32, 1 << 32));
+    let TileLayout::Regular { tile_width, .. } = level0.tile_layout else {
+        panic!("expected a regular tile layout");
+    };
+    assert_eq!(tile_width, 128, "tile size must come from the largest IFD");
+    assert_eq!(
+        layout.dataset.associated_images["macro"].dimensions,
+        (u32::MAX, u32::MAX)
+    );
+}
+
+#[test]
 fn interpret_rejects_invalid_xml_structure_and_ifd_references() {
     for (description, expected) in [
         ("<scn/>", "no <collection>"),

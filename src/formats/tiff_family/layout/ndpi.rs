@@ -4,6 +4,7 @@
 //! associated images, and z-stack planes. Produces a DatasetLayout
 //! with TileSource descriptors for each plane.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
@@ -15,7 +16,7 @@ use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
 use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, DatasetLayout,
     TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
@@ -394,11 +395,7 @@ impl NdpiInterpreter {
         pyramid_ifds: &mut [ClassifiedIfd],
     ) -> Result<(Vec<Level>, HashMap<TileSourceKey, TileSource>, u32), TiffParseError> {
         // Sort by area descending (largest first = level 0)
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         let tiff_base_dims = (pyramid_ifds[0].width, pyramid_ifds[0].height);
         for ifd in pyramid_ifds.iter_mut().skip(1) {
@@ -408,11 +405,7 @@ impl NdpiInterpreter {
                 &ifd.jpeg_probe,
             )?;
         }
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Group by SOURCELENS value -- each distinct value is one pyramid level
         // Use a Vec of (source_lens_bits, Vec<&ClassifiedIfd>) to preserve sort order.

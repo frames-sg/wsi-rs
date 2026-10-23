@@ -1,5 +1,6 @@
 use super::*;
 use crate::formats::tiff_family::container::TiffContainer;
+use crate::formats::tiff_family::test_support::{build_bigtiff, SyntheticTag};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -243,6 +244,28 @@ fn interpret_multi_level_sorted() {
     assert!(series.levels[1].downsample > 1.0);
     // downsample ~ avg(2048/512, 1536/384) / 1 = avg(4.0, 4.0) = 4.0
     assert!((series.levels[1].downsample - 4.0).abs() < 0.01);
+}
+
+#[test]
+fn interpret_sorts_levels_whose_area_overflows_u64() {
+    // BigTIFF LONG8 sizes: the 2^32 x 2^32 level's area does not fit in u64.
+    let level = |side: u64| {
+        vec![
+            SyntheticTag::long8(tags::IMAGE_WIDTH, side),
+            SyntheticTag::long8(tags::IMAGE_LENGTH, side),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+        ]
+    };
+    let file = build_bigtiff(&[level(1 << 31), level(1 << 32)]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = GenericTiffInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels[0].dimensions, (1 << 32, 1 << 32));
+    assert_eq!(levels[1].dimensions, (1 << 31, 1 << 31));
+    assert!((levels[1].downsample - 2.0).abs() < 0.001);
 }
 
 #[test]

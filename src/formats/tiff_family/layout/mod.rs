@@ -52,6 +52,12 @@ fn compression_from_tag(val: u32) -> Compression {
     }
 }
 
+/// Pixel area of an image for ordering levels by size. Widened to u128 because
+/// IMAGE_WIDTH and IMAGE_LENGTH can be unbounded BigTIFF LONG8 values.
+fn level_area(width: u64, height: u64) -> u128 {
+    u128::from(width) * u128::from(height)
+}
+
 fn single_scene_uint8_pyramid_dataset(
     dataset_id: DatasetId,
     axes: AxesShape,

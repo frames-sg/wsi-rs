@@ -4,6 +4,7 @@
 //! (tiled IFDs) and associated images (stripped IFDs). Produces a
 //! DatasetLayout with TileSource descriptors for each plane.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
@@ -12,8 +13,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, regular_tiff_level, DatasetLayout,
-    TiffLayoutInterpreter, TileSource, TileSourceKey,
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level,
+    DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 const TIFF_SUBFILE_TYPE: u16 = 254;
@@ -133,11 +134,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
         }
 
         // Phase 2: Sort tiled IFDs by area descending (largest = level 0)
-        tiled_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
-            area_b.cmp(&area_a)
-        });
+        tiled_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Some Aperio slides store different JPEG tables per pyramid level.
         let base_jpeg_tables = container

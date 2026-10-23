@@ -199,6 +199,35 @@ fn interpret_multi_level_reverse_order() {
 }
 
 #[test]
+fn interpret_sorts_levels_whose_area_overflows_u64() {
+    use crate::formats::tiff_family::test_support::{self, build_bigtiff};
+
+    // BigTIFF LONG8 sizes: the 2^32 x 2^32 level's area does not fit in u64.
+    let level = |side: u64| {
+        vec![
+            test_support::SyntheticTag::long8(tags::IMAGE_WIDTH, side),
+            test_support::SyntheticTag::long8(tags::IMAGE_LENGTH, side),
+            test_support::SyntheticTag::long(tags::TILE_WIDTH, 256),
+            test_support::SyntheticTag::long(tags::TILE_LENGTH, 256),
+            test_support::SyntheticTag::short(tags::COMPRESSION, 7),
+        ]
+    };
+    let mut small = level(1 << 31);
+    small.push(test_support::SyntheticTag::ascii(
+        tags::IMAGE_DESCRIPTION,
+        "Aperio Image Library v1.0",
+    ));
+    let file = build_bigtiff(&[small, level(1 << 32)]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels[0].dimensions, (1 << 32, 1 << 32));
+    assert_eq!(levels[1].dimensions, (1 << 31, 1 << 31));
+}
+
+#[test]
 fn interpret_tiles_across_rounds_up() {
     // 4100 / 256 = 16.015... → tiles_across = 17
     let file = build_aperio_tiff(&[vec![
