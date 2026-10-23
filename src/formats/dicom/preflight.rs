@@ -1,6 +1,7 @@
 use dicom_core::{Tag, VR};
 use dicom_object::file::ReadPreamble;
 
+use super::frame_index::explicit_vr_uses_u32_length;
 use super::*;
 use crate::core::registry::OpenBudget;
 use crate::SlideLimits;
@@ -387,23 +388,7 @@ fn read_explicit_header(
     let vr = VR::from_binary([base[4], base[5]]).ok_or_else(|| {
         invalid_slide(path, format!("invalid VR in DICOM file meta element {tag}"))
     })?;
-    let uses_u32_length = matches!(
-        vr,
-        VR::OB
-            | VR::OD
-            | VR::OF
-            | VR::OL
-            | VR::OV
-            | VR::OW
-            | VR::SQ
-            | VR::SV
-            | VR::UC
-            | VR::UN
-            | VR::UR
-            | VR::UT
-            | VR::UV
-    );
-    let (value_len, header_len) = if uses_u32_length {
+    let (value_len, header_len) = if explicit_vr_uses_u32_length([base[4], base[5]]) {
         if base[6..8] != [0, 0] {
             return Err(invalid_slide(
                 path,

@@ -12,9 +12,9 @@ use super::offset_tables::{
     checked_padded_fragment_len, read_basic_offset_table_at, read_extended_offset_tables_le,
 };
 use super::{
-    check_index_control, DICOM_ITEM_TAG_LE, DICOM_SEQUENCE_DELIMITER_TAG_LE,
-    EXPLICIT_VR_LONG_HEADER_LEN, EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE,
-    EXTENDED_OFFSET_TABLE_TAG_LE, PIXEL_DATA_TAG_LE,
+    check_index_control, explicit_vr_uses_u32_length, DICOM_ITEM_TAG_LE,
+    DICOM_SEQUENCE_DELIMITER_TAG_LE, EXPLICIT_VR_LONG_HEADER_LEN,
+    EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE, EXTENDED_OFFSET_TABLE_TAG_LE, PIXEL_DATA_TAG_LE,
 };
 use crate::formats::dicom::metadata::invalid_slide;
 use crate::formats::dicom::preflight::preflight_file_meta;
@@ -406,11 +406,7 @@ fn read_explicit_le_element_header(
             format!("invalid explicit-VR DICOM header at byte {offset}"),
         ));
     }
-    let long_vr = matches!(
-        &vr,
-        b"OB" | b"OD" | b"OF" | b"OL" | b"OV" | b"OW" | b"SQ" | b"UC" | b"UR" | b"UT" | b"UN"
-    );
-    let (length, value_offset) = if long_vr {
+    let (length, value_offset) = if explicit_vr_uses_u32_length(vr) {
         if prefix[6..8] != [0, 0] {
             return Err(invalid_slide(
                 path,

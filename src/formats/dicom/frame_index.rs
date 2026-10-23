@@ -136,3 +136,24 @@ pub(super) const EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE: [u8; 4] = [0xE0, 0x7F, 0x
 pub(super) const DICOM_ITEM_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0x00, 0xE0];
 pub(super) const DICOM_SEQUENCE_DELIMITER_TAG_LE: [u8; 4] = [0xFE, 0xFF, 0xDD, 0xE0];
 pub(super) const EXPLICIT_VR_LONG_HEADER_LEN: usize = 12;
+
+/// Whether an explicit-VR element with this VR has the long header form: two
+/// reserved bytes and a 32-bit value length (PS3.5 Section 7.1.2).
+pub(super) fn explicit_vr_uses_u32_length(vr: [u8; 2]) -> bool {
+    matches!(
+        &vr,
+        b"OB"
+            | b"OD"
+            | b"OF"
+            | b"OL"
+            | b"OV"
+            | b"OW"
+            | b"SQ"
+            | b"SV"
+            | b"UC"
+            | b"UN"
+            | b"UR"
+            | b"UT"
+            | b"UV"
+    )
+}
