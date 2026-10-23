@@ -371,6 +371,19 @@ fn associated_images_decode_cache_and_report_missing_names() {
             .width(),
         12
     );
+    let encoding = reader
+        .associated_encoding("macro")
+        .expect("measure MIRAX macro")
+        .expect("MIRAX macro encoding");
+    assert_eq!(encoding.compression, crate::core::types::Compression::Jpeg);
+    assert_eq!(
+        (encoding.decoded_bytes, encoding.encoded_bytes),
+        (
+            Some(12 * 8 * 3),
+            Some(super::fixtures::encode_jpeg(12, 8, 200).len() as u64)
+        )
+    );
+    assert_eq!(reader.associated_encoding("overview").unwrap(), None);
 }
 
 #[test]

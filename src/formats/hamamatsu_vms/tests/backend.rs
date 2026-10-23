@@ -267,9 +267,46 @@ fn associated_reads_recover_poisoned_cache_and_report_removed_source() {
         24
     );
 
+    let encoding = reader
+        .associated_encoding("macro")
+        .expect("measure VMS macro")
+        .expect("VMS macro encoding");
+    assert_eq!(encoding.compression, crate::core::types::Compression::Jpeg);
+    assert_eq!(
+        (encoding.decoded_bytes, encoding.encoded_bytes),
+        (
+            Some(24 * 16 * 3),
+            Some(fs::metadata(&fixture.macro_path).unwrap().len())
+        )
+    );
+    assert_eq!(reader.associated_encoding("label").unwrap(), None);
+
     fs::remove_file(&fixture.macro_path).expect("remove associated source after parse");
     assert!(matches!(
         reader.read_associated("macro"),
         Err(WsiError::IoWithPath { .. })
     ));
+    assert!(matches!(
+        reader.associated_encoding("macro"),
+        Err(WsiError::IoWithPath { .. })
+    ));
+}
+
+#[test]
+fn slide_reports_unknown_level_encoding_and_tile_presence_for_vms() {
+    use crate::core::types::{LevelIdx, SceneId, SeriesId};
+
+    let (_fixture, slide) = open_public_slide();
+    assert_eq!(
+        slide
+            .level_encoding(SceneId::new(0), SeriesId::new(0), LevelIdx::new(0))
+            .expect("VMS level encoding"),
+        None
+    );
+    assert_eq!(
+        slide
+            .tile_is_present(&TileRequest::new(0, 0, 0, 0, 0))
+            .expect("VMS tile presence"),
+        None
+    );
 }
