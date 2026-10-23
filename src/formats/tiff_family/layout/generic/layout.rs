@@ -111,13 +111,17 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             (stripped.width, stripped.height)
         };
 
-        // Phase 3: JPEG tables from tag 347 on first tiled IFD if present.
-        let jpeg_tables: Option<Vec<u8>> = tiled_ifds.first().and_then(|first| {
+        // Phase 3: JPEG tables (tag 347) are read per level; a level without
+        // its own tables falls back to level 0's.
+        let level_jpeg_tables = |ifd_id| {
             container
-                .get_bytes(first.ifd_id, tags::JPEG_TABLES)
+                .get_bytes(ifd_id, tags::JPEG_TABLES)
                 .ok()
-                .map(|bytes| bytes.to_vec())
-        });
+                .map(<[u8]>::to_vec)
+        };
+        let base_jpeg_tables = tiled_ifds
+            .first()
+            .and_then(|first| level_jpeg_tables(first.ifd_id));
 
         // Phase 4: Build levels and tile sources.
         let mut levels = Vec::with_capacity(tiled_ifds.len());
@@ -153,7 +157,8 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 key,
                 TileSource::TiledIfd {
                     ifd_id: tifd.ifd_id,
-                    jpeg_tables: jpeg_tables.clone(),
+                    jpeg_tables: level_jpeg_tables(tifd.ifd_id)
+                        .or_else(|| base_jpeg_tables.clone()),
                     compression: tifd.compression,
                 },
             );
