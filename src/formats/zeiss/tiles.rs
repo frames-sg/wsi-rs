@@ -37,10 +37,9 @@ impl ZeissSlide {
                     count: series.levels.len() as u32,
                 })?;
         let TileLayout::Regular {
-            tile_width,
-            tile_height,
             tiles_across,
             tiles_down,
+            ..
         } = level.tile_layout
         else {
             return Ok(None);
@@ -73,21 +72,28 @@ impl ZeissSlide {
             WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
         })?;
         Ok(self
-            .subblock_is_exact_tile(info, level, tile_width, tile_height, req.col, req.row)
+            .subblock_is_exact_tile(info, level, req.col, req.row)
             .then(|| info.clone()))
     }
 
     /// Whether `info` is one classic-JPEG subblock covering tile (`col`, `row`)
-    /// of `level` exactly, so its bytes can be served as that tile.
+    /// of the regularly tiled `level` exactly, so its bytes can be served as
+    /// that tile.
     pub(super) fn subblock_is_exact_tile(
         &self,
         info: &DirectorySubBlockInfo,
         level: &Level,
-        tile_width: u32,
-        tile_height: u32,
         col: i64,
         row: i64,
     ) -> bool {
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            ..
+        } = level.tile_layout
+        else {
+            return false;
+        };
         if info.compression != CziCompressionMode::Jpg {
             return false;
         }

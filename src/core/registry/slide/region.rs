@@ -136,7 +136,7 @@ impl PlannedRegionRead<'_> {
                     break;
                 }
                 // Singleton staging needs no worker count. Querying it starts
-                // the JP2K pool, even for cached reads of ordinary JPEG tiles.
+                // the codec pool, even for cached reads of ordinary JPEG tiles.
                 if end - start
                     >= *workers.get_or_insert_with(|| slide.decode_runtime.cpu_worker_count())
                 {

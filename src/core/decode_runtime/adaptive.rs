@@ -191,7 +191,7 @@ impl AdaptiveDecodeReader {
             return result;
         }
         let started = Instant::now();
-        let tiles = self.runtime.install_jp2k_cpu(|| prepared.read_cpu())?;
+        let tiles = self.runtime.install_codec_cpu(|| prepared.read_cpu())?;
         let cpu_elapsed = started.elapsed();
         Self::check_control(control)?;
         if let Some(device) = self.configured_device() {
@@ -242,7 +242,7 @@ impl AdaptiveDecodeReader {
             // hit cannot prematurely reject a useful device route.
             Self::check_control(control)?;
             let cpu_started = Instant::now();
-            let tiles = self.runtime.install_jp2k_cpu(|| prepared.read_cpu())?;
+            let tiles = self.runtime.install_codec_cpu(|| prepared.read_cpu())?;
             let cpu_elapsed = cpu_started.elapsed();
             Self::check_control(control)?;
             lease.complete(Some((cpu_elapsed, device_elapsed)), control)?;
@@ -254,7 +254,7 @@ impl AdaptiveDecodeReader {
         };
         let read_cpu = || {
             Self::check_control(control)?;
-            let result = self.runtime.install_jp2k_cpu(|| prepared.read_cpu());
+            let result = self.runtime.install_codec_cpu(|| prepared.read_cpu());
             Self::check_control(control)?;
             result
         };

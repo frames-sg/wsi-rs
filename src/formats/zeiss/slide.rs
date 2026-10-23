@@ -237,21 +237,14 @@ impl ZeissSlide {
         else {
             return false;
         };
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            ..
-        } = level.tile_layout
-        else {
-            return false;
-        };
         let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         tiles
             .iter()
             .all(|(&(col, row), indices)| match indices.as_slice() {
-                [index] => czi.subblocks().get(*index).is_some_and(|info| {
-                    self.subblock_is_exact_tile(info, level, tile_width, tile_height, col, row)
-                }),
+                [index] => czi
+                    .subblocks()
+                    .get(*index)
+                    .is_some_and(|info| self.subblock_is_exact_tile(info, level, col, row)),
                 _ => false,
             })
     }

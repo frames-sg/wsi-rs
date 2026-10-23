@@ -326,20 +326,15 @@ impl DicomImage {
         ) else {
             return Ok(None);
         };
-        let decoded_bytes = [
-            u64::from(self.tile_width),
-            u64::from(self.tile_height),
-            u64::from(self.samples_per_pixel),
-            u64::from(self.bit_depth.bytes_per_sample()),
-        ]
-        .into_iter()
-        .try_fold(u64::from(self.number_of_frames), u64::checked_mul)
-        .ok_or_else(|| {
-            invalid_slide(
-                &self.frame_store.path,
-                "DICOM decoded image size overflows u64",
-            )
-        })?;
+        let decoded_bytes = self
+            .checked_native_frame_bytes()
+            .and_then(|frame_bytes| frame_bytes.checked_mul(u64::from(self.number_of_frames)))
+            .ok_or_else(|| {
+                invalid_slide(
+                    &self.frame_store.path,
+                    "DICOM decoded image size overflows u64",
+                )
+            })?;
         let mut encoding = SourceEncoding::new(compression)
             .with_sizes(decoded_bytes, self.source_encoded_bytes()?);
         encoding.lossy = transfer_syntax_is_lossy(&self.transfer_syntax_uid);

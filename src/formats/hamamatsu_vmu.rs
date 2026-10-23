@@ -320,15 +320,20 @@ impl SlideReader for VmuReader {
         )?
     }
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
-        let bytes = self.macro_bytes.as_ref().filter(|_| name == "macro");
         let decoded = self
             .dataset
             .associated_images
             .get(name)
             .and_then(|image| image.decoded_bytes());
-        Ok(bytes.zip(decoded).map(|(bytes, decoded)| {
-            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, bytes.len() as u64)
-        }))
+        let (Some(bytes), Some(decoded)) = (
+            self.macro_bytes.as_ref().filter(|_| name == "macro"),
+            decoded,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, bytes.len() as u64),
+        ))
     }
 }
 impl ManagedSlideReader for VmuReader {

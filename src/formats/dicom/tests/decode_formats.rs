@@ -2,6 +2,12 @@ use super::fixtures::*;
 use super::*;
 use ::image::{DynamicImage, ImageFormat};
 use std::io::Cursor;
+
+/// Distinct RGB16 samples of a 2x2 frame.
+const RGB16_2X2: [u16; 12] = [
+    0x0102, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334, 0x3536,
+];
+
 fn read_first_tile(path: &Path) -> CpuTile {
     let slide = Slide::open(path).expect("open DICOM slide");
     slide
@@ -144,11 +150,7 @@ fn opens_explicit_vr_big_endian_native_rgb_8bit() {
 fn opens_explicit_vr_big_endian_native_rgb_16bit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("big-endian16.dcm");
-    let samples = [
-        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
-        0x3536,
-    ];
-    let pixels = samples
+    let pixels = RGB16_2X2
         .iter()
         .flat_map(|sample| sample.to_be_bytes())
         .collect();
@@ -162,7 +164,7 @@ fn opens_explicit_vr_big_endian_native_rgb_16bit() {
 
     assert_eq!(
         read_first_tile(&path).data.as_u16(),
-        Some(samples.as_slice())
+        Some(RGB16_2X2.as_slice())
     );
 }
 
@@ -179,11 +181,9 @@ fn native_twelve_bit_words_clear_unused_high_bits() {
     write_test_dicom(
         &path,
         TestDicomOptions {
-            bits_allocated: 16,
             bits_stored: 12,
             high_bit: 11,
-            pixel_data: TestPixelData::Native(pixels),
-            ..TestDicomOptions::native(Vec::new())
+            ..TestDicomOptions::uint16(TestPixelData::Native(pixels))
         },
     );
 
@@ -332,39 +332,22 @@ fn decodes_sixteen_bit_rle_lossless_rgb_frame() {
             samples_per_pixel: 3,
             photometric_interpretation: "RGB",
             planar_configuration: Some(1),
-            bits_allocated: 16,
-            bits_stored: 16,
-            high_bit: 15,
-            pixel_data: TestPixelData::Encapsulated(rle_rgb16_frame(
+            ..TestDicomOptions::uint16(TestPixelData::Encapsulated(rle_rgb16_frame(
                 &[0x0102, 0x1112, 0x2122, 0x3132],
                 &[0x0304, 0x1314, 0x2324, 0x3334],
                 &[0x0506, 0x1516, 0x2526, 0x3536],
-            )),
-            ..TestDicomOptions::native(Vec::new())
+            )))
         },
     );
 
     let tile = read_first_tile(&path);
-    assert_eq!(
-        tile.data.as_u16().unwrap(),
-        [
-            0x0102, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
-            0x3536,
-        ]
-    );
+    assert_eq!(tile.data.as_u16().unwrap(), RGB16_2X2);
 }
 
-#[test]
-fn decodes_sixteen_bit_jpeg2000_rgb_frame() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("jp2k16.dcm");
-    let samples = [
-        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
-        0x3536,
-    ];
-    let pixels = le_words(&samples);
-    let codestream = j2k_native::encode(
-        &pixels,
+/// Lossless 16-bit JPEG 2000 codestream of [`RGB16_2X2`].
+fn rgb16_2x2_jpeg2000() -> Vec<u8> {
+    j2k_native::encode(
+        &le_words(&RGB16_2X2),
         2,
         2,
         3,
@@ -376,7 +359,14 @@ fn decodes_sixteen_bit_jpeg2000_rgb_frame() {
             ..Default::default()
         },
     )
-    .expect("encode 16-bit JPEG 2000 fixture");
+    .expect("encode 16-bit JPEG 2000 fixture")
+}
+
+#[test]
+fn decodes_sixteen_bit_jpeg2000_rgb_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jp2k16.dcm");
+    let codestream = rgb16_2x2_jpeg2000();
     write_test_dicom(
         &path,
         TestDicomOptions {
@@ -401,21 +391,41 @@ fn decodes_sixteen_bit_jpeg2000_rgb_frame() {
         ])
         .expect("read 16-bit JPEG 2000 batch");
     for tile in tiles {
-        assert_eq!(tile.data.as_u16(), Some(samples.as_slice()));
+        assert_eq!(tile.data.as_u16(), Some(RGB16_2X2.as_slice()));
     }
+}
+
+#[test]
+fn decodes_sixteen_bit_jpeg2000_associated_image() {
+    let dir = tempfile::tempdir().unwrap();
+    write_test_dicom(
+        &dir.path().join("a-level.dcm"),
+        TestDicomOptions::native(test_rgb_pixel_data()),
+    );
+    write_test_dicom(
+        &dir.path().join("b-label.dcm"),
+        TestDicomOptions {
+            sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
+            image_type: "ORIGINAL\\PRIMARY\\LABEL\\NONE",
+            transfer_syntax: uids::JPEG2000_LOSSLESS,
+            ..TestDicomOptions::uint16(TestPixelData::Encapsulated(rgb16_2x2_jpeg2000()))
+        },
+    );
+
+    let label = Slide::open(dir.path())
+        .expect("open DICOM series with a 16-bit JPEG 2000 label")
+        .read_associated("label")
+        .expect("read 16-bit JPEG 2000 label");
+    assert_eq!(label.data.as_u16(), Some(RGB16_2X2.as_slice()));
 }
 
 #[test]
 fn decodes_sixteen_bit_lossless_jpeg_rgb_frame() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("jpeg-lossless16.dcm");
-    let samples = [
-        0x0102_u16, 0x0304, 0x0506, 0x1112, 0x1314, 0x1516, 0x2122, 0x2324, 0x2526, 0x3132, 0x3334,
-        0x3536,
-    ];
     let encoded = j2k_jpeg::encode_jpeg_lossless(
         j2k_jpeg::JpegLosslessSamples::Rgb16 {
-            data: &samples,
+            data: &RGB16_2X2,
             width: 2,
             height: 2,
         },
@@ -434,7 +444,7 @@ fn decodes_sixteen_bit_lossless_jpeg_rgb_frame() {
     );
 
     let tile = read_first_tile(&path);
-    assert_eq!(tile.data.as_u16(), Some(samples.as_slice()));
+    assert_eq!(tile.data.as_u16(), Some(RGB16_2X2.as_slice()));
 }
 
 #[test]

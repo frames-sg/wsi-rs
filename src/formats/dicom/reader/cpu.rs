@@ -15,9 +15,8 @@ use super::batch_plan::{
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::{
-    crop_or_keep_sample_buffer_rgb, decode_dicom_jp2k_u16, decode_dicom_jpeg_batch,
-    decode_rle_lossless_frame, dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr,
-    validate_jpeg_transfer_syntax_frame,
+    crop_or_keep_sample_buffer_rgb, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
+    dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::metadata::DicomBitDepth;
 use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
@@ -98,18 +97,13 @@ impl DicomReader {
             .first()
             .is_some_and(|(meta, _)| matches!(meta.image.bit_depth, DicomBitDepth::Uint16 { .. }))
         {
-            crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+            crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(|| {
                 use rayon::prelude::*;
                 jp2k_jobs
                     .par_iter()
                     .map(|(meta, bytes)| {
-                        decode_dicom_jp2k_u16(
+                        meta.image.decode_jp2k_u16_frame(
                             bytes.as_slice(),
-                            meta.image.tile_width,
-                            meta.image.tile_height,
-                            meta.image.samples_per_pixel,
-                            &meta.image.photometric_interpretation,
-                            meta.image.bit_depth.bits_stored(),
                             j2k::CpuDecodeParallelism::Serial,
                         )
                     })

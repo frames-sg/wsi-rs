@@ -102,7 +102,7 @@ impl MiraxReader {
             };
             let mut results = (0..owned.len()).map(|_| None).collect::<Vec<_>>();
             let pool = (owned.len() > 1)
-                .then(crate::core::decode_runtime::process_jp2k_cpu_pool)
+                .then(crate::core::decode_runtime::process_codec_cpu_pool)
                 .flatten();
             if let Some(pool) = pool {
                 crate::core::execution_telemetry::record(

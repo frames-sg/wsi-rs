@@ -476,7 +476,7 @@ impl SlideReader for ConservativeManagedReader {
             return self.inner.read_region_fastpath(ctx, req);
         }
         crate::core::decode_runtime::DecodeRuntime::default_arc()
-            .install_jp2k_cpu(|| self.inner.read_region_fastpath(ctx, req))
+            .install_codec_cpu(|| self.inner.read_region_fastpath(ctx, req))
     }
 
     fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {

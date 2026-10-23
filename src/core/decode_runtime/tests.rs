@@ -153,7 +153,7 @@ fn cpu_only_options_reuse_one_runtime_and_process_pool() {
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(first.options().acceleration(), DecodeAcceleration::CpuOnly);
     assert!(first
-        .install_jp2k_cpu(rayon::current_thread_index)
+        .install_codec_cpu(rayon::current_thread_index)
         .is_some());
 }
 
@@ -174,11 +174,11 @@ fn admitted_codec_work_on_a_foreign_worker_moves_to_the_wsi_pool_without_stealin
         let reservation = admission.reserve(512, None).unwrap();
         let ran = Arc::clone(&queued_job_ran);
         rayon::spawn(move || ran.store(true, Ordering::SeqCst));
-        let observed = runtime.install_jp2k_cpu(|| {
+        let observed = runtime.install_codec_cpu(|| {
             // Give a stealing wait time to pick up the queued job.
             std::thread::sleep(std::time::Duration::from_millis(50));
             (
-                process_jp2k_cpu_pool().is_some_and(|pool| pool.current_thread_index().is_some()),
+                process_codec_cpu_pool().is_some_and(|pool| pool.current_thread_index().is_some()),
                 queued_job_ran.load(Ordering::SeqCst),
             )
         });
@@ -205,7 +205,7 @@ fn codec_work_on_a_worker_without_admission_stays_on_that_worker() {
         .unwrap();
     let invoking = foreign.install(|| {
         let caller = std::thread::current().id();
-        runtime.install_jp2k_cpu(|| std::thread::current().id() == caller)
+        runtime.install_codec_cpu(|| std::thread::current().id() == caller)
     });
     assert!(invoking);
 }

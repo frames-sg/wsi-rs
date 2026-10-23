@@ -348,11 +348,17 @@ impl DicomImage {
         Some(retained.saturating_add(window))
     }
 
+    /// Memory estimates treat an overflowing frame size as unbounded.
     fn native_frame_bytes(&self) -> u64 {
+        self.checked_native_frame_bytes().unwrap_or(u64::MAX)
+    }
+
+    /// Bytes of one uncompressed frame, or `None` when that overflows `u64`.
+    pub(super) fn checked_native_frame_bytes(&self) -> Option<u64> {
         u64::from(self.tile_width)
-            .saturating_mul(u64::from(self.tile_height))
-            .saturating_mul(u64::from(self.samples_per_pixel))
-            .saturating_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8))
+            .checked_mul(u64::from(self.tile_height))?
+            .checked_mul(u64::from(self.samples_per_pixel))?
+            .checked_mul(u64::from(self.bit_depth.bits_allocated()).div_ceil(8))
     }
 
     /// The lazy frame index, once built. Every frame read takes this lock

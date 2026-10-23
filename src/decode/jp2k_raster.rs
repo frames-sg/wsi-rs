@@ -5,6 +5,16 @@ use crate::error::WsiError;
 
 const CHROMA_VALUES: usize = 256;
 
+// Full-range YCbCr to RGB coefficients as integer ratios: the red and blue
+// terms are over `YCBCR_RED_BLUE_SCALE`, the green terms over
+// `YCBCR_GREEN_SCALE`.
+pub(crate) const YCBCR_RED_FROM_CR: i64 = 1_402;
+pub(crate) const YCBCR_BLUE_FROM_CB: i64 = 1_772;
+pub(crate) const YCBCR_RED_BLUE_SCALE: i64 = 1_000;
+pub(crate) const YCBCR_GREEN_FROM_CB: i64 = 34_414;
+pub(crate) const YCBCR_GREEN_FROM_CR: i64 = 71_414;
+pub(crate) const YCBCR_GREEN_SCALE: i64 = 100_000;
+
 struct YcbcrTables {
     red_from_cr: [i16; CHROMA_VALUES],
     green_from_cb: [i32; CHROMA_VALUES],
@@ -30,11 +40,16 @@ const fn build_ycbcr_tables() -> YcbcrTables {
     let mut index = 0;
     while index < CHROMA_VALUES {
         let chroma = index as i64 - 128;
-        tables.red_from_cr[index] = round_ratio(1_402 * chroma, 1_000) as i16;
-        tables.green_from_cb[index] =
-            round_ratio(65_536 * (50_000 - 34_414 * chroma), 100_000) as i32;
-        tables.green_from_cr[index] = round_ratio(65_536 * (-71_414 * chroma), 100_000) as i32;
-        tables.blue_from_cb[index] = round_ratio(1_772 * chroma, 1_000) as i16;
+        tables.red_from_cr[index] =
+            round_ratio(YCBCR_RED_FROM_CR * chroma, YCBCR_RED_BLUE_SCALE) as i16;
+        tables.green_from_cb[index] = round_ratio(
+            65_536 * (YCBCR_GREEN_SCALE / 2 - YCBCR_GREEN_FROM_CB * chroma),
+            YCBCR_GREEN_SCALE,
+        ) as i32;
+        tables.green_from_cr[index] =
+            round_ratio(65_536 * (-YCBCR_GREEN_FROM_CR * chroma), YCBCR_GREEN_SCALE) as i32;
+        tables.blue_from_cb[index] =
+            round_ratio(YCBCR_BLUE_FROM_CB * chroma, YCBCR_RED_BLUE_SCALE) as i16;
         index += 1;
     }
     tables

@@ -117,4 +117,11 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
         reader.tile_is_present(&tile_request(2, 0)).unwrap(),
         Some(false)
     );
+    for (col, row) in [(-1, 0), (0, -1), (8, 0), (0, 8)] {
+        assert_eq!(
+            reader.tile_is_present(&tile_request(col, row)).unwrap(),
+            Some(false),
+            "tile ({col},{row}) lies outside the level grid"
+        );
+    }
 }

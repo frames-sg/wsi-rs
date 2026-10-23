@@ -84,7 +84,7 @@ pub(crate) fn cpu_core_count() -> usize {
 }
 
 /// Cores that no [`share_cpu_work`] caller or helper is using right now.
-/// Other work on the shared JP2K pool, such as CPU decode or region
+/// Other work on the shared codec pool, such as CPU decode or region
 /// composition, is not counted, so the pool may still be busy.
 pub(crate) fn idle_cores() -> usize {
     if let Some(cores) = crate::core::test_hooks::idle_cores_override() {
@@ -117,7 +117,7 @@ where
     R: Send + 'static,
 {
     let pool = if jobs.len() > 1 {
-        crate::core::decode_runtime::process_jp2k_cpu_pool()
+        crate::core::decode_runtime::process_codec_cpu_pool()
     } else {
         None
     };

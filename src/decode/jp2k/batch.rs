@@ -27,7 +27,7 @@ pub(crate) fn decode_batch_jp2k(jobs: &[Jp2kDecodeJob<'_>]) -> Vec<Result<CpuTil
         // Larger batches retain the codec's aggregate admission and scheduler.
         // Singleton batches retain the established fallback: this specialization
         // regressed constrained-cache concurrent singleton reads by 5–6%.
-        return crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+        return crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(|| {
             use rayon::prelude::*;
             jobs.par_iter()
                 .map(|job| {

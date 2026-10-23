@@ -170,7 +170,7 @@ impl ZeissReader {
             {
                 owned.into_iter().map(decode).collect::<Vec<_>>()
             } else {
-                runtime.install_jp2k_cpu(|| owned.into_par_iter().map(decode).collect::<Vec<_>>())
+                runtime.install_codec_cpu(|| owned.into_par_iter().map(decode).collect::<Vec<_>>())
             };
             results.extend(waiting.into_iter().map(decode));
             results.sort_unstable_by_key(|(index, _, _)| *index);

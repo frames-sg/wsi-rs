@@ -189,7 +189,7 @@ impl TiffPixelReader {
             let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
             let decode = || crate::core::batch::share_cpu_work(jobs, TiledJpegJob::decode);
             if runtime.cpu_worker_count() >= crate::core::batch::cpu_core_count() {
-                runtime.install_jp2k_cpu(decode)
+                runtime.install_codec_cpu(decode)
             } else {
                 decode()
             }

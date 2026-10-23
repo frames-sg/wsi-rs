@@ -13,8 +13,8 @@ use super::DicomImage;
 use crate::formats::dicom::backend::{is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax};
 use crate::formats::dicom::decode::{
     decode_dicom_jp2k_u16, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
-    dicom_jpeg_color_transform, frame_bytes_to_rgb_tile, frame_words_to_rgb_tile,
-    jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
+    dicom_jpeg_color_transform, interleaved_rgb_samples, jp2k_photometric_is_ycbcr,
+    validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::metadata::{invalid_slide, DicomBitDepth};
 use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
@@ -112,29 +112,17 @@ impl DicomImage {
                 path: self.frame_store.path.clone(),
             })?;
         let planar_configuration = self.planar_configuration.unwrap_or(0);
-        let tile = match self.bit_depth {
-            DicomBitDepth::Eight
-                if self.samples_per_pixel == 3
-                    && planar_configuration == 0
-                    && self.photometric_interpretation == "RGB" =>
-            {
-                CpuTile::new(
-                    self.tile_width,
-                    self.tile_height,
-                    3,
-                    ColorSpace::Rgb,
-                    CpuTileLayout::Interleaved,
-                    CpuTileData::u8(frame),
-                )
-            }
-            DicomBitDepth::Eight => frame_bytes_to_rgb_tile(
-                &frame,
+        // Interleaved 8-bit RGB frames pass through without a copy.
+        let data = match self.bit_depth {
+            DicomBitDepth::Eight => interleaved_rgb_samples(
+                frame,
                 self.tile_width,
                 self.tile_height,
                 self.samples_per_pixel,
                 planar_configuration,
                 &self.photometric_interpretation,
-            ),
+            )
+            .map(CpuTileData::u8),
             DicomBitDepth::Uint16 { .. } => {
                 let mask = self.bit_depth.unsigned_sample_mask();
                 let from_bytes = if self.transfer_syntax_uid
@@ -150,7 +138,7 @@ impl DicomImage {
                     .iter()
                     .map(|bytes| from_bytes(*bytes) & mask)
                     .collect::<Vec<_>>();
-                frame_words_to_rgb_tile(
+                interleaved_rgb_samples(
                     words,
                     self.tile_width,
                     self.tile_height,
@@ -158,14 +146,42 @@ impl DicomImage {
                     planar_configuration,
                     &self.photometric_interpretation,
                 )
+                .map(CpuTileData::u16)
             }
         };
-        tile.map_err(|err| WsiError::TileRead {
+        data.and_then(|data| {
+            CpuTile::new(
+                self.tile_width,
+                self.tile_height,
+                3,
+                ColorSpace::Rgb,
+                CpuTileLayout::Interleaved,
+                data,
+            )
+        })
+        .map_err(|err| WsiError::TileRead {
             col,
             row,
             level,
             reason: err.to_string(),
         })
+    }
+
+    /// Decode a JPEG 2000 frame of this image's 16-bit words to RGB16.
+    pub(in super::super) fn decode_jp2k_u16_frame(
+        &self,
+        bytes: &[u8],
+        parallelism: j2k::CpuDecodeParallelism,
+    ) -> Result<CpuTile, WsiError> {
+        decode_dicom_jp2k_u16(
+            bytes,
+            self.tile_width,
+            self.tile_height,
+            self.samples_per_pixel,
+            &self.photometric_interpretation,
+            self.bit_depth.bits_stored(),
+            parallelism,
+        )
     }
 
     pub(in super::super) fn decode_frame_sample_buffer(
@@ -223,7 +239,7 @@ impl DicomImage {
         } else if JP2K_TRANSFER_SYNTAXES.contains(&self.transfer_syntax_uid.as_str()) {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            match self.bit_depth {
+            let decoded = match self.bit_depth {
                 DicomBitDepth::Eight => crate::core::batch::exactly_one(
                     decode_batch_jp2k(&[Jp2kDecodeJob {
                         data: Cow::Borrowed(bytes.as_slice()),
@@ -235,34 +251,24 @@ impl DicomImage {
                         backend,
                     }]),
                     "DICOM JP2K frame decode",
-                )?
-                .map_err(|err| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: err.to_string(),
-                })?,
-                DicomBitDepth::Uint16 { bits_stored } => {
-                    crate::core::decode_runtime::DecodeRuntime::default_arc()
-                        .install_jp2k_cpu(|| {
-                            decode_dicom_jp2k_u16(
+                )?,
+                DicomBitDepth::Uint16 { .. } => {
+                    crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(
+                        || {
+                            self.decode_jp2k_u16_frame(
                                 bytes.as_slice(),
-                                self.tile_width,
-                                self.tile_height,
-                                self.samples_per_pixel,
-                                &self.photometric_interpretation,
-                                bits_stored,
                                 j2k::CpuDecodeParallelism::Auto,
                             )
-                        })
-                        .map_err(|err| WsiError::TileRead {
-                            col,
-                            row,
-                            level,
-                            reason: err.to_string(),
-                        })?
+                        },
+                    )
                 }
-            }
+            };
+            decoded.map_err(|err| WsiError::TileRead {
+                col,
+                row,
+                level,
+                reason: err.to_string(),
+            })?
         } else if self.transfer_syntax_uid == RLE_TRANSFER_SYNTAX {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;

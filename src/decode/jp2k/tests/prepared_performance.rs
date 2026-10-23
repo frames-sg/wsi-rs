@@ -183,7 +183,7 @@ fn prepared_cpu_performance() {
         .collect::<Vec<_>>();
     let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
     let mut results = Vec::new();
-    runtime.install_jp2k_cpu(|| {
+    runtime.install_codec_cpu(|| {
         for count in [1, 4, 8, 16, 64] {
             let jobs = &jobs[..count];
             let expected = super::super::batch::decode_batch_jp2k(jobs).into_iter().collect::<Result<Vec<_>, _>>().unwrap();
@@ -265,7 +265,7 @@ fn pooled_cpu_scheduling_performance() {
         .collect::<Vec<_>>();
     let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
     let mut records = Vec::new();
-    runtime.install_jp2k_cpu(|| {
+    runtime.install_codec_cpu(|| {
         for count in [1, 4, 8, 16, 64] {
             let metadata = &metadata[..count];
             let run = |pooled| {

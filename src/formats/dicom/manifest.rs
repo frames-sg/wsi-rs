@@ -341,6 +341,19 @@ impl DicomLevel {
             .unwrap_or(TileCodecKind::Other)
     }
 
+    /// Whether a part holds a frame for the requested tile. Tiles outside the
+    /// level grid are absent rather than errors.
+    pub(super) fn tile_is_present(&self, req: &TileRequest) -> bool {
+        checked_dicom_tile_coordinates(
+            req.col,
+            req.row,
+            req.level.get(),
+            self.tiles_across,
+            self.tiles_down,
+        )
+        .is_ok_and(|(col, row)| self.image_for_tile(col, row).is_some())
+    }
+
     pub(super) fn read_tile(
         &self,
         col: i64,

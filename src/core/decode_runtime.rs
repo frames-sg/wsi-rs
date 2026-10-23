@@ -232,12 +232,12 @@ impl DecodeRuntime {
             .expect("constructing the default decode runtime is infallible")
     }
 
-    pub(crate) fn install_jp2k_cpu<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
+    pub(crate) fn install_codec_cpu<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
         // Reuse an invoking Rayon worker instead of entering another registry.
         // Calls from ordinary threads share the one process-wide WSI pool.
         if rayon::current_thread_index().is_some() {
             run_codec_work_on_worker(operation)
-        } else if let Some(pool) = process_jp2k_cpu_pool() {
+        } else if let Some(pool) = process_codec_cpu_pool() {
             crate::core::execution_telemetry::record(
                 crate::core::execution_telemetry::Event::CpuPoolDispatches,
                 1,
@@ -252,7 +252,7 @@ impl DecodeRuntime {
         if rayon::current_thread_index().is_some() {
             rayon::current_num_threads()
         } else {
-            process_jp2k_cpu_pool().map_or(1, ThreadPool::current_num_threads)
+            process_codec_cpu_pool().map_or(1, ThreadPool::current_num_threads)
         }
     }
 
@@ -303,7 +303,7 @@ use calibration::*;
 /// over, because `install` from a foreign worker steals from the caller's pool
 /// while it waits, and a joined thread does not.
 pub(crate) fn run_codec_work_on_worker<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
-    match process_jp2k_cpu_pool() {
+    match process_codec_cpu_pool() {
         Some(pool)
             if pool.current_thread_index().is_none()
                 && crate::core::limits::current_thread_holds_admission() =>
@@ -323,7 +323,7 @@ pub(crate) fn run_codec_work_on_worker<R: Send>(operation: impl FnOnce() -> R + 
     }
 }
 
-pub(crate) fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
+pub(crate) fn process_codec_cpu_pool() -> Option<&'static ThreadPool> {
     static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         // Rayon's default sizing honors RAYON_NUM_THREADS; leaving it unset

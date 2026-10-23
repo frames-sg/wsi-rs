@@ -46,9 +46,10 @@ impl AdaptiveDecodeReader {
         let result = if batch_uses_jp2k(self.inner.as_ref(), reqs) {
             self.inner
                 .read_tiles_cpu_fastpath(reqs, control)
-                .unwrap_or_else(|| self.runtime.install_jp2k_cpu(operation))
+                .unwrap_or_else(|| self.runtime.install_codec_cpu(operation))
         } else if rayon::current_thread_index().is_some() {
-            // JPEG and JPEG XR batches fan out on the invoking pool too.
+            // Other batches, such as JPEG, fan out on the invoking pool too.
+            // JPEG XR decodes also dispatch through the codec pool themselves.
             super::run_codec_work_on_worker(operation)
         } else {
             operation()
@@ -154,7 +155,7 @@ impl SlideReader for AdaptiveDecodeReader {
 
     fn read_region(&self, req: &crate::core::types::RegionRequest) -> Result<CpuTile, WsiError> {
         self.runtime
-            .install_jp2k_cpu(|| self.inner.read_region(req))
+            .install_codec_cpu(|| self.inner.read_region(req))
     }
 
     fn read_display_tile(
@@ -162,7 +163,7 @@ impl SlideReader for AdaptiveDecodeReader {
         req: &crate::core::types::TileViewRequest,
     ) -> Result<CpuTile, WsiError> {
         self.runtime
-            .install_jp2k_cpu(|| self.inner.read_display_tile(req))
+            .install_codec_cpu(|| self.inner.read_display_tile(req))
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

@@ -147,13 +147,7 @@ impl SlideReader for DicomReader {
                     level: req.level.get(),
                     count: self.slide.levels.len() as u32,
                 })?;
-        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
-            return Ok(Some(false));
-        };
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return Ok(Some(false));
-        }
-        Ok(Some(level.image_for_tile(col, row).is_some()))
+        Ok(Some(level.tile_is_present(req)))
     }
 
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
@@ -188,17 +182,10 @@ impl SlideReader for DicomReader {
                     if (total.compression, total.lossy)
                         == (encoding.compression, encoding.lossy) =>
                 {
-                    let sizes = total
-                        .decoded_bytes
-                        .zip(encoding.decoded_bytes)
-                        .and_then(|(a, b)| a.checked_add(b))
-                        .zip(
-                            total
-                                .encoded_bytes
-                                .zip(encoding.encoded_bytes)
-                                .and_then(|(a, b)| a.checked_add(b)),
-                        );
-                    let Some((decoded, encoded)) = sizes else {
+                    let (Some(decoded), Some(encoded)) = (
+                        add_sizes(total.decoded_bytes, encoding.decoded_bytes),
+                        add_sizes(total.encoded_bytes, encoding.encoded_bytes),
+                    ) else {
                         return Ok(None);
                     };
                     Some(total.with_sizes(decoded, encoded))
@@ -208,6 +195,11 @@ impl SlideReader for DicomReader {
         }
         Ok(total)
     }
+}
+
+/// Sum of two sizes, unknown when either is unknown or the sum overflows.
+fn add_sizes(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    a?.checked_add(b?)
 }
 
 pub(super) fn dicom_tile_codec_kind(transfer_syntax_uid: &str) -> TileCodecKind {

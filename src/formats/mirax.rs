@@ -285,13 +285,12 @@ impl SlideReader for MiraxReader {
             .associated_images
             .get(name)
             .and_then(|image| image.decoded_bytes());
-        Ok(shared
-            .associated
-            .get(name)
-            .zip(decoded)
-            .map(|(record, decoded)| {
-                SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, record.len)
-            }))
+        let (Some(record), Some(decoded)) = (shared.associated.get(name), decoded) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, record.len),
+        ))
     }
 }
 
