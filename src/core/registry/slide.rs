@@ -844,7 +844,14 @@ impl Slide {
         let _reservation = self
             .admission
             .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
-        let tile = self.source.read_associated(name)?;
+        // Associated strips decode in parallel on the invoking pool.
+        let tile = if rayon::current_thread_index().is_some() {
+            crate::core::decode_runtime::run_codec_work_on_worker(|| {
+                self.source.read_associated(name)
+            })?
+        } else {
+            self.source.read_associated(name)?
+        };
         self.validate_decoded_output(&tile, "decoded associated image")?;
         Ok(tile)
     }

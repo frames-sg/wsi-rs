@@ -47,6 +47,9 @@ impl AdaptiveDecodeReader {
             self.inner
                 .read_tiles_cpu_fastpath(reqs, control)
                 .unwrap_or_else(|| self.runtime.install_jp2k_cpu(operation))
+        } else if rayon::current_thread_index().is_some() {
+            // JPEG and JPEG XR batches fan out on the invoking pool too.
+            super::run_codec_work_on_worker(operation)
         } else {
             operation()
         };

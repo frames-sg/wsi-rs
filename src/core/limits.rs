@@ -1,8 +1,10 @@
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use crate::{ReadControl, WsiError};
@@ -260,9 +262,11 @@ impl SlideAdmission {
                 state.serving_ticket = state.serving_ticket.wrapping_add(1);
                 advance_abandoned(&mut state);
                 self.changed.notify_all();
+                HELD_ADMISSIONS.with(|held| held.set(held.get() + 1));
                 return Ok(TransientReservation {
                     admission: Arc::clone(self),
                     bytes,
+                    holder: Some(thread::current().id()),
                 });
             }
             if control.is_some_and(|control| control.check_cancelled().is_err()) {
@@ -290,13 +294,28 @@ fn advance_abandoned(state: &mut AdmissionState) {
     }
 }
 
+thread_local! {
+    /// Ordinary reservations taken, and not yet released, on this thread.
+    static HELD_ADMISSIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether this thread is running a read under an ordinary slide reservation.
+pub(crate) fn current_thread_holds_admission() -> bool {
+    HELD_ADMISSIONS.with(|held| held.get() != 0)
+}
+
 pub(crate) struct TransientReservation {
     admission: Arc<SlideAdmission>,
     bytes: u64,
+    /// Thread that waited for this reservation; optional headroom never waits.
+    holder: Option<ThreadId>,
 }
 
 impl Drop for TransientReservation {
     fn drop(&mut self) {
+        if self.holder == Some(thread::current().id()) {
+            HELD_ADMISSIONS.with(|held| held.set(held.get().saturating_sub(1)));
+        }
         let mut state = self
             .admission
             .state

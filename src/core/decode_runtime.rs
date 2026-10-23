@@ -236,7 +236,7 @@ impl DecodeRuntime {
         // Reuse an invoking Rayon worker instead of entering another registry.
         // Calls from ordinary threads share the one process-wide WSI pool.
         if rayon::current_thread_index().is_some() {
-            operation()
+            run_codec_work_on_worker(operation)
         } else if let Some(pool) = process_jp2k_cpu_pool() {
             crate::core::execution_telemetry::record(
                 crate::core::execution_telemetry::Event::CpuPoolDispatches,
@@ -291,6 +291,37 @@ impl DecodeRuntime {
 mod calibration;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use calibration::*;
+
+/// Run CPU codec work invoked on a Rayon worker.
+///
+/// The work stays on the invoking worker unless that worker belongs to another
+/// pool and holds slide admission. There, idle workers of that pool can steal
+/// the work's nested codec jobs, start unrelated reads while waiting on their
+/// own nested jobs, and block on the same admission with the stolen job still
+/// on their stack: a cycle no budget release can break. Such work moves to the
+/// WSI pool, whose workers never wait for admission. A scoped thread hands it
+/// over, because `install` from a foreign worker steals from the caller's pool
+/// while it waits, and a joined thread does not.
+pub(crate) fn run_codec_work_on_worker<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
+    match process_jp2k_cpu_pool() {
+        Some(pool)
+            if pool.current_thread_index().is_none()
+                && crate::core::limits::current_thread_holds_admission() =>
+        {
+            crate::core::execution_telemetry::record(
+                crate::core::execution_telemetry::Event::CpuPoolDispatches,
+                1,
+            );
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| pool.install(operation))
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+        }
+        _ => operation(),
+    }
+}
 
 pub(crate) fn process_jp2k_cpu_pool() -> Option<&'static ThreadPool> {
     static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();

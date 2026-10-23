@@ -158,6 +158,59 @@ fn cpu_only_options_reuse_one_runtime_and_process_pool() {
 }
 
 #[test]
+fn admitted_codec_work_on_a_foreign_worker_moves_to_the_wsi_pool_without_stealing() {
+    use crate::core::limits::SlideAdmission;
+    use std::sync::atomic::AtomicBool;
+
+    let runtime = DecodeRuntime::default_arc();
+    let admission = SlideAdmission::new(1024);
+    // One worker: a job spawned on this pool can only run on the caller.
+    let foreign = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let queued_job_ran = Arc::new(AtomicBool::new(false));
+    let (on_wsi_pool, ran_while_waiting) = foreign.install(|| {
+        let reservation = admission.reserve(512, None).unwrap();
+        let ran = Arc::clone(&queued_job_ran);
+        rayon::spawn(move || ran.store(true, Ordering::SeqCst));
+        let observed = runtime.install_jp2k_cpu(|| {
+            // Give a stealing wait time to pick up the queued job.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            (
+                process_jp2k_cpu_pool().is_some_and(|pool| pool.current_thread_index().is_some()),
+                queued_job_ran.load(Ordering::SeqCst),
+            )
+        });
+        drop(reservation);
+        observed
+    });
+
+    assert!(
+        on_wsi_pool,
+        "admitted codec work must leave the caller's pool"
+    );
+    assert!(
+        !ran_while_waiting,
+        "the admitted caller must not run its pool's jobs while it waits"
+    );
+}
+
+#[test]
+fn codec_work_on_a_worker_without_admission_stays_on_that_worker() {
+    let runtime = DecodeRuntime::default_arc();
+    let foreign = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    let invoking = foreign.install(|| {
+        let caller = std::thread::current().id();
+        runtime.install_jp2k_cpu(|| std::thread::current().id() == caller)
+    });
+    assert!(invoking);
+}
+
+#[test]
 fn cpu_only_batches_preserve_order_and_cardinality() {
     let (source, batch_reads, requested_tiles) = CountingSource::new(42, TileCodecKind::Jp2k);
     let runtime = Arc::new(

@@ -75,6 +75,7 @@ impl<'a> ReadExecutionContext<'a> {
             reservation: TransientReservation {
                 admission: Arc::clone(admission),
                 bytes,
+                holder: None,
             },
             extra: &self.extra,
         }))

@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn ordinary_reservations_mark_only_their_holding_thread() {
+    let admission = SlideAdmission::new(100);
+    assert!(!current_thread_holds_admission());
+    let held = admission.reserve(60, None).unwrap();
+    assert!(current_thread_holds_admission());
+    std::thread::scope(|scope| {
+        scope.spawn(|| assert!(!current_thread_holds_admission()));
+    });
+    let nested = admission.reserve(10, None).unwrap();
+    drop(held);
+    assert!(current_thread_holds_admission(), "one reservation remains");
+    drop(nested);
+    assert!(!current_thread_holds_admission());
+}
+
+#[test]
 fn checked_product_rejects_overflow_and_limit() {
     assert!(checked_product_to_usize(&[u64::MAX, 2], u64::MAX, "image").is_err());
     assert!(checked_product_to_usize(&[8, 8, 3], 100, "image").is_err());
