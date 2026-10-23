@@ -23,6 +23,11 @@
 - TIFF files have their SubIFDs parsed when opened. A TIFF whose SubIFDs tag
   points at an IFD that was already parsed, or outside the file, fails to open.
 
+### Fixed
+
+- JPEG XR tiles decode inside the codec thread pool. A caller holding slide
+  admission no longer waits on global Rayon workers blocked on the same slide.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
