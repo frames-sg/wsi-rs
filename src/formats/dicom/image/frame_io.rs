@@ -7,7 +7,6 @@ use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
 use super::DicomImage;
-use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::frame_index::{
     self, group_frame_read_spans, preflight_compressed_frame_with_limit,
     scan_encapsulated_frames_controlled, DicomEncapsulatedFrames, DicomFrameReadSpan,
@@ -59,7 +58,7 @@ impl DicomImage {
         row: i64,
         cache_result: bool,
     ) -> Result<Arc<Vec<u8>>, WsiError> {
-        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+        if !self.transfer_syntax.is_encapsulated() {
             return Err(not_encapsulated_error(level, col, row));
         }
         if cache_result {
@@ -147,7 +146,7 @@ impl DicomImage {
             return Ok(results);
         }
 
-        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+        if !self.transfer_syntax.is_encapsulated() {
             return Err(not_encapsulated_error(level, col, row));
         }
 
@@ -207,7 +206,7 @@ impl DicomImage {
     /// without I/O: the native frame size, or the indexed fragment lengths once
     /// the lazy frame index exists.
     pub(in super::super) fn known_encoded_frame_bytes(&self, frame_index: u32) -> Option<u64> {
-        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+        if !self.transfer_syntax.is_encapsulated() {
             return Some(self.native_frame_bytes());
         }
         let frames = self.indexed_encapsulated_frames()?;
@@ -224,7 +223,7 @@ impl DicomImage {
         frame_indices: &[u32],
         frame_cap: u64,
     ) -> Option<u64> {
-        if !is_encapsulated_transfer_syntax(&self.transfer_syntax_uid) {
+        if !self.transfer_syntax.is_encapsulated() {
             // Native frames are read one at a time without a shared window.
             let frames = u64::try_from(frame_indices.len()).unwrap_or(u64::MAX);
             return Some(

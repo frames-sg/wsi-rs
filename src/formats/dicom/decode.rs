@@ -1,27 +1,23 @@
+use super::transfer_syntax::DicomTransferSyntax;
 use super::*;
 use crate::core::types::ycbcr::ycbcr_to_rgb_u16;
 use crate::decode::jpeg::{decode_batch_jpeg, decode_batch_jpeg_rgb16, JpegDecodeJob};
 use j2k::CpuDecodeParallelism;
 
+/// Checks that a frame's coding process matches its JPEG transfer syntax
+/// and its precision matches BitsStored. Frames of other syntaxes never match.
 pub(super) fn validate_jpeg_transfer_syntax_frame(
+    transfer_syntax: DicomTransferSyntax,
     transfer_syntax_uid: &str,
     bit_depth: DicomBitDepth,
     frame: &[u8],
 ) -> Result<(), WsiError> {
     let (sof, precision, lossless_predictor) = jpeg_process_header(frame)?;
-    let valid = match transfer_syntax_uid {
-        // Scanners such as 3DHISTECH store progressive frames under the
-        // baseline syntax. The decoder follows each frame's own DCT process,
-        // and the precision check below keeps the declared sample type.
-        uids::JPEG_BASELINE8_BIT
-        | uids::JPEG_EXTENDED12_BIT
-        | JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX
-        | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX => sof != j2k_jpeg::SofKind::Lossless,
-        uids::JPEG_LOSSLESS => sof == j2k_jpeg::SofKind::Lossless,
-        uids::JPEG_LOSSLESS_SV1 => {
-            sof == j2k_jpeg::SofKind::Lossless && lossless_predictor == Some(1)
-        }
-        _ => false,
+    let valid = match transfer_syntax {
+        DicomTransferSyntax::Jpeg(process) => process.accepts(sof, lossless_predictor),
+        DicomTransferSyntax::Native { .. }
+        | DicomTransferSyntax::Jp2k { .. }
+        | DicomTransferSyntax::Rle => false,
     };
     if !valid {
         return Err(WsiError::Unsupported {
@@ -540,27 +536,6 @@ pub(super) fn crop_or_keep_sample_buffer_rgb(
         return Ok(buffer);
     }
     crop_sample_buffer_rgb(&buffer, width, height)
-}
-
-pub(super) fn raw_compression_for_transfer_syntax(
-    transfer_syntax_uid: &str,
-    photometric_interpretation: &str,
-) -> Result<Compression, WsiError> {
-    if is_jpeg_transfer_syntax(transfer_syntax_uid) {
-        return Ok(Compression::Jpeg);
-    }
-    if JP2K_TRANSFER_SYNTAXES.contains(&transfer_syntax_uid) {
-        return Ok(if jp2k_photometric_is_ycbcr(photometric_interpretation) {
-            Compression::Jp2kYcbcr
-        } else {
-            Compression::Jp2kRgb
-        });
-    }
-    Err(WsiError::Unsupported {
-        reason: format!(
-            "raw compressed DICOM tile access requires JPEG or J2K/HTJ2K transfer syntax, got {transfer_syntax_uid}"
-        ),
-    })
 }
 
 pub(super) fn jp2k_photometric_is_ycbcr(photometric_interpretation: &str) -> bool {

@@ -681,27 +681,155 @@ fn reads_legacy_htj2k_ybr_full_422_raw_compressed_frame_as_ycbcr() {
     }
 }
 
+fn tile_codec_kind_of(transfer_syntax_uid: &str) -> TileCodecKind {
+    DicomTransferSyntax::from_uid(transfer_syntax_uid)
+        .expect("supported transfer syntax")
+        .tile_codec_kind()
+}
+
 #[test]
 fn tile_codec_kind_classifies_dicom_transfer_syntaxes() {
-    for transfer_syntax in JPEG_TRANSFER_SYNTAXES {
-        assert_eq!(dicom_tile_codec_kind(transfer_syntax), TileCodecKind::Jpeg);
+    for transfer_syntax in [
+        uids::JPEG_BASELINE8_BIT,
+        uids::JPEG_EXTENDED12_BIT,
+        JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX,
+        JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX,
+        uids::JPEG_LOSSLESS,
+        uids::JPEG_LOSSLESS_SV1,
+    ] {
+        assert_eq!(tile_codec_kind_of(transfer_syntax), TileCodecKind::Jpeg);
     }
     assert_eq!(
-        dicom_tile_codec_kind(uids::JPEG2000_LOSSLESS),
+        tile_codec_kind_of(uids::JPEG2000_LOSSLESS),
         TileCodecKind::Jp2k
     );
     assert_eq!(
-        dicom_tile_codec_kind(HTJ2K_LOSSLESS_TRANSFER_SYNTAX),
+        tile_codec_kind_of(HTJ2K_LOSSLESS_TRANSFER_SYNTAX),
         TileCodecKind::Htj2k
     );
     assert_eq!(
-        dicom_tile_codec_kind(HTJ2K_TRANSFER_SYNTAX),
+        tile_codec_kind_of(HTJ2K_TRANSFER_SYNTAX),
         TileCodecKind::Htj2k
     );
     assert_eq!(
-        dicom_tile_codec_kind(uids::EXPLICIT_VR_LITTLE_ENDIAN),
+        tile_codec_kind_of(uids::EXPLICIT_VR_LITTLE_ENDIAN),
         TileCodecKind::Other
     );
+}
+
+#[test]
+fn transfer_syntax_classification_covers_every_supported_uid() {
+    let rgb = "RGB";
+    let cases = [
+        (
+            uids::IMPLICIT_VR_LITTLE_ENDIAN,
+            Compression::None,
+            Some(false),
+            false,
+        ),
+        (
+            uids::EXPLICIT_VR_LITTLE_ENDIAN,
+            Compression::None,
+            Some(false),
+            false,
+        ),
+        (
+            EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX,
+            Compression::None,
+            Some(false),
+            false,
+        ),
+        (
+            uids::JPEG_BASELINE8_BIT,
+            Compression::Jpeg,
+            Some(true),
+            true,
+        ),
+        (
+            uids::JPEG_EXTENDED12_BIT,
+            Compression::Jpeg,
+            Some(true),
+            true,
+        ),
+        (
+            JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX,
+            Compression::Jpeg,
+            Some(true),
+            true,
+        ),
+        (
+            JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX,
+            Compression::Jpeg,
+            Some(true),
+            true,
+        ),
+        (uids::JPEG_LOSSLESS, Compression::Jpeg, Some(false), true),
+        (
+            uids::JPEG_LOSSLESS_SV1,
+            Compression::Jpeg,
+            Some(false),
+            true,
+        ),
+        (
+            uids::JPEG2000_LOSSLESS,
+            Compression::Jp2kRgb,
+            Some(false),
+            true,
+        ),
+        (uids::JPEG2000, Compression::Jp2kRgb, None, true),
+        (
+            HTJ2K_LOSSLESS_TRANSFER_SYNTAX,
+            Compression::Jp2kRgb,
+            Some(false),
+            true,
+        ),
+        (
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            Compression::Jp2kRgb,
+            Some(false),
+            true,
+        ),
+        (HTJ2K_TRANSFER_SYNTAX, Compression::Jp2kRgb, None, true),
+        (uids::RLE_LOSSLESS, Compression::Rle, Some(false), true),
+    ];
+    for (uid, compression, lossy, encapsulated) in cases {
+        let transfer_syntax = DicomTransferSyntax::from_uid(uid).expect(uid);
+        assert_eq!(
+            transfer_syntax.source_compression(rgb),
+            compression,
+            "{uid}"
+        );
+        assert_eq!(transfer_syntax.is_lossy(), lossy, "{uid}");
+        assert_eq!(transfer_syntax.is_encapsulated(), encapsulated, "{uid}");
+        assert_eq!(
+            transfer_syntax.raw_compression(rgb),
+            matches!(compression, Compression::Jpeg | Compression::Jp2kRgb).then_some(compression),
+            "{uid}"
+        );
+    }
+    assert_eq!(
+        DicomTransferSyntax::from_uid(HTJ2K_TRANSFER_SYNTAX)
+            .unwrap()
+            .source_compression("YBR_ICT"),
+        Compression::Jp2kYcbcr
+    );
+    assert_eq!(
+        DicomTransferSyntax::from_uid(uids::JPEG_BASELINE8_BIT)
+            .unwrap()
+            .source_compression("YBR_FULL_422"),
+        Compression::Jpeg
+    );
+    for unsupported in [
+        uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN,
+        uids::JPEGLS_LOSSLESS,
+        "",
+    ] {
+        assert_eq!(
+            DicomTransferSyntax::from_uid(unsupported),
+            None,
+            "{unsupported}"
+        );
+    }
 }
 
 #[test]

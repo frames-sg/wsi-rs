@@ -15,6 +15,7 @@ use super::frame_index::raw_little_endian::{
 };
 use super::frame_index::validation::preflight_compressed_frame;
 use super::frame_index::*;
+use super::transfer_syntax::*;
 use crate::core::cache::{CacheConfig, PrivateCache};
 use crate::core::registry::OpenBudget;
 use crate::SlideLimits;
@@ -46,6 +47,7 @@ mod twelve_bit;
 
 pub(super) const UNDEFINED_LENGTH_LE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 const JPEG_TRANSFER_SYNTAX: &str = uids::JPEG_BASELINE8_BIT;
+const RLE_TRANSFER_SYNTAX: &str = uids::RLE_LOSSLESS;
 
 fn scan_encapsulated_frames_raw_little_endian(
     path: &Path,

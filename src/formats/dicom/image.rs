@@ -11,19 +11,15 @@ use crate::core::registry::OpenBudget;
 use crate::core::types::{CpuTile, RawCompressedTile, SourceEncoding};
 use crate::error::WsiError;
 
-use super::backend::{
-    is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax,
-    source_compression_for_transfer_syntax, transfer_syntax_is_lossy,
-};
 use super::decode::{
     black_sample_buffer, checked_dicom_tile_coordinates, crop_or_keep_sample_buffer_rgb,
-    dicom_actual_tile_dimensions, raw_compression_for_transfer_syntax,
-    raw_photometric_interpretation, sparse_missing_raw_tile_error, trim_encapsulated_frame_padding,
-    validate_jpeg_transfer_syntax_frame,
+    dicom_actual_tile_dimensions, raw_photometric_interpretation, sparse_missing_raw_tile_error,
+    trim_encapsulated_frame_padding,
 };
 use super::frame_index::DicomEncapsulatedFrames;
 use super::metadata::{parse_sparse_tile_map_with_budget, DicomBitDepth, ParsedDicomMetadata};
 use super::preflight::DicomPixelDataLocation;
+use super::transfer_syntax::DicomTransferSyntax;
 
 mod frame_decode;
 mod frame_io;
@@ -35,6 +31,7 @@ pub(super) const BATCH_FRAME_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
 pub(super) struct DicomImage {
     pub(super) sop_instance_uid: String,
     pub(super) transfer_syntax_uid: String,
+    pub(super) transfer_syntax: DicomTransferSyntax,
     pub(super) photometric_interpretation: String,
     pub(super) samples_per_pixel: u16,
     pub(super) planar_configuration: Option<u16>,
@@ -83,6 +80,8 @@ impl DicomImage {
         private_cache_budget: &mut PrivateCacheBudget,
         open_budget: &OpenBudget,
     ) -> Result<Self, WsiError> {
+        let transfer_syntax =
+            DicomTransferSyntax::supported(&meta.path, &meta.transfer_syntax_uid)?;
         // OpenSlide's DICOM contract uses the first optical path profile for
         // both main and associated images. Preserve the bytes before the
         // parsed metadata is consumed by the frame-store construction.
@@ -119,7 +118,7 @@ impl DicomImage {
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
         let decoded_frame_cache =
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
-        let native_pixel_data = if is_encapsulated_transfer_syntax(&meta.transfer_syntax_uid) {
+        let native_pixel_data = if transfer_syntax.is_encapsulated() {
             if meta.pixel_data != DicomPixelDataLocation::Encapsulated {
                 return Err(WsiError::invalid_slide(
                     &meta.path,
@@ -153,6 +152,7 @@ impl DicomImage {
         Ok(Self {
             sop_instance_uid: meta.sop_instance_uid,
             transfer_syntax_uid: meta.transfer_syntax_uid,
+            transfer_syntax,
             photometric_interpretation: meta.photometric_interpretation,
             samples_per_pixel: meta.samples_per_pixel,
             planar_configuration: meta.planar_configuration,
@@ -215,10 +215,15 @@ impl DicomImage {
         let Some(frame_index) = self.frame_index(col_u32, row_u32) else {
             return Err(sparse_missing_raw_tile_error(col, row, level));
         };
-        let compression = raw_compression_for_transfer_syntax(
-            &self.transfer_syntax_uid,
-            &self.photometric_interpretation,
-        )?;
+        let compression = self
+            .transfer_syntax
+            .raw_compression(&self.photometric_interpretation)
+            .ok_or_else(|| WsiError::Unsupported {
+                reason: format!(
+                    "raw compressed DICOM tile access requires JPEG or J2K/HTJ2K transfer syntax, got {}",
+                    self.transfer_syntax_uid
+                ),
+            })?;
         let photometric_interpretation = raw_photometric_interpretation(
             self.samples_per_pixel,
             &self.photometric_interpretation,
@@ -226,8 +231,8 @@ impl DicomImage {
         let bytes = self.extract_encapsulated_frame(frame_index, level, col, row, true)?;
         let mut data = bytes.as_ref().clone();
         trim_encapsulated_frame_padding(&mut data);
-        if is_jpeg_transfer_syntax(&self.transfer_syntax_uid) {
-            validate_jpeg_transfer_syntax_frame(&self.transfer_syntax_uid, self.bit_depth, &data)?;
+        if matches!(self.transfer_syntax, DicomTransferSyntax::Jpeg(_)) {
+            self.validate_jpeg_frame(&data)?;
         }
 
         Ok(RawCompressedTile::builder(compression)
@@ -307,13 +312,10 @@ impl DicomImage {
                 .capacity_bytes()
     }
 
-    pub(super) fn source_encoding(&self) -> Result<Option<SourceEncoding>, WsiError> {
-        let Some(compression) = source_compression_for_transfer_syntax(
-            &self.transfer_syntax_uid,
-            &self.photometric_interpretation,
-        ) else {
-            return Ok(None);
-        };
+    pub(super) fn source_encoding(&self) -> Result<SourceEncoding, WsiError> {
+        let compression = self
+            .transfer_syntax
+            .source_compression(&self.photometric_interpretation);
         let decoded_bytes = self
             .checked_native_frame_bytes()
             .and_then(|frame_bytes| frame_bytes.checked_mul(u64::from(self.number_of_frames)))
@@ -325,8 +327,8 @@ impl DicomImage {
             })?;
         let mut encoding = SourceEncoding::new(compression)
             .with_sizes(decoded_bytes, self.source_encoded_bytes()?);
-        encoding.lossy = transfer_syntax_is_lossy(&self.transfer_syntax_uid);
-        Ok(Some(encoding))
+        encoding.lossy = self.transfer_syntax.is_lossy();
+        Ok(encoding)
     }
 }
 

@@ -5,7 +5,6 @@ use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{CpuTile, TileRequest};
 use crate::error::WsiError;
 
-use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::decode::{black_sample_buffer, crop_sample_buffer_rgb};
 use crate::formats::dicom::image::DicomImage;
 use crate::formats::dicom::manifest::DicomSlide;
@@ -125,7 +124,7 @@ impl<'a> DicomBatchPlanner<'a> {
 
         match self.mode {
             DicomBatchPlanMode::Cpu => {
-                if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
+                if image.transfer_syntax.is_encapsulated() {
                     if let Some(cached) = image.cached_decoded_frame(frame_index) {
                         return Ok(DicomResolvedBatchPlanEntry::CachedFrame(
                             slot,

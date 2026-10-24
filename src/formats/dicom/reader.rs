@@ -9,12 +9,7 @@ use crate::core::types::{
 };
 use crate::error::WsiError;
 
-use super::backend::is_encapsulated_transfer_syntax;
 use super::manifest::{DicomLevel, DicomSlide};
-use super::{
-    HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, HTJ2K_LOSSLESS_TRANSFER_SYNTAX, HTJ2K_TRANSFER_SYNTAX,
-    JP2K_TRANSFER_SYNTAXES,
-};
 
 mod batch_plan;
 mod cpu;
@@ -74,7 +69,7 @@ impl SlideReader for DicomReader {
         let (_, dicom_level) = dicom_level_at(&self.slide, scene, series, level)?;
         for image in &dicom_level.parts {
             control.check_cancelled()?;
-            if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
+            if image.transfer_syntax.is_encapsulated() {
                 image.ensure_encapsulated_frames_controlled(Some(control))?;
             }
         }
@@ -139,7 +134,7 @@ impl SlideReader for DicomReader {
 
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         match self.slide.associated.get(name) {
-            Some(image) => image.source_encoding(),
+            Some(image) => image.source_encoding().map(Some),
             None => Ok(None),
         }
     }
@@ -157,9 +152,7 @@ impl SlideReader for DicomReader {
         };
         let mut total: Option<SourceEncoding> = None;
         for part in &level.parts {
-            let Some(encoding) = part.source_encoding()? else {
-                return Ok(None);
-            };
+            let encoding = part.source_encoding()?;
             total = match total {
                 None => Some(encoding),
                 Some(total)
@@ -184,21 +177,4 @@ impl SlideReader for DicomReader {
 /// Sum of two sizes, unknown when either is unknown or the sum overflows.
 fn add_sizes(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     a?.checked_add(b?)
-}
-
-pub(super) fn dicom_tile_codec_kind(transfer_syntax_uid: &str) -> TileCodecKind {
-    if super::is_jpeg_transfer_syntax(transfer_syntax_uid) {
-        TileCodecKind::Jpeg
-    } else if matches!(
-        transfer_syntax_uid,
-        HTJ2K_TRANSFER_SYNTAX
-            | HTJ2K_LOSSLESS_TRANSFER_SYNTAX
-            | HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX
-    ) {
-        TileCodecKind::Htj2k
-    } else if JP2K_TRANSFER_SYNTAXES.contains(&transfer_syntax_uid) {
-        TileCodecKind::Jp2k
-    } else {
-        TileCodecKind::Other
-    }
 }

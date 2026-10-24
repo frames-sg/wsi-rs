@@ -20,7 +20,7 @@ use crate::formats::dicom::decode::{
     dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::metadata::DicomBitDepth;
-use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
+use crate::formats::dicom::transfer_syntax::DicomTransferSyntax;
 
 impl DicomReader {
     pub(super) fn read_tiles_cpu_with_backend_controlled(
@@ -65,16 +65,13 @@ impl DicomReader {
                         }
                         first_frame_slots.insert(key, slot);
                     }
-                    if is_jpeg_transfer_syntax(&meta.image.transfer_syntax_uid) {
-                        jpeg_metas.push(meta);
-                    } else if JP2K_TRANSFER_SYNTAXES
-                        .contains(&meta.image.transfer_syntax_uid.as_str())
-                    {
-                        jp2k_metas.push(meta);
-                    } else if meta.image.transfer_syntax_uid == RLE_TRANSFER_SYNTAX {
-                        rle_metas.push(meta);
-                    } else {
-                        results[slot] = Some(self.read_tile_with_backend(req, backend)?);
+                    match meta.image.transfer_syntax {
+                        DicomTransferSyntax::Jpeg(_) => jpeg_metas.push(meta),
+                        DicomTransferSyntax::Jp2k { .. } => jp2k_metas.push(meta),
+                        DicomTransferSyntax::Rle => rle_metas.push(meta),
+                        DicomTransferSyntax::Native { .. } => {
+                            results[slot] = Some(self.read_tile_with_backend(req, backend)?);
+                        }
                     }
                 }
                 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -206,6 +203,7 @@ fn decode_jpeg_frames_into(
         .iter()
         .map(|(meta, bytes)| {
             validate_jpeg_transfer_syntax_frame(
+                meta.image.transfer_syntax,
                 &meta.image.transfer_syntax_uid,
                 bit_depth,
                 bytes.as_slice(),

@@ -345,7 +345,7 @@ impl DicomLevel {
             .ok()
             .and_then(|(col, row)| self.image_for_tile(col, row))
             .map_or(TileCodecKind::Other, |image| {
-                dicom_tile_codec_kind(&image.transfer_syntax_uid)
+                image.transfer_syntax.tile_codec_kind()
             })
     }
 

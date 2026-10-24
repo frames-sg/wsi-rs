@@ -2,10 +2,9 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use dicom_dictionary_std::uids;
 use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
 use dicom_parser::stateful::decode::StatefulDecode;
-use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
+use dicom_transfer_syntax_registry::TransferSyntaxIndex;
 
 use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
@@ -14,7 +13,6 @@ use super::model::{DicomEncapsulatedFrames, DicomFragmentRef};
 use super::offset_tables::{build_encapsulated_frame_index, validate_basic_offset_table_len};
 use crate::formats::dicom::preflight::preflight_file_meta;
 use crate::formats::dicom::preflight::DicomMetadataTransferSyntaxIndex;
-use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
 
 pub(super) fn scan_encapsulated_frames_tokenized(
     path: &Path,
@@ -25,12 +23,6 @@ pub(super) fn scan_encapsulated_frames_tokenized(
     check_cancelled_opt(control)?;
     let transfer_syntax = DicomMetadataTransferSyntaxIndex
         .get(transfer_syntax_uid)
-        .or_else(|| {
-            JP2K_TRANSFER_SYNTAXES
-                .contains(&transfer_syntax_uid)
-                .then(|| TransferSyntaxRegistry.get(uids::EXPLICIT_VR_LITTLE_ENDIAN))
-                .flatten()
-        })
         .ok_or_else(|| {
             WsiError::invalid_slide(
                 path,

@@ -12,7 +12,7 @@ use super::batch_plan::{
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::jp2k_photometric_is_ycbcr;
-use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
+use crate::formats::dicom::transfer_syntax::DicomTransferSyntax;
 
 impl DicomReader {
     pub(super) fn strict_jp2k_frames(
@@ -33,7 +33,7 @@ impl DicomReader {
         let mut frames = Vec::with_capacity(reqs.len());
         for (slot, request) in reqs.iter().enumerate() {
             let resolved = planner.resolve(slot, request, |image| {
-                JP2K_TRANSFER_SYNTAXES.contains(&image.transfer_syntax_uid.as_str())
+                matches!(image.transfer_syntax, DicomTransferSyntax::Jp2k { .. })
             })?;
             match resolved {
                 DicomResolvedBatchPlanEntry::Frame(frame) => frames.push(frame),

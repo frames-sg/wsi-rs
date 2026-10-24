@@ -7,6 +7,8 @@ pub(super) fn test_dicom_image_with_transfer_syntax(
     Arc::new(DicomImage {
         sop_instance_uid: sop_instance_uid.into(),
         transfer_syntax_uid: transfer_syntax_uid.into(),
+        transfer_syntax: DicomTransferSyntax::from_uid(transfer_syntax_uid)
+            .expect("supported test transfer syntax"),
         photometric_interpretation: "RGB".into(),
         samples_per_pixel: 3,
         planar_configuration: Some(0),

@@ -9,14 +9,13 @@ use crate::decode::jpeg::JpegDecodeJob;
 use crate::error::WsiError;
 
 use super::DicomImage;
-use crate::formats::dicom::backend::{is_encapsulated_transfer_syntax, is_jpeg_transfer_syntax};
 use crate::formats::dicom::decode::{
     decode_dicom_jp2k_u16, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
     dicom_jpeg_color_transform, interleaved_rgb_samples, jp2k_photometric_is_ycbcr,
     validate_jpeg_transfer_syntax_frame,
 };
 use crate::formats::dicom::metadata::DicomBitDepth;
-use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
+use crate::formats::dicom::transfer_syntax::DicomTransferSyntax;
 
 impl DicomImage {
     pub(in super::super) fn decode_uncompressed_frame_sample_buffer(
@@ -119,13 +118,12 @@ impl DicomImage {
             .map(CpuTileData::u8),
             DicomBitDepth::Uint16 { .. } => {
                 let mask = self.bit_depth.unsigned_sample_mask();
-                let from_bytes = if self.transfer_syntax_uid
-                    == crate::formats::dicom::EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX
-                {
-                    u16::from_be_bytes
-                } else {
-                    u16::from_le_bytes
-                };
+                let from_bytes =
+                    if self.transfer_syntax == (DicomTransferSyntax::Native { big_endian: true }) {
+                        u16::from_be_bytes
+                    } else {
+                        u16::from_le_bytes
+                    };
                 let words = frame
                     .as_chunks::<2>()
                     .0
@@ -161,6 +159,17 @@ impl DicomImage {
         })
     }
 
+    /// Checks that a JPEG frame uses this image's declared JPEG process and
+    /// sample precision.
+    pub(in super::super) fn validate_jpeg_frame(&self, frame: &[u8]) -> Result<(), WsiError> {
+        validate_jpeg_transfer_syntax_frame(
+            self.transfer_syntax,
+            &self.transfer_syntax_uid,
+            self.bit_depth,
+            frame,
+        )
+    }
+
     /// Decode a JPEG 2000 frame of this image's 16-bit words to RGB16.
     pub(in super::super) fn decode_jp2k_u16_frame(
         &self,
@@ -186,27 +195,23 @@ impl DicomImage {
         row: i64,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        let use_decoded_cache = is_encapsulated_transfer_syntax(&self.transfer_syntax_uid);
+        let use_decoded_cache = self.transfer_syntax.is_encapsulated();
         if use_decoded_cache {
             if let Some(cached) = self.cached_decoded_frame(frame_index) {
                 return Ok(cached.as_ref().clone());
             }
         }
 
-        let buffer = if is_jpeg_transfer_syntax(&self.transfer_syntax_uid) {
+        let buffer = if matches!(self.transfer_syntax, DicomTransferSyntax::Jpeg(_)) {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            validate_jpeg_transfer_syntax_frame(
-                &self.transfer_syntax_uid,
-                self.bit_depth,
-                bytes.as_slice(),
-            )
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?;
+            self.validate_jpeg_frame(bytes.as_slice())
+                .map_err(|err| WsiError::TileRead {
+                    col,
+                    row,
+                    level,
+                    reason: err.to_string(),
+                })?;
             crate::core::batch::exactly_one(
                 decode_dicom_jpeg_batch(
                     self.bit_depth,
@@ -230,7 +235,7 @@ impl DicomImage {
                 level,
                 reason: err.to_string(),
             })?
-        } else if JP2K_TRANSFER_SYNTAXES.contains(&self.transfer_syntax_uid.as_str()) {
+        } else if matches!(self.transfer_syntax, DicomTransferSyntax::Jp2k { .. }) {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
             let decoded = match self.bit_depth {
@@ -263,7 +268,7 @@ impl DicomImage {
                 level,
                 reason: err.to_string(),
             })?
-        } else if self.transfer_syntax_uid == RLE_TRANSFER_SYNTAX {
+        } else if self.transfer_syntax == DicomTransferSyntax::Rle {
             let bytes =
                 self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
             decode_rle_lossless_frame(

@@ -2,6 +2,9 @@ use dicom_core::{Tag, VR};
 use dicom_object::file::ReadPreamble;
 
 use super::frame_index::explicit_vr_uses_u32_length;
+use super::transfer_syntax::{
+    JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX, JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX,
+};
 use super::*;
 use crate::core::registry::OpenBudget;
 use crate::SlideLimits;
