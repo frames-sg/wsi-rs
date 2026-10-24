@@ -1,6 +1,4 @@
-use super::metadata::{
-    extract_encode_info, extract_encode_info_bytes, extract_iscan_fragment_bytes,
-};
+use super::metadata::{extract_encode_info_bytes, extract_iscan_fragment_bytes};
 use super::stitching::{joint_delta, ventana_snake_coords, BifArea, BifTile};
 use super::*;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
@@ -700,7 +698,7 @@ fn compression_tag_mapping() {
 #[test]
 fn extract_encode_info_found() {
     let input = "prefix<EncodeInfo><SlideStitchInfo/></EncodeInfo>suffix";
-    let result = extract_encode_info(input);
+    let result = extract_encode_info_bytes(input.as_bytes());
     assert_eq!(
         result.as_deref(),
         Some("<EncodeInfo><SlideStitchInfo/></EncodeInfo>")
@@ -710,7 +708,7 @@ fn extract_encode_info_found() {
 #[test]
 fn extract_encode_info_with_attributes_found() {
     let input = "prefix<?xml version=\"1.0\"?><EncodeInfo Ver='2'><SlideStitchInfo/></EncodeInfo>";
-    let result = extract_encode_info(input);
+    let result = extract_encode_info_bytes(input.as_bytes());
     assert_eq!(
         result.as_deref(),
         Some("<EncodeInfo Ver='2'><SlideStitchInfo/></EncodeInfo>")
@@ -720,7 +718,7 @@ fn extract_encode_info_with_attributes_found() {
 #[test]
 fn extract_encode_info_not_found() {
     let input = "no encode info here";
-    assert!(extract_encode_info(input).is_none());
+    assert!(extract_encode_info_bytes(input.as_bytes()).is_none());
 }
 
 #[test]

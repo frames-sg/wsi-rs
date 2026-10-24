@@ -376,41 +376,29 @@ impl TiffPixelReader {
             }
         }
 
+        let decode_job = |job: AssociatedTileJob| {
+            let tile = self.decode_tiled_ifd_tile_index(
+                ifd_id,
+                job.tile_idx,
+                jpeg_tables,
+                compression,
+                job.tile_w,
+                job.tile_h,
+                offsets,
+                byte_counts,
+                BackendRequest::Auto,
+            )?;
+            Ok::<_, WsiError>((job, tile))
+        };
         let decoded_tiles: Vec<_> = if tile_jobs.len() <= 1 {
             tile_jobs
                 .into_iter()
-                .map(|job| {
-                    let tile = self.decode_tiled_ifd_tile_index(
-                        ifd_id,
-                        job.tile_idx,
-                        jpeg_tables,
-                        compression,
-                        job.tile_w,
-                        job.tile_h,
-                        offsets,
-                        byte_counts,
-                        BackendRequest::Auto,
-                    )?;
-                    Ok((job, tile))
-                })
+                .map(decode_job)
                 .collect::<Result<_, WsiError>>()?
         } else {
             tile_jobs
                 .into_par_iter()
-                .map(|job| {
-                    let tile = self.decode_tiled_ifd_tile_index(
-                        ifd_id,
-                        job.tile_idx,
-                        jpeg_tables,
-                        compression,
-                        job.tile_w,
-                        job.tile_h,
-                        offsets,
-                        byte_counts,
-                        BackendRequest::Auto,
-                    )?;
-                    Ok((job, tile))
-                })
+                .map(decode_job)
                 .collect::<Result<_, WsiError>>()?
         };
 

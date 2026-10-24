@@ -1,3 +1,5 @@
+use memchr::memmem;
+
 use super::*;
 
 // ── Detection helper ────────────────────────────────────────────────
@@ -8,14 +10,9 @@ pub(super) fn has_iscan_xmp(container: &TiffContainer, ifd_id: IfdId) -> bool {
     if let Ok(s) = container.get_string(ifd_id, tags::XMP) {
         return s.contains("iScan");
     }
-    if let Ok(bytes) = container.get_bytes(ifd_id, tags::XMP) {
-        if let Ok(s) = std::str::from_utf8(bytes) {
-            return s.contains("iScan");
-        }
-        // Byte-level search as last resort.
-        return bytes.windows(b"iScan".len()).any(|w| w == b"iScan");
-    }
-    false
+    container
+        .get_bytes(ifd_id, tags::XMP)
+        .is_ok_and(|bytes| memmem::find(bytes, b"iScan").is_some())
 }
 
 // ── XMP parsing ─────────────────────────────────────────────────────
@@ -31,11 +28,6 @@ pub(super) fn find_xmp_string(container: &TiffContainer) -> Result<Option<String
         if let Ok(bytes) = container.get_bytes(ifd_id, tags::XMP) {
             if let Some(xmp) = extract_iscan_fragment_bytes(bytes) {
                 return Ok(Some(xmp));
-            }
-            if let Ok(s) = std::str::from_utf8(bytes) {
-                if let Some(xmp) = extract_iscan_fragment(s) {
-                    return Ok(Some(xmp));
-                }
             }
         }
     }
@@ -126,22 +118,12 @@ pub(super) fn find_encode_info_xml(container: &TiffContainer) -> Result<String, 
                 if let Some(xml) = extract_encode_info_bytes(bytes) {
                     return Ok(xml);
                 }
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    if let Some(xml) = extract_encode_info(s) {
-                        return Ok(xml);
-                    }
-                }
             }
         }
     }
     Err(TiffParseError::Structure(
         "Ventana BIF: no EncodeInfo XML found".into(),
     ))
-}
-
-/// Extract `<EncodeInfo>...</EncodeInfo>` from a larger string.
-pub(super) fn extract_encode_info(s: &str) -> Option<String> {
-    extract_xml_fragment(s, "<EncodeInfo", "</EncodeInfo>")
 }
 
 /// Extract `<EncodeInfo ...>...</EncodeInfo>` from raw tag bytes.
@@ -159,19 +141,13 @@ pub(super) fn extract_iscan_fragment_bytes(bytes: &[u8]) -> Option<String> {
     extract_xml_fragment_with_optional_self_closing_bytes(bytes, b"<iScan", b"</iScan>")
 }
 
-fn extract_xml_fragment(s: &str, start_tag_prefix: &str, end_tag: &str) -> Option<String> {
-    let start = s.find(start_tag_prefix)?;
-    let end = s[start..].find(end_tag)? + start + end_tag.len();
-    Some(s[start..end].to_string())
-}
-
 fn extract_xml_fragment_bytes(
     bytes: &[u8],
     start_tag_prefix: &[u8],
     end_tag: &[u8],
 ) -> Option<String> {
-    let start = find_bytes(bytes, start_tag_prefix)?;
-    let end = find_bytes(&bytes[start..], end_tag)? + start + end_tag.len();
+    let start = memmem::find(bytes, start_tag_prefix)?;
+    let end = memmem::find(&bytes[start..], end_tag)? + start + end_tag.len();
     Some(String::from_utf8_lossy(&bytes[start..end]).into_owned())
 }
 
@@ -195,33 +171,10 @@ fn extract_xml_fragment_with_optional_self_closing_bytes(
     start_tag_prefix: &[u8],
     end_tag: &[u8],
 ) -> Option<String> {
-    let start = find_bytes(bytes, start_tag_prefix)?;
+    let start = memmem::find(bytes, start_tag_prefix)?;
     let fragment = &bytes[start..];
-    let end = find_bytes(fragment, b"/>")
+    let end = memmem::find(fragment, b"/>")
         .map(|pos| start + pos + 2)
-        .or_else(|| find_bytes(fragment, end_tag).map(|pos| start + pos + end_tag.len()))?;
+        .or_else(|| memmem::find(fragment, end_tag).map(|pos| start + pos + end_tag.len()))?;
     Some(String::from_utf8_lossy(&bytes[start..end]).into_owned())
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-
-    let first = needle[0];
-    let last_start = haystack.len() - needle.len();
-    let mut idx = 0;
-
-    while idx <= last_start {
-        let offset = haystack[idx..=last_start]
-            .iter()
-            .position(|&byte| byte == first)?;
-        let candidate = idx + offset;
-        if haystack[candidate..candidate + needle.len()] == *needle {
-            return Some(candidate);
-        }
-        idx = candidate + 1;
-    }
-
-    None
 }
