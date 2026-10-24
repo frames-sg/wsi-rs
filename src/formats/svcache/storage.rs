@@ -295,9 +295,6 @@ fn validate_level(
                 "complete svcache contains an empty dense tile slot",
             ));
         }
-        for tile in level.tiles.iter().flatten() {
-            validate_tile(path, payload_len, tile, payload_ranges, budget)?;
-        }
     } else {
         if complete && u64::try_from(level.sparse_tiles.len()).ok() != Some(tile_count) {
             return Err(invalid_svcache(
@@ -314,8 +311,10 @@ fn validate_level(
                 ));
             }
             previous = Some(entry.index);
-            validate_tile(path, payload_len, &entry.tile, payload_ranges, budget)?;
         }
+    }
+    for (_, tile) in level.populated_tiles() {
+        validate_tile(path, payload_len, tile, payload_ranges, budget)?;
     }
     Ok(())
 }
@@ -390,11 +389,9 @@ fn svcache_payload_count(path: &Path, metadata: &SvcacheMetadata) -> Result<u64,
     let level_tiles = metadata.scenes.iter().try_fold(0u64, |total, scene| {
         scene.series.iter().try_fold(total, |total, series| {
             series.levels.iter().try_fold(total, |total, level| {
-                let dense = u64::try_from(level.tiles.iter().flatten().count()).unwrap_or(u64::MAX);
-                let sparse = u64::try_from(level.sparse_tiles.len()).unwrap_or(u64::MAX);
+                let populated = u64::try_from(level.populated_tiles().count()).unwrap_or(u64::MAX);
                 total
-                    .checked_add(dense)
-                    .and_then(|value| value.checked_add(sparse))
+                    .checked_add(populated)
                     .ok_or_else(|| invalid_svcache(path, "svcache payload count overflow"))
             })
         })

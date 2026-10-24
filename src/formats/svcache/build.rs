@@ -1,64 +1,66 @@
 use super::storage::{fingerprint_source, hex_encode, read_svcache, svcache_matches_source};
 use super::*;
 
+/// The opened source slide, its fingerprint and a scratch payload file, with
+/// the output directory created.
+struct BuildSource {
+    slide: Slide,
+    fingerprint: SourceFingerprint,
+    payload: File,
+}
+
+impl BuildSource {
+    fn open(source_path: &Path, out_path: &Path) -> Result<Self, WsiError> {
+        let registry = FormatRegistry::builtin_native();
+        let source = registry.open(source_path)?;
+        let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
+        let fingerprint = fingerprint_source(source_path)?;
+        let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        Ok(Self {
+            slide,
+            fingerprint,
+            payload: tempfile::tempfile()?,
+        })
+    }
+}
+
 pub fn build_svcache(source_path: &Path, out_path: &Path) -> Result<(), WsiError> {
-    let registry = FormatRegistry::builtin_native();
-    let source = registry.open(source_path)?;
-    let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
-    let source_fingerprint = fingerprint_source(source_path)?;
-
-    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut payload = tempfile::tempfile()?;
-    let mut scenes = Vec::new();
-
-    for (scene_idx, scene) in slide.dataset().scenes.iter().enumerate() {
-        let mut series_meta = Vec::new();
-        for (series_idx, series) in scene.series.iter().enumerate() {
-            let mut levels_meta = Vec::new();
-            for (level_idx, level) in series.levels.iter().enumerate() {
-                let (tile_width, tile_height, tiles_across, tiles_down) =
-                    cache_grid_for_level(level);
-                let mut tiles = Vec::with_capacity(
-                    usize::try_from(tiles_across.saturating_mul(tiles_down)).unwrap_or(0),
-                );
-                for row in 0..tiles_down {
-                    for col in 0..tiles_across {
-                        let request = TileViewRequest {
-                            scene: scene_idx.into(),
-                            series: series_idx.into(),
-                            level: (level_idx as u32).into(),
-                            plane: PlaneSelection::default().into(),
-                            col: i64::try_from(col).unwrap_or(i64::MAX),
-                            row: i64::try_from(row).unwrap_or(i64::MAX),
-                            tile_width,
-                            tile_height,
-                        };
-                        let tile = slide.read_display_tile(&request)?;
-                        tiles.push(Some(write_tile_payload(&mut payload, &tile)?));
-                    }
-                }
-                levels_meta.push(LevelMeta {
-                    dimensions: level.dimensions,
-                    downsample: level.downsample,
-                    tile_width,
-                    tile_height,
-                    tiles_across,
-                    tiles_down,
-                    tiles,
-                    sparse_tiles: Vec::new(),
-                });
+    let BuildSource {
+        slide,
+        fingerprint,
+        mut payload,
+    } = BuildSource::open(source_path, out_path)?;
+    let mut scenes = metadata_shell(slide.dataset())?;
+    for ((scene_idx, series_idx, level_idx), level) in indexed_levels_mut(&mut scenes) {
+        level.tiles = Vec::with_capacity(
+            usize::try_from(level.tiles_across.saturating_mul(level.tiles_down)).unwrap_or(0),
+        );
+        for row in 0..level.tiles_down {
+            for col in 0..level.tiles_across {
+                let request = TileViewRequest {
+                    scene: scene_idx.into(),
+                    series: series_idx.into(),
+                    level: (level_idx as u32).into(),
+                    plane: PlaneSelection::default().into(),
+                    col: i64::try_from(col).unwrap_or(i64::MAX),
+                    row: i64::try_from(row).unwrap_or(i64::MAX),
+                    tile_width: level.tile_width,
+                    tile_height: level.tile_height,
+                };
+                let tile = slide.read_display_tile(&request)?;
+                level
+                    .tiles
+                    .push(Some(write_tile_payload(&mut payload, &tile)?));
             }
-            series_meta.push(series_metadata(series, levels_meta));
         }
-        scenes.push(scene_metadata(scene, series_meta));
     }
 
     let associated = build_associated_payloads(&slide, &mut payload)?;
     let metadata = SvcacheMetadata {
         schema_version: SCHEMA_VERSION,
         complete: true,
-        source: source_fingerprint,
+        source: fingerprint,
         properties: dataset_properties(slide.dataset()),
         scenes,
         associated,
@@ -204,16 +206,13 @@ fn build_partial_svcache_with_existing_policy(
     inputs: Vec<PartialTileInput<'_>>,
     existing_tile_policy: ExistingTilePolicy,
 ) -> Result<usize, WsiError> {
-    let registry = FormatRegistry::builtin_native();
-    let source = registry.open(source_path)?;
-    let slide = Slide::from_source_with_cache_bytes(source, 256 * 1024 * 1024);
-    let source_fingerprint = fingerprint_source(source_path)?;
-
-    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut payload = tempfile::tempfile()?;
+    let BuildSource {
+        slide,
+        fingerprint,
+        mut payload,
+    } = BuildSource::open(source_path, out_path)?;
     let mut metadata = partial_svcache_metadata(
-        source_fingerprint,
+        fingerprint,
         slide.dataset(),
         metadata_shell(slide.dataset())?,
     );
@@ -368,51 +367,66 @@ pub(super) fn copy_existing_svcache_tiles(
     let (mut existing_file, payload_start, existing_metadata) = read_svcache(out_path)?;
     let mut copied = 0usize;
 
-    for (scene_idx, scene) in scenes.iter_mut().enumerate() {
-        let Some(existing_scene) = existing_metadata.scenes.get(scene_idx) else {
+    for ((scene_idx, series_idx, level_idx), level) in indexed_levels_mut(scenes) {
+        let Some(existing_level) = existing_metadata
+            .scenes
+            .get(scene_idx)
+            .and_then(|scene| scene.series.get(series_idx))
+            .and_then(|series| series.levels.get(level_idx))
+        else {
             continue;
         };
-        for (series_idx, series) in scene.series.iter_mut().enumerate() {
-            let Some(existing_series) = existing_scene.series.get(series_idx) else {
-                continue;
-            };
-            for (level_idx, level) in series.levels.iter_mut().enumerate() {
-                let Some(existing_level) = existing_series.levels.get(level_idx) else {
-                    continue;
-                };
-                // A tile index names the same tile only on the same grid.
-                if !existing_level.has_tile_grid_of(level) {
-                    continue;
-                }
-                let tile_limit = level
-                    .tiles_across
-                    .checked_mul(level.tiles_down)
-                    .ok_or_else(|| {
-                        invalid_svcache(out_path, "svcache level tile count overflow")
-                    })?;
-                for (idx, existing_tile) in existing_level.populated_tiles() {
-                    // Validation already bounds every index by the shared grid.
-                    if idx >= tile_limit {
-                        return Err(invalid_svcache(out_path, "svcache tile index out of range"));
-                    }
-                    if level.tile_meta_for_index(idx).is_some() {
-                        continue;
-                    }
-                    let copied_tile = copy_tile_payload(
-                        out_path,
-                        &mut existing_file,
-                        payload_start,
-                        existing_tile,
-                        payload,
-                    )?;
-                    level.insert_tile_for_index(idx, copied_tile);
-                    copied += 1;
-                }
+        // A tile index names the same tile only on the same grid.
+        if !existing_level.has_tile_grid_of(level) {
+            continue;
+        }
+        let tile_limit = level
+            .tiles_across
+            .checked_mul(level.tiles_down)
+            .ok_or_else(|| invalid_svcache(out_path, "svcache level tile count overflow"))?;
+        for (idx, existing_tile) in existing_level.populated_tiles() {
+            // Validation already bounds every index by the shared grid.
+            if idx >= tile_limit {
+                return Err(invalid_svcache(out_path, "svcache tile index out of range"));
             }
+            if level.tile_meta_for_index(idx).is_some() {
+                continue;
+            }
+            let copied_tile = copy_tile_payload(
+                out_path,
+                &mut existing_file,
+                payload_start,
+                existing_tile,
+                payload,
+            )?;
+            level.insert_tile_for_index(idx, copied_tile);
+            copied += 1;
         }
     }
 
     Ok(copied)
+}
+
+/// Every level with its scene, series and level indexes.
+fn indexed_levels_mut(
+    scenes: &mut [SceneMeta],
+) -> impl Iterator<Item = ((usize, usize, usize), &mut LevelMeta)> {
+    scenes
+        .iter_mut()
+        .enumerate()
+        .flat_map(|(scene_idx, scene)| {
+            scene
+                .series
+                .iter_mut()
+                .enumerate()
+                .flat_map(move |(series_idx, series)| {
+                    series
+                        .levels
+                        .iter_mut()
+                        .enumerate()
+                        .map(move |(level_idx, level)| ((scene_idx, series_idx, level_idx), level))
+                })
+        })
 }
 
 fn copy_tile_payload(
