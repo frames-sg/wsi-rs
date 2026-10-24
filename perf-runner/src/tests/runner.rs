@@ -116,21 +116,15 @@ fn read_checksum_includes_coordinates_and_argb_bytes() {
 }
 
 #[test]
-fn files_are_canonicalized_and_hashed_deterministically() {
+fn files_are_canonicalized_or_rejected() {
     let manifest = manifest_path();
     let canonical = canonical_file(&manifest, "manifest").expect("canonical manifest");
     assert!(canonical.is_absolute());
-
-    let first = sha256_file(&manifest).expect("manifest hash");
-    let second = sha256_file(&manifest).expect("manifest hash");
-    assert_eq!(first, second);
-    assert_eq!(first.len(), 64);
 
     let missing = Path::new("definitely-missing-perf-runner-input");
     assert!(canonical_file(missing, "fixture")
         .unwrap_err()
         .contains("not a file"));
-    assert!(sha256_file(missing).unwrap_err().contains("failed to open"));
 }
 
 #[test]

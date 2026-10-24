@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -354,10 +355,14 @@ pub fn load_manifest(path: &Path) -> Result<CorpusManifest, String> {
 }
 
 pub fn corpus_cache_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os(CORPUS_CACHE_ENV) {
+    corpus_cache_dir_from(std::env::var_os(CORPUS_CACHE_ENV), std::env::var_os("HOME"))
+}
+
+fn corpus_cache_dir_from(configured: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    if let Some(path) = configured {
         return PathBuf::from(path);
     }
-    std::env::var_os("HOME").map_or_else(
+    home.map_or_else(
         || PathBuf::from(".cache/wsi-rs/parity-corpus"),
         |home| {
             PathBuf::from(home)
@@ -610,13 +615,216 @@ mod tests {
 
     #[test]
     fn benchmark_group_is_stable_and_deduplicated() {
-        let entry = CorpusEntry {
+        let entry = |codecs: &[&str], group: &str| CorpusEntry {
             alias: "slide".into(),
             format: "aperio".into(),
-            codecs: vec!["jpeg".into(), "j2k".into(), "jpeg".into()],
+            codecs: codecs.iter().map(|codec| (*codec).to_string()).collect(),
+            benchmark_group: group.into(),
             ..CorpusEntry::default()
         };
-        assert_eq!(entry.benchmark_group(), "aperio/j2k+jpeg");
+        assert_eq!(
+            entry(&["jpeg", "j2k", "jpeg"], "").benchmark_group(),
+            "aperio/j2k+jpeg"
+        );
+        assert_eq!(entry(&[], "").benchmark_group(), "aperio");
+        assert_eq!(entry(&["jpeg"], "explicit").benchmark_group(), "explicit");
+    }
+
+    const SAMPLE_MANIFEST: &str = r#"
+        [[slide]]
+        name             = "aperio_svs_brightfield_he_typical"
+        alias            = "svs-001"
+        path             = ""
+        format           = "aperio"
+        codecs           = ["jpeg"]
+        must_decode      = ["base", "level1", "level2", "label", "macro"]
+        source           = "openslide-testdata"
+        license          = "CC0-1.0"
+        redistributable  = true
+        sha256           = "deadbeef"
+        citation         = "Goode A. et al. OpenSlide..."
+        phi_reviewed     = true
+        url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs"
+    "#;
+
+    fn sample_entry() -> CorpusEntry {
+        parse_manifest(SAMPLE_MANIFEST)
+            .expect("parse")
+            .slides
+            .remove(0)
+    }
+
+    #[test]
+    fn parser_reads_a_minimal_entry() {
+        let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+        let slide = manifest.slides.first().expect("slide");
+
+        assert_eq!(manifest.slides.len(), 1);
+        assert_eq!(slide.alias, "svs-001");
+        assert_eq!(slide.format, "aperio");
+        assert!(slide.redistributable);
+        assert_eq!(slide.codecs, vec!["jpeg"]);
+        assert_eq!(slide.must_decode.len(), 5);
+    }
+
+    #[test]
+    fn parser_rejects_malformed_text_and_empty_identity() {
+        assert!(parse_manifest("not = [valid")
+            .unwrap_err()
+            .contains("manifest parse"));
+        assert!(parse_manifest("[[slide]]\nalias = ''\nformat = 'aperio'\n")
+            .unwrap_err()
+            .contains("must be non-empty"));
+        assert!(parse_manifest("")
+            .expect("empty manifest")
+            .slides
+            .is_empty());
+    }
+
+    #[test]
+    fn parser_rejects_expected_failure_waivers() {
+        let manifest =
+            format!("{SAMPLE_MANIFEST}\nexpected_failures = ['j2k-vs-reference:base']\n");
+
+        let error = parse_manifest(&manifest).expect_err("release corpus must reject waivers");
+
+        assert!(error.contains("unknown field `expected_failures`"));
+    }
+
+    #[test]
+    fn parser_rejects_unknown_fields_and_accepts_notes() {
+        let with_notes = format!("{SAMPLE_MANIFEST}\nnotes = 'documented provenance'\n");
+        parse_manifest(&with_notes).expect("notes are part of the corpus schema");
+
+        let with_unknown =
+            format!("{SAMPLE_MANIFEST}\nunsupported_properties = ['openslide.vendor']\n");
+        let error =
+            parse_manifest(&with_unknown).expect_err("unknown corpus fields must fail closed");
+        assert!(error.contains("unknown field `unsupported_properties`"));
+    }
+
+    #[test]
+    fn must_decode_level_matches_base_and_numbered_levels() {
+        let mut entry = sample_entry();
+        entry.must_decode = vec!["base".into(), "level1".into(), "level12".into()];
+
+        assert!(entry.must_decode_level(0));
+        assert!(entry.must_decode_level(1));
+        assert!(entry.must_decode_level(12));
+        assert!(!entry.must_decode_level(2));
+        assert!(!entry.must_decode_level(10));
+    }
+
+    #[test]
+    fn an_entry_can_require_wsi_decode_without_requiring_openslide() {
+        let mut entry = sample_entry();
+
+        assert!(entry.openslide_must_decode_level(0));
+        entry.openslide_required = false;
+
+        assert!(entry.must_decode_level(0));
+        assert!(!entry.openslide_must_decode_level(0));
+    }
+
+    #[test]
+    fn required_levels_include_base_reduced_and_highest() {
+        assert_eq!(
+            sample_entry().required_level_indices(5).unwrap(),
+            vec![0, 1, 2, 4]
+        );
+    }
+
+    #[test]
+    fn release_coverage_reports_all_missing_evidence() {
+        let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+
+        let error =
+            validate_release_coverage(&manifest).expect_err("one row is not release evidence");
+
+        assert!(error.contains("olympus_vsi"));
+        assert!(error.contains("lossless JP2K"));
+        assert!(error.contains("DICOM JP2K YBR_ICT"));
+        assert!(error.contains("SOF2 progressive-JPEG DICOM"));
+    }
+
+    #[test]
+    fn alias_filter_keeps_requested_manifest_entries() {
+        let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+        let second = manifest.slides[0].clone();
+        manifest.slides.push(CorpusEntry {
+            alias: "ndpi-001".into(),
+            format: "ndpi".into(),
+            name: "hamamatsu_ndpi".into(),
+            ..second
+        });
+
+        apply_alias_filter(
+            &mut manifest,
+            parse_aliases(Some("ndpi-001,missing-001")).as_ref(),
+        );
+
+        assert_eq!(manifest.slides.len(), 1);
+        assert_eq!(manifest.slides[0].alias, "ndpi-001");
+    }
+
+    #[test]
+    fn format_default_extensions_cover_every_fetched_format() {
+        for (format, extension) in [
+            ("aperio", Some("svs")),
+            ("argos", Some("avs")),
+            ("huron", Some("tif")),
+            ("leica", Some("scn")),
+            ("ventana", Some("bif")),
+            ("philips_tiff", Some("tif")),
+            ("tiff", Some("tif")),
+            ("ndpi", Some("ndpi")),
+            ("hamamatsu_vms", Some("zip")),
+            ("hamamatsu_vmu", Some("zip")),
+            ("mirax", Some("zip")),
+            ("dicom", Some("dcm")),
+            ("olympus_vsi", Some("vsi")),
+            ("raw_jp2k", Some("j2k")),
+            ("svcache", Some("svcache")),
+            ("zeiss_zvi", Some("zvi")),
+            ("nonsense", None),
+        ] {
+            assert_eq!(format_default_extension(format), extension, "{format}");
+        }
+    }
+
+    #[test]
+    fn corpus_cache_dir_prefers_the_configured_cache() {
+        assert_eq!(
+            corpus_cache_dir_from(
+                Some("/tmp/sv-corpus-test".into()),
+                Some("/home/user".into())
+            ),
+            PathBuf::from("/tmp/sv-corpus-test")
+        );
+        assert_eq!(
+            corpus_cache_dir_from(None, Some("/home/user".into())),
+            PathBuf::from("/home/user/.cache/wsi-rs/parity-corpus")
+        );
+        assert_eq!(
+            corpus_cache_dir_from(None, None),
+            PathBuf::from(".cache/wsi-rs/parity-corpus")
+        );
+    }
+
+    #[test]
+    fn candidate_search_finds_plain_files_and_nested_extensions() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let entry = CorpusEntry {
+            alias: "fixture".into(),
+            format: "aperio".into(),
+            url: "https://example.invalid/name.ext".into(),
+            ..CorpusEntry::default()
+        };
+        let jpeg = workspace.join("tests/fixtures/jpeg/baseline_420_16x16.jpg");
+        assert_eq!(resolve_candidate(&entry, &jpeg), Some(jpeg));
+        assert!(find_file_with_extension(&workspace.join("tests/fixtures"), "j2k").is_some());
+        assert!(find_file_with_extension(Path::new("missing-directory"), "j2k").is_none());
+        assert!(!cache_candidates(&entry).is_empty());
     }
 
     #[test]

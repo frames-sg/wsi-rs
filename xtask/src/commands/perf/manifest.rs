@@ -51,11 +51,6 @@ pub(super) fn load_manifest() -> Result<ParityManifest, String> {
     })
 }
 
-#[cfg(test)]
-fn parse_manifest(text: &str) -> Result<ParityManifest, String> {
-    corpus::parse_manifest(text)
-}
-
 pub(super) fn resolve_manifest_slides(
     manifest: &ParityManifest,
     selectors: &[String],
@@ -150,7 +145,7 @@ fn slide_spec(entry: &ManifestSlide, path: PathBuf) -> Result<SlideSpec, String>
         path,
         alias: entry.alias.clone(),
         format: entry.format.clone(),
-        benchmark_group: benchmark_group(entry),
+        benchmark_group: entry.benchmark_group(),
         manifest_sha256: (!entry.sha256.is_empty()).then(|| entry.sha256.clone()),
         pixel_tolerance: Some(entry.pixel_tolerance()),
     })
@@ -165,10 +160,6 @@ fn validate_manifest_sha256(entry: &ManifestSlide, slide_path: &Path) -> Result<
         .map_err(|error| format!("performance manifest: {error}"))
 }
 
-fn benchmark_group(entry: &ManifestSlide) -> String {
-    entry.benchmark_group()
-}
-
 fn resolve_entry_path(entry: &ManifestSlide) -> Result<PathBuf, String> {
     corpus::resolve_entry_path(entry, &workspace_root()).ok_or_else(|| {
         format!(
@@ -178,26 +169,6 @@ fn resolve_entry_path(entry: &ManifestSlide) -> Result<PathBuf, String> {
             corpus::corpus_cache_dir().display()
         )
     })
-}
-
-#[cfg(test)]
-fn cache_candidates(entry: &ManifestSlide) -> Vec<PathBuf> {
-    corpus::cache_candidates(entry)
-}
-
-#[cfg(test)]
-fn resolve_candidate(entry: &ManifestSlide, candidate: &Path) -> Option<PathBuf> {
-    corpus::resolve_candidate(entry, candidate)
-}
-
-#[cfg(test)]
-fn find_file_with_extension(root: &Path, extension: &str) -> Option<PathBuf> {
-    corpus::find_file_with_extension(root, extension)
-}
-
-#[cfg(test)]
-fn format_default_extension(format: &str) -> Option<&'static str> {
-    corpus::format_default_extension(format)
 }
 
 fn default_manifest_path() -> PathBuf {

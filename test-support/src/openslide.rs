@@ -846,14 +846,43 @@ mod tests {
         result.err().expect("operation should fail")
     }
 
+    fn bounds(values: &[(&str, &str)]) -> Option<OpenSlideBounds> {
+        parse_bounds_from_properties(|name| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        })
+    }
+
+    #[test]
+    fn bounds_parser_reads_canvas_origin() {
+        assert_eq!(
+            bounds(&[
+                ("openslide.bounds-x", "10778"),
+                ("openslide.bounds-y", "35096"),
+                ("openslide.bounds-width", "36832"),
+                ("openslide.bounds-height", "38432"),
+            ]),
+            Some(OpenSlideBounds {
+                x: 10778,
+                y: 35096,
+                width: 36832,
+                height: 38432,
+            })
+        );
+    }
+
     #[test]
     fn bounds_parser_rejects_partial_and_empty_bounds() {
         assert!(parse_bounds_from_properties(|_| None).is_none());
-        let values = [("openslide.bounds-x", "1"), ("openslide.bounds-y", "2")];
-        assert!(parse_bounds_from_properties(|name| values
-            .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| (*value).to_string()))
+        assert!(bounds(&[("openslide.bounds-x", "1"), ("openslide.bounds-y", "2")]).is_none());
+        assert!(bounds(&[
+            ("openslide.bounds-x", "0"),
+            ("openslide.bounds-y", "0"),
+            ("openslide.bounds-width", "0"),
+            ("openslide.bounds-height", "100"),
+        ])
         .is_none());
     }
 
