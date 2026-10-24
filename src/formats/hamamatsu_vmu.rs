@@ -271,7 +271,9 @@ fn load_macro(
         .limits()
         .encoded_unit_bytes()
         .min(budget.limits().aggregate_metadata_bytes());
-    let length = std::fs::metadata(&macro_path)?.len();
+    let length = std::fs::metadata(&macro_path)
+        .map_err(|source| WsiError::io_with_path(&macro_path, source))?
+        .len();
     budget.retain_metadata(length)?;
     let bytes = read_file_bounded(&macro_path, limit.min(length), "VMU macro JPEG")
         .map_err(|source| WsiError::io_with_path(&macro_path, source))?;

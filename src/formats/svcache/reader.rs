@@ -3,7 +3,7 @@ use super::*;
 
 impl FormatProbe for SvcacheBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let mut file = File::open(path)?;
+        let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let mut magic = [0_u8; 8];
         if file.read_exact(&mut magic).is_err() {
             return Ok(ProbeResult::not_detected("svcache"));

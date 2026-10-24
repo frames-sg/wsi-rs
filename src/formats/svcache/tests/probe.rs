@@ -18,6 +18,12 @@ fn prefer_fresh_surfaces_corrupt_cache_instead_of_falling_back() {
 #[test]
 fn svcache_probe_distinguishes_truncated_foreign_and_valid_files() {
     let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.svcache");
+    assert!(matches!(
+        SvcacheBackend.probe(&missing),
+        Err(WsiError::IoWithPath { path, .. }) if path == missing
+    ));
+
     let truncated = dir.path().join("truncated.svcache");
     std::fs::write(&truncated, b"short").unwrap();
     assert!(!SvcacheBackend.probe(&truncated).unwrap().detected);

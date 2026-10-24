@@ -64,7 +64,8 @@
   of reporting the new file's size.
 - `.svcache` errors about a corrupt cache name the cache file, not the source
   slide or an empty path, and a tile payload that cannot be read reports
-  `IoWithPath` with the cache file instead of a bare `Io` error. A bad scene or
+  `IoWithPath` with the cache file instead of a bare `Io` error, as does
+  probing a cache file that cannot be opened. A bad scene or
   series in an `.svcache` read or a partial build reports `SceneOutOfRange` or
   `SeriesOutOfRange` with the real count, not `LevelOutOfRange` with a count
   of 0.
@@ -77,6 +78,8 @@
   one. `Slide::tile_codec_kind` reports `TileCodecKind::Other` for them.
 - Zeiss CZI tile reads report a series the slide doesn't have as
   `SeriesOutOfRange` with the real count, instead of `SceneOutOfRange`.
+- Opening a VMU slide whose macro image size cannot be read reports
+  `IoWithPath` with the macro file instead of a bare `Io` error.
 - XML metadata parsing applies its nesting-depth limit to self-closing
   elements too, not only to elements with content.
 
