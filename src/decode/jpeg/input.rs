@@ -140,11 +140,12 @@ pub(super) fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: 
         x
     };
 
-    header[sof_offset + 5..sof_offset + 7].copy_from_slice(&new_y.to_be_bytes());
-    header[sof_offset + 7..sof_offset + 9].copy_from_slice(&new_x.to_be_bytes());
+    set_sof_dimensions(header, sof_offset, new_x, new_y);
 }
 
-pub(super) fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
+/// Overwrite the height and width of the SOF segment whose `0xFF` prefix is at
+/// `sof_offset`. Leaves `header` unchanged when it is too short to hold them.
+pub(crate) fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
     if sof_offset + 9 > header.len() {
         return;
     }

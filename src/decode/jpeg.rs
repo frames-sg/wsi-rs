@@ -11,7 +11,7 @@ use input::{
 };
 pub(crate) use input::{
     decode_jpeg_rgb_downscaled_with_size_override, decode_jpeg_rgb_with_color_transform,
-    jpeg_dimensions,
+    jpeg_dimensions, set_sof_dimensions,
 };
 
 use std::borrow::Cow;

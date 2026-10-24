@@ -517,11 +517,8 @@ pub(super) fn patch_jpeg_sof0_dimensions(
                     reason: "NDPI JPEG passthrough SOF0 segment is truncated".into(),
                 });
             }
-            let payload_start = segment.start + 4;
-            data[payload_start + 1..payload_start + 3]
-                .copy_from_slice(&(height as u16).to_be_bytes());
-            data[payload_start + 3..payload_start + 5]
-                .copy_from_slice(&(width as u16).to_be_bytes());
+            let sof_offset = segment.start;
+            crate::decode::jpeg::set_sof_dimensions(data, sof_offset, width as u16, height as u16);
             return Ok(());
         }
         if is_sof_marker(segment.marker) {
