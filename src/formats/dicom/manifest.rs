@@ -38,12 +38,7 @@ impl DicomSlide {
         manifest: DicomSeriesManifest,
     ) -> Result<Self, WsiError> {
         let DicomSeriesManifest {
-            study_instance_uid,
-            series_instance_uid,
-            frame_of_reference_uid,
-            container_identifier,
-            specimen_identifier,
-            barcode_value,
+            identity,
             volume_images,
             associated_images,
             unsupported_associated_images,
@@ -102,7 +97,7 @@ impl DicomSlide {
             .ok_or_else(|| WsiError::invalid_slide(path, "No pyramid levels found"))?
             .clone();
 
-        let quickhash = quickhash_for_series_uid(&series_instance_uid)?;
+        let quickhash = quickhash_for_series_uid(&identity.series)?;
         let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
         let largest_dimensions = (level0.width, level0.height);
         let public_levels = levels
@@ -122,23 +117,7 @@ impl DicomSlide {
         let mut properties = Properties::new();
         properties.insert("openslide.vendor", "dicom");
         properties.insert("openslide.quickhash-1", quickhash);
-        properties.insert("dicom.series-instance-uid", &series_instance_uid);
-        if let Some(study_instance_uid) = &study_instance_uid {
-            properties.insert("dicom.study-instance-uid", study_instance_uid);
-        }
-        if let Some(frame_of_reference_uid) = &frame_of_reference_uid {
-            properties.insert("dicom.frame-of-reference-uid", frame_of_reference_uid);
-        }
-        if let Some(container_identifier) = &container_identifier {
-            properties.insert("dicom.container-identifier", container_identifier);
-        }
-        if let Some(specimen_identifier) = &specimen_identifier {
-            properties.insert("dicom.specimen-identifier", specimen_identifier);
-        }
-        if let Some(barcode_value) = &barcode_value {
-            properties.insert("dicom.barcode-value", barcode_value);
-            properties.insert("openslide.barcode", barcode_value);
-        }
+        identity.insert_properties(&mut properties);
         properties.insert("dicom.source-file-count", source_file_count.to_string());
         // Source paths that are not UTF-8 cannot be listed as text; their
         // property is omitted rather than failing the open.
@@ -527,13 +506,71 @@ pub(super) enum ImageRole {
     Ignore,
 }
 
+/// The series-level identifiers every instance of one slide shares.
+pub(super) struct DicomSeriesIdentity {
+    pub(super) study: Option<String>,
+    pub(super) series: String,
+    pub(super) frame_of_reference: Option<String>,
+    pub(super) container: Option<String>,
+    pub(super) specimen: Option<String>,
+    pub(super) barcode: Option<String>,
+}
+
+impl DicomSeriesIdentity {
+    /// The identity of the first instance, with each optional identifier
+    /// taken from whichever instances carry it; instances that disagree on
+    /// one are an error.
+    pub(super) fn from_metas(path: &Path, metas: &[ParsedDicomMetadata]) -> Result<Self, WsiError> {
+        let first = metas
+            .first()
+            .ok_or_else(|| WsiError::invalid_slide(path, "No DICOM VL WSI objects found"))?;
+        Ok(Self {
+            series: first.series_instance_uid.clone(),
+            study: common_optional_value(path, "StudyInstanceUID", metas, |meta| {
+                meta.study_instance_uid.as_deref()
+            })?,
+            frame_of_reference: common_optional_value(
+                path,
+                "FrameOfReferenceUID",
+                metas,
+                |meta| meta.frame_of_reference_uid.as_deref(),
+            )?,
+            container: common_optional_value(path, "ContainerIdentifier", metas, |meta| {
+                meta.container_identifier.as_deref()
+            })?,
+            specimen: common_optional_value(path, "SpecimenIdentifier", metas, |meta| {
+                meta.specimen_identifier.as_deref()
+            })?,
+            barcode: common_optional_value(path, "BarcodeValue", metas, |meta| {
+                meta.barcode_value.as_deref()
+            })?,
+        })
+    }
+
+    /// Adds the `dicom.*` identifier properties, and `openslide.barcode`.
+    pub(super) fn insert_properties(&self, properties: &mut Properties) {
+        properties.insert("dicom.series-instance-uid", &self.series);
+        if let Some(study) = &self.study {
+            properties.insert("dicom.study-instance-uid", study);
+        }
+        if let Some(frame_of_reference) = &self.frame_of_reference {
+            properties.insert("dicom.frame-of-reference-uid", frame_of_reference);
+        }
+        if let Some(container) = &self.container {
+            properties.insert("dicom.container-identifier", container);
+        }
+        if let Some(specimen) = &self.specimen {
+            properties.insert("dicom.specimen-identifier", specimen);
+        }
+        if let Some(barcode) = &self.barcode {
+            properties.insert("dicom.barcode-value", barcode);
+            properties.insert("openslide.barcode", barcode);
+        }
+    }
+}
+
 pub(super) struct DicomSeriesManifest {
-    pub(super) study_instance_uid: Option<String>,
-    pub(super) series_instance_uid: String,
-    pub(super) frame_of_reference_uid: Option<String>,
-    pub(super) container_identifier: Option<String>,
-    pub(super) specimen_identifier: Option<String>,
-    pub(super) barcode_value: Option<String>,
+    pub(super) identity: DicomSeriesIdentity,
     pub(super) volume_images: Vec<ParsedDicomMetadata>,
     pub(super) associated_images: Vec<(AssociatedKind, ParsedDicomMetadata)>,
     /// Associated images left out because their pixel format is unsupported,
@@ -619,32 +656,11 @@ impl DicomSeriesManifest {
         path: &Path,
         metas: Vec<ParsedDicomMetadata>,
     ) -> Result<Self, WsiError> {
-        let first = metas
-            .first()
-            .ok_or_else(|| WsiError::invalid_slide(path, "No DICOM VL WSI objects found"))?;
-        let series_instance_uid = first.series_instance_uid.clone();
-        let study_instance_uid = common_optional_value(path, "StudyInstanceUID", &metas, |meta| {
-            meta.study_instance_uid.as_deref()
-        })?;
-        let frame_of_reference_uid =
-            common_optional_value(path, "FrameOfReferenceUID", &metas, |meta| {
-                meta.frame_of_reference_uid.as_deref()
-            })?;
-        let container_identifier =
-            common_optional_value(path, "ContainerIdentifier", &metas, |meta| {
-                meta.container_identifier.as_deref()
-            })?;
-        let specimen_identifier =
-            common_optional_value(path, "SpecimenIdentifier", &metas, |meta| {
-                meta.specimen_identifier.as_deref()
-            })?;
-        let barcode_value = common_optional_value(path, "BarcodeValue", &metas, |meta| {
-            meta.barcode_value.as_deref()
-        })?;
+        let identity = DicomSeriesIdentity::from_metas(path, &metas)?;
         let source_file_count = metas.len();
 
         for meta in &metas {
-            if meta.series_instance_uid != series_instance_uid {
+            if meta.series_instance_uid != identity.series {
                 return Err(WsiError::invalid_slide(
                     path,
                     "DICOM series resolver received mixed SeriesInstanceUID values",
@@ -673,12 +689,7 @@ impl DicomSeriesManifest {
         }
 
         Ok(Self {
-            study_instance_uid,
-            series_instance_uid,
-            frame_of_reference_uid,
-            container_identifier,
-            specimen_identifier,
-            barcode_value,
+            identity,
             volume_images,
             associated_images,
             unsupported_associated_images,
