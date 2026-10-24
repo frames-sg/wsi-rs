@@ -21,6 +21,7 @@ use crate::core::types::{
     EncodedTilePhotometricInterpretation, RawCompressedTile,
 };
 use crate::error::WsiError;
+pub(crate) use j2k_jpeg::is_sof_marker;
 use j2k_jpeg::{
     decode_tiles_into_with_options, decode_tiles_scaled_into_with_options,
     ColorSpace as J2kColorSpace, ColorTransform as J2kColorTransform,
@@ -36,13 +37,6 @@ use rayon::prelude::*;
 /// OOM from crafted JPEG headers with extreme dimensions.
 const MAX_JPEG_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const JPEG_MAX_DIMENSION: u16 = 65500;
-
-pub(crate) const fn is_sof_marker(marker: u8) -> bool {
-    matches!(
-        marker,
-        0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
-    )
-}
 
 /// Interleaved RGB samples: `u8` for 8-bit JPEG, `u16` for 12-bit JPEG.
 pub(crate) struct DecodedJpegRgb<T = u8> {
