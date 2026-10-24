@@ -328,22 +328,9 @@ impl DicomLevel {
             .cloned()
     }
 
-    pub(super) fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        if req.col < 0
-            || req.row < 0
-            || req.col >= self.tiles_across as i64
-            || req.row >= self.tiles_down as i64
-        {
-            return TileCodecKind::Other;
-        }
-        self.image_for_tile(req.col as u32, req.row as u32)
-            .map(|image| dicom_tile_codec_kind(&image.transfer_syntax_uid))
-            .unwrap_or(TileCodecKind::Other)
-    }
-
-    /// Whether a part holds a frame for the requested tile. Tiles outside the
-    /// level grid are absent rather than errors.
-    pub(super) fn tile_is_present(&self, req: &TileRequest) -> bool {
+    /// The column and row of `req` in this level's grid, or a `TileRead`
+    /// error when the tile lies outside it.
+    pub(super) fn tile_coordinates(&self, req: &TileRequest) -> Result<(u32, u32), WsiError> {
         checked_dicom_tile_coordinates(
             req.col,
             req.row,
@@ -351,7 +338,22 @@ impl DicomLevel {
             self.tiles_across,
             self.tiles_down,
         )
-        .is_ok_and(|(col, row)| self.image_for_tile(col, row).is_some())
+    }
+
+    pub(super) fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
+        self.tile_coordinates(req)
+            .ok()
+            .and_then(|(col, row)| self.image_for_tile(col, row))
+            .map_or(TileCodecKind::Other, |image| {
+                dicom_tile_codec_kind(&image.transfer_syntax_uid)
+            })
+    }
+
+    /// Whether a part holds a frame for the requested tile. Tiles outside the
+    /// level grid are absent rather than errors.
+    pub(super) fn tile_is_present(&self, req: &TileRequest) -> bool {
+        self.tile_coordinates(req)
+            .is_ok_and(|(col, row)| self.image_for_tile(col, row).is_some())
     }
 
     pub(super) fn read_tile(
@@ -385,11 +387,7 @@ impl DicomLevel {
             }
         }
 
-        Err(WsiError::Unsupported {
-            reason: format!(
-                "raw compressed tile access is not available for sparse missing DICOM tile ({col}, {row}) at level {level}"
-            ),
-        })
+        Err(sparse_missing_raw_tile_error(col, row, level))
     }
 
     pub(super) fn actual_tile_dimensions(&self, col: u32, row: u32) -> (u32, u32) {

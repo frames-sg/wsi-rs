@@ -149,12 +149,9 @@ impl DicomReader {
         let Ok(level) = dicom_level_for_request(&self.slide, req) else {
             return FrameLookup::Unknown;
         };
-        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
+        let Ok((col, row)) = level.tile_coordinates(req) else {
             return FrameLookup::Unknown;
         };
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return FrameLookup::Unknown;
-        }
         level
             .image_for_tile(col, row)
             .and_then(|image| image.frame_index(col, row).map(|index| (image, index)))

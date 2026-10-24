@@ -75,19 +75,10 @@ impl<'a> DicomBatchPlanner<'a> {
     ) -> Result<DicomResolvedBatchPlanEntry, WsiError> {
         check_cancelled_opt(self.control)?;
         let level = dicom_level_for_request(self.slide, req)?;
-        if req.col < 0
-            || req.row < 0
-            || req.col >= level.tiles_across as i64
-            || req.row >= level.tiles_down as i64
-        {
-            return Err(match self.mode {
-                DicomBatchPlanMode::Cpu => WsiError::tile_read(
-                    req,
-                    format!(
-                        "tile ({},{}) out of range ({}x{})",
-                        req.col, req.row, level.tiles_across, level.tiles_down
-                    ),
-                ),
+        let (col, row) = level
+            .tile_coordinates(req)
+            .map_err(|error| match self.mode {
+                DicomBatchPlanMode::Cpu => error,
                 #[cfg(any(feature = "metal", feature = "cuda"))]
                 DicomBatchPlanMode::Device { .. } => WsiError::Unsupported {
                     reason: format!(
@@ -95,11 +86,7 @@ impl<'a> DicomBatchPlanner<'a> {
                         req.col, req.row
                     ),
                 },
-            });
-        }
-
-        let col = req.col as u32;
-        let row = req.row as u32;
+            })?;
         let black_tile = || {
             #[cfg(any(feature = "metal", feature = "cuda"))]
             if matches!(

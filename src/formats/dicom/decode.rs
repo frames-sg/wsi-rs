@@ -496,6 +496,15 @@ pub(super) fn checked_dicom_tile_coordinates(
     Ok((col as u32, row as u32))
 }
 
+/// The error for raw access to a sparse-grid tile that has no stored frame.
+pub(super) fn sparse_missing_raw_tile_error(col: i64, row: i64, level: u32) -> WsiError {
+    WsiError::Unsupported {
+        reason: format!(
+            "raw compressed tile access is not available for sparse missing DICOM tile ({col}, {row}) at level {level}"
+        ),
+    }
+}
+
 pub(super) fn dicom_actual_tile_dimensions(
     width: u32,
     height: u32,

@@ -18,7 +18,7 @@ use super::backend::{
 use super::decode::{
     black_sample_buffer, checked_dicom_tile_coordinates, crop_or_keep_sample_buffer_rgb,
     dicom_actual_tile_dimensions, raw_compression_for_transfer_syntax,
-    raw_photometric_interpretation, trim_encapsulated_frame_padding,
+    raw_photometric_interpretation, sparse_missing_raw_tile_error, trim_encapsulated_frame_padding,
     validate_jpeg_transfer_syntax_frame,
 };
 use super::frame_index::DicomEncapsulatedFrames;
@@ -213,11 +213,7 @@ impl DicomImage {
         let (col_u32, row_u32) =
             checked_dicom_tile_coordinates(col, row, level, self.tiles_across, self.tiles_down)?;
         let Some(frame_index) = self.frame_index(col_u32, row_u32) else {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "raw compressed tile access is not available for sparse missing DICOM tile ({col}, {row}) at level {level}"
-                ),
-            });
+            return Err(sparse_missing_raw_tile_error(col, row, level));
         };
         let compression = raw_compression_for_transfer_syntax(
             &self.transfer_syntax_uid,
