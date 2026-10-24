@@ -84,7 +84,7 @@ impl EtsIndex {
             let byte_count = file.read_u32::<LittleEndian>()?;
             file.seek_relative(4)?;
 
-            let key = key_from_coords(&coords, use_pyramid)?;
+            let key = key_from_coords(path, &coords, use_pyramid)?;
             checked_ets_level_count(key.level)
                 .map_err(|message| WsiError::invalid_slide(path, message))?;
             for (name, value) in [("z", key.z), ("c", key.c), ("t", key.t)] {
@@ -244,12 +244,13 @@ pub(in crate::formats::olympus_vsi) fn checked_ets_extent(
 }
 
 pub(in crate::formats::olympus_vsi) fn key_from_coords(
+    path: &Path,
     coords: &[i32],
     use_pyramid: bool,
 ) -> Result<EtsTileKey, WsiError> {
     if coords.len() < 3 {
         return Err(WsiError::invalid_slide(
-            Path::new(""),
+            path,
             "ETS coordinate dimensionality is too small",
         ));
     }
@@ -259,7 +260,7 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
         coords.len()
     };
     let level = if use_pyramid {
-        checked_coord(coords[coords.len() - 1], "resolution")?
+        checked_coord(path, coords[coords.len() - 1], "resolution")?
     } else {
         0
     };
@@ -267,19 +268,19 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
     let z = extra
         .first()
         .copied()
-        .map(|value| checked_coord(value, "z"))
+        .map(|value| checked_coord(path, value, "z"))
         .transpose()?
         .unwrap_or(0);
     let c = extra
         .get(1)
         .copied()
-        .map(|value| checked_coord(value, "c"))
+        .map(|value| checked_coord(path, value, "c"))
         .transpose()?
         .unwrap_or(0);
     let t = extra
         .get(2)
         .copied()
-        .map(|value| checked_coord(value, "t"))
+        .map(|value| checked_coord(path, value, "t"))
         .transpose()?
         .unwrap_or(0);
     Ok(EtsTileKey {
@@ -287,17 +288,14 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
         z,
         c,
         t,
-        col: checked_coord(coords[0], "x")?,
-        row: checked_coord(coords[1], "y")?,
+        col: checked_coord(path, coords[0], "x")?,
+        row: checked_coord(path, coords[1], "y")?,
     })
 }
 
-fn checked_coord(value: i32, name: &str) -> Result<u32, WsiError> {
+fn checked_coord(path: &Path, value: i32, name: &str) -> Result<u32, WsiError> {
     u32::try_from(value).map_err(|_| {
-        WsiError::invalid_slide(
-            Path::new(""),
-            format!("negative ETS {name} coordinate {value}"),
-        )
+        WsiError::invalid_slide(path, format!("negative ETS {name} coordinate {value}"))
     })
 }
 

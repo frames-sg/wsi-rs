@@ -48,6 +48,7 @@ pub(super) struct VmsJpeg {
 
 impl VmsLevel {
     pub(super) fn new(
+        path: &Path,
         jpegs: Vec<Arc<VmsJpeg>>,
         jpegs_across: u32,
         _jpegs_down: u32,
@@ -55,7 +56,7 @@ impl VmsLevel {
     ) -> Result<Self, WsiError> {
         let first = jpegs
             .first()
-            .ok_or_else(|| WsiError::invalid_slide(Path::new(""), "VMS level has no JPEG shards"))?
+            .ok_or_else(|| WsiError::invalid_slide(path, "VMS level has no JPEG shards"))?
             .clone();
         Ok(Self {
             scale_denom,

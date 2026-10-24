@@ -99,8 +99,9 @@ fn configured_metadata_limit_rejects_vms_ini_before_open_allocations() {
 fn backend_default_and_empty_level_return_defined_results() {
     let _backend = HamamatsuVmsBackend::default();
     assert!(matches!(
-        VmsLevel::new(Vec::new(), 1, 1, 1),
-        Err(WsiError::InvalidSlide { message, .. }) if message.contains("no JPEG shards")
+        VmsLevel::new(Path::new("slide.vms"), Vec::new(), 1, 1, 1),
+        Err(WsiError::InvalidSlide { path, message })
+            if path == Path::new("slide.vms") && message.contains("no JPEG shards")
     ));
 }
 

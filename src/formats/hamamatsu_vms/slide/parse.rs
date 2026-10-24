@@ -194,8 +194,14 @@ fn build_levels_and_properties(
         properties.insert("openslide.objective-power", source_lens.clone());
     }
 
-    let base_level = VmsLevel::new(sources.base_images, sources.num_cols, sources.num_rows, 1)?;
-    let map_level = VmsLevel::new(vec![sources.map_image], 1, 1, 1)?;
+    let base_level = VmsLevel::new(
+        path,
+        sources.base_images,
+        sources.num_cols,
+        sources.num_rows,
+        1,
+    )?;
+    let map_level = VmsLevel::new(path, vec![sources.map_image], 1, 1, 1)?;
     if let Some(width_nm) = sources
         .group
         .get(KEY_PHYSICAL_WIDTH)
