@@ -380,24 +380,24 @@ pub(super) fn copy_existing_svcache_tiles(
                 let Some(existing_level) = existing_series.levels.get(level_idx) else {
                     continue;
                 };
+                // A tile index names the same tile only on the same grid.
+                if !existing_level.has_tile_grid_of(level) {
+                    continue;
+                }
                 let tile_limit = level
                     .tiles_across
                     .checked_mul(level.tiles_down)
                     .ok_or_else(|| {
                         invalid_svcache(out_path, "svcache level tile count overflow")
                     })?;
-                for (idx, existing_slot) in existing_level.tiles.iter().enumerate() {
-                    let idx = u64::try_from(idx)
-                        .map_err(|_| invalid_svcache(out_path, "svcache tile index overflow"))?;
+                for (idx, existing_tile) in existing_level.populated_tiles() {
+                    // Validation already bounds every index by the shared grid.
                     if idx >= tile_limit {
-                        break;
+                        return Err(invalid_svcache(out_path, "svcache tile index out of range"));
                     }
                     if level.tile_meta_for_index(idx).is_some() {
                         continue;
                     }
-                    let Some(existing_tile) = existing_slot else {
-                        continue;
-                    };
                     let copied_tile = copy_tile_payload(
                         out_path,
                         &mut existing_file,
@@ -406,26 +406,6 @@ pub(super) fn copy_existing_svcache_tiles(
                         payload,
                     )?;
                     level.insert_tile_for_index(idx, copied_tile);
-                    copied += 1;
-                }
-                for existing_entry in &existing_level.sparse_tiles {
-                    if existing_entry.index >= tile_limit {
-                        return Err(invalid_svcache(
-                            out_path,
-                            "svcache sparse tile index out of range",
-                        ));
-                    }
-                    if level.tile_meta_for_index(existing_entry.index).is_some() {
-                        continue;
-                    }
-                    let copied_tile = copy_tile_payload(
-                        out_path,
-                        &mut existing_file,
-                        payload_start,
-                        &existing_entry.tile,
-                        payload,
-                    )?;
-                    level.insert_tile_for_index(existing_entry.index, copied_tile);
                     copied += 1;
                 }
             }

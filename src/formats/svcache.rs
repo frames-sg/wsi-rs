@@ -212,6 +212,25 @@ impl LevelMeta {
             .ok_or_else(|| error(".svcache tile index overflow"))
     }
 
+    /// Whether `other` cuts the same dimensions into the same tiles.
+    fn has_tile_grid_of(&self, other: &Self) -> bool {
+        self.dimensions == other.dimensions
+            && (self.tile_width, self.tile_height) == (other.tile_width, other.tile_height)
+            && (self.tiles_across, self.tiles_down) == (other.tiles_across, other.tiles_down)
+    }
+
+    /// Every stored tile with its index, dense or sparse.
+    fn populated_tiles(&self) -> impl Iterator<Item = (u64, &TileMeta)> {
+        let dense = self.tiles.iter().enumerate().filter_map(|(index, tile)| {
+            Some((u64::try_from(index).unwrap_or(u64::MAX), tile.as_ref()?))
+        });
+        let sparse = self
+            .sparse_tiles
+            .iter()
+            .map(|entry| (entry.index, &entry.tile));
+        dense.chain(sparse)
+    }
+
     fn tile_meta_for_index(&self, index: u64) -> Option<&TileMeta> {
         if !self.tiles.is_empty() {
             return usize::try_from(index)

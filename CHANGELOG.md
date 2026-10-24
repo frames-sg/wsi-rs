@@ -62,6 +62,9 @@
   slide or an empty path. A bad scene or series in an `.svcache` read or a
   partial build reports `SceneOutOfRange` or `SeriesOutOfRange` with the real
   count, not `LevelOutOfRange` with a count of 0.
+- Partial `.svcache` builds that merge an existing cache copy nothing from a
+  level whose dimensions or tile grid changed, instead of copying its tiles to
+  the wrong positions.
 
 ## [0.8.0] - 2026-10-06
 
