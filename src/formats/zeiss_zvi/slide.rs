@@ -467,10 +467,7 @@ fn validated_payload_length_with_limits(
 }
 
 fn invalid_slide(path: &Path, message: impl ToString) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.to_string(),
-    }
+    WsiError::invalid_slide(path, message.to_string())
 }
 
 #[cfg(test)]

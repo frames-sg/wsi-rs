@@ -421,8 +421,5 @@ fn read_exact(
 }
 
 fn io_error(path: &Path, source: std::io::Error) -> WsiError {
-    WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    }
+    WsiError::io_with_path(path, source)
 }

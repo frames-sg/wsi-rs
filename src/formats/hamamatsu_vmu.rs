@@ -23,10 +23,7 @@ const GROUP: &str = "Uncompressed Virtual Microscope Specimen";
 pub(crate) struct HamamatsuVmuBackend;
 
 fn invalid(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
+    WsiError::invalid_slide(path, message)
 }
 
 fn key_file(path: &Path, budget: &OpenBudget) -> Result<ParsedIni, WsiError> {

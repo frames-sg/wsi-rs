@@ -379,8 +379,5 @@ fn extract_tag_text(xml: &str, tag: &str) -> Option<String> {
 }
 
 pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
+    WsiError::invalid_slide(path, message)
 }

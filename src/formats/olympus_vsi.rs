@@ -283,12 +283,7 @@ fn tile_key(req: &TileRequest) -> EtsTileKey {
 }
 
 fn tile_error(req: &TileRequest, err: WsiError) -> WsiError {
-    WsiError::TileRead {
-        col: req.col,
-        row: req.row,
-        level: req.level.get(),
-        reason: err.to_string(),
-    }
+    WsiError::tile_read(req, err.to_string())
 }
 
 impl ManagedSlideReader for OlympusVsiReader {
@@ -345,10 +340,7 @@ fn is_vsi_path(path: &Path) -> bool {
 }
 
 fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
+    WsiError::invalid_slide(path, message)
 }
 
 #[cfg(test)]

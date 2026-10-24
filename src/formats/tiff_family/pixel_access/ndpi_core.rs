@@ -48,12 +48,7 @@ impl TiffPixelReader {
     }
 
     pub(super) fn ndpi_full_decode_error(req: &TileRequest, reason: impl Into<String>) -> WsiError {
-        WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: reason.into(),
-        }
+        WsiError::tile_read(req, reason)
     }
 
     /// Locates `strip_key`'s restart segment. The outer error means the

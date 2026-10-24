@@ -158,10 +158,7 @@ struct TileMeta {
 }
 
 fn invalid_svcache(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
+    WsiError::invalid_slide(path, message)
 }
 
 impl SvcacheMetadata {

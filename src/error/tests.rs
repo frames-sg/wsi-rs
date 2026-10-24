@@ -125,3 +125,49 @@ fn unsupported_display() {
     };
     assert!(err.to_string().contains("device backend unavailable"));
 }
+
+#[test]
+fn invalid_slide_names_the_file_and_message() {
+    let err = WsiError::invalid_slide(Path::new("/tmp/slide.vms"), "missing key");
+    assert!(
+        matches!(
+            &err,
+            WsiError::InvalidSlide { path, message }
+                if path.as_path() == Path::new("/tmp/slide.vms") && message == "missing key"
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn io_with_path_keeps_the_source_and_names_the_file() {
+    let err = WsiError::io_with_path(
+        Path::new("/tmp/slide.svs"),
+        std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
+    );
+    match &err {
+        WsiError::IoWithPath { source, path } => {
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            assert_eq!(path.as_path(), Path::new("/tmp/slide.svs"));
+        }
+        other => panic!("expected IoWithPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn tile_read_reports_the_request_tile() {
+    let req = TileRequest::new(0, 0, 3, -2, 7);
+    let err = WsiError::tile_read(&req, "bad tile");
+    assert!(
+        matches!(
+            &err,
+            WsiError::TileRead {
+                col: -2,
+                row: 7,
+                level: 3,
+                reason,
+            } if reason == "bad tile"
+        ),
+        "got: {err:?}"
+    );
+}

@@ -315,8 +315,5 @@ pub(super) fn fmt_key2(fmt: &str, value1: i32, value2: i32) -> String {
 }
 
 pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
+    WsiError::invalid_slide(path, message)
 }
