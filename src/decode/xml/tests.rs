@@ -108,9 +108,9 @@ fn budget_counters_accept_exact_limits_and_reject_the_next_item() {
         nodes: 0,
         attributes: MAX_XML_ATTRIBUTES - 1,
     };
-    attribute_budget.add_attributes(1).unwrap();
+    attribute_budget.add_attribute().unwrap();
     assert_eq!(attribute_budget.attributes, MAX_XML_ATTRIBUTES);
-    assert!(attribute_budget.add_attributes(1).is_err());
+    assert!(attribute_budget.add_attribute().is_err());
 }
 
 #[test]

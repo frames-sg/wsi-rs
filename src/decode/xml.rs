@@ -29,14 +29,11 @@ impl XmlBudget {
         Ok(())
     }
 
-    fn add_attributes(&mut self, count: usize) -> Result<(), WsiError> {
-        if count > MAX_XML_ATTRIBUTES_PER_NODE {
-            return Err(WsiError::Xml(format!(
-                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
-            )));
-        }
-        // Per-node and aggregate budgets bound this addition to at most 500,256.
-        self.attributes += count;
+    /// Counts one attribute; `node_from_start` enforces the per-node cap.
+    fn add_attribute(&mut self) -> Result<(), WsiError> {
+        // The aggregate budget stops the count at 500,001, so this cannot
+        // overflow.
+        self.attributes += 1;
         if self.attributes > MAX_XML_ATTRIBUTES {
             return Err(WsiError::Xml(format!(
                 "XML attribute count exceeds maximum of {MAX_XML_ATTRIBUTES}"
@@ -132,7 +129,7 @@ fn node_from_start(
                 "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
             )));
         }
-        budget.add_attributes(1)?;
+        budget.add_attribute()?;
         let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
