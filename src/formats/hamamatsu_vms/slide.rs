@@ -55,48 +55,11 @@ impl SlideReader for VmsReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        let scene =
-            self.slide
-                .dataset
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: self.slide.dataset.scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            ..
-        } = level.tile_layout
-        else {
-            return Err(WsiError::Unsupported {
-                reason: "VMS raw JPEG display access requires a regular native tile grid".into(),
-            });
-        };
-        if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "VMS raw JPEG display tile size {}x{} does not match native tile size {}x{}",
-                    req.tile_width, req.tile_height, tile_width, tile_height
-                ),
-            });
-        }
+        crate::formats::geometry::validate_native_regular_display_tile(
+            &self.slide.dataset,
+            req,
+            "VMS raw JPEG display",
+        )?;
 
         self.read_raw_compressed_tile(&TileRequest {
             scene: req.scene,

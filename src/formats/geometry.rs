@@ -1,3 +1,45 @@
+use crate::core::types::{Dataset, TileViewRequest};
+use crate::{SlideLimits, WsiError};
+
+pub(crate) fn validate_native_regular_display_tile(
+    dataset: &Dataset,
+    req: &TileViewRequest,
+    context: &str,
+) -> Result<(), WsiError> {
+    let (_, _, level) = dataset.level(req.scene, req.series, req.level)?;
+    let crate::TileLayout::Regular {
+        tile_width,
+        tile_height,
+        ..
+    } = level.tile_layout
+    else {
+        return Err(WsiError::Unsupported {
+            reason: format!("{context} access requires a regular native tile grid"),
+        });
+    };
+    if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "{context} tile size {}x{} does not match native tile size {tile_width}x{tile_height}",
+                req.tile_width, req.tile_height
+            ),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn batch_decode_target(limits: SlideLimits, logical_bytes: u64) -> u64 {
+    limits
+        .batch_chunk_bytes()
+        .min(limits.operation_transient_bytes())
+        .min(limits.slide_transient_bytes())
+        .min(
+            limits
+                .encoded_unit_bytes()
+                .saturating_add(logical_bytes.saturating_mul(2)),
+        )
+}
+
 pub(crate) fn irregular_extra_tiles(
     offset_x: f64,
     offset_y: f64,

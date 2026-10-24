@@ -30,15 +30,7 @@ impl ZeissReader {
             });
         // Stay inside the enclosing reader's existing encoded-unit + two
         // output-buffer reservation, in addition to all configured ceilings.
-        let target = limits
-            .batch_chunk_bytes()
-            .min(limits.operation_transient_bytes())
-            .min(limits.slide_transient_bytes())
-            .min(
-                limits
-                    .encoded_unit_bytes()
-                    .saturating_add(logical_bytes.saturating_mul(2)),
-            );
+        let target = crate::formats::geometry::batch_decode_target(limits, logical_bytes);
         let workers = runtime.cpu_worker_count();
         let mut output = Vec::with_capacity(reqs.len());
         let mut start = 0;
