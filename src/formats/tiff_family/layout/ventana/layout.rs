@@ -232,18 +232,19 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             .ok_or_else(|| {
                 TiffParseError::Structure("Ventana BIF: no pyramid IFDs found".into())
             })?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
-            pyramid_ifds.last().unwrap().ifd_id,
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: pyramid_ifds.last().unwrap().ifd_id,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

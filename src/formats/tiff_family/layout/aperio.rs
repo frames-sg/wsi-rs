@@ -13,9 +13,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    associated_channels, averaged_downsample, compression_from_tag,
-    finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level, tiled_ifd_descriptor,
-    TiledIfdDescriptor,
+    associated_channels, averaged_downsample, compression_from_tag, level_area, regular_tiff_level,
+    tiled_ifd_descriptor, SingleSceneTiffLayout, TiledIfdDescriptor,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -251,18 +250,19 @@ impl TiffLayoutInterpreter for AperioInterpreter {
             .top_ifds()
             .first()
             .ok_or_else(|| TiffParseError::Structure("No IFDs in Aperio container".into()))?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
-            tiled_ifds.last().unwrap().ifd_id,
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: tiled_ifds.last().unwrap().ifd_id,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: tiled_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

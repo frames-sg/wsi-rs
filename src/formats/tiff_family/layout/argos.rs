@@ -6,18 +6,14 @@ use crate::core::types::*;
 use crate::decode::xml::{self, XmlNode};
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
-    single_scene_uint8_pyramid_dataset, stripped_tile_source, tiled_ifd_descriptor,
-    ResolutionStyle, TiledIfdDescriptor as TiledIfd,
+    stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle, SingleSceneTiffLayout,
+    TiledIfdDescriptor as TiledIfd,
 };
-use super::{
-    compute_tiff_dataset_identity_with_extra_strings, DatasetLayout, TiffLayoutInterpreter,
-    TileSource, TileSourceKey,
-};
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const ARGOS_METADATA_TAG: u16 = 65_000;
 const ARGOS_ROOT: &str = "Argos.Scan.Metadata";
@@ -137,16 +133,7 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
             .last()
             .ok_or_else(|| TiffParseError::Structure("ARGOS pyramid has no levels".into()))?
             .ifd_id;
-        let identity = compute_tiff_dataset_identity_with_extra_strings(
-            container,
-            lowest_ifd,
-            first_ifd,
-            &[metadata.xml.as_str()],
-        )?;
         let mut properties = metadata.properties;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
         add_tiff_resolution_properties(
             container,
             representative[0].ifd_id,
@@ -160,26 +147,19 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
             representative[0].height,
         );
 
-        let mut dataset = single_scene_uint8_pyramid_dataset(
-            identity.dataset_id,
-            AxesShape::new(metadata.z_planes, 1, 1),
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: lowest_ifd,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[metadata.xml.as_str()],
+            axes: AxesShape::new(metadata.z_planes, 1, 1),
             levels,
             associated_images,
             properties,
-        );
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            tiled.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            source_icc_ifds: tiled.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

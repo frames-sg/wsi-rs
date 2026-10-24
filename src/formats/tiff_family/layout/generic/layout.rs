@@ -243,18 +243,19 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 tiled_ifds.iter().map(|ifd| ifd.ifd_id).collect(),
             )
         };
-        finish_single_scene_uint8_tiff_layout(
-            container,
+        SingleSceneTiffLayout {
             lowest_resolution_ifd,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
             source_icc_ifds,
-        )
+        }
+        .finish(container)
     }
 }
 

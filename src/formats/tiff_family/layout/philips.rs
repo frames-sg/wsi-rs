@@ -21,9 +21,7 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 use base64::Engine;
 
-use super::common::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, TiledIfdDescriptor,
-};
+use super::common::{compression_from_tag, level_area, SingleSceneTiffLayout, TiledIfdDescriptor};
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── PhilipsInterpreter ──────────────────────────────────────────────
@@ -215,18 +213,19 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
             .top_ifds()
             .first()
             .ok_or_else(|| TiffParseError::Structure("No IFDs in Philips TIFF container".into()))?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
-            tiled_ifds.last().unwrap().ifd_id,
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: tiled_ifds.last().unwrap().ifd_id,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            tiled_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: tiled_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

@@ -16,8 +16,8 @@ use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
 use super::common::{
-    add_tiff_resolution_properties, associated_channels, compression_from_tag,
-    finish_single_scene_uint8_tiff_layout, level_area, ResolutionStyle,
+    add_tiff_resolution_properties, associated_channels, compression_from_tag, level_area,
+    ResolutionStyle, SingleSceneTiffLayout,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -357,18 +357,19 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
             .last()
             .map(|ifd| ifd.ifd_id)
             .ok_or_else(|| TiffParseError::Structure("No pyramid IFDs in NDPI container".into()))?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
+        SingleSceneTiffLayout {
             lowest_resolution_ifd,
             property_ifd,
-            AxesShape::new(z_count, 1, 1),
+            identity_extra_strings: &[],
+            axes: AxesShape::new(z_count, 1, 1),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

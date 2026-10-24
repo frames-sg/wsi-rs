@@ -14,7 +14,7 @@ use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
-use super::common::{compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area};
+use super::common::{compression_from_tag, level_area, SingleSceneTiffLayout};
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── VentanaInterpreter ──────────────────────────────────────────────

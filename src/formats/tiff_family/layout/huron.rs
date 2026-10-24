@@ -9,8 +9,8 @@ use crate::properties::Properties;
 
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
-    finish_single_scene_uint8_tiff_layout, regular_tiff_level, stripped_tile_source,
-    tiled_ifd_descriptor, ResolutionStyle,
+    regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle,
+    SingleSceneTiffLayout,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -121,18 +121,19 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             &mut properties,
             ResolutionStyle::INCH_FULL_PRECISION,
         );
-        finish_single_scene_uint8_tiff_layout(
-            container,
-            tiled.last().unwrap().ifd_id,
-            first_ifd,
-            AxesShape::default(),
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: tiled.last().unwrap().ifd_id,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            tiled.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: tiled.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

@@ -11,7 +11,6 @@ use crate::core::hash::Quickhash1;
 use crate::core::types::{Compression, Dataset, DatasetId, TileRequest};
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::properties::Properties;
 
 pub(crate) mod aperio;
 pub(crate) mod argos;
@@ -26,19 +25,6 @@ pub(crate) mod trestle;
 pub(crate) mod ventana;
 
 const QUICKHASH_MAX_LEVEL_BYTES: u64 = 5 << 20;
-
-fn compute_tiff_dataset_id_and_record_quickhash(
-    container: &TiffContainer,
-    lowest_resolution_ifd: IfdId,
-    property_ifd: IfdId,
-    properties: &mut Properties,
-) -> Result<DatasetId, TiffParseError> {
-    let identity = compute_tiff_dataset_identity(container, lowest_resolution_ifd, property_ifd)?;
-    if let Some(quickhash1) = identity.quickhash1.as_deref() {
-        properties.insert("openslide.quickhash-1", quickhash1);
-    }
-    Ok(identity.dataset_id)
-}
 
 pub(crate) struct DatasetIdentity {
     pub dataset_id: DatasetId,

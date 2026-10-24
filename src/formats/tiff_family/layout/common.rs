@@ -13,7 +13,7 @@ use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::{
-    compute_tiff_dataset_id_and_record_quickhash, DatasetLayout, TileSource, TileSourceKey,
+    compute_tiff_dataset_identity_with_extra_strings, DatasetLayout, TileSource, TileSourceKey,
 };
 
 pub(super) fn compression_from_tag(val: u32) -> Compression {
@@ -42,7 +42,7 @@ pub(super) fn averaged_downsample(base: (u64, u64), level: (u64, u64)) -> f64 {
     (base.0 as f64 / level.0 as f64 + base.1 as f64 / level.1 as f64) / 2.0
 }
 
-pub(super) fn single_scene_uint8_pyramid_dataset(
+fn single_scene_uint8_pyramid_dataset(
     dataset_id: DatasetId,
     axes: AxesShape,
     levels: Vec<Level>,
@@ -203,35 +203,54 @@ pub(super) fn add_tiff_resolution_properties(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn finish_single_scene_uint8_tiff_layout<I>(
-    container: &TiffContainer,
-    lowest_resolution_ifd: IfdId,
-    property_ifd: IfdId,
-    axes: AxesShape,
-    levels: Vec<Level>,
-    associated_images: HashMap<String, AssociatedImage>,
-    mut properties: Properties,
-    tile_sources: HashMap<TileSourceKey, TileSource>,
-    associated_sources: HashMap<String, TileSource>,
-    source_icc_ifds: I,
-) -> Result<DatasetLayout, TiffParseError>
+/// A single-scene, single-series 8-bit pyramid, ready to become a
+/// `DatasetLayout` once its identity is hashed and its ICC profile attached.
+pub(super) struct SingleSceneTiffLayout<'a, I> {
+    pub(super) lowest_resolution_ifd: IfdId,
+    pub(super) property_ifd: IfdId,
+    /// Vendor strings hashed into the dataset identity after the TIFF
+    /// string properties.
+    pub(super) identity_extra_strings: &'a [&'a str],
+    pub(super) axes: AxesShape,
+    pub(super) levels: Vec<Level>,
+    pub(super) associated_images: HashMap<String, AssociatedImage>,
+    pub(super) properties: Properties,
+    pub(super) tile_sources: HashMap<TileSourceKey, TileSource>,
+    pub(super) associated_sources: HashMap<String, TileSource>,
+    /// IFDs searched, in order, for the series' source ICC profile.
+    pub(super) source_icc_ifds: I,
+}
+
+impl<I> SingleSceneTiffLayout<'_, I>
 where
     I: IntoIterator<Item = IfdId>,
 {
-    let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
-        container,
-        lowest_resolution_ifd,
-        property_ifd,
-        &mut properties,
-    )?;
-    let mut dataset =
-        single_scene_uint8_pyramid_dataset(dataset_id, axes, levels, associated_images, properties);
-    attach_source_icc_profile(&mut dataset, container, source_icc_ifds, 0, 0)?;
+    /// Hashes the dataset identity, records `openslide.quickhash-1` when the
+    /// lowest level is small enough to hash, and attaches the ICC profile.
+    pub(super) fn finish(self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
+        let identity = compute_tiff_dataset_identity_with_extra_strings(
+            container,
+            self.lowest_resolution_ifd,
+            self.property_ifd,
+            self.identity_extra_strings,
+        )?;
+        let mut properties = self.properties;
+        if let Some(quickhash1) = identity.quickhash1.as_deref() {
+            properties.insert("openslide.quickhash-1", quickhash1);
+        }
+        let mut dataset = single_scene_uint8_pyramid_dataset(
+            identity.dataset_id,
+            self.axes,
+            self.levels,
+            self.associated_images,
+            properties,
+        );
+        attach_source_icc_profile(&mut dataset, container, self.source_icc_ifds, 0, 0)?;
 
-    Ok(DatasetLayout {
-        dataset,
-        tile_sources,
-        associated_sources,
-    })
+        Ok(DatasetLayout {
+            dataset,
+            tile_sources: self.tile_sources,
+            associated_sources: self.associated_sources,
+        })
+    }
 }

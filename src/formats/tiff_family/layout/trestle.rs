@@ -6,16 +6,10 @@ use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::TiffParseError;
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::common::{
-    averaged_downsample, compression_from_tag, single_scene_uint8_pyramid_dataset,
-};
-use super::{
-    compute_tiff_dataset_id_and_record_quickhash, DatasetLayout, TiffLayoutInterpreter, TileSource,
-    TileSourceKey,
-};
+use super::common::{averaged_downsample, compression_from_tag, SingleSceneTiffLayout};
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const TRESTLE_SOFTWARE_PREFIX: &str = "MedScan";
 const MAX_TRESTLE_TILES_PER_LEVEL: u64 = 1_000_000;
@@ -225,27 +219,19 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             }
         }
 
-        let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
-            container,
-            lowest_ifd,
-            first_ifd,
-            &mut properties,
-        )?;
-
-        let mut dataset = single_scene_uint8_pyramid_dataset(
-            dataset_id,
-            AxesShape::default(),
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: lowest_ifd,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
-        );
-        attach_source_icc_profile(&mut dataset, container, top_ifds.iter().copied(), 0, 0)?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            source_icc_ifds: top_ifds.iter().copied(),
+        }
+        .finish(container)
     }
 }
 
