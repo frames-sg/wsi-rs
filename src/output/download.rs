@@ -2,6 +2,23 @@
 
 use crate::{error::WsiError, CpuTile, CpuTileData, CpuTileLayout, PixelFormat};
 
+pub(super) const MAX_DEVICE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+pub(super) fn enforce_download_limit(
+    byte_len: usize,
+    resource: &'static str,
+) -> Result<(), WsiError> {
+    let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
+    if requested > MAX_DEVICE_DOWNLOAD_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource,
+            requested,
+            limit: MAX_DEVICE_DOWNLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn tight_download_layout(
     width: u32,
     height: u32,
@@ -109,6 +126,24 @@ mod tests {
                     format!("{backend} host download expected 12 bytes, received {byte_len}")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn device_download_limit_is_shared_without_losing_backend_context() {
+        for resource in ["CUDA host tile download", "Metal host tile download"] {
+            enforce_download_limit(MAX_DEVICE_DOWNLOAD_BYTES as usize, resource)
+                .expect("limit is inclusive");
+            let error = enforce_download_limit(MAX_DEVICE_DOWNLOAD_BYTES as usize + 1, resource)
+                .expect_err("oversized device readback must fail before allocation");
+            assert!(matches!(
+                error,
+                WsiError::ResourceLimit {
+                    resource: actual,
+                    limit: MAX_DEVICE_DOWNLOAD_BYTES,
+                    ..
+                } if actual == resource
+            ));
         }
     }
 }

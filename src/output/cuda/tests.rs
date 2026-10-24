@@ -69,21 +69,6 @@ fn tight_download_layout_rejects_dimension_overflow() {
 }
 
 #[test]
-fn download_limit_is_128_mib() {
-    enforce_download_limit(128 * 1024 * 1024).expect("limit is inclusive");
-    let error = enforce_download_limit(128 * 1024 * 1024 + 1)
-        .expect_err("oversized CUDA readback must fail before allocation");
-    assert!(matches!(
-        error,
-        WsiError::ResourceLimit {
-            resource: "CUDA host tile download",
-            limit: MAX_DEVICE_DOWNLOAD_BYTES,
-            ..
-        }
-    ));
-}
-
-#[test]
 fn downloaded_bytes_convert_all_public_pixel_families() {
     for (format, channels, color_space) in [
         (PixelFormat::Gray8, 1, ColorSpace::Grayscale),

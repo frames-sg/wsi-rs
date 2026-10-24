@@ -176,7 +176,7 @@ pub(super) fn download_resident_batch(
     let mut staged = Vec::new();
     let mut staged_bytes = 0_usize;
     for (index, row) in rows.iter().enumerate() {
-        super::tile::enforce_download_limit(row.byte_len)?;
+        crate::output::download::enforce_download_limit(row.byte_len, "Metal host tile download")?;
         record(Event::ReadbackBytes, row.byte_len);
         // SAFETY: the resident owner is retained by the caller throughout all
         // copies. No CPU/GPU writer can alias this completed input.
@@ -191,7 +191,7 @@ pub(super) fn download_resident_batch(
             continue;
         }
         if staged_bytes.saturating_add(row.byte_len)
-            > super::tile::MAX_DEVICE_DOWNLOAD_BYTES as usize
+            > crate::output::download::MAX_DEVICE_DOWNLOAD_BYTES as usize
         {
             download_staged_rows(rows, &staged, staged_bytes, queue, &mut outputs)?;
             staged.clear();
@@ -378,7 +378,7 @@ fn copy_completed_shared_rows(
         .map_err(|_| WsiError::ResourceLimit {
             resource: "Metal host tile download",
             requested: byte_len as u64,
-            limit: super::tile::MAX_DEVICE_DOWNLOAD_BYTES,
+            limit: crate::output::download::MAX_DEVICE_DOWNLOAD_BYTES,
         })?;
     for row in 0..height {
         let offset = image.byte_offset() + row * image.pitch_bytes();
