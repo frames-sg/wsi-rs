@@ -36,10 +36,7 @@ pub(super) fn read_svcache_with_budget(
     file.read_exact(&mut len)?;
     let metadata_len = u64::from_le_bytes(len);
     if metadata_len > MAX_METADATA_BYTES {
-        return Err(WsiError::InvalidSlide {
-            path: path.into(),
-            message: "svcache metadata is too large".into(),
-        });
+        return Err(invalid_svcache(path, "svcache metadata is too large"));
     }
     let metadata_limit = MAX_METADATA_BYTES.min(budget.limits().metadata_value_bytes());
     if metadata_len > budget.limits().metadata_value_bytes() {
@@ -65,11 +62,8 @@ pub(super) fn read_svcache_with_budget(
         })?;
     metadata_bytes.resize(metadata_len, 0);
     file.read_exact(&mut metadata_bytes)?;
-    let metadata: SvcacheMetadata =
-        serde_json::from_slice(&metadata_bytes).map_err(|err| WsiError::InvalidSlide {
-            path: path.into(),
-            message: format!("parse svcache metadata: {err}"),
-        })?;
+    let metadata: SvcacheMetadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|err| invalid_svcache(path, format!("parse svcache metadata: {err}")))?;
     if metadata.schema_version != SCHEMA_VERSION {
         return Err(WsiError::UnsupportedFormat(format!(
             "unsupported svcache schema {}",
@@ -82,13 +76,6 @@ pub(super) fn read_svcache_with_budget(
     let file_len = file.metadata()?.len();
     validate_svcache_metadata(path, file_len, payload_start, &metadata, budget)?;
     Ok((file, payload_start, metadata))
-}
-
-fn invalid_svcache(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
 }
 
 fn validate_svcache_metadata(
@@ -137,9 +124,9 @@ fn validate_svcache_metadata(
     }
 
     let payload_len = file_len - payload_start;
-    let retained_index_bytes = svcache_index_bytes(metadata)?;
+    let retained_index_bytes = svcache_index_bytes(path, metadata)?;
     budget.retain_index(retained_index_bytes)?;
-    let payload_range_count = svcache_payload_count(metadata)?;
+    let payload_range_count = svcache_payload_count(path, metadata)?;
     let payload_range_bytes = payload_range_count
         .saturating_mul(u64::try_from(std::mem::size_of::<(u64, u64)>()).unwrap_or(u64::MAX));
     let mut payload_ranges = Vec::new();
@@ -399,7 +386,7 @@ fn validate_tile(
     Ok(())
 }
 
-fn svcache_payload_count(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+fn svcache_payload_count(path: &Path, metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
     let level_tiles = metadata.scenes.iter().try_fold(0u64, |total, scene| {
         scene.series.iter().try_fold(total, |total, series| {
             series.levels.iter().try_fold(total, |total, level| {
@@ -408,16 +395,16 @@ fn svcache_payload_count(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                 total
                     .checked_add(dense)
                     .and_then(|value| value.checked_add(sparse))
-                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+                    .ok_or_else(|| invalid_svcache(path, "svcache payload count overflow"))
             })
         })
     })?;
     level_tiles
         .checked_add(u64::try_from(metadata.associated.len()).unwrap_or(u64::MAX))
-        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+        .ok_or_else(|| invalid_svcache(path, "svcache payload count overflow"))
 }
 
-fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+fn svcache_index_bytes(path: &Path, metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
     let mut bytes = u64::try_from(metadata.scenes.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(u64::try_from(std::mem::size_of::<SceneMeta>()).unwrap_or(u64::MAX));
@@ -430,7 +417,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                         u64::try_from(std::mem::size_of::<SeriesMeta>()).unwrap_or(u64::MAX),
                     ),
             )
-            .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+            .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
         for series in &scene.series {
             bytes = bytes
                 .checked_add(
@@ -440,7 +427,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                             u64::try_from(std::mem::size_of::<LevelMeta>()).unwrap_or(u64::MAX),
                         ),
                 )
-                .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+                .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
             for level in &series.levels {
                 bytes = bytes
                     .checked_add(
@@ -461,7 +448,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                                 ),
                         )
                     })
-                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+                    .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
             }
         }
     }
@@ -473,7 +460,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                     u64::try_from(std::mem::size_of::<AssociatedMeta>()).unwrap_or(u64::MAX),
                 ),
         )
-        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))
+        .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))
 }
 
 fn validate_string(path: &Path, label: &str, value: &str) -> Result<(), WsiError> {

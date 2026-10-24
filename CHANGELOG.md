@@ -58,6 +58,10 @@
 - MIRAX data files and the VMS macro image must still be the files the slide
   was opened on. A read after one is replaced fails instead of reading the new
   file.
+- `.svcache` errors about a corrupt cache name the cache file, not the source
+  slide or an empty path. A bad scene or series in an `.svcache` read or a
+  partial build reports `SceneOutOfRange` or `SeriesOutOfRange` with the real
+  count, not `LevelOutOfRange` with a count of 0.
 
 ## [0.8.0] - 2026-10-06
 

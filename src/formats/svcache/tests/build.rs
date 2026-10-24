@@ -269,6 +269,34 @@ fn svcache_complete_and_partial_builders_cover_merge_and_invalid_inputs() {
         assert!(build_svcache_tiles(source.path(), &path, &[invalid]).is_err());
     }
 
+    let out_of_range = |scene: usize, series: usize, level: u32| {
+        let selection = SvcacheTileSelection::new(
+            SceneId::new(scene),
+            SeriesId::new(series),
+            LevelIdx::new(level),
+            0,
+            0,
+        );
+        build_svcache_tiles(
+            source.path(),
+            &out_dir.path().join("out-of-range.svcache"),
+            &[selection],
+        )
+        .unwrap_err()
+    };
+    assert!(matches!(
+        out_of_range(1, 0, 0),
+        WsiError::SceneOutOfRange { index: 1, count: 1 }
+    ));
+    assert!(matches!(
+        out_of_range(0, 1, 0),
+        WsiError::SeriesOutOfRange { index: 1, count: 1 }
+    ));
+    assert!(matches!(
+        out_of_range(0, 0, 3),
+        WsiError::LevelOutOfRange { level: 3, count: 3 }
+    ));
+
     let u16_tile = CpuTile::new(
         1,
         1,
