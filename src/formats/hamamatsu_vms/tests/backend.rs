@@ -314,6 +314,18 @@ fn replaced_associated_source_is_refused_instead_of_read() {
         ),
         "unexpected error: {error:?}"
     );
+    let error = reader
+        .associated_encoding("macro")
+        .expect_err("a replaced associated source must not be sized");
+    assert!(
+        matches!(
+            &error,
+            WsiError::InvalidSlide { path, message }
+                if *path == macro_path
+                    && message == "VMS associated image changed after the slide was opened"
+        ),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]

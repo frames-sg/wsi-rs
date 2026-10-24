@@ -2,6 +2,7 @@ use super::model::{VmsJpeg, VmsLevel, VmsSlide};
 use super::*;
 
 const MAX_VMS_JPEG_SHARDS: u64 = 65_536;
+const ASSOCIATED_FILE_CHANGED: &str = "VMS associated image changed after the slide was opened";
 
 mod parse;
 
@@ -76,11 +77,12 @@ impl SlideReader for VmsReader {
         let (Some(file), Some(decoded)) = (self.slide.associated_files.get(name), decoded) else {
             return Ok(None);
         };
-        let encoded = std::fs::metadata(&file.path)
-            .map_err(|source| WsiError::io_with_path(&file.path, source))?
-            .len();
+        // Sized from the identity recorded at open, once the file still
+        // matches it; a replaced file is refused as in read_associated.
+        file.identity
+            .ensure_matches(&file.path, ASSOCIATED_FILE_CHANGED)?;
         Ok(Some(
-            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, encoded),
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, file.identity.length()),
         ))
     }
 
@@ -100,11 +102,8 @@ impl SlideReader for VmsReader {
             .associated_files
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        let source = FileIdentity::open_verified(
-            &file.path,
-            &file.identity,
-            "VMS associated image changed after the slide was opened",
-        )?;
+        let source =
+            FileIdentity::open_verified(&file.path, &file.identity, ASSOCIATED_FILE_CHANGED)?;
         let data =
             read_to_end_bounded(source, self.slide.encoded_unit_bytes, "VMS associated JPEG")
                 .map_err(|source| WsiError::io_with_path(&file.path, source))?;
