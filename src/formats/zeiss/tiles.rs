@@ -14,26 +14,8 @@ impl ZeissSlide {
             return Ok(None);
         }
         let (_, _, level) = self.dataset.level(req.scene, req.series, req.level)?;
-        let TileLayout::Regular {
-            tiles_across,
-            tiles_down,
-            ..
-        } = level.tile_layout
-        else {
+        if level.regular_tile(req)?.is_none() {
             return Ok(None);
-        };
-        if req.col < 0
-            || req.row < 0
-            || req.col >= tiles_across as i64
-            || req.row >= tiles_down as i64
-        {
-            return Err(WsiError::tile_read(
-                req,
-                format!(
-                    "tile ({},{}) out of range ({}x{})",
-                    req.col, req.row, tiles_across, tiles_down
-                ),
-            ));
         }
 
         let candidate_indices = self
@@ -169,33 +151,13 @@ impl ZeissSlide {
         row: i64,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<CpuTile, WsiError> {
-        let (_, _, level_ref) = self.dataset.level(
-            SceneId::new(scene),
-            SeriesId::new(series),
-            LevelIdx::new(level),
-        )?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = level_ref.tile_layout
-        else {
+        let req = TileRequest::new(scene, series, level, col, row);
+        let (_, _, level_ref) = self.dataset.level(req.scene, req.series, req.level)?;
+        let Some(tile) = level_ref.regular_tile(&req)? else {
             return Err(WsiError::UnsupportedFormat(
                 "Zeiss levels must use regular tiles".into(),
             ));
         };
-        if col < 0 || row < 0 || col >= tiles_across as i64 || row >= tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    tiles_across, tiles_down
-                ),
-            });
-        }
 
         let key = (scene, level as usize, col, row);
         if let Some(cached) = self
@@ -208,19 +170,18 @@ impl ZeissSlide {
             return Ok(cached);
         }
 
-        let buffer = if let Some(buffer) =
-            self.scene_tile_image_local(level_ref, level as usize, col, row, sources)?
-        {
-            record(Event::ZeissLocalTileHits, 1);
-            buffer
-        } else {
-            let level_img = self.scene_level_image(scene, level as usize)?;
-            let x = (col as u32).saturating_mul(tile_width);
-            let y = (row as u32).saturating_mul(tile_height);
-            let w = tile_width.min(level_img.width.saturating_sub(x));
-            let h = tile_height.min(level_img.height.saturating_sub(y));
-            crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
-        };
+        let buffer =
+            if let Some(buffer) = self.scene_tile_image_local(&req, level_ref, tile, sources)? {
+                record(Event::ZeissLocalTileHits, 1);
+                buffer
+            } else {
+                let level_img = self.scene_level_image(scene, level as usize)?;
+                let x = (col as u32).saturating_mul(tile.tile_width);
+                let y = (row as u32).saturating_mul(tile.tile_height);
+                let w = tile.tile_width.min(level_img.width.saturating_sub(x));
+                let h = tile.tile_height.min(level_img.height.saturating_sub(y));
+                crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
+            };
         let retained_bytes = u64::try_from(buffer.data.byte_size()).unwrap_or(u64::MAX);
         self.tile_cache
             .lock()
@@ -229,42 +190,25 @@ impl ZeissSlide {
         Ok(buffer)
     }
 
+    /// Composes regular `tile` of `req`'s level from the subblocks that cover it.
     fn scene_tile_image_local(
         &self,
+        req: &TileRequest,
         level_ref: &Level,
-        level: usize,
-        col: i64,
-        row: i64,
+        tile: RegularTile,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<Option<CpuTile>, WsiError> {
-        let (tile_x, tile_y, tile_w, tile_h) = {
-            let TileLayout::Regular {
-                tile_width,
-                tile_height,
-                ..
-            } = level_ref.tile_layout
-            else {
-                return Ok(None);
-            };
-            let tile_x = (col as u64).saturating_mul(u64::from(tile_width));
-            let tile_y = (row as u64).saturating_mul(u64::from(tile_height));
-            // Each value is explicitly capped by its u32 tile dimension.
-            let tile_w = level_ref
-                .dimensions
-                .0
-                .saturating_sub(tile_x)
-                .min(u64::from(tile_width)) as u32;
-            let tile_h = level_ref
-                .dimensions
-                .1
-                .saturating_sub(tile_y)
-                .min(u64::from(tile_height)) as u32;
-            (tile_x, tile_y, tile_w, tile_h)
-        };
+        let RegularTile {
+            x: tile_x,
+            y: tile_y,
+            width: tile_w,
+            height: tile_h,
+            ..
+        } = tile;
         let candidate_indices = self
             .canvas_level_tile_subblocks
-            .get(level)
-            .and_then(|tiles| tiles.get(&(col, row)).cloned())
+            .get(req.level.get() as usize)
+            .and_then(|tiles| tiles.get(&(req.col, req.row)).cloned())
             .unwrap_or_default();
         let tile_rgb_len = crate::core::limits::checked_product_to_usize(
             &[u64::from(tile_w), u64::from(tile_h), 3],

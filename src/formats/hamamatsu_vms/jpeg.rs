@@ -107,6 +107,16 @@ impl VmsJpeg {
         })
     }
 
+    /// Size of tile (`tile_col`, `tile_row`) of this JPEG, clipped to its edge.
+    pub(super) fn tile_size(&self, tile_col: u32, tile_row: u32) -> (u32, u32) {
+        (
+            self.tile_width
+                .min(self.width.saturating_sub(tile_col * self.tile_width)),
+            self.tile_height
+                .min(self.height.saturating_sub(tile_row * self.tile_height)),
+        )
+    }
+
     pub(super) fn decode_tile(
         &self,
         tile_index: usize,
@@ -134,14 +144,10 @@ impl VmsJpeg {
                 )));
             }
         };
-        let tile_col = tile_index as u32 % self.tiles_across;
-        let tile_row = tile_index as u32 / self.tiles_across;
-        let width = self
-            .tile_width
-            .min(self.width.saturating_sub(tile_col * self.tile_width));
-        let height = self
-            .tile_height
-            .min(self.height.saturating_sub(tile_row * self.tile_height));
+        let (width, height) = self.tile_size(
+            tile_index as u32 % self.tiles_across,
+            tile_index as u32 / self.tiles_across,
+        );
         let data = self.tile_jpeg_bytes(tile_index, width, height)?;
         let decoder = J2kJpegDecoder::new(&data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let roi = J2kRect {

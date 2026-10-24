@@ -42,16 +42,7 @@ impl TiffPixelReader {
         let col = req.col;
         let row = req.row;
 
-        // Bounds check
-        if col < 0 || col >= tiles_across as i64 || row < 0 || row >= tiles_down as i64 {
-            return Err(WsiError::tile_read(
-                req,
-                format!(
-                    "tile ({},{}) out of range ({}x{})",
-                    col, row, tiles_across, tiles_down,
-                ),
-            ));
-        }
+        checked_grid_tile(req, u64::from(tiles_across), u64::from(tiles_down))?;
 
         // Compute tile dimensions first (needed for empty-tile fallback and decode)
         let (level_w, level_h, vtw, vth) = self.ndpi_whole_level_geometry(

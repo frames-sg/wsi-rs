@@ -322,6 +322,66 @@ fn source_icc_profiles_for_series_filters_matching_profiles() {
     assert_eq!(profiles, vec![matching_scene_series, matching_channel]);
 }
 
+// --- Level::regular_tile ---
+
+#[test]
+fn regular_tile_clips_edge_tiles_and_rejects_tiles_outside_the_grid() {
+    let level = Level::new(
+        (250, 130),
+        1.0,
+        TileLayout::Regular {
+            tile_width: 100,
+            tile_height: 64,
+            tiles_across: 3,
+            tiles_down: 3,
+        },
+    );
+    assert_eq!(
+        level
+            .regular_tile(&TileRequest::new(0usize, 0usize, 2u32, 2, 2))
+            .unwrap(),
+        Some(RegularTile {
+            x: 200,
+            y: 128,
+            width: 50,
+            height: 2,
+            tile_width: 100,
+            tile_height: 64,
+        })
+    );
+    for (col, row) in [(-1, 0), (0, -1), (3, 0), (0, 3)] {
+        let error = level
+            .regular_tile(&TileRequest::new(0usize, 0usize, 2u32, col, row))
+            .expect_err("tile outside the grid");
+        assert!(
+            matches!(
+                &error,
+                WsiError::TileRead { col: c, row: r, level: 2, reason }
+                    if (*c, *r) == (col, row)
+                        && *reason == format!("tile ({col},{row}) out of range (3x3)")
+            ),
+            "{error:?}"
+        );
+    }
+
+    let whole = Level::new(
+        (10, 10),
+        1.0,
+        TileLayout::WholeLevel {
+            width: 10,
+            height: 10,
+            virtual_tile_width: 10,
+            virtual_tile_height: 10,
+        },
+    );
+    assert_eq!(
+        whole
+            .regular_tile(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
+            .unwrap(),
+        None
+    );
+}
+
 // --- SampleType ---
 
 #[test]

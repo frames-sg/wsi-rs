@@ -7,7 +7,9 @@ use crate::core::registry::{
     BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
-use crate::core::types::{CpuTile, Dataset, RawCompressedTile, TileCodecKind, TileRequest};
+use crate::core::types::{
+    checked_grid_tile, CpuTile, Dataset, RawCompressedTile, TileCodecKind, TileRequest,
+};
 use crate::error::WsiError;
 
 mod pixels;
@@ -249,19 +251,11 @@ impl OlympusVsiReader {
                     count: scene.levels.len() as u32,
                 })?;
         scene.axes.validate_plane(req.plane.get())?;
-        if req.col < 0
-            || req.row < 0
-            || req.col >= level.tiles_across as i64
-            || req.row >= level.tiles_down as i64
-        {
-            return Err(WsiError::tile_read(
-                req,
-                format!(
-                    "tile ({},{}) out of range ({}x{})",
-                    req.col, req.row, level.tiles_across, level.tiles_down
-                ),
-            ));
-        }
+        checked_grid_tile(
+            req,
+            u64::from(level.tiles_across),
+            u64::from(level.tiles_down),
+        )?;
 
         let key = tile_key(req);
         Ok((scene, level, scene.tiles.get(&key)))

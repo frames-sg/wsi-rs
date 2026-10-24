@@ -210,39 +210,12 @@ impl ZeissReader {
             .slide
             .dataset
             .find_level(req.scene, req.series, req.level)?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = level.tile_layout
-        else {
-            return None;
-        };
-        if req.col < 0
-            || req.row < 0
-            || req.col as u64 >= tiles_across
-            || req.row as u64 >= tiles_down
-        {
-            return None;
-        }
-        let x = req.col.checked_mul(i64::from(tile_width))?;
-        let y = req.row.checked_mul(i64::from(tile_height))?;
-        let width = level
-            .dimensions
-            .0
-            .saturating_sub(x as u64)
-            .min(u64::from(tile_width)) as u32;
-        let height = level
-            .dimensions
-            .1
-            .saturating_sub(y as u64)
-            .min(u64::from(tile_height)) as u32;
+        let tile = level.regular_tile(req).ok().flatten()?;
         Some((
-            x,
-            y,
-            width,
-            height,
+            i64::try_from(tile.x).ok()?,
+            i64::try_from(tile.y).ok()?,
+            tile.width,
+            tile.height,
             level.downsample.round().max(1.0) as i64,
         ))
     }

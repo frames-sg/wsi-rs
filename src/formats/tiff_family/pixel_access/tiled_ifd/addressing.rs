@@ -28,16 +28,8 @@ impl TiffPixelReader {
                 tiles_down,
                 ..
             } => {
-                if col < 0 || col >= *tiles_across as i64 || row < 0 || row >= *tiles_down as i64 {
-                    return Err(WsiError::tile_read(
-                        req,
-                        format!(
-                            "tile ({},{}) out of range ({}x{})",
-                            col, row, tiles_across, tiles_down,
-                        ),
-                    ));
-                }
-                (row as u64 * *tiles_across + col as u64) as usize
+                let (col, row) = checked_grid_tile(req, *tiles_across, *tiles_down)?;
+                (row * *tiles_across + col) as usize
             }
             TileLayout::Irregular { tiles, .. } => {
                 let entry = tiles.get(&(col, row)).ok_or_else(|| {

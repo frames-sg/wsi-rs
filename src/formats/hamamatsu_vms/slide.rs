@@ -144,28 +144,9 @@ impl VmsReader {
                     count: self.slide.levels.len() as u32,
                 })?;
 
-        let TileLayout::Regular {
-            tiles_across,
-            tiles_down,
-            ..
-        } = level_meta.tile_layout
-        else {
+        if level_meta.regular_tile(req)?.is_none() {
             return Err(WsiError::UnsupportedFormat(
                 "VMS levels must use regular tiles".into(),
-            ));
-        };
-
-        if req.col < 0
-            || req.row < 0
-            || req.col >= tiles_across as i64
-            || req.row >= tiles_down as i64
-        {
-            return Err(WsiError::tile_read(
-                req,
-                format!(
-                    "tile ({},{}) out of range ({}x{})",
-                    req.col, req.row, tiles_across, tiles_down
-                ),
             ));
         }
 
@@ -184,13 +165,7 @@ impl VmsReader {
             ));
         }
         let tile_index = (local_tile_row * jpeg.tiles_across + local_tile_col) as usize;
-        let width = jpeg
-            .tile_width
-            .min(jpeg.width.saturating_sub(local_tile_col * jpeg.tile_width));
-        let height = jpeg.tile_height.min(
-            jpeg.height
-                .saturating_sub(local_tile_row * jpeg.tile_height),
-        );
+        let (width, height) = jpeg.tile_size(local_tile_col, local_tile_row);
         Ok(ResolvedVmsTile {
             level,
             jpeg: jpeg.as_ref(),
