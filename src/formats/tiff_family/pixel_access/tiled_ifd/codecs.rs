@@ -87,29 +87,8 @@ impl TiffPixelReader {
         ) {
             Self::empty_transparent_tile(width, height)
         } else {
-            Self::empty_rgb_tile(width, height)
+            zero_rgb_interleaved_u8_tile(width, height)
         }
-    }
-
-    pub(in super::super) fn empty_rgb_tile(width: u32, height: u32) -> Result<CpuTile, WsiError> {
-        let pixel_count = usize::try_from(width)
-            .ok()
-            .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-            .and_then(|pixels| pixels.checked_mul(3))
-            .ok_or_else(|| {
-                WsiError::UnsupportedFormat(format!(
-                    "empty RGB tile dimensions {}x{} overflow output buffer size",
-                    width, height
-                ))
-            })?;
-        Ok(CpuTile {
-            width,
-            height,
-            channels: 3,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8(vec![0u8; pixel_count]),
-        })
     }
 
     pub(in super::super) fn empty_transparent_tile(
