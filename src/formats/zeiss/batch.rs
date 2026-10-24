@@ -241,12 +241,8 @@ impl ZeissReader {
             let info = czi.subblocks().get(index).ok_or_else(|| {
                 WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
             })?;
-            if !matches!(
-                info.compression,
-                CziCompressionMode::UnCompressed
-                    | CziCompressionMode::Jpg
-                    | CziCompressionMode::JpgXr
-            ) || !matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
+            if !info.compression.is_wsi_supported()
+                || !matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
             {
                 return Ok(None);
             }

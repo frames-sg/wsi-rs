@@ -122,12 +122,10 @@ fn read_embedded_czi_blob(
 fn ensure_supported_embedded_czi(
     compressions: impl IntoIterator<Item = CziCompressionMode>,
 ) -> Result<(), WsiError> {
-    if let Some(compression) = compressions.into_iter().find(|compression| {
-        !matches!(
-            compression,
-            CziCompressionMode::UnCompressed | CziCompressionMode::Jpg | CziCompressionMode::JpgXr
-        )
-    }) {
+    if let Some(compression) = compressions
+        .into_iter()
+        .find(|compression| !compression.is_wsi_supported())
+    {
         return Err(WsiError::UnsupportedFormat(format!(
             "embedded CZI associated-image compression is not supported safely ({compression})"
         )));

@@ -121,13 +121,7 @@ impl ZeissSlide {
     pub(super) fn validate_wsi_pixels(&self) -> Result<(), WsiError> {
         let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         if czi.subblocks().iter().any(|info| {
-            info.pixel_type != CziPixelType::Bgr24
-                || !matches!(
-                    info.compression,
-                    CziCompressionMode::UnCompressed
-                        | CziCompressionMode::Jpg
-                        | CziCompressionMode::JpgXr
-                )
+            info.pixel_type != CziPixelType::Bgr24 || !info.compression.is_wsi_supported()
         }) {
             return Err(WsiError::UnsupportedFormat("CZI WSI reads currently require Bgr24 with uncompressed, JPEG, or JPEG XR subblocks".into()));
         }

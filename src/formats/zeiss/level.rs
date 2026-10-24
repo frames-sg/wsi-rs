@@ -13,12 +13,7 @@ impl ZeissSlide {
             let info = all.get(index).cloned().ok_or_else(|| {
                 WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
             })?;
-            if !matches!(
-                info.compression,
-                CziCompressionMode::UnCompressed
-                    | CziCompressionMode::Jpg
-                    | CziCompressionMode::JpgXr
-            ) {
+            if !info.compression.is_wsi_supported() {
                 return Ok(None);
             }
             selected.push(info);
