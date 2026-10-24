@@ -16,7 +16,8 @@ use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
 use super::common::{
-    associated_channels, compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area,
+    add_tiff_resolution_properties, associated_channels, compression_from_tag,
+    finish_single_scene_uint8_tiff_layout, level_area, ResolutionStyle,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -667,26 +668,16 @@ impl NdpiInterpreter {
             properties.insert("hamamatsu.Reference", reference.to_string());
         }
 
-        // MPP from XResolution / YResolution (NDPI stores pixels/cm, unit=3).
-        let res_unit = container
-            .get_u32(first_ifd, tags::RESOLUTION_UNIT)
-            .unwrap_or(3); // NDPI default: centimeter
-        let unit_to_microns = match res_unit {
-            3 => 10_000.0, // 1 cm = 10,000 µm
-            _ => 25_400.0, // 1 inch = 25,400 µm
-        };
-        if let Ok(x_res) = container.get_f64(first_ifd, tags::X_RESOLUTION) {
-            if x_res > 0.0 {
-                let mpp_x = unit_to_microns / x_res;
-                properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-            }
-        }
-        if let Ok(y_res) = container.get_f64(first_ifd, tags::Y_RESOLUTION) {
-            if y_res > 0.0 {
-                let mpp_y = unit_to_microns / y_res;
-                properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
-            }
-        }
+        // NDPI stores pixels per centimeter and reports MPP to six decimals.
+        add_tiff_resolution_properties(
+            container,
+            first_ifd,
+            &mut properties,
+            ResolutionStyle {
+                default_unit: 3,
+                decimals: Some(6),
+            },
+        );
 
         Ok(properties)
     }

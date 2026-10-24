@@ -216,27 +216,16 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 properties.insert("openslide.comment", desc.to_string());
             }
 
-            // Extract MPP from TIFF XResolution / YResolution tags.
-            // ResolutionUnit: 2 = inch (default), 3 = centimeter.
-            let res_unit = container
-                .get_u32(first_id, tags::RESOLUTION_UNIT)
-                .unwrap_or(2); // default: inch
-            let unit_to_microns = match res_unit {
-                3 => 10_000.0, // 1 cm = 10,000 µm
-                _ => 25_400.0, // 1 inch = 25,400 µm
-            };
-            if let Ok(x_res) = container.get_f64(first_id, tags::X_RESOLUTION) {
-                if x_res > 0.0 {
-                    let mpp_x = unit_to_microns / x_res;
-                    properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-                }
-            }
-            if let Ok(y_res) = container.get_f64(first_id, tags::Y_RESOLUTION) {
-                if y_res > 0.0 {
-                    let mpp_y = unit_to_microns / y_res;
-                    properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
-                }
-            }
+            // Generic TIFF reports MPP to six decimals, inches by default.
+            add_tiff_resolution_properties(
+                container,
+                first_id,
+                &mut properties,
+                ResolutionStyle {
+                    default_unit: 2,
+                    decimals: Some(6),
+                },
+            );
         }
 
         // Phase 7: Dataset identity from TIFF quickhash-compatible content hashing.

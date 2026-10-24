@@ -10,7 +10,7 @@ use crate::properties::Properties;
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
     finish_single_scene_uint8_tiff_layout, regular_tiff_level, stripped_tile_source,
-    tiled_ifd_descriptor,
+    tiled_ifd_descriptor, ResolutionStyle,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -115,7 +115,12 @@ impl TiffLayoutInterpreter for HuronInterpreter {
         }
 
         let mut properties = parse_properties(description);
-        add_tiff_resolution_properties(container, first_ifd, &mut properties);
+        add_tiff_resolution_properties(
+            container,
+            first_ifd,
+            &mut properties,
+            ResolutionStyle::INCH_FULL_PRECISION,
+        );
         finish_single_scene_uint8_tiff_layout(
             container,
             tiled.last().unwrap().ifd_id,

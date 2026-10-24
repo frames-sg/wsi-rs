@@ -15,8 +15,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    averaged_downsample, compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area,
-    regular_tiff_level, tiled_ifd_descriptor, TiledIfdDescriptor,
+    add_tiff_resolution_properties, averaged_downsample, compression_from_tag,
+    finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level, tiled_ifd_descriptor,
+    ResolutionStyle, TiledIfdDescriptor,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 

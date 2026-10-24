@@ -156,26 +156,49 @@ pub(super) fn stripped_tile_source(
     })
 }
 
+/// How a vendor turns XResolution/YResolution into `openslide.mpp-*`.
+#[derive(Clone, Copy)]
+pub(super) struct ResolutionStyle {
+    /// ResolutionUnit assumed when the tag is absent: 3 is centimeters, any
+    /// other value inches.
+    pub(super) default_unit: u32,
+    /// Fixed decimal places, or `None` for the shortest exact form.
+    pub(super) decimals: Option<usize>,
+}
+
+impl ResolutionStyle {
+    /// Inch default and full precision.
+    pub(super) const INCH_FULL_PRECISION: Self = Self {
+        default_unit: 2,
+        decimals: None,
+    };
+}
+
 pub(super) fn add_tiff_resolution_properties(
     container: &TiffContainer,
     ifd_id: IfdId,
     properties: &mut Properties,
+    style: ResolutionStyle,
 ) {
     let unit_microns = match container
         .get_u32(ifd_id, tags::RESOLUTION_UNIT)
-        .unwrap_or(2)
+        .unwrap_or(style.default_unit)
     {
         3 => 10_000.0,
         _ => 25_400.0,
     };
+    let format = |mpp: f64| match style.decimals {
+        Some(decimals) => format!("{mpp:.decimals$}"),
+        None => mpp.to_string(),
+    };
     if let Ok(value) = container.get_f64(ifd_id, tags::X_RESOLUTION) {
         if value > 0.0 {
-            properties.insert("openslide.mpp-x", (unit_microns / value).to_string());
+            properties.insert("openslide.mpp-x", format(unit_microns / value));
         }
     }
     if let Ok(value) = container.get_f64(ifd_id, tags::Y_RESOLUTION) {
         if value > 0.0 {
-            properties.insert("openslide.mpp-y", (unit_microns / value).to_string());
+            properties.insert("openslide.mpp-y", format(unit_microns / value));
         }
     }
 }

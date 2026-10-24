@@ -12,7 +12,7 @@ use crate::properties::Properties;
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
     single_scene_uint8_pyramid_dataset, stripped_tile_source, tiled_ifd_descriptor,
-    TiledIfdDescriptor as TiledIfd,
+    ResolutionStyle, TiledIfdDescriptor as TiledIfd,
 };
 use super::{
     compute_tiff_dataset_identity_with_extra_strings, DatasetLayout, TiffLayoutInterpreter,
@@ -147,7 +147,12 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
         if let Some(quickhash1) = identity.quickhash1.as_deref() {
             properties.insert("openslide.quickhash-1", quickhash1);
         }
-        add_tiff_resolution_properties(container, representative[0].ifd_id, &mut properties);
+        add_tiff_resolution_properties(
+            container,
+            representative[0].ifd_id,
+            &mut properties,
+            ResolutionStyle::INCH_FULL_PRECISION,
+        );
         add_sparse_bounds_properties(
             &mut properties,
             level0_bounds,
