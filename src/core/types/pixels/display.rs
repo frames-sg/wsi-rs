@@ -103,6 +103,85 @@ impl CpuTile {
         }
     }
 
+    fn windowed_rgb_bytes(
+        &self,
+        window: &DisplayWindow,
+        include_alpha: bool,
+    ) -> Result<Vec<u8>, WsiError> {
+        let range = window.max - window.min;
+        if range <= 0.0 {
+            return Err(WsiError::DisplayConversion(
+                "window range must be positive".into(),
+            ));
+        }
+        let pixel_count = (self.width as usize) * (self.height as usize);
+        let output_channels = if include_alpha { 4 } else { 3 };
+        let mut output = Vec::with_capacity(pixel_count * output_channels);
+        let scale = |sample: f64| {
+            (((sample - window.min) / range) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+        let push_alpha = |output: &mut Vec<u8>| {
+            if include_alpha {
+                output.push(255);
+            }
+        };
+
+        match &self.data {
+            CpuTileData::U16(samples) => {
+                self.validate_len(samples)?;
+                if self.channels == 1 {
+                    for &sample in samples.iter() {
+                        let value = scale(f64::from(sample));
+                        output.extend_from_slice(&[value, value, value]);
+                        push_alpha(&mut output);
+                    }
+                } else if self.channels == 3 {
+                    for idx in 0..pixel_count {
+                        for sample in self.u16_triplet_at(samples, idx)? {
+                            output.push(scale(f64::from(sample)));
+                        }
+                        push_alpha(&mut output);
+                    }
+                } else {
+                    return Err(WsiError::DisplayConversion(format!(
+                        "unsupported channel count {} for windowed conversion",
+                        self.channels
+                    )));
+                }
+            }
+            CpuTileData::F32(samples) => {
+                self.validate_len(samples)?;
+                if self.channels == 1 {
+                    for &sample in samples.iter() {
+                        let value = scale(f64::from(sample));
+                        output.extend_from_slice(&[value, value, value]);
+                        push_alpha(&mut output);
+                    }
+                } else if self.channels == 3 && self.layout == CpuTileLayout::Interleaved {
+                    for pixel in samples.as_chunks::<3>().0 {
+                        for &sample in pixel {
+                            output.push(scale(f64::from(sample)));
+                        }
+                        push_alpha(&mut output);
+                    }
+                } else {
+                    return Err(WsiError::DisplayConversion(format!(
+                        "unsupported channel count {} for F32 windowed conversion",
+                        self.channels
+                    )));
+                }
+            }
+            CpuTileData::U8(_) => {
+                return Err(WsiError::DisplayConversion(
+                    "U8 data should not reach windowed conversion path".into(),
+                ));
+            }
+        }
+        Ok(output)
+    }
+
     /// Convert Uint8 data to RgbaImage. Returns error for non-Uint8 data.
     pub fn to_rgba(&self) -> Result<image::RgbaImage, WsiError> {
         let bytes = self.data.as_u8().ok_or_else(|| {
@@ -195,75 +274,7 @@ impl CpuTile {
         if let CpuTileData::U8(_) = &self.data {
             return self.to_rgba();
         }
-        let range = window.max - window.min;
-        if range <= 0.0 {
-            return Err(WsiError::DisplayConversion(
-                "window range must be positive".into(),
-            ));
-        }
-        let pixel_count = (self.width as usize) * (self.height as usize);
-        let mut rgba = Vec::with_capacity(pixel_count * 4);
-
-        match &self.data {
-            CpuTileData::U16(samples) => {
-                self.validate_len(samples)?;
-                if self.channels == 1 {
-                    for &s in samples.iter() {
-                        let v = (((s as f64 - window.min) / range) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as u8;
-                        rgba.extend_from_slice(&[v, v, v, 255]);
-                    }
-                } else if self.channels == 3 {
-                    for idx in 0..pixel_count {
-                        for s in self.u16_triplet_at(samples, idx)? {
-                            let v = (((s as f64 - window.min) / range) * 255.0)
-                                .round()
-                                .clamp(0.0, 255.0) as u8;
-                            rgba.push(v);
-                        }
-                        rgba.push(255);
-                    }
-                } else {
-                    return Err(WsiError::DisplayConversion(format!(
-                        "unsupported channel count {} for windowed conversion",
-                        self.channels
-                    )));
-                }
-            }
-            CpuTileData::F32(samples) => {
-                self.validate_len(samples)?;
-                if self.channels == 1 {
-                    for &s in samples.iter() {
-                        let v = (((s as f64 - window.min) / range) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as u8;
-                        rgba.extend_from_slice(&[v, v, v, 255]);
-                    }
-                } else if self.channels == 3 && self.layout == CpuTileLayout::Interleaved {
-                    for pixel in samples.as_chunks::<3>().0 {
-                        for &s in pixel {
-                            let v = (((s as f64 - window.min) / range) * 255.0)
-                                .round()
-                                .clamp(0.0, 255.0) as u8;
-                            rgba.push(v);
-                        }
-                        rgba.push(255);
-                    }
-                } else {
-                    return Err(WsiError::DisplayConversion(format!(
-                        "unsupported channel count {} for F32 windowed conversion",
-                        self.channels
-                    )));
-                }
-            }
-            CpuTileData::U8(_) => {
-                return Err(WsiError::DisplayConversion(
-                    "U8 data should not reach windowed conversion path".into(),
-                ));
-            }
-        }
-
+        let rgba = self.windowed_rgb_bytes(window, true)?;
         Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
             .expect("windowed samples produce exactly one RGBA pixel per input pixel"))
     }
@@ -336,73 +347,7 @@ impl CpuTile {
         if let CpuTileData::U8(_) = &self.data {
             return self.to_rgb();
         }
-        let range = window.max - window.min;
-        if range <= 0.0 {
-            return Err(WsiError::DisplayConversion(
-                "window range must be positive".into(),
-            ));
-        }
-        let pixel_count = (self.width as usize) * (self.height as usize);
-        let mut rgb = Vec::with_capacity(pixel_count * 3);
-
-        match &self.data {
-            CpuTileData::U16(samples) => {
-                self.validate_len(samples)?;
-                if self.channels == 1 {
-                    for &s in samples.iter() {
-                        let v = (((s as f64 - window.min) / range) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as u8;
-                        rgb.extend_from_slice(&[v, v, v]);
-                    }
-                } else if self.channels == 3 {
-                    for idx in 0..pixel_count {
-                        for s in self.u16_triplet_at(samples, idx)? {
-                            let v = (((s as f64 - window.min) / range) * 255.0)
-                                .round()
-                                .clamp(0.0, 255.0) as u8;
-                            rgb.push(v);
-                        }
-                    }
-                } else {
-                    return Err(WsiError::DisplayConversion(format!(
-                        "unsupported channel count {} for windowed conversion",
-                        self.channels
-                    )));
-                }
-            }
-            CpuTileData::F32(samples) => {
-                self.validate_len(samples)?;
-                if self.channels == 1 {
-                    for &s in samples.iter() {
-                        let v = (((s as f64 - window.min) / range) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as u8;
-                        rgb.extend_from_slice(&[v, v, v]);
-                    }
-                } else if self.channels == 3 && self.layout == CpuTileLayout::Interleaved {
-                    for pixel in samples.as_chunks::<3>().0 {
-                        for &s in pixel {
-                            let v = (((s as f64 - window.min) / range) * 255.0)
-                                .round()
-                                .clamp(0.0, 255.0) as u8;
-                            rgb.push(v);
-                        }
-                    }
-                } else {
-                    return Err(WsiError::DisplayConversion(format!(
-                        "unsupported channel count {} for F32 windowed conversion",
-                        self.channels
-                    )));
-                }
-            }
-            CpuTileData::U8(_) => {
-                return Err(WsiError::DisplayConversion(
-                    "U8 data should not reach windowed conversion path".into(),
-                ));
-            }
-        }
-
+        let rgb = self.windowed_rgb_bytes(window, false)?;
         Ok(image::RgbImage::from_raw(self.width, self.height, rgb)
             .expect("windowed samples produce exactly one RGB pixel per input pixel"))
     }

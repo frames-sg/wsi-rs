@@ -166,6 +166,9 @@ fn to_rgba_windowed_u16_planar_rgb() {
     let img = buf.to_rgba_windowed(&window).unwrap();
     assert_eq!(img.get_pixel(0, 0).0, [0, 0, 0, 255]);
     assert_eq!(img.get_pixel(1, 0).0, [255, 255, 0, 255]);
+    let img = buf.to_rgb_windowed(&window).unwrap();
+    assert_eq!(img.get_pixel(0, 0).0, [0, 0, 0]);
+    assert_eq!(img.get_pixel(1, 0).0, [255, 255, 0]);
 }
 
 #[test]
@@ -338,6 +341,8 @@ fn to_rgb_windowed_f32_3ch_direct() {
     let window = DisplayWindow::new(0.0, 1.0).unwrap();
     let img = buf.to_rgb_windowed(&window).unwrap();
     assert_eq!(img.get_pixel(0, 0).0, [0, 128, 255]);
+    let img = buf.to_rgba_windowed(&window).unwrap();
+    assert_eq!(img.get_pixel(0, 0).0, [0, 128, 255, 255]);
 }
 
 // --- Arc Palette ---
