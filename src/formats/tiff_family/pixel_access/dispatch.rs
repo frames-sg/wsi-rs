@@ -711,42 +711,19 @@ impl SlideReader for TiffPixelReader {
                 strip_byte_count,
                 ..
             } => {
-                let data = self
-                    .container
-                    .pread(*strip_offset, *strip_byte_count)
-                    .map_err(|e| e.into_wsi_error(self.container.path()))?;
-
                 let info = self
                     .layout
                     .dataset
                     .associated_images
                     .get(name)
                     .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-
-                let options = j2k_decode_options(
-                    self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &data, None)
-                        .color_transform,
-                );
-                let view = J2kJpegView::parse_with_options(&data, options)
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let decoder = J2kJpegDecoder::from_view(view)
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let (pixels, outcome) = decoder
-                    .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let decoded =
-                    cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
-                if decoded.width > info.dimensions.0 || decoded.height > info.dimensions.1 {
-                    crop_rgb_interleaved_u8_buffer(
-                        &decoded,
-                        0,
-                        0,
-                        info.dimensions.0,
-                        info.dimensions.1,
-                    )
-                } else {
-                    Ok(decoded)
-                }
+                self.decode_ndpi_full_jpeg(
+                    *ifd_id,
+                    *strip_offset,
+                    *strip_byte_count,
+                    J2kDownscale::None,
+                    Some(info.dimensions),
+                )
             }
             TileSource::TiledIfd {
                 ifd_id,

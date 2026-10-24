@@ -206,16 +206,36 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<Arc<CpuTile>, WsiError> {
-        let data = self
-            .container
-            .pread(strip_offset, strip_byte_count)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?;
-
         let (_, _, level) = self
             .layout
             .dataset
             .level(req.scene, req.series, req.level)?;
         let (level_w, level_h) = level.dimensions;
+        let decoded = self.decode_ndpi_full_jpeg(
+            ifd_id,
+            strip_offset,
+            strip_byte_count,
+            J2kDownscale::None,
+            Some((level_w as u32, level_h as u32)),
+        )?;
+
+        Ok(Arc::new(decoded))
+    }
+
+    /// Decodes a whole-image NDPI JPEG at `scale` to RGB8. With `crop_to`, an
+    /// output larger than `(width, height)` is cropped to it from the origin.
+    pub(super) fn decode_ndpi_full_jpeg(
+        &self,
+        ifd_id: IfdId,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        scale: J2kDownscale,
+        crop_to: Option<(u32, u32)>,
+    ) -> Result<CpuTile, WsiError> {
+        let data = self
+            .container
+            .pread(strip_offset, strip_byte_count)
+            .map_err(|e| e.into_wsi_error(self.container.path()))?;
         let options = j2k_decode_options(
             self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, None)
                 .color_transform,
@@ -224,17 +244,22 @@ impl TiffPixelReader {
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let decoder =
             J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let (pixels, outcome) = decoder
-            .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
+        let (source_w, source_h) = decoder.info().dimensions;
+        let scale_denom = scale.denominator();
+        let (pixels, _outcome) = decoder
+            .decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let decoded = cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
-        let decoded = if decoded.width > level_w as u32 || decoded.height > level_h as u32 {
-            crop_rgb_interleaved_u8_buffer(&decoded, 0, 0, level_w as u32, level_h as u32)?
-        } else {
-            decoded
-        };
-
-        Ok(Arc::new(decoded))
+        let decoded = cpu_tile_from_rgb_pixels(
+            source_w.div_ceil(scale_denom),
+            source_h.div_ceil(scale_denom),
+            pixels,
+        )?;
+        match crop_to {
+            Some((w, h)) if decoded.width > w || decoded.height > h => {
+                crop_rgb_interleaved_u8_buffer(&decoded, 0, 0, w, h)
+            }
+            _ => Ok(decoded),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
