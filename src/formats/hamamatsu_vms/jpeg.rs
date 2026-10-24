@@ -121,7 +121,6 @@ impl VmsJpeg {
         &self,
         tile_index: usize,
         scale_denom: u32,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         let cache_key = (tile_index, scale_denom);
         if let Some(cached) = self

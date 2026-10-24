@@ -78,11 +78,7 @@ fn register_shared_index(key: MiraxShareKey, shared: MiraxShared) -> Arc<MiraxSh
 }
 
 impl MiraxSlide {
-    pub(super) fn decode_image_with_backend(
-        &self,
-        image: &Arc<MiraxImage>,
-        _backend: BackendRequest,
-    ) -> Result<Arc<CpuTile>, WsiError> {
+    pub(super) fn decode_image(&self, image: &Arc<MiraxImage>) -> Result<Arc<CpuTile>, WsiError> {
         self.resolve_image_claim(image, self.claim_image(image))
     }
 
@@ -123,7 +119,6 @@ impl MiraxSlide {
             &image.record,
             image.format,
             Some((image.expected_width, image.expected_height)),
-            BackendRequest::Auto,
         )?);
         let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.decoded_images
@@ -152,12 +147,8 @@ impl MiraxSlide {
             execution_telemetry::record(Event::MiraxAssociatedCacheHits, 1);
             return Ok((*buffer).clone());
         }
-        let decoded = Arc::new(self.decode_record_to_sample_buffer(
-            record,
-            MiraxImageFormat::Jpeg,
-            None,
-            BackendRequest::Auto,
-        )?);
+        let decoded =
+            Arc::new(self.decode_record_to_sample_buffer(record, MiraxImageFormat::Jpeg, None)?);
         let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.associated_cache
             .lock()
@@ -171,7 +162,6 @@ impl MiraxSlide {
         record: &MiraxRecord,
         format: MiraxImageFormat,
         expected_dimensions: Option<(u32, u32)>,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         let bytes = self.read_record_bytes(record)?;
         match format {

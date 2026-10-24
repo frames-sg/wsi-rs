@@ -31,8 +31,7 @@ pub(crate) use probe_cache::ConfiguredProbeCache;
 pub use registry_impl::FormatRegistry;
 pub use slide::Slide;
 pub(crate) use traits::{
-    read_cpu_tiles, ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader,
-    ManagedSlideReader,
+    ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader, ManagedSlideReader,
 };
 pub use traits::{
     DatasetReader, FormatProbe, ProbeConfidence, ProbeResult, SlideReadContext, SlideReader,

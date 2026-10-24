@@ -53,7 +53,13 @@ impl SlideReader for ZeissReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Cpu)
+        self.slide.read_tile(
+            req.scene.get(),
+            req.series.get(),
+            req.level.get(),
+            req.col,
+            req.row,
+        )
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -89,23 +95,6 @@ impl SlideReader for ZeissReader {
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.slide.read_associated(name)
-    }
-}
-
-impl ZeissReader {
-    fn read_tile_with_backend(
-        &self,
-        req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
-        self.slide.read_tile(
-            req.scene.get(),
-            req.series.get(),
-            req.level.get(),
-            req.col,
-            req.row,
-            backend,
-        )
     }
 }
 

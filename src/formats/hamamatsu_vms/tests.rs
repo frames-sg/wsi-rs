@@ -92,7 +92,7 @@ fn vms_jpeg_decodes_restart_segment_tile() {
     ];
     let jpeg = VmsJpeg::parse(&path, row_starts).unwrap();
 
-    let tile = jpeg.decode_tile(3, 1, BackendRequest::Auto).unwrap();
+    let tile = jpeg.decode_tile(3, 1).unwrap();
 
     assert_eq!(tile.width, 64);
     assert_eq!(tile.height, 8);

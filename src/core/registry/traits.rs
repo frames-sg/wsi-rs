@@ -1,5 +1,4 @@
 use super::*;
-use j2k_core::BackendRequest;
 
 // ── Probe traits ───────────────────────────────────────────────────
 
@@ -75,15 +74,6 @@ pub(crate) trait ConfiguredDatasetReader: DatasetReader {
 }
 
 // ── Read interface ─────────────────────────────────────────────────
-
-pub(crate) fn read_cpu_tiles(
-    reqs: &[TileRequest],
-    mut read_tile: impl FnMut(&TileRequest, BackendRequest) -> Result<CpuTile, WsiError>,
-) -> Result<Vec<CpuTile>, WsiError> {
-    reqs.iter()
-        .map(|req| read_tile(req, BackendRequest::Cpu))
-        .collect()
-}
 
 pub struct SlideReadContext<'a> {
     tile_cache: Option<&'a TileCache>,

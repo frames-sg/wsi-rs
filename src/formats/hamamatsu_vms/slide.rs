@@ -30,14 +30,14 @@ impl SlideReader for VmsReader {
         }
     }
 
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        read_cpu_tiles(reqs, |req, backend| {
-            self.read_tile_with_backend(req, backend)
-        })
-    }
-
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Cpu)
+        let tile = self.resolve_tile(req)?;
+        tile.jpeg
+            .decode_tile(tile.tile_index, tile.level.scale_denom)
+            .map_err(|err| match err {
+                WsiError::TileRead { .. } => err,
+                other => WsiError::tile_read(req, other.to_string()),
+            })
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -153,20 +153,6 @@ impl VmsReader {
             width,
             height,
         })
-    }
-
-    fn read_tile_with_backend(
-        &self,
-        req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
-        let tile = self.resolve_tile(req)?;
-        tile.jpeg
-            .decode_tile(tile.tile_index, tile.level.scale_denom, backend)
-            .map_err(|err| match err {
-                WsiError::TileRead { .. } => err,
-                other => WsiError::tile_read(req, other.to_string()),
-            })
     }
 
     fn read_raw_jpeg_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {

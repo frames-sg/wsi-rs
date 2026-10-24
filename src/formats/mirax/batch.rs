@@ -4,10 +4,7 @@ use super::*;
 impl MiraxReader {
     pub(super) fn read_cpu_batch(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         if reqs.len() <= 1 {
-            return reqs
-                .iter()
-                .map(|req| self.read_tile_with_backend(req, BackendRequest::Cpu))
-                .collect();
+            return reqs.iter().map(|req| self.decode_tile(req)).collect();
         }
         let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
         let workers = runtime.cpu_worker_count();

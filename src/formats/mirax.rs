@@ -27,7 +27,6 @@ use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
-use j2k_core::BackendRequest;
 
 const MRXS_EXT: &str = "mrxs";
 const SLIDEDAT_INI: &str = "Slidedat.ini";
@@ -229,7 +228,7 @@ impl SlideReader for MiraxReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Cpu)
+        self.decode_tile(req)
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -328,13 +327,9 @@ impl MiraxReader {
         Ok((entry, tile))
     }
 
-    fn read_tile_with_backend(
-        &self,
-        req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
+    fn decode_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         let (entry, tile) = self.tile_for_request(req)?;
-        let decoded = self.slide.decode_image_with_backend(&tile.image, backend)?;
+        let decoded = self.slide.decode_image(&tile.image)?;
         if !tile.image.resample
             && tile.src_x == 0.0
             && tile.src_y == 0.0

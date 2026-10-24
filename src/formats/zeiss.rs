@@ -28,7 +28,6 @@ use container::{
     PixelType as CziPixelType, RawSubBlock, SubBlockStatistics,
 };
 
-use j2k_core::BackendRequest;
 use std::collections::HashMap as StdHashMap;
 
 use crate::core::cache::{CacheConfig, PrivateCache};

@@ -10,7 +10,6 @@ use crate::formats::zeiss::raster::{
 use crate::formats::zeiss::slide::ZeissSlide;
 use crate::formats::zeiss::subblock::bitmap_from_raw_uncompressed_subblock;
 use crate::{Compression, TileLayout, TileRequest};
-use j2k_core::BackendRequest;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[cfg(unix)]
@@ -265,7 +264,7 @@ fn parsed_slide_returns_blank_for_empty_and_nonintersecting_local_candidates() {
     let mut slide = ZeissSlide::parse(fixture.path()).expect("parse generated CZI");
     slide.canvas_level_tile_subblocks[0].clear();
     let blank = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect("blank tile for empty candidate map");
     assert!(blank
         .data
@@ -277,7 +276,7 @@ fn parsed_slide_returns_blank_for_empty_and_nonintersecting_local_candidates() {
     let mut slide = ZeissSlide::parse(fixture.path()).expect("parse generated CZI again");
     slide.subblock_origin = (-10_000, -10_000);
     let blank = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect("blank tile for nonintersecting candidates");
     assert!(blank
         .data
@@ -295,7 +294,7 @@ fn parsed_slide_reports_corrupt_candidate_indices_with_context() {
         .get_mut(&(0, 0))
         .expect("level-zero candidate list")[0] = usize::MAX;
     let error = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect_err("corrupt local candidate index");
     assert!(error.to_string().contains("subblock index"));
 
@@ -326,7 +325,7 @@ fn compressed_level_zero_declines_unsafe_fallback_without_decoding() {
     let fixture = write_fixture(&[compressed], &[], &metadata_xml(1, 1));
     let slide = ZeissSlide::parse(fixture.path()).expect("parse compressed CZI");
     let error = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect_err("compressed level zero cannot use direct composition");
     assert!(error.to_string().contains("direct subblock composition"));
 }
@@ -347,7 +346,7 @@ fn classic_jpeg_subblock_decodes_with_czi_geometry_and_rgb_color() {
     assert_eq!(slide.level_encoding(0), None);
 
     let tile = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect("decode JPEG-compressed CZI tile");
     assert_eq!((tile.width, tile.height, tile.channels), (8, 8, 3));
     let pixel = &tile.data.as_u8().expect("8-bit RGB JPEG tile")[..3];
@@ -395,7 +394,7 @@ fn non_rgb8_subblocks_use_typed_level_composition_and_reject_local_rgb_path() {
         .expect("compose typed BGR48 level");
     assert_eq!(level.data.as_u16(), Some([3, 2, 1].as_slice()));
     let error = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect_err("local tile path requires u8 RGB");
     assert!(error.to_string().contains("8-bit RGB-compatible"));
 
@@ -423,7 +422,7 @@ fn local_tile_geometry_rejects_origins_outside_the_i32_compositor_space() {
     };
     slide.canvas_level_tile_subblocks[0].insert((1, 0), vec![0]);
     let error = slide
-        .read_tile(0, 0, 0, 1, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 1, 0)
         .expect_err("oversized local x origin must fail");
     assert!(error.to_string().contains("tile x overflow"));
 
@@ -438,7 +437,7 @@ fn local_tile_geometry_rejects_origins_outside_the_i32_compositor_space() {
     };
     slide.canvas_level_tile_subblocks[0].insert((0, 1), vec![0]);
     let error = slide
-        .read_tile(0, 0, 0, 0, 1, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 1)
         .expect_err("oversized local y origin must fail");
     assert!(error.to_string().contains("tile y overflow"));
 }
@@ -520,7 +519,7 @@ fn local_and_level_reads_report_errors_from_the_open_czi_inode() {
     let fixture = main_fixture();
     let slide = ZeissSlide::parse(fixture.path()).expect("parse direct local CZI");
     let open_inode = replace_path_and_truncate_open_fixture(&fixture);
-    let result = slide.read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu);
+    let result = slide.read_tile(0, 0, 0, 0, 0);
     std::fs::remove_file(open_inode).expect("remove detached direct local inode");
     assert_read_error(result, "truncated direct local reader must fail");
 
@@ -529,7 +528,7 @@ fn local_and_level_reads_report_errors_from_the_open_czi_inode() {
     let fixture = write_fixture(&[bgr48.clone()], &[], &metadata_xml(1, 1));
     let slide = ZeissSlide::parse(fixture.path()).expect("parse typed local CZI");
     let open_inode = replace_path_and_truncate_open_fixture(&fixture);
-    let result = slide.read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu);
+    let result = slide.read_tile(0, 0, 0, 0, 0);
     std::fs::remove_file(open_inode).expect("remove detached typed local inode");
     assert_read_error(result, "truncated typed local reader must fail");
 
@@ -556,7 +555,7 @@ fn tile_reads_reject_a_replaced_czi_source_path() {
     let open_inode = crate::test_support::replace_file_with_copy(fixture.path());
 
     let error = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
+        .read_tile(0, 0, 0, 0, 0)
         .expect_err("a replaced CZI path must not be preflighted for the original open reader");
     std::fs::remove_file(open_inode).expect("remove detached original CZI inode");
     assert!(
@@ -577,9 +576,7 @@ fn jpegxr_czi_subblock_preserves_rgb_pixels() {
     block.compression = 4;
     let fixture = write_fixture(&[block], &[], &metadata_xml(16, 16));
     let slide = ZeissSlide::parse(fixture.path()).unwrap();
-    let actual = slide
-        .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)
-        .expect("JPEG XR CZI tile");
+    let actual = slide.read_tile(0, 0, 0, 0, 0).expect("JPEG XR CZI tile");
     let expected =
         image::load_from_memory(include_bytes!("../../../../tests/fixtures/jxr/rgb.ppm"))
             .unwrap()
@@ -595,7 +592,7 @@ fn overlapping_subblocks_use_the_same_order_for_tiles_and_levels() {
     low.m_index = Some(1);
     let fixture = write_fixture(&[high, low], &[], &metadata_xml(1, 1));
     let slide = ZeissSlide::parse(fixture.path()).unwrap();
-    let tile = slide.read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu).unwrap();
+    let tile = slide.read_tile(0, 0, 0, 0, 0).unwrap();
     let level = slide.scene_level_image(0, 0).unwrap();
     assert_eq!(tile.data.as_u8(), Some([10, 20, 30].as_slice()));
     assert_eq!(tile.data.as_u8(), level.data.as_u8());

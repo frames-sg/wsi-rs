@@ -137,7 +137,6 @@ impl ZeissSlide {
         level: u32,
         col: i64,
         row: i64,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         self.read_tile_with_sources(scene, series, level, col, row, None)
     }
