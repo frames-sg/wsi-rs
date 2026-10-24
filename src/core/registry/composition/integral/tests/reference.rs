@@ -10,7 +10,7 @@ pub(in crate::core::registry::composition) fn compose_dense_integral_u8_rows(
         let dst_y_i64 = dst_y as i64;
         let mut cursor = 0usize;
         for entry in dense_hits {
-            let Some(src_bottom) = entry.hit.dest_y.checked_add(entry.height) else {
+            let Some(src_bottom) = entry.hit.dest_y.checked_add(i64::from(entry.height)) else {
                 return Err(WsiError::DisplayConversion(
                     "tile destination y overflow".into(),
                 ));
@@ -23,7 +23,7 @@ pub(in crate::core::registry::composition) fn compose_dense_integral_u8_rows(
             let dst_end_i64 = entry
                 .hit
                 .dest_x
-                .checked_add(entry.width)
+                .checked_add(i64::from(entry.width))
                 .ok_or_else(|| WsiError::DisplayConversion("tile destination x overflow".into()))?
                 .min(out_width_i64);
             if dst_end_i64 <= dst_start_i64 {

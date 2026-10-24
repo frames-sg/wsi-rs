@@ -5,9 +5,8 @@ use super::fractional_u8::{
 };
 use super::integral::{
     blit_integral_rgb_into_rgba, blit_integral_rgb_saturating_rgba, blit_integral_samples,
-    compose_dense_integral_rgb_argb32, has_integral_position, hit_covers_output,
-    integral_tile_rect, is_integral_hit, mark_integral_tile_opaque,
-    try_compose_dense_integral_u8_region,
+    compose_dense_integral_rgb_argb32, has_integral_position, hit_covers_output, is_integral_hit,
+    mark_integral_tile_opaque, try_compose_dense_integral_u8_region, IntegralClip,
 };
 use super::output::{
     checked_region_pixels_usize, checked_total_samples, metadata_probe_coordinate,
@@ -340,7 +339,7 @@ struct RegionComposer {
     rgba_scratch: RgbaBandScratch,
     // Streaming reads can encounter their first RGBA tile after opaque RGB.
     // Retain only painted rectangles so promotion preserves transparent gaps.
-    integral_rgb_regions: Option<Vec<(usize, usize, usize, usize)>>,
+    integral_rgb_regions: Option<Vec<IntegralClip>>,
 }
 
 impl RegionComposer {
@@ -426,14 +425,14 @@ impl RegionComposer {
             bytes[pixel * 4..pixel * 4 + 3].copy_from_slice(&rgb);
             bytes[pixel * 4 + 3] = 0;
         }
-        for (x0, y0, x1, y1) in self
+        for clip in self
             .integral_rgb_regions
             .take()
             .expect("integral RGB promotion retains painted rectangles")
         {
-            for y in y0..y1 {
-                let start = (y * self.shape.width + x0) * 4;
-                let end = (y * self.shape.width + x1) * 4;
+            for y in clip.y0..clip.y1 {
+                let start = (y * self.shape.width + clip.x0) * 4;
+                let end = (y * self.shape.width + clip.x1) * 4;
                 for pixel in bytes[start..end].as_chunks_mut::<4>().0 {
                     pixel[3] = 255;
                 }
@@ -530,8 +529,8 @@ impl RegionComposer {
             self.shape,
         )?;
         if let Some(regions) = &mut self.integral_rgb_regions {
-            if let Some(rect) = integral_tile_rect(tile, hit, self.shape) {
-                regions.push(rect);
+            if let Some(clip) = IntegralClip::of_hit(tile, hit, self.shape) {
+                regions.push(clip);
             }
         }
         Ok(())

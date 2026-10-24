@@ -547,39 +547,43 @@ fn composition_rejects_truncated_tile_storage_before_blit() {
 }
 
 #[test]
-fn dense_row_planner_rejects_gaps_overflow_and_truncated_tiles() {
+fn dense_row_planner_rejects_gaps_and_truncated_tiles_and_clips_overflow() {
     let data = [7u8];
     let shape = CompositionShape {
         width: 1,
         height: 1,
         channels: 1,
     };
-
-    let y_overflow_hit = hit_at(0, i64::MAX, 0.0, i64::MAX as f64);
-    let y_overflow = DenseIntegralU8Hit {
-        hit: &y_overflow_hit,
-        data: &data,
-        width: 1,
-        height: 1,
-        row_stride: 1,
-    };
-    let error = compose_dense_integral_u8_rows(&[y_overflow], shape, 1)
-        .expect_err("destination y overflow must fail");
-    assert!(error.to_string().contains("destination y overflow"));
-
-    let x_overflow_hit = hit_at(i64::MAX, 0, i64::MAX as f64, 0.0);
-    let x_overflow = DenseIntegralU8Hit {
-        hit: &x_overflow_hit,
-        data: &data,
-        width: 1,
-        height: 1,
-        row_stride: 1,
-    };
-    let error = compose_dense_integral_u8_rows(&[x_overflow], shape, 1)
-        .expect_err("destination x overflow must fail");
-    assert!(error.to_string().contains("destination x overflow"));
-
+    // A placement whose far edge passes the i64 range lies off the output
+    // and clips away like any other, beside a tile that covers the output.
     let valid_hit = hit(0, 0.0);
+    let overflow_hits = [
+        hit_at(0, i64::MAX, 0.0, i64::MAX as f64),
+        hit_at(i64::MAX, 0, i64::MAX as f64, 0.0),
+    ];
+    let unit_entry = |hit| DenseIntegralU8Hit {
+        hit,
+        data: &data,
+        width: 1,
+        height: 1,
+        row_stride: 1,
+    };
+    for overflow_hit in &overflow_hits {
+        assert_eq!(
+            compose_dense_integral_u8_rows(&[unit_entry(overflow_hit)], shape, 1).unwrap(),
+            None
+        );
+        assert_eq!(
+            compose_dense_integral_u8_rows(
+                &[unit_entry(&valid_hit), unit_entry(overflow_hit)],
+                shape,
+                1
+            )
+            .unwrap(),
+            Some(vec![7])
+        );
+    }
+
     let truncated = DenseIntegralU8Hit {
         hit: &valid_hit,
         data: &[],
@@ -618,6 +622,29 @@ fn dense_row_planner_rejects_gaps_overflow_and_truncated_tiles() {
     assert!(compose_dense_integral_u8_rows(&[gap], gap_shape, 2)
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn integral_clips_offset_the_source_and_skip_placements_past_the_i64_range() {
+    assert_eq!(
+        IntegralClip::new((-1, 2), (4, 3), (2, 8)),
+        Some(IntegralClip {
+            x0: 0,
+            y0: 2,
+            x1: 2,
+            y1: 5,
+            source_x: 1,
+            source_y: 0,
+        })
+    );
+    assert_eq!(IntegralClip::new((i64::MIN, 0), (4, 3), (2, 8)), None);
+
+    let tile = tile_2d(CpuTileData::u8(vec![9; 3]), 1, 1);
+    let mut rgba = vec![0u8; 4];
+    for dest in [(i64::MAX, 0), (0, i64::MAX)] {
+        blit_integral_rgb_saturating_rgba(&mut rgba, (1, 1), &[9; 3], &tile, dest);
+    }
+    assert_eq!(rgba, [0; 4]);
 }
 
 #[test]
