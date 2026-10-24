@@ -354,6 +354,42 @@ fn read_tiles_cpu_reports_the_first_invalid_request_deterministically() {
 }
 
 #[test]
+fn dicom_reader_validates_dataset_indices_and_planes_before_tile_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("request-indices.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let (reader, _) = reader_and_first_image(&path);
+
+    let mut invalid_scene = tile_request(0, 0);
+    invalid_scene.scene = SceneId::new(1);
+    assert!(matches!(
+        reader.read_tile_cpu(&invalid_scene),
+        Err(WsiError::SceneOutOfRange { index: 1, count: 1 })
+    ));
+    assert!(matches!(
+        reader.tile_is_present(&invalid_scene),
+        Err(WsiError::SceneOutOfRange { index: 1, count: 1 })
+    ));
+
+    let mut invalid_series = tile_request(0, 0);
+    invalid_series.series = SeriesId::new(1);
+    assert!(matches!(
+        reader.read_tiles_cpu(&[invalid_series]),
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
+    ));
+
+    let invalid_plane = tile_request(0, 0).with_plane(PlaneSelection::new(1, 0, 0));
+    assert!(matches!(
+        reader.read_tile_cpu(&invalid_plane),
+        Err(WsiError::PlaneOutOfRange {
+            axis,
+            value: 1,
+            max: 0,
+        }) if axis == "z"
+    ));
+}
+
+#[test]
 fn extract_encapsulated_frames_batch_preserves_requested_frames() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("batch-frames.dcm");

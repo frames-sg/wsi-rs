@@ -136,27 +136,7 @@ pub trait SlideReader: Send + Sync {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<LevelSourceKind, WsiError> {
-        let dataset = self.dataset();
-        let scene_ref = dataset
-            .scenes
-            .get(scene.get())
-            .ok_or(WsiError::SceneOutOfRange {
-                index: scene.get(),
-                count: dataset.scenes.len(),
-            })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
-        if level.get() as usize >= series_ref.levels.len() {
-            return Err(WsiError::LevelOutOfRange {
-                level: level.get(),
-                count: series_ref.levels.len() as u32,
-            });
-        }
+        self.dataset().level(scene, series, level)?;
         Ok(LevelSourceKind::Physical)
     }
     /// Prepares format-specific state for a level without decoding pixels.

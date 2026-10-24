@@ -42,6 +42,9 @@
   TIFF tiles, converts YCbCr with the lookup tables that OpenSlide and the
   JPEG 2000 path use instead of floating-point math. About 0.08% of YCbCr
   values change by 1 in one channel, to match OpenSlide.
+- Region reads such as `Slide::read_region` report `PlaneOutOfRange` with the
+  last valid plane index as `max`, as MIRAX, VSI and ZVI tile reads do,
+  instead of the axis count.
 
 ### Fixed
 
@@ -65,6 +68,10 @@
 - Partial `.svcache` builds that merge an existing cache copy nothing from a
   level whose dimensions or tile grid changed, instead of copying its tiles to
   the wrong positions.
+- DICOM tile reads, raw tile reads and `Slide::tile_is_present` reject a
+  scene, series or plane the slide doesn't have with `SceneOutOfRange`,
+  `SeriesOutOfRange` or `PlaneOutOfRange`, instead of answering for the first
+  one.
 
 ## [0.8.0] - 2026-10-06
 

@@ -10,7 +10,7 @@ use crate::core::types::{
 use crate::error::WsiError;
 
 use super::backend::is_encapsulated_transfer_syntax;
-use super::manifest::DicomSlide;
+use super::manifest::{DicomLevel, DicomSlide};
 use super::{
     HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, HTJ2K_LOSSLESS_TRANSFER_SYNTAX, HTJ2K_TRANSFER_SYNTAX,
     JP2K_TRANSFER_SYNTAXES,
@@ -24,6 +24,21 @@ mod managed;
 
 pub(super) struct DicomReader {
     pub(super) slide: Arc<DicomSlide>,
+}
+
+pub(super) fn dicom_level_for_request<'a>(
+    slide: &'a DicomSlide,
+    req: &TileRequest,
+) -> Result<&'a DicomLevel, WsiError> {
+    let (_, series, _) = slide.dataset.level(req.scene, req.series, req.level)?;
+    series.axes.validate_plane(req.plane.get())?;
+    slide
+        .levels
+        .get(req.level.get() as usize)
+        .ok_or(WsiError::LevelOutOfRange {
+            level: req.level.get(),
+            count: series.levels.len() as u32,
+        })
 }
 
 impl SlideReader for DicomReader {
@@ -47,22 +62,7 @@ impl SlideReader for DicomReader {
         control: &crate::ReadControl,
     ) -> Result<(), WsiError> {
         control.check_cancelled()?;
-        let scene_ref =
-            self.slide
-                .dataset
-                .scenes
-                .get(scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: scene.get(),
-                    count: self.slide.dataset.scenes.len(),
-                })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
+        let (_, series_ref, _) = self.slide.dataset.level(scene, series, level)?;
         let dicom_level =
             self.slide
                 .levels
@@ -118,14 +118,7 @@ impl SlideReader for DicomReader {
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        let image =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let image = dicom_level_for_request(&self.slide, req)?;
         image.read_raw_compressed_tile(req.col, req.row, req.level.get())
     }
 
@@ -139,14 +132,7 @@ impl SlideReader for DicomReader {
     }
 
     fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
-        let level =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let level = dicom_level_for_request(&self.slide, req)?;
         Ok(Some(level.tile_is_present(req)))
     }
 

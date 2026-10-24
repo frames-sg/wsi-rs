@@ -40,15 +40,35 @@ fn test_private_cache<K: std::hash::Hash + Eq, V>() -> PrivateCache<K, V> {
     PrivateCache::new(budget.allocate(1024))
 }
 
-pub(super) fn empty_dataset() -> Dataset {
-    Dataset {
-        id: DatasetId::new(1),
-        scenes: Vec::new(),
-        associated_images: HashMap::new(),
-        properties: Properties::new(),
-        icc_profiles: HashMap::new(),
-        source_icc_profiles: Vec::new(),
-    }
+pub(super) fn dataset_for_levels(levels: &[DicomLevel]) -> Dataset {
+    let base_width = levels.first().map_or(1, |level| level.width);
+    Dataset::new(
+        DatasetId::new(1),
+        vec![Scene::new(
+            "scene_0",
+            vec![Series::new(
+                "series_0",
+                AxesShape::default(),
+                levels
+                    .iter()
+                    .map(|level| {
+                        Level::new(
+                            (u64::from(level.width), u64::from(level.height)),
+                            f64::from(base_width) / f64::from(level.width),
+                            TileLayout::Regular {
+                                tile_width: level.tile_width,
+                                tile_height: level.tile_height,
+                                tiles_across: u64::from(level.tiles_across),
+                                tiles_down: u64::from(level.tiles_down),
+                            },
+                        )
+                    })
+                    .collect(),
+                SampleType::Uint8,
+                Vec::new(),
+            )],
+        )],
+    )
 }
 
 pub(super) fn tile_request(col: i64, row: i64) -> TileRequest {

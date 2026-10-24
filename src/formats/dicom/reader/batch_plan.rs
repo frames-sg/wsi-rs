@@ -8,6 +8,7 @@ use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::decode::{black_sample_buffer, crop_sample_buffer_rgb};
 use crate::formats::dicom::image::DicomImage;
 use crate::formats::dicom::manifest::DicomSlide;
+use crate::formats::dicom::reader::dicom_level_for_request;
 
 #[derive(Clone)]
 pub(super) struct DicomResolvedBatchFrame {
@@ -76,14 +77,7 @@ impl<'a> DicomBatchPlanner<'a> {
         _is_device_decodable: impl FnOnce(&DicomImage) -> bool,
     ) -> Result<DicomResolvedBatchPlanEntry, WsiError> {
         check_read_control(self.control)?;
-        let level =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let level = dicom_level_for_request(self.slide, req)?;
         if req.col < 0
             || req.row < 0
             || req.col >= level.tiles_across as i64

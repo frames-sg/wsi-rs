@@ -13,7 +13,7 @@ use super::batch_plan::{
     attach_encapsulated_frame_bytes, check_read_control, DicomBatchPlanMode, DicomBatchPlanner,
     DicomFrameBatchKind, DicomFrameBytes, DicomResolvedBatchPlanEntry,
 };
-use super::DicomReader;
+use super::{dicom_level_for_request, DicomReader};
 use crate::formats::dicom::decode::{
     crop_or_keep_sample_buffer_rgb, decode_dicom_jpeg_batch, decode_rle_lossless_frame,
     dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr, validate_jpeg_transfer_syntax_frame,
@@ -201,14 +201,7 @@ impl DicomReader {
         req: &TileRequest,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        let image =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let image = dicom_level_for_request(&self.slide, req)?;
         image.read_tile(req.col, req.row, req.level.get(), backend)
     }
 }

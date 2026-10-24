@@ -30,6 +30,37 @@ impl Dataset {
         }
     }
 
+    pub(crate) fn level(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Result<(&Scene, &Series, &Level), WsiError> {
+        let scene_ref = self
+            .scenes
+            .get(scene.get())
+            .ok_or(WsiError::SceneOutOfRange {
+                index: scene.get(),
+                count: self.scenes.len(),
+            })?;
+        let series_ref = scene_ref
+            .series
+            .get(series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: series.get(),
+                count: scene_ref.series.len(),
+            })?;
+        let level_ref =
+            series_ref
+                .levels
+                .get(level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: level.get(),
+                    count: u32::try_from(series_ref.levels.len()).unwrap_or(u32::MAX),
+                })?;
+        Ok((scene_ref, series_ref, level_ref))
+    }
+
     pub fn with_associated_images(
         mut self,
         associated_images: HashMap<String, AssociatedImage>,
@@ -297,6 +328,23 @@ pub struct AxesShape {
 impl AxesShape {
     pub const fn new(z: u32, c: u32, t: u32) -> Self {
         Self { z, c, t }
+    }
+
+    pub(crate) fn validate_plane(self, plane: PlaneSelection) -> Result<(), WsiError> {
+        for (axis, value, extent) in [
+            ("z", plane.z, self.z),
+            ("c", plane.c, self.c),
+            ("t", plane.t, self.t),
+        ] {
+            if value >= extent {
+                return Err(WsiError::PlaneOutOfRange {
+                    axis: axis.into(),
+                    value,
+                    max: extent.saturating_sub(1),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

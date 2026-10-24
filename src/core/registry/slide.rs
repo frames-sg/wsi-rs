@@ -676,29 +676,7 @@ impl Slide {
     }
 
     fn estimate_tile_output_bytes(&self, req: &TileRequest) -> Result<u64, WsiError> {
-        let scene =
-            self.dataset()
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: self.dataset().scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: u32::try_from(series.levels.len()).unwrap_or(u32::MAX),
-                })?;
+        let (_, series, level) = self.dataset().level(req.scene, req.series, req.level)?;
         let dimensions = match &level.tile_layout {
             TileLayout::Regular {
                 tile_width,

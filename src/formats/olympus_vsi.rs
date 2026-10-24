@@ -7,9 +7,7 @@ use crate::core::registry::{
     BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, DatasetReader, FormatProbe,
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
-use crate::core::types::{
-    AxesShape, CpuTile, Dataset, PlaneSelection, RawCompressedTile, TileCodecKind, TileRequest,
-};
+use crate::core::types::{CpuTile, Dataset, RawCompressedTile, TileCodecKind, TileRequest};
 use crate::error::WsiError;
 
 mod pixels;
@@ -251,7 +249,7 @@ impl OlympusVsiReader {
                     level: req.level.get(),
                     count: scene.levels.len() as u32,
                 })?;
-        validate_plane(req.plane.get(), scene.axes)?;
+        scene.axes.validate_plane(req.plane.get())?;
         if req.col < 0
             || req.row < 0
             || req.col >= level.tiles_across as i64
@@ -337,31 +335,6 @@ impl ManagedSlideReader for OlympusVsiReader {
     ) -> Result<u64, WsiError> {
         Ok(self.slide.scenes[0].encoded_unit_limit)
     }
-}
-
-fn validate_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), WsiError> {
-    if plane.z >= axes.z {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "z".into(),
-            value: plane.z,
-            max: axes.z.saturating_sub(1),
-        });
-    }
-    if plane.c >= axes.c {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "c".into(),
-            value: plane.c,
-            max: axes.c.saturating_sub(1),
-        });
-    }
-    if plane.t >= axes.t {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "t".into(),
-            value: plane.t,
-            max: axes.t.saturating_sub(1),
-        });
-    }
-    Ok(())
 }
 
 fn is_vsi_path(path: &Path) -> bool {

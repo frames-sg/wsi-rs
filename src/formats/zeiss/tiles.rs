@@ -13,29 +13,7 @@ impl ZeissSlide {
         if req.plane.get() != PlaneSelection::default() {
             return Ok(None);
         }
-        let scene = self
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .ok_or(WsiError::SceneOutOfRange {
-                index: req.scene.get(),
-                count: self.dataset.scenes.len(),
-            })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
+        let (_, _, level) = self.dataset.level(req.scene, req.series, req.level)?;
         let TileLayout::Regular {
             tiles_across,
             tiles_down,

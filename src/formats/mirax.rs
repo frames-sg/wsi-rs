@@ -300,31 +300,8 @@ impl MiraxReader {
         req: &TileRequest,
     ) -> Result<(&'a TileEntry, &'a MiraxTile), WsiError> {
         let shared = &self.slide.shared;
-        let scene =
-            shared
-                .dataset
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: shared.dataset.scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
-        validate_mirax_plane(req.plane.get(), series.axes)?;
+        let (_, series, level) = shared.dataset.level(req.scene, req.series, req.level)?;
+        series.axes.validate_plane(req.plane.get())?;
         let TileLayout::Irregular { tiles, .. } = &level.tile_layout else {
             return Err(WsiError::UnsupportedFormat(
                 "MIRAX levels must use irregular tiles".into(),
@@ -381,23 +358,6 @@ impl MiraxReader {
         }
         tile.extract(decoded.as_ref(), entry.dimensions)
     }
-}
-
-fn validate_mirax_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), WsiError> {
-    for (axis, value, extent) in [
-        ("z", plane.z, axes.z),
-        ("c", plane.c, axes.c),
-        ("t", plane.t, axes.t),
-    ] {
-        if value >= extent {
-            return Err(WsiError::PlaneOutOfRange {
-                axis: axis.into(),
-                value,
-                max: extent.saturating_sub(1),
-            });
-        }
-    }
-    Ok(())
 }
 
 struct MiraxSlide {

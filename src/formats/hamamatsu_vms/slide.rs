@@ -183,30 +183,7 @@ impl SlideReader for VmsReader {
 
 impl VmsReader {
     fn resolve_tile(&self, req: &TileRequest) -> Result<ResolvedVmsTile<'_>, WsiError> {
-        let scene =
-            self.slide
-                .dataset
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: self.slide.dataset.scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level_meta =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
+        let (_, _, level_meta) = self.slide.dataset.level(req.scene, req.series, req.level)?;
         let level =
             self.slide
                 .levels

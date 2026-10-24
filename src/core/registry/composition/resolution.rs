@@ -11,51 +11,8 @@ pub(super) fn validate_region_request<'a>(
     dataset: &'a Dataset,
     req: &RegionRequest,
 ) -> Result<(&'a Scene, &'a Series, &'a Level), WsiError> {
-    if req.scene.get() >= dataset.scenes.len() {
-        return Err(WsiError::SceneOutOfRange {
-            index: req.scene.get(),
-            count: dataset.scenes.len(),
-        });
-    }
-    let scene = &dataset.scenes[req.scene.get()];
-
-    if req.series.get() >= scene.series.len() {
-        return Err(WsiError::SeriesOutOfRange {
-            index: req.series.get(),
-            count: scene.series.len(),
-        });
-    }
-    let series = &scene.series[req.series.get()];
-
-    if req.level.get() as usize >= series.levels.len() {
-        return Err(WsiError::LevelOutOfRange {
-            level: req.level.get(),
-            count: series.levels.len() as u32,
-        });
-    }
-    let level = &series.levels[req.level.get() as usize];
-
-    if req.plane.get().z >= series.axes.z {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "z".into(),
-            value: req.plane.get().z,
-            max: series.axes.z,
-        });
-    }
-    if req.plane.get().c >= series.axes.c {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "c".into(),
-            value: req.plane.get().c,
-            max: series.axes.c,
-        });
-    }
-    if req.plane.get().t >= series.axes.t {
-        return Err(WsiError::PlaneOutOfRange {
-            axis: "t".into(),
-            value: req.plane.get().t,
-            max: series.axes.t,
-        });
-    }
+    let (scene, series, level) = dataset.level(req.scene, req.series, req.level)?;
+    series.axes.validate_plane(req.plane.get())?;
 
     Ok((scene, series, level))
 }
