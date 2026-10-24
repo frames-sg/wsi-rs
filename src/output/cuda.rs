@@ -1,5 +1,5 @@
 use crate::output::download::{
-    downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
+    check_row_pitch, downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
     MAX_DEVICE_DOWNLOAD_BYTES,
 };
 use crate::{error::WsiError, CpuTile, PixelFormat};
@@ -161,15 +161,7 @@ impl CudaDeviceTile {
             });
         }
         let (row_bytes, _) = tight_download_layout(self.width, self.height, self.format, "CUDA")?;
-        if self.pitch_bytes < row_bytes {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "CUDA surface pitch {} is smaller than its {}-byte row",
-                    self.pitch_bytes, row_bytes
-                ),
-            });
-        }
-        Ok(())
+        check_row_pitch(self.pitch_bytes, row_bytes, "CUDA")
     }
 
     pub(crate) fn from_j2k(

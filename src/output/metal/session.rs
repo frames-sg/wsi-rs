@@ -157,12 +157,9 @@ impl MetalBackendSessions {
             .iter()
             .map(|tile| {
                 let image = tile.resident_image_for_device(self.j2k().device())?;
+                // download_resident_batch enforces the download limit per image.
                 let (row_bytes, byte_len) =
                     tight_download_layout(tile.width, tile.height, tile.format, "Metal")?;
-                crate::output::download::enforce_download_limit(
-                    byte_len,
-                    "Metal host tile download",
-                )?;
                 Ok(super::interop::ReadbackRows {
                     image,
                     row_bytes,

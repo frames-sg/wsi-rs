@@ -1,5 +1,5 @@
 use crate::output::download::{
-    downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
+    check_row_pitch, downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
 };
 use crate::{error::WsiError, CpuTile, PixelFormat};
 use objc2::runtime::ProtocolObject;
@@ -100,14 +100,7 @@ impl MetalDeviceTile {
         let (row_bytes, byte_len) =
             tight_download_layout(self.width, self.height, self.format, "Metal")?;
         enforce_download_limit(byte_len, "Metal host tile download")?;
-        if self.pitch_bytes < row_bytes {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "Metal surface pitch {} is smaller than its {}-byte row",
-                    self.pitch_bytes, row_bytes
-                ),
-            });
-        }
+        check_row_pitch(self.pitch_bytes, row_bytes, "Metal")?;
         let bytes =
             interop::download_resident_rows(image, row_bytes, byte_len, &self.readback_queue)?;
         downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes, "Metal")

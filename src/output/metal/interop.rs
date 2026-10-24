@@ -284,6 +284,26 @@ fn download_staged_rows(
     Ok(())
 }
 
+/// The byte span from the image's first logical row start to its last row
+/// end, when `height` rows of `row_bytes` fit its pitch and byte length and
+/// pack into exactly `byte_len` bytes. `None` for an empty image or any
+/// mismatch. Callers still bound the span against their own buffer.
+fn checked_row_span(
+    image: &ResidentMetalImage,
+    row_bytes: usize,
+    byte_len: usize,
+) -> Option<usize> {
+    let height = image.dimensions().1 as usize;
+    let span = height
+        .checked_sub(1)?
+        .checked_mul(image.pitch_bytes())?
+        .checked_add(row_bytes)?;
+    (row_bytes <= image.pitch_bytes()
+        && height.checked_mul(row_bytes) == Some(byte_len)
+        && span <= image.byte_len())
+    .then_some(span)
+}
+
 fn encode_readback_rows(
     blit: &ProtocolObject<dyn MTLBlitCommandEncoder>,
     row: &ReadbackRows<'_>,
@@ -292,14 +312,7 @@ fn encode_readback_rows(
 ) -> Result<(), WsiError> {
     let image = row.image;
     let height = image.dimensions().1 as usize;
-    let span = height
-        .checked_sub(1)
-        .and_then(|n| n.checked_mul(image.pitch_bytes()))
-        .and_then(|n| n.checked_add(row.row_bytes));
-    if height == 0
-        || row.row_bytes > image.pitch_bytes()
-        || height.checked_mul(row.row_bytes) != Some(row.byte_len)
-        || span.is_none_or(|span| span > image.byte_len())
+    if checked_row_span(image, row.row_bytes, row.byte_len).is_none()
         || base
             .checked_add(row.byte_len)
             .is_none_or(|end| end > output.length())
@@ -346,20 +359,12 @@ fn copy_completed_shared_rows(
     byte_len: usize,
 ) -> Result<Vec<u8>, WsiError> {
     let height = image.dimensions().1 as usize;
-    let span = height
-        .checked_sub(1)
-        .and_then(|rows| rows.checked_mul(image.pitch_bytes()))
-        .and_then(|bytes| bytes.checked_add(row_bytes));
-    if row_bytes > image.pitch_bytes()
-        || height.checked_mul(row_bytes) != Some(byte_len)
-        || span.is_none_or(|span| {
-            span > image.byte_len()
-                || image
-                    .byte_offset()
-                    .checked_add(span)
-                    .is_none_or(|end| end > buffer.length())
-        })
-    {
+    if checked_row_span(image, row_bytes, byte_len).is_none_or(|span| {
+        image
+            .byte_offset()
+            .checked_add(span)
+            .is_none_or(|end| end > buffer.length())
+    }) {
         return Err(WsiError::DisplayConversion(
             "invalid Metal shared readback row span".into(),
         ));
