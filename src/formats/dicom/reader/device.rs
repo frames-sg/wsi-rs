@@ -123,8 +123,8 @@ impl DicomReader {
     }
 }
 
-/// JP2K decode jobs for strict device frames. Jobs carry each frame's actual
-/// stored extent so edge frames decode their full codestream.
+/// JP2K decode jobs for strict device frames. Jobs carry each tile's actual,
+/// edge-clipped extent, so decoded edge frames are cropped to the logical tile.
 pub(super) fn jp2k_jobs(
     frames: &[DicomFrameBytes],
     backend: BackendRequest,
