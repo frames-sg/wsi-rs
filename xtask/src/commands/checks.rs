@@ -138,85 +138,140 @@ pub(super) fn feature_check() -> Result<(), String> {
     ])
 }
 
-pub(super) fn parity_corpus_test() -> Result<(), String> {
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "argos_huron",
-        "--",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "openslide_parity",
-        "--features",
-        "parity-openslide",
-        "preflight",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "j2k_parity",
-        "j2k_cpu_vs_reference_within_tolerance",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "dicom_parity",
-        "dicom_public_corpus_decodes_with_wsi_rs",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "dicom_parity",
-        "--features",
-        "parity-openslide",
-        "dicom_public_corpus_matches_openslide_within_tolerance",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "real_wsi_behavior",
-        "--",
-        "--ignored",
-    ])?;
-    for (alias, test) in [
-        (
-            "dicom-jp2k-001",
+/// Runner prefix for corpus runs under `parity-corpus-test`.
+const CARGO_TEST: &[&str] = &["test", "--locked"];
+/// Runner prefix for one instrumented corpus run under `coverage`.
+const COVERAGE_STEP: &[&str] = &[
+    "llvm-cov",
+    "--no-clean",
+    "--lcov",
+    "--output-path",
+    "target/coverage-corpus-step.lcov",
+    "--locked",
+];
+
+/// One corpus-backed ignored-test run. `parity-corpus-test` and the corpus
+/// part of `coverage` both run every selected entry of [`CORPUS_RUNS`].
+struct CorpusRun {
+    target: &'static [&'static str],
+    features: Option<&'static str>,
+    tests: CorpusTests,
+    /// The run is skipped unless one of these aliases is selected. Empty
+    /// means it runs whenever the corpus does.
+    aliases: &'static [&'static str],
+}
+
+enum CorpusTests {
+    /// The ignored test with this exact name.
+    Exact(&'static str),
+    /// Every ignored test in the target.
+    AllIgnored,
+    /// Each ignored test whose name starts with this prefix, one at a time.
+    Prefix(&'static str),
+}
+
+impl CorpusRun {
+    fn is_selected(&self) -> bool {
+        self.aliases.is_empty()
+            || self
+                .aliases
+                .iter()
+                .any(|alias| corpus_alias_selected(alias))
+    }
+}
+
+const VENDOR_REFERENCE_RUN: CorpusRun = CorpusRun {
+    target: &["--test", "vendor_reference"],
+    features: None,
+    tests: CorpusTests::Prefix("vendor_native_pixels_"),
+    aliases: &["olympus-vsi-001", "zeiss-zvi-001"],
+};
+
+const CORPUS_RUNS: &[CorpusRun] = &[
+    CorpusRun {
+        target: &["--test", "argos_huron"],
+        features: None,
+        tests: CorpusTests::Exact(
+            "public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images",
+        ),
+        aliases: &["argos-001", "argos-stacked-001"],
+    },
+    CorpusRun {
+        target: &["--test", "argos_huron"],
+        features: None,
+        tests: CorpusTests::Exact(
+            "public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images",
+        ),
+        aliases: &["huron-jpeg-001", "huron-uncompressed-001"],
+    },
+    CorpusRun {
+        target: &["--test", "openslide_parity"],
+        features: Some("parity-openslide"),
+        tests: CorpusTests::Exact("preflight"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "j2k_parity"],
+        features: None,
+        tests: CorpusTests::Exact("j2k_cpu_vs_reference_within_tolerance"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "dicom_parity"],
+        features: None,
+        tests: CorpusTests::Exact("dicom_public_corpus_decodes_with_wsi_rs"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "dicom_parity"],
+        features: Some("parity-openslide"),
+        tests: CorpusTests::Exact("dicom_public_corpus_matches_openslide_within_tolerance"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "real_wsi_behavior"],
+        features: None,
+        tests: CorpusTests::AllIgnored,
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--lib"],
+        features: None,
+        tests: CorpusTests::Prefix(
             "opens_public_dicom_folder_and_member_with_matching_levels_when_available",
         ),
-        (
-            "olympus-vsi-001",
-            "opens_olympus_vsi_when_corpus_is_available",
-        ),
-    ] {
-        if corpus_alias_selected(alias) {
-            run_ignored(&["--lib"], test, None, false)?;
-        }
-    }
-    if corpus_alias_selected("olympus-vsi-001") || corpus_alias_selected("zeiss-zvi-001") {
-        conformance_test(vec!["vendor".into()])?;
+        aliases: &["dicom-jp2k-001"],
+    },
+    CorpusRun {
+        target: &["--lib"],
+        features: None,
+        tests: CorpusTests::Prefix("opens_olympus_vsi_when_corpus_is_available"),
+        aliases: &["olympus-vsi-001"],
+    },
+    VENDOR_REFERENCE_RUN,
+];
+
+pub(super) fn parity_corpus_test() -> Result<(), String> {
+    run_selected_corpus(CARGO_TEST)
+}
+
+fn run_selected_corpus(runner: &[&str]) -> Result<(), String> {
+    for run in CORPUS_RUNS.iter().filter(|run| run.is_selected()) {
+        run_corpus(run, runner)?;
     }
     Ok(())
+}
+
+fn run_corpus(run: &CorpusRun, runner: &[&str]) -> Result<(), String> {
+    let mut args = test_command(runner, run.target, run.features, false);
+    match run.tests {
+        CorpusTests::Prefix(prefix) => {
+            return run_ignored_with(runner, run.target, prefix, run.features, false)
+        }
+        CorpusTests::Exact(name) => args.extend(["--", name, "--exact", "--ignored"]),
+        CorpusTests::AllIgnored => args.extend(["--", "--ignored"]),
+    }
+    run_cargo(&args)
 }
 
 fn corpus_alias_selected(alias: &str) -> bool {
@@ -235,12 +290,7 @@ pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
             run_ignored(&["--lib"], "uncompressed_sentinel_", None, false)?;
             run_ignored(&["--test", "zeiss_czi"], "real_jpegxr_czi_", None, false)
         }
-        "vendor" => run_ignored(
-            &["--test", "vendor_reference"],
-            "vendor_native_pixels_",
-            None,
-            false,
-        ),
+        "vendor" => run_corpus(&VENDOR_REFERENCE_RUN, CARGO_TEST),
         "zvi-variants" => run_ignored(
             &["--test", "zeiss_zvi"],
             "builtin_registry_opens_zeiss_zvi_",
@@ -345,19 +395,41 @@ fn run_ignored(
     features: Option<&str>,
     release: bool,
 ) -> Result<(), String> {
+    run_ignored_with(CARGO_TEST, target, filter, features, release)
+}
+
+/// `runner`, a cargo subcommand with its options, followed by the test
+/// target selection.
+fn test_command<'a>(
+    runner: &[&'a str],
+    target: &[&'a str],
+    features: Option<&'a str>,
+    release: bool,
+) -> Vec<&'a str> {
+    let mut command = runner.to_vec();
+    command.extend_from_slice(target);
+    if let Some(features) = features {
+        command.extend(["--features", features]);
+    }
+    if release {
+        command.push("--release");
+    }
+    command
+}
+
+fn run_ignored_with(
+    runner: &[&str],
+    target: &[&str],
+    filter: &str,
+    features: Option<&str>,
+    release: bool,
+) -> Result<(), String> {
     if features.is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
         && !cfg!(target_os = "macos")
     {
         return Err("this lane requires a macOS Metal runtime".into());
     }
-    let mut base = vec!["test", "--locked"];
-    base.extend_from_slice(target);
-    if let Some(features) = features {
-        base.extend(["--features", features]);
-    }
-    if release {
-        base.push("--release");
-    }
+    let base = test_command(runner, target, features, release);
     let mut list = base.clone();
     list.extend(["--", "--ignored", "--list"]);
     let output = run_program_capture(
@@ -648,58 +720,7 @@ fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {
     run_cargo(COVERAGE_BASE_ARGS)?;
 
     if include_corpus {
-        let report = [
-            "--no-clean",
-            "--lcov",
-            "--output-path",
-            "target/coverage-corpus-step.lcov",
-            "--locked",
-        ];
-        let corpus_runs: &[&[&str]] = &[
-            &[
-                "--test",
-                "openslide_parity",
-                "--features",
-                "parity-openslide",
-                "--",
-                "preflight",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "j2k_parity",
-                "--",
-                "j2k_cpu_vs_reference_within_tolerance",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "dicom_parity",
-                "--",
-                "dicom_public_corpus_decodes_with_wsi_rs",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "dicom_parity",
-                "--features",
-                "parity-openslide",
-                "--",
-                "dicom_public_corpus_matches_openslide_within_tolerance",
-                "--exact",
-                "--ignored",
-            ],
-            &["--test", "real_wsi_behavior", "--", "--ignored"],
-        ];
-        for run in corpus_runs {
-            let mut args = vec!["llvm-cov"];
-            args.extend(report);
-            args.extend(*run);
-            run_cargo(&args)?;
-        }
+        run_selected_corpus(COVERAGE_STEP)?;
         run_cargo(COVERAGE_REPORT_ARGS)?;
     }
 

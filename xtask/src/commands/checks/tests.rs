@@ -217,3 +217,19 @@ fn fuzz_gate_covers_every_declared_fuzz_binary() {
     }
     assert_eq!(manifest.matches("[[bin]]").count(), FUZZ_TARGETS.len());
 }
+
+#[test]
+fn corpus_runs_name_tests_that_exist_in_their_targets() {
+    for run in CORPUS_RUNS {
+        let ["--test", target] = run.target else {
+            continue;
+        };
+        let source = repo_file(&format!("tests/{target}.rs"));
+        let name = match run.tests {
+            CorpusTests::Exact(name) => format!("fn {name}()"),
+            CorpusTests::Prefix(prefix) => format!("fn {prefix}"),
+            CorpusTests::AllIgnored => "#[ignore".to_string(),
+        };
+        assert!(source.contains(&name), "tests/{target}.rs has no `{name}`");
+    }
+}

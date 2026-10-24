@@ -619,6 +619,63 @@ esac
         }
     }
 
+    #[test]
+    fn corpus_coverage_instruments_every_parity_corpus_run() {
+        let fixture = FakeRepository::new();
+        let script = format!(
+            "{}{}",
+            fs::read_to_string(&fixture.cargo).unwrap(),
+            r#"
+case "$*" in
+    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+esac
+"#
+        );
+        write_executable(&fixture.cargo, &script);
+        let aliases = "argos-001,huron-jpeg-001,dicom-jp2k-001,olympus-vsi-001";
+        let runs = |task: &str, runner: &str| {
+            fs::write(&fixture.log_path, "").unwrap();
+            let output = fixture
+                .command()
+                .arg(task)
+                .env("WSI_RS_PARITY_ALIASES", aliases)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{task}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::read_to_string(&fixture.log_path)
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.split_once(runner).map(|(_, run)| run.to_string()))
+                .collect::<Vec<_>>()
+        };
+
+        let parity = runs("parity-corpus-test", " test --locked ");
+        let coverage = runs(
+            "coverage",
+            " llvm-cov --no-clean --lcov --output-path target/coverage-corpus-step.lcov --locked ",
+        );
+
+        assert_eq!(parity, coverage);
+        for expected in [
+            "--test argos_huron -- public_argos_",
+            "--test argos_huron -- public_huron_",
+            "--test openslide_parity --features parity-openslide -- preflight --exact --ignored",
+            "--test real_wsi_behavior -- --ignored",
+            "--lib -- fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available --exact --ignored --test-threads=1",
+            "--lib -- fixture::opens_olympus_vsi_when_corpus_is_available --exact",
+            "--test vendor_reference -- vendor_native_pixels_match_independent_reference --exact",
+        ] {
+            assert!(
+                coverage.iter().any(|run| run.starts_with(expected)),
+                "missing `{expected}` in {coverage:#?}"
+            );
+        }
+    }
+
     fn write_executable(path: &Path, contents: &str) {
         fs::write(path, contents).unwrap();
         let mut permissions = fs::metadata(path).unwrap().permissions();
