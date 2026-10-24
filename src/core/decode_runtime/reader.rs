@@ -59,33 +59,7 @@ impl AdaptiveDecodeReader {
 }
 
 impl SlideReader for AdaptiveDecodeReader {
-    fn dataset(&self) -> &Dataset {
-        self.inner.dataset()
-    }
-
-    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        self.inner.tile_codec_kind(req)
-    }
-
-    fn level_source_kind(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-    ) -> Result<crate::core::types::LevelSourceKind, WsiError> {
-        self.inner.level_source_kind(scene, series, level)
-    }
-
-    fn prepare_level_controlled(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-        control: &crate::ReadControl,
-    ) -> Result<(), WsiError> {
-        self.inner
-            .prepare_level_controlled(scene, series, level, control)
-    }
+    crate::core::registry::forward_slide_reader_methods!(inner);
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         crate::core::batch::exactly_one(
@@ -104,42 +78,6 @@ impl SlideReader for AdaptiveDecodeReader {
         control: &crate::ReadControl,
     ) -> Result<Vec<CpuTile>, WsiError> {
         self.read_tiles_adaptive(reqs, Some(control), None)
-    }
-
-    #[cfg(feature = "metal")]
-    fn read_tiles_metal(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::metal::MetalBackendSessions,
-    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        self.inner.read_tiles_metal(reqs, session)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn read_tiles_cuda(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::cuda::CudaBackendSessions,
-    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        self.inner.read_tiles_cuda(reqs, session)
-    }
-
-    fn read_raw_compressed_tile(
-        &self,
-        req: &TileRequest,
-    ) -> Result<crate::core::types::RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_tile(req)
-    }
-
-    fn read_raw_compressed_display_tile(
-        &self,
-        req: &crate::core::types::TileViewRequest,
-    ) -> Result<crate::core::types::RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_display_tile(req)
-    }
-
-    fn use_display_tile_cache(&self, req: &crate::core::types::TileViewRequest) -> bool {
-        self.inner.use_display_tile_cache(req)
     }
 
     fn read_region_fastpath(
@@ -161,30 +99,6 @@ impl SlideReader for AdaptiveDecodeReader {
     ) -> Result<CpuTile, WsiError> {
         self.runtime
             .install_codec_cpu(|| self.inner.read_display_tile(req))
-    }
-
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        self.inner.read_associated(name)
-    }
-
-    fn associated_encoding(
-        &self,
-        name: &str,
-    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
-        self.inner.associated_encoding(name)
-    }
-
-    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
-        self.inner.tile_is_present(req)
-    }
-
-    fn level_encoding(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
-        self.inner.level_encoding(scene, series, level)
     }
 }
 

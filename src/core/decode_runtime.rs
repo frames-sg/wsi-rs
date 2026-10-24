@@ -1,5 +1,7 @@
 use crate::core::registry::{ManagedSlideReader, SlideReader};
-use crate::core::types::{CpuTile, Dataset, TileCodecKind, TileRequest};
+#[cfg(any(feature = "metal", feature = "cuda"))]
+use crate::core::types::Dataset;
+use crate::core::types::{CpuTile, TileCodecKind, TileRequest};
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use crate::core::types::{Level, TileLayout};
 use crate::error::WsiError;
