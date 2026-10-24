@@ -176,6 +176,32 @@ fn vms_reader_rejects_signed_and_grid_tile_bounds() {
     }
 }
 
+#[test]
+fn vms_raw_display_tiles_must_name_one_native_tile() {
+    let fixture = VmsFixture::complete();
+    let reader = HamamatsuVmsBackend::new()
+        .open(&fixture.path)
+        .expect("open synthetic VMS");
+    let view = |col, row, width, height| TileViewRequest::new(0, 0, 0, col, row, width, height);
+
+    let raw = reader
+        .read_raw_compressed_display_tile(&view(1, 1, 64, 8))
+        .expect("raw display tile on the native grid");
+    let native = reader
+        .read_raw_compressed_tile(&TileRequest::new(0, 0, 0, 1, 1))
+        .expect("raw native tile");
+    assert_eq!(raw.data(), native.data());
+    assert!(matches!(
+        reader.read_raw_compressed_display_tile(&view(0, 0, 32, 8)),
+        Err(WsiError::Unsupported { reason })
+            if reason == "VMS raw JPEG display tile size 32x8 does not match native tile size 64x8"
+    ));
+    assert!(matches!(
+        reader.read_raw_compressed_display_tile(&view(4, 0, 64, 8)),
+        Err(WsiError::TileRead { col: 4, row: 0, .. })
+    ));
+}
+
 fn open_public_slide() -> (VmsFixture, Slide) {
     let fixture = VmsFixture::complete();
     let slide = Slide::open(&fixture.path).expect("open synthetic VMS through registry");

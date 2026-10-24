@@ -424,6 +424,45 @@ impl Level {
             tile_height,
         }))
     }
+
+    /// The native tile that display request `req` names when its tile size
+    /// and position match one tile of this level's regular grid exactly.
+    pub(crate) fn native_display_tile(
+        &self,
+        req: &TileViewRequest,
+    ) -> Result<TileRequest, NativeDisplayMismatch> {
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = self.tile_layout
+        else {
+            return Err(NativeDisplayMismatch::NotRegular);
+        };
+        if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
+            return Err(NativeDisplayMismatch::TileSize {
+                native: (tile_width, tile_height),
+            });
+        }
+        let in_grid = u64::try_from(req.col).is_ok_and(|col| col < tiles_across)
+            && u64::try_from(req.row).is_ok_and(|row| row < tiles_down);
+        if !in_grid {
+            return Err(NativeDisplayMismatch::OutsideGrid);
+        }
+        Ok(req.source_tile())
+    }
+}
+
+/// Why a display request is not exactly one native tile of its level.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum NativeDisplayMismatch {
+    /// The level has no regular native grid.
+    NotRegular,
+    /// The display tile size differs from the native tile size.
+    TileSize { native: (u32, u32) },
+    /// The tile lies outside the native grid.
+    OutsideGrid,
 }
 
 /// One tile of a regular grid in level pixels; `width` and `height` are

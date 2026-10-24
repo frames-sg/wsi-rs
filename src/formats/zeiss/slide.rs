@@ -79,13 +79,12 @@ impl SlideReader for ZeissReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        crate::formats::geometry::validate_native_regular_display_tile(
+        let tile = crate::formats::geometry::native_regular_display_tile(
             &self.slide.dataset,
             req,
             "Zeiss raw JPEG display",
         )?;
-
-        self.slide.read_raw_jpeg_tile(&req.source_tile())
+        self.slide.read_raw_jpeg_tile(&tile)
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

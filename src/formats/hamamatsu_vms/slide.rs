@@ -51,13 +51,12 @@ impl SlideReader for VmsReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        crate::formats::geometry::validate_native_regular_display_tile(
+        let tile = crate::formats::geometry::native_regular_display_tile(
             &self.slide.dataset,
             req,
             "VMS raw JPEG display",
         )?;
-
-        self.read_raw_compressed_tile(&req.source_tile())
+        self.read_raw_compressed_tile(&tile)
     }
 
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {

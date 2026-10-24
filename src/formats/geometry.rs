@@ -1,31 +1,30 @@
-use crate::core::types::{Dataset, TileViewRequest};
+use crate::core::types::{Dataset, NativeDisplayMismatch, TileRequest, TileViewRequest};
 use crate::{SlideLimits, WsiError};
 
-pub(crate) fn validate_native_regular_display_tile(
+/// The native tile a raw display request names, once its level has a
+/// regular grid with the requested tile size. A tile outside the grid is
+/// returned as is, for the tile read to reject with `TileRead`.
+pub(crate) fn native_regular_display_tile(
     dataset: &Dataset,
     req: &TileViewRequest,
     context: &str,
-) -> Result<(), WsiError> {
+) -> Result<TileRequest, WsiError> {
     let (_, _, level) = dataset.level(req.scene, req.series, req.level)?;
-    let crate::TileLayout::Regular {
-        tile_width,
-        tile_height,
-        ..
-    } = level.tile_layout
-    else {
-        return Err(WsiError::Unsupported {
+    match level.native_display_tile(req) {
+        Ok(tile) => Ok(tile),
+        Err(NativeDisplayMismatch::OutsideGrid) => Ok(req.source_tile()),
+        Err(NativeDisplayMismatch::NotRegular) => Err(WsiError::Unsupported {
             reason: format!("{context} access requires a regular native tile grid"),
-        });
-    };
-    if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
-        return Err(WsiError::Unsupported {
+        }),
+        Err(NativeDisplayMismatch::TileSize {
+            native: (tile_width, tile_height),
+        }) => Err(WsiError::Unsupported {
             reason: format!(
                 "{context} tile size {}x{} does not match native tile size {tile_width}x{tile_height}",
                 req.tile_width, req.tile_height
             ),
-        });
+        }),
     }
-    Ok(())
 }
 
 pub(crate) fn batch_decode_target(limits: SlideLimits, logical_bytes: u64) -> u64 {

@@ -23,32 +23,6 @@ impl TiffPixelReader {
             })
     }
 
-    fn display_request_matches_native_regular_grid(&self, req: &TileViewRequest) -> bool {
-        let Some(level) = self
-            .layout
-            .dataset
-            .find_level(req.scene, req.series, req.level)
-        else {
-            return false;
-        };
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = &level.tile_layout
-        else {
-            return false;
-        };
-        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
-            return false;
-        };
-        req.tile_width == *tile_width
-            && req.tile_height == *tile_height
-            && col < *tiles_across
-            && row < *tiles_down
-    }
-
     pub(super) fn read_tiles_cpu_with_backend(
         &self,
         reqs: &[TileRequest],
@@ -350,7 +324,12 @@ impl SlideReader for TiffPixelReader {
                 jpeg_tables,
                 compression: Compression::Jpeg,
             } => {
-                if !self.display_request_matches_native_regular_grid(req) {
+                let exact = self
+                    .layout
+                    .dataset
+                    .find_level(req.scene, req.series, req.level)
+                    .is_some_and(|level| level.native_display_tile(req).is_ok());
+                if !exact {
                     return Err(WsiError::Unsupported {
                         reason: "raw TIFF JPEG display passthrough requires the display grid to exactly match the native regular tile layout"
                             .into(),
