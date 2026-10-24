@@ -15,7 +15,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
-use super::common::{compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area};
+use super::common::{
+    associated_channels, compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area,
+};
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── NDPI-specific tag constants ───────────────────────────────────
@@ -309,10 +311,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                 } else {
                     None
                 };
-                let channels = container
-                    .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-                    .unwrap_or(3)
-                    .clamp(1, u32::from(u16::MAX)) as u16;
+                let channels = associated_channels(container, ifd_id);
 
                 associated_images.insert(
                     name.to_string(),

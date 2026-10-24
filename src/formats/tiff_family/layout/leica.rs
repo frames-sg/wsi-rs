@@ -17,7 +17,7 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::common::{compression_from_tag, level_area};
+use super::common::{associated_channels, compression_from_tag, level_area};
 use super::{
     compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
@@ -139,7 +139,7 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
                         u32::try_from(best.height).unwrap_or(u32::MAX),
                     ),
                     sample_type: sample_type_for_ifd(container, ifd_id),
-                    channels: associated_channel_count(container, ifd_id),
+                    channels: associated_channels(container, ifd_id),
                     icc_profile: Vec::new(),
                 },
             );
@@ -762,14 +762,6 @@ fn sample_type_for_ifd(container: &TiffContainer, ifd_id: IfdId) -> SampleType {
         (32, 3) => SampleType::Float32,
         _ => SampleType::Uint8,
     }
-}
-
-fn associated_channel_count(container: &TiffContainer, ifd_id: IfdId) -> u16 {
-    container
-        .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-        .ok()
-        .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(3)
 }
 
 fn parse_channel_settings(image_node: &xml::XmlNode) -> Vec<ParsedChannel> {

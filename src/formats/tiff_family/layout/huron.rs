@@ -8,8 +8,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    add_tiff_resolution_properties, compression_from_tag, finish_single_scene_uint8_tiff_layout,
-    regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor,
+    add_tiff_resolution_properties, associated_channels, compression_from_tag,
+    finish_single_scene_uint8_tiff_layout, regular_tiff_level, stripped_tile_source,
+    tiled_ifd_descriptor,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -178,9 +179,7 @@ fn insert_associated(
         AssociatedImage::new(
             (width, height),
             SampleType::Uint8,
-            container
-                .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-                .unwrap_or(3) as u16,
+            associated_channels(container, ifd_id),
         ),
     );
     sources.insert(

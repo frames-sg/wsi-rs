@@ -13,7 +13,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level,
+    associated_channels, compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area,
+    regular_tiff_level,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -241,9 +242,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
                 .unwrap_or_else(|| format!("image_{}", sifd.ifd_index))
             };
 
-            let spp = container
-                .get_u32(sifd.ifd_id, tags::SAMPLES_PER_PIXEL)
-                .unwrap_or(3) as u16;
+            let channels = associated_channels(container, sifd.ifd_id);
             let icc_profile = if name == "thumbnail"
                 && main_icc_name.is_some()
                 && main_icc_name == aperio_ifd_property(container, sifd.ifd_id, "ICC Profile")
@@ -258,7 +257,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
                 AssociatedImage {
                     dimensions: (sifd.width, sifd.height),
                     sample_type: SampleType::Uint8,
-                    channels: spp,
+                    channels,
                     icc_profile,
                 },
             );

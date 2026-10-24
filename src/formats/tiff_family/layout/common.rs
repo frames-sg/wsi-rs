@@ -118,6 +118,17 @@ pub(super) fn tiled_ifd_descriptor(
     })
 }
 
+/// Channel count of an associated image from its SamplesPerPixel tag, 3 when
+/// the tag is absent. Values outside 1..=65535 clamp to that range rather
+/// than wrapping into `u16`.
+pub(super) fn associated_channels(container: &TiffContainer, ifd_id: IfdId) -> u16 {
+    let samples = container
+        .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
+        .unwrap_or(3)
+        .clamp(1, u32::from(u16::MAX));
+    u16::try_from(samples).unwrap_or(u16::MAX)
+}
+
 pub(super) fn stripped_tile_source(
     container: &TiffContainer,
     ifd_id: IfdId,

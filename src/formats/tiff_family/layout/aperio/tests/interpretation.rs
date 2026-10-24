@@ -129,6 +129,45 @@ fn interpret_ignores_associated_only_icc_for_main_series() {
 }
 
 #[test]
+fn interpret_clamps_associated_samples_per_pixel_instead_of_wrapping() {
+    let associated = |samples_per_pixel| {
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 400),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 300),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 100),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 5000),
+            SyntheticTag::long(tags::SAMPLES_PER_PIXEL, samples_per_pixel),
+        ]
+    };
+    let file = build_aperio_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 4096),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 3072),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Aperio Image Library v1.0"),
+        ],
+        associated(65_536),
+        {
+            let mut label = associated(0);
+            label.push(SyntheticTag::long(TIFF_SUBFILE_TYPE, 1));
+            label
+        },
+    ]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.associated_images["thumbnail"].channels,
+        u16::MAX
+    );
+    assert_eq!(layout.dataset.associated_images["label"].channels, 1);
+}
+
+#[test]
 fn interpret_multi_level_sorted_by_area() {
     let file = build_aperio_tiff(&[
         // IFD 0: large (level 0 after sorting)
