@@ -82,6 +82,9 @@
   `IoWithPath` with the macro file instead of a bare `Io` error.
 - XML metadata parsing applies its nesting-depth limit to self-closing
   elements too, not only to elements with content.
+- CUDA JPEG 2000 batches size their decode windows at 4 bytes per pixel, like
+  Metal, so a window no longer admits about a third more pixels than its
+  4 MiB target.
 
 ## [0.8.0] - 2026-10-06
 
