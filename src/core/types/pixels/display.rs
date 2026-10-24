@@ -38,22 +38,6 @@ fn into_owned_vec<T: Clone>(samples: Arc<Vec<T>>) -> Vec<T> {
 }
 
 impl CpuTile {
-    fn expected_samples(&self) -> usize {
-        self.width as usize * self.height as usize * self.channels as usize
-    }
-
-    fn validate_len<T>(&self, samples: &[T]) -> Result<(), WsiError> {
-        if samples.len() == self.expected_samples() {
-            Ok(())
-        } else {
-            Err(WsiError::DisplayConversion(format!(
-                "buffer size mismatch: expected {} samples, got {}",
-                self.expected_samples(),
-                samples.len()
-            )))
-        }
-    }
-
     fn u8_triplet_at(&self, bytes: &[u8], idx: usize) -> Result<[u8; 3], WsiError> {
         match self.layout {
             CpuTileLayout::Interleaved => {
@@ -108,12 +92,9 @@ impl CpuTile {
         window: &DisplayWindow,
         include_alpha: bool,
     ) -> Result<Vec<u8>, WsiError> {
+        self.validate_invariants()?;
+        // DisplayWindow::new admits only finite bounds with max > min.
         let range = window.max - window.min;
-        if range <= 0.0 {
-            return Err(WsiError::DisplayConversion(
-                "window range must be positive".into(),
-            ));
-        }
         let pixel_count = (self.width as usize) * (self.height as usize);
         let output_channels = if include_alpha { 4 } else { 3 };
         let mut output = Vec::with_capacity(pixel_count * output_channels);
@@ -130,7 +111,6 @@ impl CpuTile {
 
         match &self.data {
             CpuTileData::U16(samples) => {
-                self.validate_len(samples)?;
                 if self.channels == 1 {
                     for &sample in samples.iter() {
                         let value = scale(f64::from(sample));
@@ -152,7 +132,6 @@ impl CpuTile {
                 }
             }
             CpuTileData::F32(samples) => {
-                self.validate_len(samples)?;
                 if self.channels == 1 {
                     for &sample in samples.iter() {
                         let value = scale(f64::from(sample));
@@ -189,10 +168,10 @@ impl CpuTile {
                 "to_rgba() requires Uint8 data; use to_rgba_windowed() for Uint16/Float32".into(),
             )
         })?;
-        self.validate_len(bytes)?;
+        self.validate_invariants()?;
+        let pixel_count = self.width as usize * self.height as usize;
         match &self.color_space {
             ColorSpace::Rgba if self.channels == 4 => {
-                let pixel_count = self.width as usize * self.height as usize;
                 let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for idx in 0..pixel_count {
                     rgba.extend_from_slice(&self.u8_quad_at(bytes, idx)?);
@@ -201,7 +180,6 @@ impl CpuTile {
                     .expect("validated RGBA sample count matches image dimensions"))
             }
             ColorSpace::Rgb if self.channels == 3 => {
-                let pixel_count = self.width as usize * self.height as usize;
                 let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for idx in 0..pixel_count {
                     rgba.extend_from_slice(&self.u8_triplet_at(bytes, idx)?);
@@ -211,7 +189,7 @@ impl CpuTile {
                     .expect("validated RGB sample count expands to exact RGBA dimensions"))
             }
             ColorSpace::Grayscale if self.channels == 1 => {
-                let mut rgba = Vec::with_capacity((self.width * self.height * 4) as usize);
+                let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for &val in bytes {
                     rgba.extend_from_slice(&[val, val, val, 255]);
                 }
@@ -219,7 +197,6 @@ impl CpuTile {
                     .expect("validated grayscale samples expand to exact RGBA dimensions"))
             }
             ColorSpace::YCbCr if self.channels == 3 => {
-                let pixel_count = self.width as usize * self.height as usize;
                 let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for idx in 0..pixel_count {
                     let [y, cb, cr] = self.u8_triplet_at(bytes, idx)?;
@@ -230,7 +207,7 @@ impl CpuTile {
                     .expect("validated YCbCr samples expand to exact RGBA dimensions"))
             }
             ColorSpace::Palette(lut) if self.channels == 1 => {
-                let mut rgba = Vec::with_capacity((self.width * self.height * 4) as usize);
+                let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for &idx in bytes {
                     let rgb = lut.get(idx as usize).unwrap_or(&[0, 0, 0]);
                     rgba.extend_from_slice(rgb);
@@ -250,8 +227,8 @@ impl CpuTile {
     /// Convert this buffer into an owned RgbaImage, reusing the underlying
     /// byte vector directly when the buffer is already RGBA8 interleaved.
     pub fn into_rgba(self) -> Result<image::RgbaImage, WsiError> {
-        if let CpuTileData::U8(bytes) = &self.data {
-            self.validate_len(bytes)?;
+        if let CpuTileData::U8(_) = &self.data {
+            self.validate_invariants()?;
         }
         match self {
             CpuTile {
@@ -287,7 +264,7 @@ impl CpuTile {
                 "to_rgb() requires Uint8 data; use to_rgb_windowed() for Uint16/Float32".into(),
             )
         })?;
-        self.validate_len(bytes)?;
+        self.validate_invariants()?;
 
         match (&self.color_space, self.channels, self.layout) {
             (ColorSpace::Rgb, 3, CpuTileLayout::Interleaved) => {
@@ -309,7 +286,7 @@ impl CpuTile {
                 // Fallback: go through RGBA and strip alpha
                 let rgba = self.to_rgba()?;
                 let (w, h) = rgba.dimensions();
-                let mut rgb_data = Vec::with_capacity((w * h * 3) as usize);
+                let mut rgb_data = Vec::with_capacity(w as usize * h as usize * 3);
                 for pixel in rgba.pixels() {
                     rgb_data.extend_from_slice(&pixel.0[..3]);
                 }
@@ -322,8 +299,8 @@ impl CpuTile {
     /// Convert this buffer into an owned RgbImage, reusing the underlying
     /// byte vector directly when the buffer is already RGB8 interleaved.
     pub fn into_rgb(self) -> Result<image::RgbImage, WsiError> {
-        if let CpuTileData::U8(bytes) = &self.data {
-            self.validate_len(bytes)?;
+        if let CpuTileData::U8(_) = &self.data {
+            self.validate_invariants()?;
         }
         match self {
             CpuTile {

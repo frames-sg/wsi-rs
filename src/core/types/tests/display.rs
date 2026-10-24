@@ -137,6 +137,28 @@ fn to_rgba_rejects_non_u8() {
 }
 
 #[test]
+fn conversions_reject_storage_that_does_not_match_overflowing_dimensions() {
+    for data in [CpuTileData::u8(vec![0; 3]), CpuTileData::u16(vec![0; 3])] {
+        let buf = CpuTile {
+            width: u32::MAX,
+            height: u32::MAX,
+            channels: 3,
+            color_space: ColorSpace::Rgb,
+            layout: CpuTileLayout::Interleaved,
+            data,
+        };
+        let window = DisplayWindow::new(0.0, 1000.0).unwrap();
+        for result in [
+            buf.to_rgba_windowed(&window).map(drop),
+            buf.to_rgb_windowed(&window).map(drop),
+            buf.clone().into_rgba().map(drop),
+        ] {
+            assert!(matches!(result, Err(WsiError::DisplayConversion(_))));
+        }
+    }
+}
+
+#[test]
 fn to_rgba_windowed_u16() {
     let buf = CpuTile {
         width: 2,
