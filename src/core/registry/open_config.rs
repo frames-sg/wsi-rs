@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::core::cache::CacheConfig;
-use crate::core::limits::SlideLimits;
+use crate::core::limits::{ensure_within, SlideLimits};
 use crate::core::types::{Dataset, IccProfileProvenance, TileLayout};
 use crate::error::WsiError;
 
@@ -47,14 +47,12 @@ impl OpenBudget {
     }
 
     pub(crate) fn check_metadata_value(&self, bytes: u64) -> Result<(), WsiError> {
-        if bytes > self.limits.metadata_value_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "individual metadata value",
-                requested: bytes,
-                limit: self.limits.metadata_value_bytes(),
-            });
-        }
-        Ok(())
+        ensure_within(
+            "individual metadata value",
+            bytes,
+            self.limits.metadata_value_bytes(),
+        )
+        .map(drop)
     }
 
     pub(crate) const fn limits(&self) -> SlideLimits {
@@ -64,29 +62,21 @@ impl OpenBudget {
     pub(crate) fn retain_metadata(&self, bytes: u64) -> Result<(), WsiError> {
         self.check_metadata_value(bytes)?;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let requested = state.retained_metadata_bytes.saturating_add(bytes);
-        if requested > self.limits.aggregate_metadata_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "aggregate metadata",
-                requested,
-                limit: self.limits.aggregate_metadata_bytes(),
-            });
-        }
-        state.retained_metadata_bytes = requested;
+        state.retained_metadata_bytes = ensure_within(
+            "aggregate metadata",
+            state.retained_metadata_bytes.saturating_add(bytes),
+            self.limits.aggregate_metadata_bytes(),
+        )?;
         Ok(())
     }
 
     pub(crate) fn retain_index(&self, bytes: u64) -> Result<(), WsiError> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let requested = state.retained_index_bytes.saturating_add(bytes);
-        if requested > self.limits.tile_index_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "tile/frame index",
-                requested,
-                limit: self.limits.tile_index_bytes(),
-            });
-        }
-        state.retained_index_bytes = requested;
+        state.retained_index_bytes = ensure_within(
+            "tile/frame index",
+            state.retained_index_bytes.saturating_add(bytes),
+            self.limits.tile_index_bytes(),
+        )?;
         Ok(())
     }
 }

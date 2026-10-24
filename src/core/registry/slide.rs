@@ -3,7 +3,7 @@ use super::*;
 mod execution;
 mod region;
 use super::open_config::validate_dataset_limits;
-use crate::core::limits::ReadExecutionContext;
+use crate::core::limits::{ensure_within, ReadExecutionContext};
 use crate::core::read_control::check_cancelled_opt;
 use execution::AdmittedReader;
 use std::sync::atomic::AtomicBool;
@@ -709,33 +709,18 @@ impl Slide {
     }
 
     fn check_region_output(&self, req: &RegionRequest) -> Result<u64, WsiError> {
-        let pixels = u64::from(req.size_px.0)
-            .checked_mul(u64::from(req.size_px.1))
-            .ok_or(WsiError::ResourceLimit {
-                resource: "region pixels",
-                requested: u64::MAX,
-                limit: self.limits.region_pixels(),
-            })?;
-        if pixels > self.limits.region_pixels() {
-            return Err(WsiError::ResourceLimit {
-                resource: "region pixels",
-                requested: pixels,
-                limit: self.limits.region_pixels(),
-            });
-        }
+        // Two u32 factors cannot overflow u64.
+        let pixels = ensure_within(
+            "region pixels",
+            u64::from(req.size_px.0) * u64::from(req.size_px.1),
+            self.limits.region_pixels(),
+        )?;
         let bytes = pixels.checked_mul(4).ok_or(WsiError::ResourceLimit {
             resource: "region RGBA output",
             requested: u64::MAX,
             limit: self.limits.region_rgba_bytes(),
         })?;
-        if bytes > self.limits.region_rgba_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "region RGBA output",
-                requested: bytes,
-                limit: self.limits.region_rgba_bytes(),
-            });
-        }
-        Ok(bytes)
+        ensure_within("region RGBA output", bytes, self.limits.region_rgba_bytes())
     }
 
     fn region_work_bytes(
@@ -753,14 +738,11 @@ impl Slide {
         if fractional {
             requested = requested.saturating_add(output_bytes);
         }
-        if requested > self.limits.operation_transient_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "per-operation transient work",
-                requested,
-                limit: self.limits.operation_transient_bytes(),
-            });
-        }
-        Ok(requested)
+        ensure_within(
+            "per-operation transient work",
+            requested,
+            self.limits.operation_transient_bytes(),
+        )
     }
 
     fn ordinary_work_bytes(&self, encoded_bytes: u64, output_bytes: u64) -> Result<u64, WsiError> {
@@ -769,15 +751,7 @@ impl Slide {
     }
 
     fn check_output_limit(&self, bytes: u64, resource: &'static str) -> Result<(), WsiError> {
-        if bytes > self.limits.decoded_output_bytes() {
-            Err(WsiError::ResourceLimit {
-                resource,
-                requested: bytes,
-                limit: self.limits.decoded_output_bytes(),
-            })
-        } else {
-            Ok(())
-        }
+        ensure_within(resource, bytes, self.limits.decoded_output_bytes()).map(drop)
     }
 
     fn validate_decoded_output(
@@ -793,16 +767,12 @@ impl Slide {
     }
 
     fn validate_encoded_unit(&self, byte_len: usize) -> Result<(), WsiError> {
-        let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
-        if requested > self.limits.encoded_unit_bytes() {
-            Err(WsiError::ResourceLimit {
-                resource: "encoded tile/frame unit",
-                requested,
-                limit: self.limits.encoded_unit_bytes(),
-            })
-        } else {
-            Ok(())
-        }
+        ensure_within(
+            "encoded tile/frame unit",
+            u64::try_from(byte_len).unwrap_or(u64::MAX),
+            self.limits.encoded_unit_bytes(),
+        )
+        .map(drop)
     }
 
     pub(crate) fn validate_encoded_contract(
