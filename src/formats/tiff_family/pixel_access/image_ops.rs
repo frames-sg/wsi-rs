@@ -137,6 +137,31 @@ pub(super) fn checked_rgb_u8_len(width: u32, height: u32) -> Result<usize, WsiEr
     .map_err(WsiError::DisplayConversion)
 }
 
+pub(super) fn cpu_tile_from_rgb_pixels(
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+) -> Result<CpuTile, WsiError> {
+    let expected_len = checked_rgb_u8_len(width, height)?;
+    if pixels.len() != expected_len {
+        return Err(WsiError::Jpeg(format!(
+            "RGB pixel buffer has {} bytes, expected {} for {}x{}",
+            pixels.len(),
+            expected_len,
+            width,
+            height
+        )));
+    }
+    Ok(CpuTile {
+        width,
+        height,
+        channels: 3,
+        color_space: ColorSpace::Rgb,
+        layout: CpuTileLayout::Interleaved,
+        data: CpuTileData::u8(pixels),
+    })
+}
+
 pub(super) fn zero_rgb_interleaved_u8_tile(width: u32, height: u32) -> Result<CpuTile, WsiError> {
     Ok(CpuTile {
         width,

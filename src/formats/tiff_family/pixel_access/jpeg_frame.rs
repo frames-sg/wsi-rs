@@ -417,31 +417,6 @@ pub(super) fn j2k_downscale_for_factor(factor: u32) -> Option<J2kDownscale> {
     }
 }
 
-pub(super) fn cpu_tile_from_rgb_pixels(
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
-) -> Result<CpuTile, WsiError> {
-    let expected_len = checked_rgb_u8_len(width, height)?;
-    if pixels.len() != expected_len {
-        return Err(WsiError::Jpeg(format!(
-            "j2k JPEG decode produced {} bytes, expected {} for {}x{} RGB",
-            pixels.len(),
-            expected_len,
-            width,
-            height
-        )));
-    }
-    Ok(CpuTile {
-        width,
-        height,
-        channels: 3,
-        color_space: ColorSpace::Rgb,
-        layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(pixels),
-    })
-}
-
 pub(super) fn strip_leading_restart_marker(segment: &[u8]) -> &[u8] {
     if segment.len() >= 2 && segment[0] == 0xFF && (0xD0..=0xD7).contains(&segment[1]) {
         &segment[2..]
@@ -535,26 +510,4 @@ pub(super) fn patch_jpeg_sof0_dimensions(
     Err(WsiError::Unsupported {
         reason: "NDPI JPEG passthrough could not find a Baseline JPEG SOF0 marker".into(),
     })
-}
-
-pub(super) fn ndpi_restart_segments_align_to_rows(
-    level_width: u64,
-    virtual_tile_width: u32,
-    restart_interval: u16,
-) -> bool {
-    if level_width == 0 || virtual_tile_width == 0 || restart_interval == 0 {
-        return false;
-    }
-    let restart_interval = u64::from(restart_interval);
-    let virtual_tile_width = u64::from(virtual_tile_width);
-    if !virtual_tile_width.is_multiple_of(restart_interval) {
-        return false;
-    }
-    let mcu_width = virtual_tile_width / restart_interval;
-    if mcu_width == 0 {
-        return false;
-    }
-    level_width
-        .div_ceil(mcu_width)
-        .is_multiple_of(restart_interval)
 }

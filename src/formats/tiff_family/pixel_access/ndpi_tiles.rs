@@ -1,3 +1,4 @@
+use super::ndpi_core::ndpi_restart_segments_align_to_rows;
 use super::*;
 
 /// A tile read through its NDPI restart-marker segment.

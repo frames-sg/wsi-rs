@@ -602,6 +602,28 @@ impl TiffPixelReader {
     }
 }
 
+pub(super) fn ndpi_restart_segments_align_to_rows(
+    level_width: u64,
+    virtual_tile_width: u32,
+    restart_interval: u16,
+) -> bool {
+    if level_width == 0 || virtual_tile_width == 0 || restart_interval == 0 {
+        return false;
+    }
+    let restart_interval = u64::from(restart_interval);
+    let virtual_tile_width = u64::from(virtual_tile_width);
+    if !virtual_tile_width.is_multiple_of(restart_interval) {
+        return false;
+    }
+    let mcu_width = virtual_tile_width / restart_interval;
+    if mcu_width == 0 {
+        return false;
+    }
+    level_width
+        .div_ceil(mcu_width)
+        .is_multiple_of(restart_interval)
+}
+
 /// Why the MCU-starts table cannot locate a strip's restart segment.
 #[derive(Debug)]
 enum NdpiMcuSegmentError {
