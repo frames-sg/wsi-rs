@@ -94,6 +94,11 @@
   registry (`SlideOpenOptions::with_registry`) that has no `.svcache` backend
   opens the source slide instead of redirecting to a `.svcache` file and
   failing.
+- Hamamatsu VMS errors for a level with no JPEG shards, and Olympus VSI errors
+  for negative or missing ETS tile coordinates, name the slide file instead of
+  an empty path.
+- I/O errors while opening or reading the header of a `.svcache` file name the
+  cache file.
 
 ## [0.8.0] - 2026-10-06
 
