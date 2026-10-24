@@ -307,7 +307,7 @@ file is changed by generation.
 | `czi` | `WSI_RS_ZEISS_CZI_PATH` for Zeiss-5-Uncompressed.czi and `WSI_RS_CZI_JXR_PATH` for Zeiss-5-JXR.czi; five canvas/cache regressions and the JPEG XR readback case. |
 | `vendor` | `WSI_RS_VENDOR_REFERENCE_ROOT` from the generator; independent VSI RGB and ZVI U16 pixels. |
 | `zvi-variants` | `WSI_RS_ZVI_ROOT` containing the six filenames listed in `tests/zeiss_zvi.rs`; channels, Z planes, mosaic geometry and thumbnail decoding. |
-| `vmu` | Independent libopenslide and `WSI_RS_VMU_SHIM_LIBRARY` naming the freshly built shim; generated RGB12 geometry and ABI pixel parity. |
+| `vmu` | Independent libopenslide; the task builds the shim and points `WSI_RS_VMU_SHIM_LIBRARY` at it. Generated RGB12 geometry and ABI pixel parity. |
 | `openslide` | Independent libopenslide, `WSI_RS_OPENSLIDE_COMPARE_PATHS`, and `WSI_RS_APERIO_JPEG_RGB_PATH`; region and reduced-level RGBA comparisons. |
 | `metal-color` | macOS Metal; exhaustive YCbCr8 parity for both addressing kernels. |
 | `metal-edges` | macOS Metal and `WSI_RS_METAL_EDGE_PATHS`; each source must have a regular eligible edge tile. |
