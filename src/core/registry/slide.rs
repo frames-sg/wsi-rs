@@ -226,21 +226,34 @@ impl Slide {
         let output_bytes = self.estimate_tile_output_bytes(req)?;
         let transient =
             self.ordinary_work_bytes(self.source.tile_encoded_upper_bound(req)?, output_bytes)?;
-        let reservation = self.admission.reserve(transient, None)?;
-        let calibration = AtomicBool::new(false);
+        self.with_admission(transient, None, &AtomicBool::new(false), |context| {
+            let tile = crate::core::batch::exactly_one(
+                self.source
+                    .read_tiles_with_context(std::slice::from_ref(req), context)?,
+                "admitted single tile",
+            )?;
+            self.validate_decoded_output(&tile, "decoded tile")?;
+            Ok(tile)
+        })
+    }
+
+    /// Runs `read` under a reservation of `bytes` transient work. Every
+    /// context of one public read shares its `calibration` flag.
+    fn with_admission<R>(
+        &self,
+        bytes: u64,
+        control: Option<&crate::ReadControl>,
+        calibration: &AtomicBool,
+        read: impl FnOnce(&ReadExecutionContext<'_>) -> Result<R, WsiError>,
+    ) -> Result<R, WsiError> {
+        let reservation = self.admission.reserve(bytes, control)?;
         let context = ReadExecutionContext::new(
             &reservation,
             self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
+            control,
+            calibration,
         );
-        let tile = crate::core::batch::exactly_one(
-            self.source
-                .read_tiles_with_context(std::slice::from_ref(req), &context)?,
-            "admitted single tile",
-        )?;
-        self.validate_decoded_output(&tile, "decoded tile")?;
-        Ok(tile)
+        read(&context)
     }
 
     pub fn read_tiles(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
@@ -396,38 +409,34 @@ impl Slide {
         mut planned: region::PlannedRegionRead<'_>,
         allow_fastpath: bool,
     ) -> Result<CpuTile, WsiError> {
-        let reservation = self.admission.reserve(planned.work_bytes, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
-        let admitted = AdmittedReader {
-            source: self.source.as_ref(),
-            execution: &execution,
-        };
-        let cache = self.shared_tile_cache();
-        if allow_fastpath {
-            let mut ctx = SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
-            if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
-                let tile = result?;
-                self.validate_decoded_output(&tile, "decoded region")?;
-                return Ok(tile);
+        let work_bytes = planned.work_bytes;
+        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+            let cache = self.shared_tile_cache();
+            if allow_fastpath {
+                let mut ctx =
+                    SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
+                if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
+                    let tile = result?;
+                    self.validate_decoded_output(&tile, "decoded region")?;
+                    return Ok(tile);
+                }
             }
-        }
-        let (batch_ends, _parallel_staging) =
-            planned.batch_ends(self, req, output_bytes, &execution)?;
-        let tile = composition::composite_region_from_plan(
-            &admitted,
-            Some(cache.as_ref()),
-            req,
-            planned.plan,
-            &batch_ends,
-        )?;
-        self.validate_decoded_output(&tile, "decoded region")?;
-        Ok(tile)
+            let (batch_ends, _parallel_staging) =
+                planned.batch_ends(self, req, output_bytes, execution)?;
+            let admitted = AdmittedReader {
+                source: self.source.as_ref(),
+                execution,
+            };
+            let tile = composition::composite_region_from_plan(
+                &admitted,
+                Some(cache.as_ref()),
+                req,
+                planned.plan,
+                &batch_ends,
+            )?;
+            self.validate_decoded_output(&tile, "decoded region")?;
+            Ok(tile)
+        })
     }
 
     /// Writes a cached tiled region straight into premultiplied
@@ -483,19 +492,20 @@ impl Slide {
         let output_bytes = checked_rgba_bytes(req.tile_width, req.tile_height, "display tile")?;
         self.check_output_limit(output_bytes, "decoded tile/associated output")?;
         let encoded = self.source.display_tile_encoded_upper_bound(req)?;
-        let reservation = self
-            .admission
-            .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
+        let work_bytes = self.ordinary_work_bytes(encoded, output_bytes)?;
+        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+            self.read_admitted_display_tile(req, execution)
+        })
+    }
+
+    fn read_admitted_display_tile(
+        &self,
+        req: &TileViewRequest,
+        execution: &ReadExecutionContext<'_>,
+    ) -> Result<CpuTile, WsiError> {
         let admitted = AdmittedReader {
             source: self.source.as_ref(),
-            execution: &execution,
+            execution,
         };
         // For Regular tile layouts, route through the generic composition path
         // with cache so intermediate tile reads are reused. For WholeLevel and
@@ -587,24 +597,20 @@ impl Slide {
                 self.tile_chunk_len(&reqs[start..], &estimates[start..], target)?;
             let end = start + len;
 
-            let reservation = self.admission.reserve(chunk_bytes, control)?;
-            let execution = ReadExecutionContext::new(
-                &reservation,
-                self.limits.operation_transient_bytes(),
-                control,
-                &calibration,
-            );
-            let chunk = decode(&reqs[start..end], &execution)?;
-            if chunk.len() != end - start {
-                return Err(WsiError::BackendContract {
-                    context,
-                    expected: end - start,
-                    actual: chunk.len(),
-                });
-            }
-            for tile in &chunk {
-                validate(tile)?;
-            }
+            let chunk = self.with_admission(chunk_bytes, control, &calibration, |execution| {
+                let chunk = decode(&reqs[start..end], execution)?;
+                if chunk.len() != end - start {
+                    return Err(WsiError::BackendContract {
+                        context,
+                        expected: end - start,
+                        actual: chunk.len(),
+                    });
+                }
+                for tile in &chunk {
+                    validate(tile)?;
+                }
+                Ok(chunk)
+            })?;
             output.extend(chunk);
             start = end;
         }
