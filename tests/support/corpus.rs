@@ -4,17 +4,14 @@ use std::path::{Path, PathBuf};
 
 #[allow(unused_imports)]
 pub(crate) use wsi_rs_test_support::corpus::{
-    apply_alias_filter, corpus_cache_dir, format_default_extension, parse_manifest, CorpusEntry,
-    CorpusManifest,
+    alias_selected, apply_alias_filter, corpus_cache_dir, format_default_extension, parse_aliases,
+    parse_manifest, selected_aliases, CorpusEntry, CorpusManifest,
 };
 use wsi_rs_test_support::corpus::{load_manifest, resolve_entry_path as resolve_shared_entry};
 
 pub(crate) fn load_public() -> Result<CorpusManifest, String> {
     let mut manifest = load_public_unfiltered()?;
-    apply_alias_filter(
-        &mut manifest,
-        std::env::var("WSI_RS_PARITY_ALIASES").ok().as_deref(),
-    );
+    apply_alias_filter(&mut manifest, selected_aliases().as_ref());
     Ok(manifest)
 }
 

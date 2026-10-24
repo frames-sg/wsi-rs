@@ -7,7 +7,7 @@ use wsi_rs::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
 use support::corpus::{
-    apply_alias_filter, corpus_cache_dir, format_default_extension, parse_manifest,
+    apply_alias_filter, corpus_cache_dir, format_default_extension, parse_aliases, parse_manifest,
     public_manifest_path,
 };
 use support::oracles::{
@@ -299,7 +299,10 @@ fn corpus_alias_filter_keeps_requested_manifest_entries() {
         ..second
     });
 
-    apply_alias_filter(&mut manifest, Some("ndpi-001,missing-001"));
+    apply_alias_filter(
+        &mut manifest,
+        parse_aliases(Some("ndpi-001,missing-001")).as_ref(),
+    );
 
     assert_eq!(manifest.slides.len(), 1);
     assert_eq!(manifest.slides[0].alias, "ndpi-001");

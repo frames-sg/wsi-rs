@@ -1,5 +1,7 @@
 use std::{env, ffi::OsString, fs, path::Path};
 
+use wsi_rs_test_support::corpus;
+
 use super::process::{
     ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
@@ -176,7 +178,7 @@ impl CorpusRun {
             || self
                 .aliases
                 .iter()
-                .any(|alias| corpus_alias_selected(alias))
+                .any(|alias| corpus::alias_selected(alias))
     }
 }
 
@@ -272,12 +274,6 @@ fn run_corpus(run: &CorpusRun, runner: &[&str]) -> Result<(), String> {
         CorpusTests::AllIgnored => args.extend(["--", "--ignored"]),
     }
     run_cargo(&args)
-}
-
-fn corpus_alias_selected(alias: &str) -> bool {
-    env::var("WSI_RS_PARITY_ALIASES").map_or(true, |aliases| {
-        aliases.split(',').any(|value| value.trim() == alias)
-    })
 }
 
 /// Explicit lanes for fixtures and hardware excluded from quick correctness runs.
@@ -709,9 +705,7 @@ const COVERAGE_REPORT_ARGS: &[&str] = &[
 ];
 
 pub(super) fn coverage() -> Result<(), String> {
-    coverage_with_corpus(
-        std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()),
-    )
+    coverage_with_corpus(corpus::selected_aliases().is_some())
 }
 
 fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {

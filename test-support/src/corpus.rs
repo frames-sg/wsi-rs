@@ -1,9 +1,10 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 const CORPUS_CACHE_ENV: &str = "WSI_RS_PARITY_CORPUS_CACHE";
+const PARITY_ALIASES_ENV: &str = "WSI_RS_PARITY_ALIASES";
 
 /// Formats covered by the available public release samples.
 ///
@@ -479,18 +480,41 @@ pub fn format_default_extension(format: &str) -> Option<&'static str> {
     }
 }
 
-pub fn apply_alias_filter(manifest: &mut CorpusManifest, raw_aliases: Option<&str>) {
-    let Some(raw_aliases) = raw_aliases else {
-        return;
-    };
-    let aliases = raw_aliases
+/// The corpus aliases `WSI_RS_PARITY_ALIASES` selects, or `None` when it
+/// selects the whole corpus. See [`parse_aliases`] for the grammar.
+pub fn selected_aliases() -> Option<BTreeSet<String>> {
+    parse_aliases(
+        std::env::var_os(PARITY_ALIASES_ENV)
+            .as_deref()
+            .map(|value| value.to_string_lossy())
+            .as_deref(),
+    )
+}
+
+/// Whether `WSI_RS_PARITY_ALIASES` selects `alias`. Every alias is selected
+/// when the variable selects the whole corpus.
+pub fn alias_selected(alias: &str) -> bool {
+    selected_aliases().is_none_or(|aliases| aliases.contains(alias))
+}
+
+/// Parse an alias list. Aliases are separated by commas, semicolons or
+/// whitespace. An absent value, or one with no aliases, selects the whole
+/// corpus and returns `None`.
+pub fn parse_aliases(raw: Option<&str>) -> Option<BTreeSet<String>> {
+    let aliases = raw?
         .split(|character: char| character == ',' || character == ';' || character.is_whitespace())
         .filter(|alias| !alias.is_empty())
-        .collect::<HashSet<_>>();
-    if !aliases.is_empty() {
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    (!aliases.is_empty()).then_some(aliases)
+}
+
+/// Keep only the selected aliases; `None` keeps the whole manifest.
+pub fn apply_alias_filter(manifest: &mut CorpusManifest, aliases: Option<&BTreeSet<String>>) {
+    if let Some(aliases) = aliases {
         manifest
             .slides
-            .retain(|entry| aliases.contains(entry.alias.as_str()));
+            .retain(|entry| aliases.contains(&entry.alias));
     }
 }
 
@@ -543,6 +567,18 @@ mod tests {
                 expected,
                 "{format}/{codec} lossless={lossless}"
             );
+        }
+    }
+
+    #[test]
+    fn alias_lists_split_on_commas_semicolons_and_whitespace() {
+        let parsed = parse_aliases(Some(" svs-001,ndpi-001;mirax-001\n vms-001,,")).unwrap();
+        assert_eq!(
+            parsed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["mirax-001", "ndpi-001", "svs-001", "vms-001"]
+        );
+        for whole_corpus in [None, Some(""), Some(" "), Some(",;")] {
+            assert_eq!(parse_aliases(whole_corpus), None, "{whole_corpus:?}");
         }
     }
 

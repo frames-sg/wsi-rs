@@ -18,12 +18,9 @@ pub(crate) fn fixture_path(alias: &str, extension: &str) -> Option<CString> {
             CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL"),
         );
     }
-    let required = std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| {
-        aliases
-            .split(',')
-            .map(str::trim)
-            .any(|candidate| candidate == alias)
-    });
+    // Only an explicitly selected alias is required; the whole corpus is not.
+    let required = wsi_rs_test_support::corpus::selected_aliases()
+        .is_some_and(|aliases| aliases.contains(alias));
     assert!(
         !required,
         "required parity fixture is missing: {}",

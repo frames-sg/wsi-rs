@@ -284,7 +284,9 @@ inputs or hardware fail the run. The commands list the selected ignored tests
 first and reject a selection that matches no tests.
 
 `cargo xtask parity-corpus-test` covers the public manifest plus DICOM folder
-opening and Olympus VSI reading. When Olympus or ZVI is selected, it also runs
+opening and Olympus VSI reading. `WSI_RS_PARITY_ALIASES` limits it to the
+manifest aliases it lists, separated by commas, semicolons or whitespace; unset
+or empty selects the whole corpus. When Olympus or ZVI is selected, it also runs
 independent native-pixel probes. Generate those probes with the existing
 SlideIO 2.9.0 environment after fetching the two samples:
 

@@ -29,7 +29,7 @@ fn preflight() {
             return;
         }
     };
-    if std::env::var_os("WSI_RS_PARITY_ALIASES").is_none() {
+    if support::corpus::selected_aliases().is_none() {
         if let Err(error) = wsi_rs_test_support::corpus::validate_release_coverage(&manifest) {
             panic!("[preflight] release-corpus coverage is incomplete:\n{error}");
         }
