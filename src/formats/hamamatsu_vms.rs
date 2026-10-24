@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
-use crate::core::limits::read_file_bounded;
+use crate::core::limits::read_to_end_bounded;
 use crate::core::registry::{
     read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
     ConfiguredProbeCache, ConservativeManagedReader, DatasetReader, FormatProbe,

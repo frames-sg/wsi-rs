@@ -292,6 +292,30 @@ fn associated_reads_recover_poisoned_cache_and_report_removed_source() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn replaced_associated_source_is_refused_instead_of_read() {
+    let fixture = VmsFixture::complete();
+    let reader = HamamatsuVmsBackend::new()
+        .open(&fixture.path)
+        .expect("open synthetic VMS");
+    let macro_path = fs::canonicalize(&fixture.macro_path).expect("resolve VMS macro");
+    crate::test_support::replace_file_with_copy(&macro_path);
+
+    let error = reader
+        .read_associated("macro")
+        .expect_err("a replaced associated source must not be read");
+    assert!(
+        matches!(
+            &error,
+            WsiError::InvalidSlide { path, message }
+                if *path == macro_path
+                    && message == "VMS associated image changed after the slide was opened"
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
 #[test]
 fn slide_reports_unknown_level_encoding_and_tile_presence_for_vms() {
     use crate::core::types::{LevelIdx, SceneId, SeriesId};

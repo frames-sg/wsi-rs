@@ -51,6 +51,9 @@
   fast frame scanner instead of falling back to the slower parser.
 - JPEG tiles decoded with forced dimensions patch the frame header itself, not
   `FF Cx` bytes inside an earlier APPn, DQT or COM segment.
+- MIRAX data files and the VMS macro image must still be the files the slide
+  was opened on. A read after one is replaced fails instead of reading the new
+  file.
 
 ## [0.8.0] - 2026-10-06
 

@@ -27,16 +27,6 @@ fn replace_path_and_truncate_open_fixture(fixture: &tempfile::NamedTempFile) -> 
     open_inode_path
 }
 
-#[cfg(unix)]
-fn replace_path_with_identical_file(fixture: &tempfile::NamedTempFile) -> std::path::PathBuf {
-    let source_path = fixture.path();
-    let replacement = std::fs::read(source_path).expect("read replacement CZI bytes");
-    let open_inode_path = source_path.with_extension("open-inode.czi");
-    std::fs::rename(source_path, &open_inode_path).expect("detach open CZI inode from source path");
-    std::fs::write(source_path, replacement).expect("replace path with valid CZI bytes");
-    open_inode_path
-}
-
 fn raw(
     pixel_type: PixelType,
     compression: CompressionMode,
@@ -563,7 +553,7 @@ fn local_and_level_reads_report_errors_from_the_open_czi_inode() {
 fn tile_reads_reject_a_replaced_czi_source_path() {
     let fixture = main_fixture();
     let slide = ZeissSlide::parse(fixture.path()).expect("parse direct local CZI");
-    let open_inode = replace_path_with_identical_file(&fixture);
+    let open_inode = crate::test_support::replace_file_with_copy(fixture.path());
 
     let error = slide
         .read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu)

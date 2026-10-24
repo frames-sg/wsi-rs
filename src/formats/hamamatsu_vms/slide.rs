@@ -115,13 +115,13 @@ impl SlideReader for VmsReader {
             .associated_images
             .get(name)
             .and_then(|image| image.decoded_bytes());
-        let (Some(path), Some(decoded)) = (self.slide.associated_paths.get(name), decoded) else {
+        let (Some(file), Some(decoded)) = (self.slide.associated_files.get(name), decoded) else {
             return Ok(None);
         };
-        let encoded = std::fs::metadata(path)
+        let encoded = std::fs::metadata(&file.path)
             .map_err(|source| WsiError::IoWithPath {
                 source: std::sync::Arc::new(source),
-                path: path.clone(),
+                path: file.path.clone(),
             })?
             .len();
         Ok(Some(
@@ -140,16 +140,22 @@ impl SlideReader for VmsReader {
         {
             return Ok(cached.as_ref().clone());
         }
-        let path = self
+        let file = self
             .slide
-            .associated_paths
+            .associated_files
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        let data = read_file_bounded(path, self.slide.encoded_unit_bytes, "VMS associated JPEG")
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.clone(),
-            })?;
+        let source = FileIdentity::open_verified(
+            &file.path,
+            &file.identity,
+            "VMS associated image changed after the slide was opened",
+        )?;
+        let data =
+            read_to_end_bounded(source, self.slide.encoded_unit_bytes, "VMS associated JPEG")
+                .map_err(|source| WsiError::IoWithPath {
+                    source: Arc::new(source),
+                    path: file.path.clone(),
+                })?;
         crate::core::batch::exactly_one(
             decode_batch_jpeg(&[JpegDecodeJob {
                 data: Cow::Borrowed(&data),

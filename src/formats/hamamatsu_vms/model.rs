@@ -3,9 +3,17 @@ use super::*;
 pub(super) struct VmsSlide {
     pub(super) dataset: Dataset,
     pub(super) levels: Vec<VmsLevel>,
-    pub(super) associated_paths: HashMap<String, PathBuf>,
+    pub(super) associated_files: HashMap<String, VmsAssociatedFile>,
     pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     pub(super) encoded_unit_bytes: u64,
+}
+
+/// A standalone associated JPEG, reread on each uncached read.
+pub(super) struct VmsAssociatedFile {
+    pub(super) path: PathBuf,
+    /// Identity when the slide was opened; a file that no longer matches is
+    /// refused.
+    pub(super) identity: FileIdentity,
 }
 
 pub(super) struct VmsLevel {

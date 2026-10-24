@@ -23,18 +23,23 @@ struct MiraxShareKey {
 }
 
 impl MiraxShareKey {
-    /// `None` when a file cannot be identified. That open parses without
-    /// sharing and reports any error the parse itself meets.
+    /// `None` when Slidedat.ini or the index cannot be identified. That open
+    /// parses without sharing and reports any error the parse itself meets.
     fn new(
         slidedat: &Path,
         index: &Path,
         datafiles: &[PathBuf],
+        datafile_identities: &HashMap<PathBuf, FileIdentity>,
         limits: crate::SlideLimits,
     ) -> Option<Self> {
         let identities = [slidedat, index]
             .into_iter()
-            .chain(datafiles.iter().map(PathBuf::as_path))
             .map(|path| FileIdentity::from_path(path).ok())
+            .chain(
+                datafiles
+                    .iter()
+                    .map(|path| datafile_identities.get(path).cloned()),
+            )
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
             limits,
@@ -242,10 +247,16 @@ impl MiraxSlide {
             return Ok(Arc::clone(file));
         }
 
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let identity = self
+            .shared
+            .datafile_identities
+            .get(path)
+            .ok_or_else(|| invalid_slide(path, "MIRAX record names an unlisted data file"))?;
+        let file = FileIdentity::open_verified(
+            path,
+            identity,
+            "MIRAX data file changed after the slide was opened",
+        )?;
         let file = Arc::new(crate::core::positioned_file::PositionedFile::new(file));
         Ok(Arc::clone(
             self.open_files

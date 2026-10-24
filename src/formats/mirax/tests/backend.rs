@@ -514,6 +514,45 @@ fn associated_record_open_errors_retain_the_missing_path() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn replaced_data_file_is_refused_instead_of_read() {
+    let fixture = MiraxFixture::complete();
+    let parsed = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
+    // A handle reusing the parsed index opens data files on first read.
+    let reused = MiraxSlide::parse(&fixture.path).expect("reuse synthetic MIRAX index");
+    assert!(Arc::ptr_eq(&parsed.shared, &reused.shared));
+    let data_path = std::fs::canonicalize(&fixture.data_path).expect("resolve MIRAX data file");
+    crate::test_support::replace_file_with_copy(&data_path);
+
+    let reader = MiraxReader {
+        slide: Arc::new(reused),
+    };
+    for error in [
+        reader
+            .slide
+            .read_associated("macro")
+            .expect_err("a replaced data file must not be read"),
+        reader
+            .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+            .expect_err("a replaced data file must not be read"),
+    ] {
+        assert!(
+            matches!(
+                &error,
+                WsiError::InvalidSlide { path, message }
+                    if *path == data_path
+                        && message == "MIRAX data file changed after the slide was opened"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+    // The handle that parsed the index keeps reading the file it opened.
+    parsed
+        .read_associated("macro")
+        .expect("read the originally opened data file");
+}
+
 fn parse_with_limits(path: &Path, limits: crate::SlideLimits) -> Result<MiraxSlide, WsiError> {
     MiraxSlide::parse_with_config(
         path,

@@ -2,6 +2,7 @@ use super::super::helpers::*;
 use super::super::index::*;
 use super::super::*;
 use super::{register_shared_index, shared_index, MiraxShareKey};
+use crate::core::file_identity::FileIdentity;
 
 const MAX_MIRAX_BASE_IMAGES: u64 = 16 * 1024 * 1024;
 const MAX_MIRAX_HIERARCHIES: i32 = 1_024;
@@ -56,12 +57,18 @@ impl MiraxSlide {
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
         let ini = preflight_slidedat(path, budget.as_ref())?;
+        let datafile_identities = ini
+            .datafile_paths
+            .iter()
+            .map(|path| Ok((path.clone(), FileIdentity::from_path(path)?)))
+            .collect::<Result<HashMap<_, _>, WsiError>>()?;
         // Slidedat.ini names every file the index walk reads, so an unchanged
         // set of them can reuse an index another open handle already parsed.
         let key = MiraxShareKey::new(
             &ini.slidedat_path,
             &ini.index_path,
             &ini.datafile_paths,
+            &datafile_identities,
             config.limits,
         );
         if let Some(shared) = key.as_ref().and_then(shared_index) {
@@ -71,7 +78,12 @@ impl MiraxSlide {
         let mut sources = load_data_index_sources(path, hierarchy, quickhash, budget.as_ref())?;
         let (properties, associated_metadata) =
             build_associated_images_and_properties(path, &mut sources)?;
-        let (shared, quickhash_files) = assemble_shared(sources, properties, associated_metadata);
+        let (shared, quickhash_files) = assemble_shared(
+            sources,
+            properties,
+            associated_metadata,
+            datafile_identities,
+        );
         let shared = match key {
             Some(key) => register_shared_index(key, shared),
             None => Arc::new(shared),
@@ -620,6 +632,7 @@ fn assemble_shared(
     sources: MiraxIndexSources,
     properties: Properties,
     associated_metadata: HashMap<String, AssociatedImage>,
+    datafile_identities: HashMap<PathBuf, FileIdentity>,
 ) -> (MiraxShared, HashMap<PathBuf, CachedMiraxFile>) {
     let level_builders = sources.hierarchy.level_builders;
     let mut dataset_levels = Vec::with_capacity(level_builders.len());
@@ -685,6 +698,7 @@ fn assemble_shared(
             associated: sources.associated,
             decoded_image_bytes,
             associated_image_bytes,
+            datafile_identities,
         },
         sources.quickhash_files,
     )

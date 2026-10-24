@@ -2,7 +2,7 @@ use super::super::ini::*;
 use super::super::levels::{
     base_level_dimensions, expanded_levels, total_tiles_across, total_tiles_down,
 };
-use super::super::model::{invalid_slide, VmsJpeg, VmsLevel, VmsSlide};
+use super::super::model::{invalid_slide, VmsAssociatedFile, VmsJpeg, VmsLevel, VmsSlide};
 use super::super::*;
 use super::vms_image_count;
 
@@ -258,13 +258,16 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
         .map(|jpeg| jpeg.encoded_unit_bytes)
         .ok_or_else(|| invalid_slide(Path::new(""), "VMS slide created no JPEG sources"))?;
     let mut associated_images = HashMap::new();
-    let mut associated_paths = HashMap::new();
+    let mut associated_files = HashMap::new();
     if let Some(macro_path) = parts.macro_path.filter(|path| path.is_file()) {
-        let macro_bytes = read_file_bounded(&macro_path, encoded_unit_bytes, "VMS macro JPEG")
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: macro_path.clone(),
-            })?;
+        let io_error = |source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: macro_path.clone(),
+        };
+        let file = File::open(&macro_path).map_err(io_error)?;
+        let identity = FileIdentity::from_open_file(&macro_path, &file)?;
+        let macro_bytes =
+            read_to_end_bounded(&file, encoded_unit_bytes, "VMS macro JPEG").map_err(io_error)?;
         let macro_dims = jpeg_dimensions(&macro_bytes)?;
         associated_images.insert(
             "macro".into(),
@@ -275,7 +278,13 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
                 icc_profile: Vec::new(),
             },
         );
-        associated_paths.insert("macro".into(), macro_path);
+        associated_files.insert(
+            "macro".into(),
+            VmsAssociatedFile {
+                path: macro_path,
+                identity,
+            },
+        );
     }
 
     let associated_entry_bytes = associated_images
@@ -312,7 +321,7 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
     Ok(VmsSlide {
         dataset,
         levels: parts.levels,
-        associated_paths,
+        associated_files,
         associated_cache: Mutex::new(associated_cache),
         encoded_unit_bytes,
     })
