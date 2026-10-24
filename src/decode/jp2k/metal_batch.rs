@@ -103,9 +103,7 @@ fn decode_groups(
         sessions.j2k().clone(),
         BatchDecodeOptions {
             layout: BatchLayout::Nhwc,
-            workers: std::num::NonZeroUsize::new(
-                crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count(),
-            ),
+            workers: std::num::NonZeroUsize::new(crate::core::batch::cpu_worker_count()),
             ..BatchDecodeOptions::default()
         },
     );

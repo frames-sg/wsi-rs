@@ -6,8 +6,7 @@ impl MiraxReader {
         if reqs.len() <= 1 {
             return reqs.iter().map(|req| self.decode_tile(req)).collect();
         }
-        let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
-        let workers = runtime.cpu_worker_count();
+        let workers = crate::core::batch::cpu_worker_count();
         let limits = self.slide.limits;
         let logical_bytes = reqs.iter().try_fold(0_u64, |sum, req| {
             let (entry, _) = self.tile_for_request(req)?;
@@ -91,7 +90,7 @@ impl MiraxReader {
             };
             let mut results = (0..owned.len()).map(|_| None).collect::<Vec<_>>();
             let pool = (owned.len() > 1)
-                .then(crate::core::decode_runtime::process_codec_cpu_pool)
+                .then(crate::core::batch::process_codec_cpu_pool)
                 .flatten();
             if let Some(pool) = pool {
                 crate::core::execution_telemetry::record(

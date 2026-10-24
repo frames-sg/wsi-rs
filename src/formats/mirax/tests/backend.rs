@@ -38,7 +38,7 @@ fn indexed_mirax_jpeg_tiles_fit_a_small_transient_budget() {
 fn concurrent_mirax_batches_share_one_source_miss() {
     let fixture = MiraxFixture::complete();
     let mut slide = MiraxSlide::parse(&fixture.path).unwrap();
-    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+    if crate::core::batch::cpu_worker_count() > 1 {
         slide
             .probe
             .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));

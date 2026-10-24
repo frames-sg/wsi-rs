@@ -7,7 +7,6 @@ use crate::core::types::{Level, TileLayout};
 use crate::error::WsiError;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use lru::LruCache;
-use rayon::ThreadPool;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use std::num::NonZeroUsize;
 #[cfg(feature = "route-telemetry")]
@@ -235,27 +234,11 @@ impl DecodeRuntime {
     }
 
     pub(crate) fn install_codec_cpu<R: Send>(&self, operation: impl FnOnce() -> R + Send) -> R {
-        // Reuse an invoking Rayon worker instead of entering another registry.
-        // Calls from ordinary threads share the one process-wide WSI pool.
-        if rayon::current_thread_index().is_some() {
-            run_codec_work_on_worker(operation)
-        } else if let Some(pool) = process_codec_cpu_pool() {
-            crate::core::execution_telemetry::record(
-                crate::core::execution_telemetry::Event::CpuPoolDispatches,
-                1,
-            );
-            pool.install(operation)
-        } else {
-            operation()
-        }
+        crate::core::batch::install_codec_cpu(operation)
     }
 
     pub(crate) fn cpu_worker_count(&self) -> usize {
-        if rayon::current_thread_index().is_some() {
-            rayon::current_num_threads()
-        } else {
-            process_codec_cpu_pool().map_or(1, ThreadPool::current_num_threads)
-        }
+        crate::core::batch::cpu_worker_count()
     }
 
     pub(crate) fn options(&self) -> DecodeExecutionOptions {
@@ -293,57 +276,6 @@ impl DecodeRuntime {
 mod calibration;
 #[cfg(any(test, feature = "metal", feature = "cuda"))]
 use calibration::*;
-
-/// Run CPU codec work invoked on a Rayon worker.
-///
-/// The work stays on the invoking worker unless that worker belongs to another
-/// pool and holds slide admission. There, idle workers of that pool can steal
-/// the work's nested codec jobs, start unrelated reads while waiting on their
-/// own nested jobs, and block on the same admission with the stolen job still
-/// on their stack: a cycle no budget release can break. Such work moves to the
-/// WSI pool, whose workers never wait for admission. A scoped thread hands it
-/// over, because `install` from a foreign worker steals from the caller's pool
-/// while it waits, and a joined thread does not.
-pub(crate) fn run_codec_work_on_worker<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
-    match process_codec_cpu_pool() {
-        Some(pool)
-            if pool.current_thread_index().is_none()
-                && crate::core::limits::current_thread_holds_admission() =>
-        {
-            crate::core::execution_telemetry::record(
-                crate::core::execution_telemetry::Event::CpuPoolDispatches,
-                1,
-            );
-            std::thread::scope(|scope| {
-                scope
-                    .spawn(|| pool.install(operation))
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-        }
-        _ => operation(),
-    }
-}
-
-pub(crate) fn process_codec_cpu_pool() -> Option<&'static ThreadPool> {
-    static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        // Rayon's default sizing honors RAYON_NUM_THREADS; leaving it unset
-        // also avoids a second wsi-rs-specific concurrency control.
-        rayon::ThreadPoolBuilder::new()
-            .thread_name(|index| format!("wsi-rs-jp2k-cpu-{index}"))
-            .build()
-            .map(Some)
-            .unwrap_or_else(|error| {
-                tracing::error!(
-                    %error,
-                    "failed to initialize process-wide JP2K CPU pool; decoding inline"
-                );
-                None
-            })
-    })
-    .as_ref()
-}
 
 #[cfg(any(feature = "metal", feature = "cuda"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

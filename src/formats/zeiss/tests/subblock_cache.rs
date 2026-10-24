@@ -47,7 +47,7 @@ fn czi_large_source_groups_fit_decoded_staging() {
 fn concurrent_czi_batches_share_one_source_miss() {
     let fixture = jpeg_fixture();
     let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
-    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+    if crate::core::batch::cpu_worker_count() > 1 {
         slide
             .probe
             .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));

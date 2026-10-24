@@ -47,7 +47,7 @@ impl AdaptiveDecodeReader {
         } else if rayon::current_thread_index().is_some() {
             // Other batches, such as JPEG, fan out on the invoking pool too.
             // JPEG XR decodes also dispatch through the codec pool themselves.
-            super::run_codec_work_on_worker(operation)
+            crate::core::batch::run_codec_work_on_worker(operation)
         } else {
             operation()
         };
@@ -202,7 +202,7 @@ pub(super) fn route_key_for_batch(
         codec_kind,
         device_identity: device_identity.to_owned(),
         sample_tile_count: reqs.len(),
-        cpu_workers: DecodeRuntime::default_arc().cpu_worker_count(),
+        cpu_workers: crate::core::batch::cpu_worker_count(),
     })
 }
 

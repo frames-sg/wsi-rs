@@ -58,7 +58,7 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
         // eviction and decodes a late miss on this thread.
         compose()
     } else {
-        crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(compose)
+        crate::core::batch::install_codec_cpu(compose)
     }
 }
 

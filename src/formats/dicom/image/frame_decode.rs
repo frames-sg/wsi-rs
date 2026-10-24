@@ -271,16 +271,12 @@ impl DicomImage {
                         decode_batch_jp2k(&[self.jp2k_job(bytes.as_slice(), backend)]),
                         "DICOM JP2K frame decode",
                     )?,
-                    DicomBitDepth::Uint16 { .. } => {
-                        crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(
-                            || {
-                                self.decode_jp2k_u16_frame(
-                                    bytes.as_slice(),
-                                    j2k::CpuDecodeParallelism::Auto,
-                                )
-                            },
+                    DicomBitDepth::Uint16 { .. } => crate::core::batch::install_codec_cpu(|| {
+                        self.decode_jp2k_u16_frame(
+                            bytes.as_slice(),
+                            j2k::CpuDecodeParallelism::Auto,
                         )
-                    }
+                    }),
                 }
                 .map_err(tile_read)?
             }

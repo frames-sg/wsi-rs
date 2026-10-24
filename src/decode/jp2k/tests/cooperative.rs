@@ -36,7 +36,7 @@ fn distinct_jobs() -> Vec<Jp2kDecodeJob<'static>> {
 }
 
 fn sessions() -> MetalBackendSessions {
-    let workers = crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count();
+    let workers = crate::core::batch::cpu_worker_count();
     assert!(
         workers >= 2,
         "cooperative tests require at least two WSI CPU workers"

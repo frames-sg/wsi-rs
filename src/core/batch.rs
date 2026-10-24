@@ -102,6 +102,84 @@ impl Drop for ActiveWorker {
     }
 }
 
+/// Runs CPU codec work on the process-wide WSI pool.
+///
+/// An invoking Rayon worker is reused instead of entering another registry;
+/// calls from ordinary threads share the one process-wide pool.
+pub(crate) fn install_codec_cpu<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
+    if rayon::current_thread_index().is_some() {
+        run_codec_work_on_worker(operation)
+    } else if let Some(pool) = process_codec_cpu_pool() {
+        crate::core::execution_telemetry::record(
+            crate::core::execution_telemetry::Event::CpuPoolDispatches,
+            1,
+        );
+        pool.install(operation)
+    } else {
+        operation()
+    }
+}
+
+/// Worker count available to CPU codec work started from the calling thread.
+pub(crate) fn cpu_worker_count() -> usize {
+    if rayon::current_thread_index().is_some() {
+        rayon::current_num_threads()
+    } else {
+        process_codec_cpu_pool().map_or(1, ThreadPool::current_num_threads)
+    }
+}
+
+/// Run CPU codec work invoked on a Rayon worker.
+///
+/// The work stays on the invoking worker unless that worker belongs to another
+/// pool and holds slide admission. There, idle workers of that pool can steal
+/// the work's nested codec jobs, start unrelated reads while waiting on their
+/// own nested jobs, and block on the same admission with the stolen job still
+/// on their stack: a cycle no budget release can break. Such work moves to the
+/// WSI pool, whose workers never wait for admission. A scoped thread hands it
+/// over, because `install` from a foreign worker steals from the caller's pool
+/// while it waits, and a joined thread does not.
+pub(crate) fn run_codec_work_on_worker<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
+    match process_codec_cpu_pool() {
+        Some(pool)
+            if pool.current_thread_index().is_none()
+                && crate::core::limits::current_thread_holds_admission() =>
+        {
+            crate::core::execution_telemetry::record(
+                crate::core::execution_telemetry::Event::CpuPoolDispatches,
+                1,
+            );
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| pool.install(operation))
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+        }
+        _ => operation(),
+    }
+}
+
+pub(crate) fn process_codec_cpu_pool() -> Option<&'static ThreadPool> {
+    static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        // Rayon's default sizing honors RAYON_NUM_THREADS; leaving it unset
+        // also avoids a second wsi-rs-specific concurrency control.
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|index| format!("wsi-rs-jp2k-cpu-{index}"))
+            .build()
+            .map(Some)
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    %error,
+                    "failed to initialize process-wide JP2K CPU pool; decoding inline"
+                );
+                None
+            })
+    })
+    .as_ref()
+}
+
 /// Runs `jobs` on the calling thread in order while otherwise idle cores help.
 ///
 /// Helpers go to the process worker pool only for cores that no other shared
@@ -117,7 +195,7 @@ where
     R: Send + 'static,
 {
     let pool = if jobs.len() > 1 {
-        crate::core::decode_runtime::process_codec_cpu_pool()
+        process_codec_cpu_pool()
     } else {
         None
     };

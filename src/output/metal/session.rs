@@ -64,9 +64,7 @@ impl MetalBackendSessions {
     #[cfg(target_os = "macos")]
     pub(crate) fn try_cooperative_decode(&self) -> Option<(NonZeroUsize, MutexGuard<'_, ()>)> {
         let requested = self.cooperative_cpu_workers?;
-        let workers = requested
-            .get()
-            .min(crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count());
+        let workers = requested.get().min(crate::core::batch::cpu_worker_count());
         if workers < 2 {
             return None;
         }

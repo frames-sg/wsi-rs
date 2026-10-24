@@ -90,7 +90,7 @@ impl DicomReader {
             .first()
             .is_some_and(|(meta, _)| matches!(meta.image.bit_depth, DicomBitDepth::Uint16 { .. }))
         {
-            crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(|| {
+            crate::core::batch::install_codec_cpu(|| {
                 use rayon::prelude::*;
                 jp2k_jobs
                     .par_iter()

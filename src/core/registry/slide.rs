@@ -684,9 +684,7 @@ impl Slide {
             .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
         // Associated strips decode in parallel on the invoking pool.
         let tile = if rayon::current_thread_index().is_some() {
-            crate::core::decode_runtime::run_codec_work_on_worker(|| {
-                self.source.read_associated(name)
-            })?
+            crate::core::batch::run_codec_work_on_worker(|| self.source.read_associated(name))?
         } else {
             self.source.read_associated(name)?
         };

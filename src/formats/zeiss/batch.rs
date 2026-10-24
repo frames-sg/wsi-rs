@@ -16,7 +16,6 @@ impl ZeissReader {
         if let Some(tiles) = self.cached_batch(reqs) {
             return Ok(tiles);
         }
-        let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
         let limits = self.slide.limits;
         let logical_bytes = reqs
             .iter()
@@ -31,7 +30,7 @@ impl ZeissReader {
         // Stay inside the enclosing reader's existing encoded-unit + two
         // output-buffer reservation, in addition to all configured ceilings.
         let target = crate::formats::geometry::batch_decode_target(limits, logical_bytes);
-        let workers = runtime.cpu_worker_count();
+        let workers = crate::core::batch::cpu_worker_count();
         let mut output = Vec::with_capacity(reqs.len());
         let mut start = 0;
         while start < reqs.len() {
@@ -162,7 +161,9 @@ impl ZeissReader {
             {
                 owned.into_iter().map(decode).collect::<Vec<_>>()
             } else {
-                runtime.install_codec_cpu(|| owned.into_par_iter().map(decode).collect::<Vec<_>>())
+                crate::core::batch::install_codec_cpu(|| {
+                    owned.into_par_iter().map(decode).collect::<Vec<_>>()
+                })
             };
             results.extend(waiting.into_iter().map(decode));
             results.sort_unstable_by_key(|(index, _, _)| *index);
