@@ -38,6 +38,10 @@
   Decoded pixels are unchanged.
 - TIFF files have their SubIFDs parsed when opened. A TIFF whose SubIFDs tag
   points at an IFD that was already parsed, or outside the file, fails to open.
+- `CpuTile::to_rgba`, and so `Slide::read_region_rgba` on uncompressed YCbCr
+  TIFF tiles, converts YCbCr with the lookup tables that OpenSlide and the
+  JPEG 2000 path use instead of floating-point math. About 0.08% of YCbCr
+  values change by 1 in one channel, to match OpenSlide.
 
 ### Fixed
 

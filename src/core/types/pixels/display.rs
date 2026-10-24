@@ -143,16 +143,9 @@ impl CpuTile {
                 let pixel_count = self.width as usize * self.height as usize;
                 let mut rgba = Vec::with_capacity(pixel_count * 4);
                 for idx in 0..pixel_count {
-                    let [y_raw, cb_raw, cr_raw] = self.u8_triplet_at(bytes, idx)?;
-                    let y = y_raw as f64;
-                    let cb = cb_raw as f64 - 128.0;
-                    let cr = cr_raw as f64 - 128.0;
-                    let r = (y + 1.402 * cr).round().clamp(0.0, 255.0) as u8;
-                    let g = (y - 0.344136 * cb - 0.714136 * cr)
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
-                    let b = (y + 1.772 * cb).round().clamp(0.0, 255.0) as u8;
-                    rgba.extend_from_slice(&[r, g, b, 255]);
+                    let [y, cb, cr] = self.u8_triplet_at(bytes, idx)?;
+                    rgba.extend_from_slice(&super::ycbcr::ycbcr_to_rgb_u8(y, cb, cr));
+                    rgba.push(255);
                 }
                 Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
                     .expect("validated YCbCr samples expand to exact RGBA dimensions"))

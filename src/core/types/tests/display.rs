@@ -61,6 +61,69 @@ fn to_rgba_from_palette() {
 }
 
 #[test]
+fn to_rgba_from_ycbcr_matches_openslide_lookup_tables() {
+    // f64 math put green one unit off OpenSlide on each of these pixels.
+    let ycbcr = [
+        [100, 12, 186],
+        [100, 14, 10],
+        [100, 29, 140],
+        [100, 61, 224],
+    ];
+    let expected = [
+        [181, 99, 0, 255],
+        [0, 224, 0, 255],
+        [117, 126, 0, 255],
+        [235, 54, 0, 255],
+    ];
+    let planar: Vec<u8> = (0..3)
+        .flat_map(|channel| ycbcr.iter().map(move |pixel| pixel[channel]))
+        .collect();
+    for (layout, data) in [
+        (CpuTileLayout::Interleaved, ycbcr.concat()),
+        (CpuTileLayout::Planar, planar),
+    ] {
+        let buf = CpuTile {
+            width: 4,
+            height: 1,
+            channels: 3,
+            color_space: ColorSpace::YCbCr,
+            layout,
+            data: CpuTileData::u8(data),
+        };
+        let img = buf.to_rgba().unwrap();
+        let actual: Vec<[u8; 4]> = img.pixels().map(|pixel| pixel.0).collect();
+        assert_eq!(actual, expected, "{layout:?}");
+    }
+}
+
+#[test]
+fn to_rgba_from_ycbcr_uses_the_shared_table_for_every_chroma_pair() {
+    for y in [0_u8, 100, 255] {
+        let data: Vec<u8> = (0..=255_u8)
+            .flat_map(|cb| (0..=255_u8).flat_map(move |cr| [y, cb, cr]))
+            .collect();
+        let expected: Vec<u8> = data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[y, cb, cr]| {
+                let [r, g, b] = crate::core::types::ycbcr::ycbcr_to_rgb_u8(y, cb, cr);
+                [r, g, b, 255]
+            })
+            .collect();
+        let buf = CpuTile {
+            width: 256,
+            height: 256,
+            channels: 3,
+            color_space: ColorSpace::YCbCr,
+            layout: CpuTileLayout::Interleaved,
+            data: CpuTileData::u8(data),
+        };
+        assert_eq!(buf.to_rgba().unwrap().into_raw(), expected, "Y={y}");
+    }
+}
+
+#[test]
 fn to_rgba_rejects_non_u8() {
     let buf = CpuTile {
         width: 1,
