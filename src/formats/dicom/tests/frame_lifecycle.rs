@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use super::runtime::frame_index_built;
 use super::*;
 #[test]
 fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
@@ -16,12 +17,7 @@ fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
 
     let image = &slide.levels[0].parts[0];
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(image),
         "encapsulated frame index should stay lazy until first frame read"
     );
 }
@@ -158,12 +154,7 @@ fn prepare_level_controlled_builds_the_lazy_frame_index() {
         .expect("prepare DICOM level");
 
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_some(),
+        frame_index_built(&image),
         "preparation should publish the complete frame index"
     );
 }
@@ -382,12 +373,7 @@ fn cancelled_level_preparation_does_not_publish_an_index() {
         "cancelled preparation must not report an index outcome"
     );
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "cancelled preparation must not publish a partial index"
     );
 }
@@ -424,12 +410,7 @@ fn cancellation_during_frame_index_build_does_not_publish_the_completed_candidat
 
     assert!(matches!(error, WsiError::Cancelled));
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "cancellation during the build must leave no cached index"
     );
 }
@@ -496,12 +477,7 @@ fn cancellation_during_extended_table_read_does_not_publish_an_index() {
 
     assert!(matches!(error, WsiError::Cancelled));
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "a cancelled extended-table read must not publish an index"
     );
 }

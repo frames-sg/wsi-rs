@@ -42,6 +42,16 @@ fn test_private_cache<K: std::hash::Hash + Eq, V>() -> PrivateCache<K, V> {
     PrivateCache::new(budget.allocate(1024))
 }
 
+/// Whether `image`'s lazy encapsulated frame index has been published.
+pub(super) fn frame_index_built(image: &DicomImage) -> bool {
+    image
+        .frame_store
+        .encapsulated_frames
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .is_some()
+}
+
 pub(super) fn dataset_for_levels(levels: &[DicomLevel]) -> Dataset {
     let base_width = levels.first().map_or(1, |level| level.width);
     Dataset::new(

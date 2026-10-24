@@ -239,12 +239,7 @@ fn controlled_dicom_batch_cancelled_before_io_does_not_build_index() {
 
     assert!(matches!(error, WsiError::Cancelled));
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "cancellation before admission must not build the frame index"
     );
 }
