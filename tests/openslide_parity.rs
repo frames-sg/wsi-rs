@@ -2,12 +2,10 @@
 
 mod support;
 
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use wsi_rs::Slide;
+use wsi_rs_test_support::corpus::verify_entry_sha256;
 
 use support::compare::{compare_rgba, tolerance_failure};
 use support::corpus::{load_public, resolve_entry_path, CorpusEntry};
@@ -60,7 +58,7 @@ fn preflight() {
             }
             continue;
         }
-        if let Err(error) = validate_entry_sha256(entry, &path) {
+        if let Err(error) = verify_entry_sha256(entry, &path) {
             failures.push(error);
             continue;
         }
@@ -293,58 +291,6 @@ fn preflight() {
         "preflight failures:\n  {}",
         failures.join("\n  ")
     );
-}
-
-fn validate_entry_sha256(entry: &CorpusEntry, resolved_path: &Path) -> Result<(), String> {
-    let source_path = if entry
-        .url
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
-    {
-        wsi_rs_test_support::corpus::source_archive_path(entry).ok_or_else(|| {
-            format!(
-                "{}: source archive is missing, so its declared SHA-256 cannot be verified",
-                entry.alias
-            )
-        })?
-    } else {
-        resolved_path.to_path_buf()
-    };
-    let file = File::open(&source_path).map_err(|error| {
-        format!(
-            "{}: open hash source {}: {error}",
-            entry.alias,
-            source_path.display()
-        )
-    })?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let count = reader.read(&mut buffer).map_err(|error| {
-            format!(
-                "{}: read hash source {}: {error}",
-                entry.alias,
-                source_path.display()
-            )
-        })?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let actual = format!("{:x}", hasher.finalize());
-    if actual.eq_ignore_ascii_case(&entry.sha256) {
-        Ok(())
-    } else {
-        Err(format!(
-            "{}: SHA-256 mismatch for {}: expected {}, found {actual}",
-            entry.alias,
-            source_path.display(),
-            entry.sha256
-        ))
-    }
 }
 
 fn validate_wsi_contract(entry: &CorpusEntry, path: &Path, failures: &mut Vec<String>) {

@@ -156,36 +156,13 @@ fn slide_spec(entry: &ManifestSlide, path: PathBuf) -> Result<SlideSpec, String>
     })
 }
 
+/// Performance manifests may omit a slide's SHA-256; a declared one must match.
 fn validate_manifest_sha256(entry: &ManifestSlide, slide_path: &Path) -> Result<(), String> {
     if entry.sha256.is_empty() {
         return Ok(());
     }
-    let source_path = if entry
-        .url
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
-    {
-        corpus::source_archive_path(entry).ok_or_else(|| {
-            format!(
-                "manifest source archive for {:?} is missing; cannot verify SHA-256",
-                entry.alias
-            )
-        })?
-    } else {
-        slide_path.to_path_buf()
-    };
-    let actual = wsi_rs_perf::sha256_file(&source_path)?;
-    if actual.eq_ignore_ascii_case(&entry.sha256) {
-        Ok(())
-    } else {
-        Err(format!(
-            "manifest SHA-256 mismatch for {:?} at {}: expected {}, found {actual}",
-            entry.alias,
-            source_path.display(),
-            entry.sha256
-        ))
-    }
+    corpus::verify_entry_sha256(entry, slide_path)
+        .map_err(|error| format!("performance manifest: {error}"))
 }
 
 fn benchmark_group(entry: &ManifestSlide) -> String {

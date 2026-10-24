@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const CORPUS_CACHE_ENV: &str = "WSI_RS_PARITY_CORPUS_CACHE";
 const PARITY_ALIASES_ENV: &str = "WSI_RS_PARITY_ALIASES";
@@ -379,6 +382,63 @@ pub fn resolve_entry_path(entry: &CorpusEntry, workspace_root: &Path) -> Option<
         .find_map(|candidate| resolve_candidate(entry, &candidate))
 }
 
+/// Check the file the entry's `sha256` describes: the fetched archive when
+/// the entry's URL names a zip, otherwise the resolved slide. An entry that
+/// declares no SHA-256 is an error.
+pub fn verify_entry_sha256(entry: &CorpusEntry, resolved: &Path) -> Result<(), String> {
+    if entry.sha256.is_empty() {
+        return Err(format!("{}: manifest declares no SHA-256", entry.alias));
+    }
+    let source = if url_names_zip(entry) {
+        source_archive_path(entry).ok_or_else(|| {
+            format!(
+                "{}: source archive is missing, so its declared SHA-256 cannot be verified",
+                entry.alias
+            )
+        })?
+    } else {
+        resolved.to_path_buf()
+    };
+    let actual = sha256_file(&source).map_err(|error| format!("{}: {error}", entry.alias))?;
+    if actual.eq_ignore_ascii_case(&entry.sha256) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: SHA-256 mismatch for {}: expected {}, found {actual}",
+            entry.alias,
+            source.display(),
+            entry.sha256
+        ))
+    }
+}
+
+/// The lower-case hexadecimal SHA-256 of a file's contents.
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    let file = File::open(path)
+        .map_err(|err| format!("failed to open {} for hashing: {err}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut checksum = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|err| format!("failed to hash {}: {err}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        checksum.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", checksum.finalize()))
+}
+
+fn url_names_zip(entry: &CorpusEntry) -> bool {
+    entry
+        .url
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
+}
+
 pub fn source_archive_path(entry: &CorpusEntry) -> Option<PathBuf> {
     cache_candidates(entry).into_iter().find(|candidate| {
         candidate.is_file()
@@ -399,7 +459,7 @@ pub fn cache_candidates(entry: &CorpusEntry) -> Vec<PathBuf> {
         candidates.push(cache.join(format!("{}.{}", entry.alias, extension)));
     }
     if let Some(name) = entry.url.rsplit('/').next().filter(|name| !name.is_empty()) {
-        if name.to_ascii_lowercase().ends_with(".zip") {
+        if url_names_zip(entry) {
             let fetched_archive = cache.join(format!("{}.zip", entry.alias));
             if !candidates.contains(&fetched_archive) {
                 candidates.push(fetched_archive);
@@ -663,6 +723,53 @@ mod tests {
             assert_eq!(resolve_candidate(&entry, &extracted), Some(slide));
         }
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn entry_sha256_checks_the_resolved_slide_and_requires_a_digest() {
+        let directory =
+            std::env::temp_dir().join(format!("wsi-rs-corpus-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let slide = directory.join("slide.svs");
+        std::fs::write(&slide, b"abc").unwrap();
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(sha256_file(&slide).unwrap(), abc);
+        assert!(sha256_file(&directory.join("missing"))
+            .unwrap_err()
+            .contains("failed to open"));
+
+        let entry = |sha256: &str| CorpusEntry {
+            alias: "slide".into(),
+            format: "aperio".into(),
+            sha256: sha256.into(),
+            ..CorpusEntry::default()
+        };
+        verify_entry_sha256(&entry(abc), &slide).unwrap();
+        verify_entry_sha256(&entry(&abc.to_ascii_uppercase()), &slide).unwrap();
+        let mismatch = verify_entry_sha256(&entry(&"0".repeat(64)), &slide).unwrap_err();
+        assert!(mismatch.contains("slide: SHA-256 mismatch"), "{mismatch}");
+        assert!(verify_entry_sha256(&entry(""), &slide)
+            .unwrap_err()
+            .contains("declares no SHA-256"));
+        let unreadable = verify_entry_sha256(&entry(abc), &directory.join("missing")).unwrap_err();
+        assert!(
+            unreadable.starts_with("slide: failed to open"),
+            "{unreadable}"
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn entry_sha256_of_a_zip_url_hashes_the_fetched_archive() {
+        let entry = CorpusEntry {
+            alias: "wsi-rs-no-such-archive-alias".into(),
+            format: "mirax".into(),
+            sha256: "a".repeat(64),
+            url: "https://example.invalid/wsi-rs-no-such-archive.zip".into(),
+            ..CorpusEntry::default()
+        };
+        let error = verify_entry_sha256(&entry, Path::new("Cargo.toml")).unwrap_err();
+        assert!(error.contains("source archive is missing"), "{error}");
     }
 
     #[test]
