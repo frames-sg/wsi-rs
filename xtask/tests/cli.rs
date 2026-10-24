@@ -554,6 +554,37 @@ EOF
     }
 
     #[test]
+    fn test_runners_cover_reader_features_and_shared_support_once() {
+        for (task, runner) in [("test", "test"), ("nextest", "nextest run")] {
+            let fixture = FakeRepository::new();
+            let output = fixture.run(task, &[]);
+            assert!(
+                output.status.success(),
+                "{task}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = fs::read_to_string(&fixture.log_path).unwrap();
+            let invocations = log
+                .lines()
+                .map(|line| {
+                    line.strip_prefix(&format!("{} ", fixture.cargo.display()))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut expected = vec![
+                format!("{runner} --locked --lib --tests -p wsi-rs -p wsi-rs-test-support"),
+                format!("{runner} --locked --lib --tests -p wsi-rs --features parity-openslide"),
+            ];
+            if cfg!(target_os = "macos") {
+                expected.push(format!(
+                    "{runner} --locked --lib --tests -p wsi-rs --features parity-metal"
+                ));
+            }
+            assert_eq!(invocations, expected, "{task}");
+        }
+    }
+
+    #[test]
     fn engineering_commands_execute_their_complete_orchestration_contracts() {
         let fixture = FakeRepository::new();
         let script = fs::read_to_string(&fixture.cargo).unwrap();
@@ -617,6 +648,32 @@ esac
         ] {
             assert!(log.contains(expected), "missing `{expected}` in:\n{log}");
         }
+    }
+
+    #[test]
+    fn release_fuzz_takes_the_ci_time_budget() {
+        let fixture = FakeRepository::new();
+        let output = fixture.run("release-fuzz", &["--seconds", "15", "--timeout", "5"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert_eq!(log.lines().count(), 9, "{log}");
+        assert!(
+            log.contains(
+                "fuzz run --sanitizer address open_wsi_bytes fuzz/corpus/open_wsi_bytes -- \
+                 -max_total_time=15 -timeout=5 -rss_limit_mb=2048\n"
+            ),
+            "{log}"
+        );
+
+        fs::write(&fixture.log_path, "").unwrap();
+        let output = fixture.run("release-fuzz", &["--minutes", "5"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("usage: cargo xtask release-fuzz"));
+        assert!(fs::read_to_string(&fixture.log_path).unwrap().is_empty());
     }
 
     #[test]

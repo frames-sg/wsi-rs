@@ -33,7 +33,7 @@ pub(super) fn rc_preflight() -> Result<(), String> {
     api_check()?;
     deps()?;
     fuzz_check()?;
-    release_fuzz()?;
+    run_fuzz_campaigns(RELEASE_FUZZ_BUDGET)?;
     feature_check()?;
     validate()?;
     release_test()?;
@@ -68,49 +68,30 @@ pub(super) fn clippy() -> Result<(), String> {
 }
 
 pub(super) fn test() -> Result<(), String> {
-    run_cargo(&["test", "--locked", "--lib", "--tests"])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--lib",
-        "--tests",
-        "--features",
-        "parity-openslide",
-    ])?;
-    if cfg!(target_os = "macos") {
-        run_cargo(&[
-            "test",
-            "--locked",
-            "--lib",
-            "--tests",
-            "--features",
-            "parity-metal",
-        ])?;
-    }
-    Ok(())
+    run_test_matrix(&["test"])
 }
 
 pub(super) fn nextest() -> Result<(), String> {
-    run_cargo(&["nextest", "run", "--locked", "--lib", "--tests"])?;
-    run_cargo(&[
-        "nextest",
-        "run",
-        "--locked",
-        "--lib",
-        "--tests",
-        "--features",
-        "parity-openslide",
-    ])?;
-    if cfg!(target_os = "macos") {
-        run_cargo(&[
-            "nextest",
-            "run",
-            "--locked",
-            "--lib",
-            "--tests",
-            "--features",
-            "parity-metal",
-        ])?;
+    run_test_matrix(&["nextest", "run"])
+}
+
+fn run_test_matrix(runner: &[&str]) -> Result<(), String> {
+    for feature in [
+        None,
+        Some("parity-openslide"),
+        #[cfg(target_os = "macos")]
+        Some("parity-metal"),
+    ] {
+        let mut args = runner.to_vec();
+        args.extend(["--locked", "--lib", "--tests", "-p", "wsi-rs"]);
+        if let Some(feature) = feature {
+            args.extend(["--features", feature]);
+        } else {
+            // Shared corpus and OpenSlide tests belong to their owning crate.
+            // They have no reader feature variants and only need to run once.
+            args.extend(["-p", "wsi-rs-test-support"]);
+        }
+        run_cargo(&args)?;
     }
     Ok(())
 }
@@ -555,37 +536,87 @@ pub(super) fn fuzz_check() -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn release_fuzz() -> Result<(), String> {
+/// How long each fuzz target runs, and how long one input may take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FuzzBudget {
+    seconds: u64,
+    timeout_seconds: u64,
+}
+
+/// The release preflight's campaign, and `release-fuzz`'s default.
+const RELEASE_FUZZ_BUDGET: FuzzBudget = FuzzBudget {
+    seconds: 300,
+    timeout_seconds: 10,
+};
+
+const RELEASE_FUZZ_USAGE: &str = "usage: cargo xtask release-fuzz [--seconds N] [--timeout N]";
+
+pub(super) fn release_fuzz(arguments: Vec<String>) -> Result<(), String> {
+    run_fuzz_campaigns(parse_fuzz_budget(&arguments)?)
+}
+
+fn parse_fuzz_budget(arguments: &[String]) -> Result<FuzzBudget, String> {
+    let mut budget = RELEASE_FUZZ_BUDGET;
+    let mut arguments = arguments.iter();
+    while let Some(flag) = arguments.next() {
+        let field = match flag.as_str() {
+            "--seconds" => &mut budget.seconds,
+            "--timeout" => &mut budget.timeout_seconds,
+            _ => return Err(format!("{RELEASE_FUZZ_USAGE}; unknown argument {flag:?}")),
+        };
+        *field = arguments
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                format!("{RELEASE_FUZZ_USAGE}; {flag} takes a positive number of seconds")
+            })?;
+    }
+    Ok(budget)
+}
+
+fn run_fuzz_campaigns(budget: FuzzBudget) -> Result<(), String> {
     for target in FUZZ_TARGETS {
         let corpus = format!("fuzz/corpus/{target}");
         fs::create_dir_all(&corpus)
             .map_err(|error| format!("create release fuzz corpus {corpus}: {error}"))?;
         let seed = format!("fuzz/seeds/{target}");
-        let mut owned_args = vec![
-            "run".to_string(),
-            PINNED_NIGHTLY_TOOLCHAIN.to_string(),
-            "cargo".to_string(),
-            "fuzz".to_string(),
-            "run".to_string(),
-            "--sanitizer".to_string(),
-            "address".to_string(),
-            target.to_string(),
-            corpus,
-        ];
-        if Path::new(&seed).is_dir() {
-            owned_args.push(seed);
-        }
-        owned_args.extend([
-            "--".to_string(),
-            "-max_total_time=300".to_string(),
-            "-timeout=10".to_string(),
-            "-rss_limit_mb=2048".to_string(),
-        ]);
+        let seed = Path::new(&seed).is_dir().then_some(seed);
+        let owned_args = fuzz_run_args(target, corpus, seed, budget);
         let args = owned_args.iter().map(String::as_str).collect::<Vec<_>>();
         run_program(OsString::from("rustup"), &args, &[])
             .map_err(|error| format!("release fuzz campaign failed for {target}: {error}"))?;
     }
     Ok(())
+}
+
+fn fuzz_run_args(
+    target: &str,
+    corpus: String,
+    seed: Option<String>,
+    budget: FuzzBudget,
+) -> Vec<String> {
+    let mut args = [
+        "run",
+        PINNED_NIGHTLY_TOOLCHAIN,
+        "cargo",
+        "fuzz",
+        "run",
+        "--sanitizer",
+        "address",
+        target,
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(corpus);
+    args.extend(seed);
+    args.extend([
+        "--".to_string(),
+        format!("-max_total_time={}", budget.seconds),
+        format!("-timeout={}", budget.timeout_seconds),
+        "-rss_limit_mb=2048".to_string(),
+    ]);
+    args
 }
 
 fn performance_preflight() -> Result<(), String> {
