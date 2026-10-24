@@ -102,15 +102,11 @@ fn tile_from_raw_jpeg_subblock(raw: &RawSubBlock) -> Result<CpuTile, WsiError> {
     }
 
     let decoded = crate::core::batch::exactly_one(
-        decode_batch_jpeg(&[JpegDecodeJob {
-            data: Cow::Borrowed(&raw.data),
-            tables: None,
+        decode_batch_jpeg(&[JpegDecodeJob::with_expected(
+            &raw.data,
             expected_width,
             expected_height,
-            color_transform: j2k_jpeg::ColorTransform::Auto,
-            force_dimensions: false,
-            requested_size: None,
-        }]),
+        )]),
         "Zeiss JPEG subblock decode",
     )?
     .map_err(|error| {

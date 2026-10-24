@@ -14,7 +14,6 @@ mod tiles;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fs::{self, File};

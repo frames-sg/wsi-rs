@@ -117,11 +117,17 @@ impl<'a> JpegDecodeJob<'a> {
     /// A self-contained JPEG decoded at the size its SOF declares: no
     /// external tables, no dimension patch, no rescale.
     pub(crate) fn standalone(data: &'a [u8]) -> Self {
+        Self::with_expected(data, 0, 0)
+    }
+
+    /// A self-contained JPEG whose SOF should match `width` x `height`: no
+    /// external tables, no dimension patch, no rescale.
+    pub(crate) fn with_expected(data: &'a [u8], width: u32, height: u32) -> Self {
         Self {
             data: Cow::Borrowed(data),
             tables: None,
-            expected_width: 0,
-            expected_height: 0,
+            expected_width: width,
+            expected_height: height,
             color_transform: J2kColorTransform::Auto,
             force_dimensions: false,
             requested_size: None,

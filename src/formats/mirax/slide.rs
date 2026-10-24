@@ -168,15 +168,11 @@ impl MiraxSlide {
             MiraxImageFormat::Jpeg => {
                 let (expected_width, expected_height) = expected_dimensions.unwrap_or((0, 0));
                 crate::core::batch::exactly_one(
-                    decode_batch_jpeg(&[JpegDecodeJob {
-                        data: Cow::Borrowed(&bytes),
-                        tables: None,
+                    decode_batch_jpeg(&[JpegDecodeJob::with_expected(
+                        &bytes,
                         expected_width,
                         expected_height,
-                        color_transform: j2k_jpeg::ColorTransform::Auto,
-                        force_dimensions: false,
-                        requested_size: None,
-                    }]),
+                    )]),
                     "MIRAX JPEG decode",
                 )?
             }

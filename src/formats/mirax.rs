@@ -6,7 +6,6 @@ mod slide;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
