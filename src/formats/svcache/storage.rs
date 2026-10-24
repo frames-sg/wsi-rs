@@ -23,9 +23,10 @@ pub(super) fn read_svcache_with_budget(
     path: &Path,
     budget: &OpenBudget,
 ) -> Result<(File, u64, SvcacheMetadata), WsiError> {
-    let mut file = File::open(path)?;
+    let mut file = File::open(path).map_err(|e| WsiError::io_with_path(path, e))?;
     let mut magic = [0_u8; 8];
-    file.read_exact(&mut magic)?;
+    file.read_exact(&mut magic)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
     if &magic != MAGIC {
         return Err(WsiError::UnsupportedFormat(format!(
             "{} is not an .svcache file",
@@ -33,7 +34,8 @@ pub(super) fn read_svcache_with_budget(
         )));
     }
     let mut len = [0_u8; 8];
-    file.read_exact(&mut len)?;
+    file.read_exact(&mut len)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
     let metadata_len = u64::from_le_bytes(len);
     if metadata_len > MAX_METADATA_BYTES {
         return Err(invalid_svcache(path, "svcache metadata is too large"));
@@ -61,7 +63,8 @@ pub(super) fn read_svcache_with_budget(
             limit: metadata_limit,
         })?;
     metadata_bytes.resize(metadata_len, 0);
-    file.read_exact(&mut metadata_bytes)?;
+    file.read_exact(&mut metadata_bytes)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
     let metadata: SvcacheMetadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|err| invalid_svcache(path, format!("parse svcache metadata: {err}")))?;
     if metadata.schema_version != SCHEMA_VERSION {
