@@ -187,6 +187,51 @@ impl DicomImage {
         )
     }
 
+    /// The JPEG decode job for one of this image's frames, once the frame
+    /// matches the declared process and precision.
+    pub(in super::super) fn jpeg_job<'a>(
+        &self,
+        bytes: &'a [u8],
+    ) -> Result<JpegDecodeJob<'a>, WsiError> {
+        self.validate_jpeg_frame(bytes)?;
+        Ok(JpegDecodeJob {
+            data: Cow::Borrowed(bytes),
+            tables: None,
+            expected_width: self.tile_width,
+            expected_height: self.tile_height,
+            color_transform: dicom_jpeg_color_transform(&self.photometric_interpretation),
+            force_dimensions: false,
+            requested_size: None,
+        })
+    }
+
+    /// The decode job for one of this image's 8-bit JPEG 2000 frames.
+    pub(in super::super) fn jp2k_job<'a>(
+        &self,
+        bytes: &'a [u8],
+        backend: BackendRequest,
+    ) -> Jp2kDecodeJob<'a> {
+        Jp2kDecodeJob {
+            data: Cow::Borrowed(bytes),
+            expected_width: self.tile_width,
+            expected_height: self.tile_height,
+            rgb_color_space: !jp2k_photometric_is_ycbcr(&self.photometric_interpretation),
+            backend,
+        }
+    }
+
+    /// Decode one of this image's RLE Lossless frames.
+    pub(in super::super) fn decode_rle(&self, bytes: &[u8]) -> Result<CpuTile, WsiError> {
+        decode_rle_lossless_frame(
+            bytes,
+            self.tile_width,
+            self.tile_height,
+            self.samples_per_pixel,
+            &self.photometric_interpretation,
+            self.bit_depth,
+        )
+    }
+
     pub(in super::super) fn decode_frame_sample_buffer(
         &self,
         frame_index: u32,
@@ -202,91 +247,49 @@ impl DicomImage {
             }
         }
 
-        let buffer = if matches!(self.transfer_syntax, DicomTransferSyntax::Jpeg(_)) {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            self.validate_jpeg_frame(bytes.as_slice())
-                .map_err(|err| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: err.to_string(),
-                })?;
-            crate::core::batch::exactly_one(
-                decode_dicom_jpeg_batch(
-                    self.bit_depth,
-                    &[JpegDecodeJob {
-                        data: Cow::Borrowed(bytes.as_slice()),
-                        tables: None,
-                        expected_width: self.tile_width,
-                        expected_height: self.tile_height,
-                        color_transform: dicom_jpeg_color_transform(
-                            &self.photometric_interpretation,
-                        ),
-                        force_dimensions: false,
-                        requested_size: None,
-                    }],
-                ),
-                "DICOM JPEG frame decode",
-            )?
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else if matches!(self.transfer_syntax, DicomTransferSyntax::Jp2k { .. }) {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            let decoded = match self.bit_depth {
-                DicomBitDepth::Eight => crate::core::batch::exactly_one(
-                    decode_batch_jp2k(&[Jp2kDecodeJob {
-                        data: Cow::Borrowed(bytes.as_slice()),
-                        expected_width: self.tile_width,
-                        expected_height: self.tile_height,
-                        rgb_color_space: !jp2k_photometric_is_ycbcr(
-                            self.photometric_interpretation.as_str(),
-                        ),
-                        backend,
-                    }]),
-                    "DICOM JP2K frame decode",
-                )?,
-                DicomBitDepth::Uint16 { .. } => {
-                    crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(
-                        || {
-                            self.decode_jp2k_u16_frame(
-                                bytes.as_slice(),
-                                j2k::CpuDecodeParallelism::Auto,
-                            )
-                        },
-                    )
+        let extract = || self.extract_encapsulated_frame(frame_index, level, col, row, false);
+        let tile_read = |err: WsiError| WsiError::TileRead {
+            col,
+            row,
+            level,
+            reason: err.to_string(),
+        };
+        let buffer = match self.transfer_syntax {
+            DicomTransferSyntax::Jpeg(_) => {
+                let bytes = extract()?;
+                let job = self.jpeg_job(bytes.as_slice()).map_err(tile_read)?;
+                crate::core::batch::exactly_one(
+                    decode_dicom_jpeg_batch(self.bit_depth, &[job]),
+                    "DICOM JPEG frame decode",
+                )?
+                .map_err(tile_read)?
+            }
+            DicomTransferSyntax::Jp2k { .. } => {
+                let bytes = extract()?;
+                match self.bit_depth {
+                    DicomBitDepth::Eight => crate::core::batch::exactly_one(
+                        decode_batch_jp2k(&[self.jp2k_job(bytes.as_slice(), backend)]),
+                        "DICOM JP2K frame decode",
+                    )?,
+                    DicomBitDepth::Uint16 { .. } => {
+                        crate::core::decode_runtime::DecodeRuntime::default_arc().install_codec_cpu(
+                            || {
+                                self.decode_jp2k_u16_frame(
+                                    bytes.as_slice(),
+                                    j2k::CpuDecodeParallelism::Auto,
+                                )
+                            },
+                        )
+                    }
                 }
-            };
-            decoded.map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else if self.transfer_syntax == DicomTransferSyntax::Rle {
-            let bytes =
-                self.extract_encapsulated_frame(frame_index, level, col, row, !use_decoded_cache)?;
-            decode_rle_lossless_frame(
-                bytes.as_slice(),
-                self.tile_width,
-                self.tile_height,
-                self.samples_per_pixel,
-                &self.photometric_interpretation,
-                self.bit_depth,
-            )
-            .map_err(|err| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: err.to_string(),
-            })?
-        } else {
-            self.decode_uncompressed_frame_sample_buffer(frame_index, level, col, row)?
+                .map_err(tile_read)?
+            }
+            DicomTransferSyntax::Rle => {
+                self.decode_rle(extract()?.as_slice()).map_err(tile_read)?
+            }
+            DicomTransferSyntax::Native { .. } => {
+                self.decode_uncompressed_frame_sample_buffer(frame_index, level, col, row)?
+            }
         };
 
         if use_decoded_cache {
