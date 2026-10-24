@@ -271,12 +271,9 @@ pub(super) fn route_key_for_batch(
     {
         return None;
     }
-    let level = dataset_level(
-        reader.dataset(),
-        first.scene.get(),
-        first.series.get(),
-        first.level.get(),
-    )?;
+    let level = reader
+        .dataset()
+        .find_level(first.scene, first.series, first.level)?;
     let dimensions = reqs
         .iter()
         .map(|request| logical_tile_dimensions(level, request))
@@ -293,22 +290,6 @@ pub(super) fn route_key_for_batch(
         sample_tile_count: reqs.len(),
         cpu_workers: DecodeRuntime::default_arc().cpu_worker_count(),
     })
-}
-
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
-pub(super) fn dataset_level(
-    dataset: &Dataset,
-    scene: usize,
-    series: usize,
-    level: u32,
-) -> Option<&Level> {
-    dataset
-        .scenes
-        .get(scene)?
-        .series
-        .get(series)?
-        .levels
-        .get(level as usize)
 }
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]

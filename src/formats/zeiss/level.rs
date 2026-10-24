@@ -76,8 +76,11 @@ impl ZeissSlide {
             return Ok(None);
         };
 
-        let series = &self.dataset.scenes[scene].series[0];
-        let level_ref = &series.levels[level];
+        let (_, _, level_ref) = self.dataset.level(
+            SceneId::new(scene),
+            SeriesId::new(0),
+            LevelIdx::new(u32::try_from(level).unwrap_or(u32::MAX)),
+        )?;
 
         let subblocks = candidate_infos;
 

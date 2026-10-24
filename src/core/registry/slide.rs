@@ -372,7 +372,8 @@ impl Slide {
         // Irregular tile maps have fractional tile placements and gaps even at
         // whole-pixel origins, so they keep the coverage-preserving plan.
         let irregular = self
-            .level_for(req)
+            .dataset()
+            .find_level(req.scene, req.series, req.level)
             .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
         if offset_px == (0.0, 0.0) && !irregular {
             return self.read_region(req);
@@ -441,12 +442,15 @@ impl Slide {
         destination: &mut [u32],
     ) -> Result<bool, WsiError> {
         check_subpixel_offset(offset_px)?;
-        let tiled = self.level_for(req).is_some_and(|level| {
-            matches!(
-                level.tile_layout,
-                TileLayout::Regular { .. } | TileLayout::Irregular { .. }
-            )
-        });
+        let tiled = self
+            .dataset()
+            .find_level(req.scene, req.series, req.level)
+            .is_some_and(|level| {
+                matches!(
+                    level.tile_layout,
+                    TileLayout::Regular { .. } | TileLayout::Irregular { .. }
+                )
+            });
         if !tiled {
             return Ok(false);
         }
@@ -497,12 +501,8 @@ impl Slide {
         // Irregular layouts, delegate to the source's override which may have
         // format-specific fast paths (e.g. NDPI MCU-level JPEG access).
         let is_regular = self
-            .source
             .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|s| s.series.get(req.series.get()))
-            .and_then(|s| s.levels.get(req.level.get() as usize))
+            .find_level(req.scene, req.series, req.level)
             .is_some_and(|level| matches!(level.tile_layout, TileLayout::Regular { .. }));
         if is_regular {
             let display_cache = self
@@ -652,15 +652,6 @@ impl Slide {
         }
         let (encoded, output) = work(fit)?;
         Ok((fit, self.ordinary_work_bytes(encoded, output)?))
-    }
-
-    fn level_for(&self, req: &RegionRequest) -> Option<&crate::core::types::Level> {
-        self.source
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
     }
 
     fn estimate_tile_output_bytes(&self, req: &TileRequest) -> Result<u64, WsiError> {

@@ -135,17 +135,10 @@ impl TiffPixelReader {
     }
 
     fn subtile_entry(&self, req: &TileRequest) -> Result<&TileEntry, WsiError> {
-        let level = self
+        let (_, _, level) = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-            .ok_or(WsiError::LevelOutOfRange {
-                level: req.level.get(),
-                count: 0,
-            })?;
+            .level(req.scene, req.series, req.level)?;
         let TileLayout::Irregular { tiles, .. } = &level.tile_layout else {
             return Err(WsiError::UnsupportedFormat(
                 "Ventana subtile levels must use irregular tilemaps".into(),

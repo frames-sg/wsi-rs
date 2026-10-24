@@ -32,10 +32,7 @@ impl TiffPixelReader {
         let Some(level) = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
+            .find_level(req.scene, req.series, req.level)
         else {
             return false;
         };
@@ -277,29 +274,7 @@ impl SlideReader for TiffPixelReader {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<LevelSourceKind, WsiError> {
-        let scene_ref =
-            self.layout
-                .dataset
-                .scenes
-                .get(scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: scene.get(),
-                    count: self.layout.dataset.scenes.len(),
-                })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
-        if level.get() as usize >= series_ref.levels.len() {
-            return Err(WsiError::LevelOutOfRange {
-                level: level.get(),
-                count: series_ref.levels.len() as u32,
-            });
-        }
-
+        self.layout.dataset.level(scene, series, level)?;
         let synthetic = self.layout.tile_sources.iter().any(|(key, source)| {
             key.scene == scene.get()
                 && key.series == series.get()
@@ -464,13 +439,10 @@ impl SlideReader for TiffPixelReader {
         req: &RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
         let cache = ctx.tile_cache();
-        let series = self
+        let level = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))?;
-        let level = series.levels.get(req.level.get() as usize)?;
+            .find_level(req.scene, req.series, req.level)?;
         if !matches!(level.tile_layout, TileLayout::WholeLevel { .. }) {
             return None;
         }
@@ -569,8 +541,10 @@ impl SlideReader for TiffPixelReader {
             ),
             TileSource::SyntheticDownsample { base_level, factor } => {
                 validate_tile_coords(req.col, req.row, req.level.get())?;
-                let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()]
-                    .levels[req.level.get() as usize];
+                let (_, _, level) = self
+                    .layout
+                    .dataset
+                    .level(req.scene, req.series, req.level)?;
                 let TileLayout::WholeLevel {
                     virtual_tile_width,
                     virtual_tile_height,

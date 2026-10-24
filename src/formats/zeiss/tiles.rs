@@ -209,7 +209,7 @@ impl ZeissSlide {
         }
 
         let buffer = if let Some(buffer) =
-            self.scene_tile_image_local(scene, level as usize, col, row, sources)?
+            self.scene_tile_image_local(level_ref, level as usize, col, row, sources)?
         {
             record(Event::ZeissLocalTileHits, 1);
             buffer
@@ -231,15 +231,13 @@ impl ZeissSlide {
 
     fn scene_tile_image_local(
         &self,
-        scene: usize,
+        level_ref: &Level,
         level: usize,
         col: i64,
         row: i64,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<Option<CpuTile>, WsiError> {
         let (tile_x, tile_y, tile_w, tile_h) = {
-            let series = &self.dataset.scenes[scene].series[0];
-            let level_ref = &series.levels[level];
             let TileLayout::Regular {
                 tile_width,
                 tile_height,
@@ -277,10 +275,7 @@ impl ZeissSlide {
         if candidate_indices.is_empty() {
             return rgb_u8_tile(tile_w, tile_h, vec![0; tile_rgb_len]).map(Some);
         }
-        let level_ratio = self.dataset.scenes[scene].series[0].levels[level]
-            .downsample
-            .round()
-            .max(1.0) as i32;
+        let level_ratio = level_ref.downsample.round().max(1.0) as i32;
         let tile_origin_x = i32::try_from(tile_x)
             .map_err(|_| WsiError::DisplayConversion("Zeiss tile x overflow".into()))?;
         let tile_origin_y = i32::try_from(tile_y)

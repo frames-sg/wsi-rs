@@ -120,8 +120,10 @@ impl TiffPixelReader {
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<CpuTile, WsiError> {
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let TileLayout::Regular {
             tile_width,
             tile_height,

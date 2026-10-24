@@ -1,8 +1,9 @@
 //! Admitted calibration and selected-route execution. Calibration times CPU
 //! on the calling read and the device on one background thread.
-use super::reader::{dataset_level, route_key_for_batch};
+use super::reader::route_key_for_batch;
 use super::*;
 use crate::core::read_control::check_cancelled_opt;
+use crate::core::types::{LevelIdx, SceneId, SeriesId};
 use crate::decode::jp2k::PreparedJp2kBatch;
 
 impl AdaptiveDecodeReader {
@@ -17,8 +18,7 @@ impl AdaptiveDecodeReader {
         let Some(mut key) = route_key_for_batch(self.inner.as_ref(), reqs, "") else {
             return self.read_inner_cpu(reqs, control);
         };
-        let level = dataset_level(self.inner.dataset(), key.scene, key.series, key.level)
-            .expect("route key validated the level");
+        let level = key_level(self.inner.dataset(), &key).expect("route key validated the level");
         if let TileLayout::Regular {
             tile_width,
             tile_height,
@@ -309,8 +309,7 @@ impl AdaptiveDecodeReader {
         key: &DecodeRouteKey,
         context: &'a crate::core::limits::ReadExecutionContext<'_>,
     ) -> Result<Option<(PreparedJp2kBatch, crate::core::limits::OptionalWork<'a>)>, WsiError> {
-        let Some(level) = dataset_level(self.inner.dataset(), key.scene, key.series, key.level)
-        else {
+        let Some(level) = key_level(self.inner.dataset(), key) else {
             return Ok(None);
         };
         let TileLayout::Regular {
@@ -378,6 +377,15 @@ impl AdaptiveDecodeReader {
             None
         }
     }
+}
+
+/// The level `key` names.
+fn key_level<'a>(dataset: &'a Dataset, key: &DecodeRouteKey) -> Option<&'a Level> {
+    dataset.find_level(
+        SceneId::new(key.scene),
+        SeriesId::new(key.series),
+        LevelIdx::new(key.level),
+    )
 }
 
 /// The device half of a calibration whose CPU half a foreground read timed.

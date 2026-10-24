@@ -61,6 +61,22 @@ impl Dataset {
         Ok((scene_ref, series_ref, level_ref))
     }
 
+    /// The level that `scene`, `series` and `level` name, or `None` where
+    /// [`Self::level`] would fail.
+    pub(crate) fn find_level(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Option<&Level> {
+        self.scenes
+            .get(scene.get())?
+            .series
+            .get(series.get())?
+            .levels
+            .get(level.get() as usize)
+    }
+
     pub fn with_associated_images(
         mut self,
         associated_images: HashMap<String, AssociatedImage>,

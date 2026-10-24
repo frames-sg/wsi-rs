@@ -4,7 +4,7 @@ use j2k_core::BackendRequest;
 
 use crate::core::registry::SlideReader;
 use crate::core::types::{
-    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, SourceEncoding,
+    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, Series, SeriesId, SourceEncoding,
     TileCodecKind, TileRequest,
 };
 use crate::error::WsiError;
@@ -30,15 +30,27 @@ pub(super) fn dicom_level_for_request<'a>(
     slide: &'a DicomSlide,
     req: &TileRequest,
 ) -> Result<&'a DicomLevel, WsiError> {
-    let (_, series, _) = slide.dataset.level(req.scene, req.series, req.level)?;
+    let (series, level) = dicom_level_at(slide, req.scene, req.series, req.level)?;
     series.axes.validate_plane(req.plane.get())?;
-    slide
+    Ok(level)
+}
+
+/// The DICOM level that `scene`, `series` and `level` name, with its series.
+fn dicom_level_at(
+    slide: &DicomSlide,
+    scene: SceneId,
+    series: SeriesId,
+    level: LevelIdx,
+) -> Result<(&Series, &DicomLevel), WsiError> {
+    let (_, series_ref, _) = slide.dataset.level(scene, series, level)?;
+    let dicom_level = slide
         .levels
-        .get(req.level.get() as usize)
+        .get(level.get() as usize)
         .ok_or(WsiError::LevelOutOfRange {
-            level: req.level.get(),
-            count: series.levels.len() as u32,
-        })
+            level: level.get(),
+            count: series_ref.levels.len() as u32,
+        })?;
+    Ok((series_ref, dicom_level))
 }
 
 impl SlideReader for DicomReader {
@@ -62,15 +74,7 @@ impl SlideReader for DicomReader {
         control: &crate::ReadControl,
     ) -> Result<(), WsiError> {
         control.check_cancelled()?;
-        let (_, series_ref, _) = self.slide.dataset.level(scene, series, level)?;
-        let dicom_level =
-            self.slide
-                .levels
-                .get(level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: level.get(),
-                    count: series_ref.levels.len() as u32,
-                })?;
+        let (_, dicom_level) = dicom_level_at(&self.slide, scene, series, level)?;
         for image in &dicom_level.parts {
             control.check_cancelled()?;
             if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
@@ -151,10 +155,7 @@ impl SlideReader for DicomReader {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<Option<SourceEncoding>, WsiError> {
-        if scene.get() != 0 || series.get() != 0 {
-            return Ok(None);
-        }
-        let Some(level) = self.slide.levels.get(level.get() as usize) else {
+        let Ok((_, level)) = dicom_level_at(&self.slide, scene, series, level) else {
             return Ok(None);
         };
         let mut total: Option<SourceEncoding> = None;

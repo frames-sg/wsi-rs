@@ -146,7 +146,7 @@ impl DicomReader {
     }
 
     fn frame_for_request(&self, req: &TileRequest) -> FrameLookup {
-        let Some(level) = self.slide.levels.get(req.level.get() as usize) else {
+        let Ok(level) = dicom_level_for_request(&self.slide, req) else {
             return FrameLookup::Unknown;
         };
         let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {

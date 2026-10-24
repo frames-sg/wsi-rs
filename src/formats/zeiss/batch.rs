@@ -209,12 +209,7 @@ impl ZeissReader {
         let level = self
             .slide
             .dataset
-            .scenes
-            .get(req.scene.get())?
-            .series
-            .get(req.series.get())?
-            .levels
-            .get(req.level.get() as usize)?;
+            .find_level(req.scene, req.series, req.level)?;
         let TileLayout::Regular {
             tile_width,
             tile_height,

@@ -69,8 +69,10 @@ impl TiffPixelReader {
         let Some(scale) = j2k_downscale_for_factor(factor) else {
             return Ok(None);
         };
-        let target = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, target) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let base_req = TileRequest {
             scene: req.scene.get().into(),
             series: req.series.get().into(),
@@ -155,9 +157,11 @@ impl TiffPixelReader {
         else {
             return Ok(None);
         };
-        let base = &self.layout.dataset.scenes[base_tile_req.scene.get()].series
-            [base_tile_req.series.get()]
-        .levels[base_tile_req.level.get() as usize];
+        let (_, _, base) = self.layout.dataset.level(
+            base_tile_req.scene,
+            base_tile_req.series,
+            base_tile_req.level,
+        )?;
         let TileLayout::WholeLevel {
             virtual_tile_width: base_strip_w,
             virtual_tile_height: base_strip_h,
@@ -323,10 +327,14 @@ impl TiffPixelReader {
             return Ok(Arc::new(image));
         }
 
-        let base = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [base_level as usize];
-        let target = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, base) =
+            self.layout
+                .dataset
+                .level(req.scene, req.series, LevelIdx::new(base_level))?;
+        let (_, _, target) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let base_tile_req = TileRequest {
             scene: req.scene.get().into(),
             series: req.series.get().into(),
@@ -405,8 +413,10 @@ impl TiffPixelReader {
 
         let (x, y) = req.origin_px;
         let (w, h) = req.size_px;
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         if x != 0
             || y != 0
             || u64::from(w) != level.dimensions.0
@@ -573,29 +583,10 @@ impl TiffPixelReader {
             }
         }
 
-        let series = self
-            .layout
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .ok_or_else(|| WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: self
-                    .layout
-                    .dataset
-                    .scenes
-                    .get(req.scene.get())
-                    .map_or(0, |scene| scene.series.len()),
-            })?;
-        let base =
-            series
-                .levels
-                .get(base_level as usize)
-                .ok_or_else(|| WsiError::LevelOutOfRange {
-                    level: base_level,
-                    count: series.levels.len() as u32,
-                })?;
+        let (_, _, base) =
+            self.layout
+                .dataset
+                .level(req.scene, req.series, LevelIdx::new(base_level))?;
         // Each coordinate was clamped to the nonnegative u64 target dimensions.
         let clipped_x0 = clipped_x0 as u128;
         let clipped_y0 = clipped_y0 as u128;
@@ -657,27 +648,10 @@ impl TiffPixelReader {
         base_level: u32,
         factor: u32,
     ) -> Result<CpuTile, WsiError> {
-        let series = self
+        let (_, _, level) = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .ok_or_else(|| WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: self
-                    .layout
-                    .dataset
-                    .scenes
-                    .get(req.scene.get())
-                    .map_or(0, |scene| scene.series.len()),
-            })?;
-        let level = series.levels.get(req.level.get() as usize).ok_or_else(|| {
-            WsiError::LevelOutOfRange {
-                level: req.level.get(),
-                count: series.levels.len() as u32,
-            }
-        })?;
+            .level(req.scene, req.series, req.level)?;
 
         let origin_x = req.col.saturating_mul(i64::from(req.tile_width));
         let origin_y = req.row.saturating_mul(i64::from(req.tile_height));

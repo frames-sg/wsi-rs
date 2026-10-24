@@ -17,8 +17,10 @@ impl TiffPixelReader {
         let col = req.col;
         let row = req.row;
 
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
 
         let tile_idx = match &level.tile_layout {
             TileLayout::Regular {
