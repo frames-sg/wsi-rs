@@ -340,12 +340,9 @@ impl TiffPixelReader {
                 needed_strips.push(NeededNdpiStrip {
                     strip_key,
                     strip_req: TileRequest {
-                        scene: req.scene.get().into(),
-                        series: req.series.get().into(),
-                        level: req.level.get().into(),
-                        plane: req.plane,
                         col: i64::from(native_col),
                         row: i64::from(native_row),
+                        ..req.source_tile()
                     },
                     copy_start_x,
                     copy_start_y,

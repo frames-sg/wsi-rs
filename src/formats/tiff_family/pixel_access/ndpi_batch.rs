@@ -144,14 +144,7 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<CpuTile, WsiError> {
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        };
+        let tile_req = req.source_tile();
         let full_image =
             self.get_or_decode_ndpi_full_image(&tile_req, ifd_id, strip_offset, strip_byte_count)?;
         let (_, _, level) = self

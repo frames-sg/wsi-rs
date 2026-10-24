@@ -291,17 +291,7 @@ impl CacheKey {
         col: i64,
         row: i64,
     ) -> Self {
-        Self::from_tile_request(
-            dataset_id,
-            &TileRequest {
-                scene: request.scene,
-                series: request.series,
-                level: request.level,
-                plane: request.plane,
-                col,
-                row,
-            },
-        )
+        Self::from_tile_request(dataset_id, &request.tile_at(col, row))
     }
 }
 

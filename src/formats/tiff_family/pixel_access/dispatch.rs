@@ -4,28 +4,23 @@ use super::*;
 impl TiffPixelReader {
     /// Look up the TileSource for a given tile request.
     pub(super) fn tile_source_for(&self, req: &TileRequest) -> Result<&TileSource, WsiError> {
-        let key = TileSourceKey {
-            scene: req.scene.get(),
-            series: req.series.get(),
-            level: req.level.get(),
-            z: req.plane.get().z,
-            c: req.plane.get().c,
-            t: req.plane.get().t,
-        };
-        self.layout.tile_sources.get(&key).ok_or_else(|| {
-            WsiError::tile_read(
-                req,
-                format!(
-                    "no tile source for scene={}, series={}, level={}, z={}, c={}, t={}",
-                    req.scene.get(),
-                    req.series.get(),
-                    req.level.get(),
-                    req.plane.get().z,
-                    req.plane.get().c,
-                    req.plane.get().t,
-                ),
-            )
-        })
+        self.layout
+            .tile_sources
+            .get(&TileSourceKey::from(req))
+            .ok_or_else(|| {
+                WsiError::tile_read(
+                    req,
+                    format!(
+                        "no tile source for scene={}, series={}, level={}, z={}, c={}, t={}",
+                        req.scene.get(),
+                        req.series.get(),
+                        req.level.get(),
+                        req.plane.get().z,
+                        req.plane.get().c,
+                        req.plane.get().t,
+                    ),
+                )
+            })
     }
 
     fn display_request_matches_native_regular_grid(&self, req: &TileViewRequest) -> bool {
@@ -348,14 +343,7 @@ impl SlideReader for TiffPixelReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        };
+        let tile_req = req.source_tile();
         match self.tile_source_for(&tile_req)? {
             TileSource::TiledIfd {
                 ifd_id,
@@ -413,14 +401,7 @@ impl SlideReader for TiffPixelReader {
     }
 
     fn use_display_tile_cache(&self, req: &TileViewRequest) -> bool {
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        };
+        let tile_req = req.source_tile();
         match self.tile_source_for(&tile_req) {
             Ok(
                 TileSource::NdpiJpeg { .. }
@@ -446,16 +427,10 @@ impl SlideReader for TiffPixelReader {
         if !matches!(level.tile_layout, TileLayout::WholeLevel { .. }) {
             return None;
         }
-        let plane = req.plane.get();
-
-        let source = self.layout.tile_sources.get(&TileSourceKey {
-            scene: req.scene.get(),
-            series: req.series.get(),
-            level: req.level.get(),
-            z: plane.z,
-            c: plane.c,
-            t: plane.t,
-        })?;
+        let source = self
+            .layout
+            .tile_sources
+            .get(&TileSourceKey::from(&req.tile_at(0, 0)))?;
         match source {
             TileSource::NdpiJpeg { .. } => {
                 let TileLayout::WholeLevel {
@@ -632,14 +607,7 @@ impl SlideReader for TiffPixelReader {
     }
 
     fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
-        let source = self.tile_source_for(&TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        })?;
+        let source = self.tile_source_for(&req.source_tile())?;
         match source {
             TileSource::NdpiJpeg {
                 ifd_id,

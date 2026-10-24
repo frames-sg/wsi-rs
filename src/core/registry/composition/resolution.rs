@@ -40,24 +40,18 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
         CacheKey::from_region_tile(self.source.dataset().id, self.request, col, row)
     }
 
-    fn tile_request(&self, col: i64, row: i64) -> TileRequest {
-        TileRequest {
-            scene: self.request.scene.get().into(),
-            series: self.request.series.get().into(),
-            level: self.request.level.get().into(),
-            plane: self.request.plane,
-            col,
-            row,
-        }
-    }
-
     pub(super) fn resolve_one(&self, col: i64, row: i64) -> Result<Arc<CpuTile>, WsiError> {
         let key = self.cache_key(col, row);
         if let Some(cached) = self.cache.and_then(|cache| cache.get(&key)) {
             return Ok(cached);
         }
 
-        resolve_tile_miss(self.source, self.cache, key, &self.tile_request(col, row))
+        resolve_tile_miss(
+            self.source,
+            self.cache,
+            key,
+            &self.request.tile_at(col, row),
+        )
     }
 
     pub(super) fn resolve_hits(&self, hits: &[TileHit]) -> Result<Vec<Arc<CpuTile>>, WsiError> {
@@ -80,7 +74,7 @@ impl<'a, T: SlideReader + ?Sized> RegionTileResolver<'a, T> {
                 }
                 cache_misses += 1;
             }
-            let req = self.tile_request(hit.col, hit.row);
+            let req = self.request.tile_at(hit.col, hit.row);
             match self
                 .cache
                 .map(|cache| cache.claim_miss(&key))

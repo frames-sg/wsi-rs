@@ -3,9 +3,7 @@ use super::resolution::{resolve_tile_miss, validate_region_request};
 
 use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::{SlideReader, DEFAULT_MAX_REGION_PIXELS};
-use crate::core::types::{
-    CpuTile, LevelIdx, RegionRequest, TileLayout, TileRequest, TileViewRequest,
-};
+use crate::core::types::{CpuTile, RegionRequest, TileLayout, TileViewRequest};
 use crate::error::WsiError;
 
 pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
@@ -26,7 +24,7 @@ fn display_region_request(req: &TileViewRequest) -> RegionRequest {
     RegionRequest {
         scene: req.scene,
         series: req.series,
-        level: LevelIdx::new(req.level.get()),
+        level: req.level,
         plane: req.plane,
         origin_px: (
             req.col.saturating_mul(i64::from(req.tile_width)),
@@ -55,22 +53,11 @@ fn is_exact_native_display_request(layout: &TileLayout, req: &TileViewRequest) -
         && req.row < *tiles_down as i64
 }
 
-fn display_tile_request(req: &TileViewRequest) -> TileRequest {
-    TileRequest {
-        scene: req.scene,
-        series: req.series,
-        level: req.level,
-        plane: req.plane,
-        col: req.col,
-        row: req.row,
-    }
-}
-
 fn read_display_source_tile<T: SlideReader + ?Sized>(
     source: &T,
     req: &TileViewRequest,
 ) -> Result<CpuTile, WsiError> {
-    source.read_tile_cpu(&display_tile_request(req))
+    source.read_tile_cpu(&req.source_tile())
 }
 
 fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
@@ -80,11 +67,11 @@ fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
 ) -> Result<CpuTile, WsiError> {
     let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
     let (tile, cache_hit) = if let Some(cache) = cache {
-        let key = CacheKey::from_tile_request(source.dataset().id, &display_tile_request(req));
+        let key = CacheKey::from_tile_request(source.dataset().id, &req.source_tile());
         if let Some(cached) = cache.get(&key) {
             (cached.as_ref().clone(), Some(true))
         } else {
-            let tile = resolve_tile_miss(source, Some(cache), key, &display_tile_request(req))?;
+            let tile = resolve_tile_miss(source, Some(cache), key, &req.source_tile())?;
             (tile.as_ref().clone(), Some(false))
         }
     } else {

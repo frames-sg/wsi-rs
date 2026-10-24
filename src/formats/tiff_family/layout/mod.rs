@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use crate::core::hash::Quickhash1;
 use crate::core::types::{
     AssociatedImage, AxesShape, Compression, Dataset, DatasetId, Level, SampleType, Scene, Series,
+    TileRequest,
 };
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
@@ -284,6 +285,20 @@ pub(crate) struct TileSourceKey {
     pub z: u32,
     pub c: u32,
     pub t: u32,
+}
+
+impl From<&TileRequest> for TileSourceKey {
+    fn from(req: &TileRequest) -> Self {
+        let plane = req.plane.get();
+        Self {
+            scene: req.scene.get(),
+            series: req.series.get(),
+            level: req.level.get(),
+            z: plane.z,
+            c: plane.c,
+            t: plane.t,
+        }
+    }
 }
 
 /// Describes how to access a level's or associated image's pixel data.

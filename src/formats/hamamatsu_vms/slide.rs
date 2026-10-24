@@ -57,14 +57,7 @@ impl SlideReader for VmsReader {
             "VMS raw JPEG display",
         )?;
 
-        self.read_raw_compressed_tile(&TileRequest {
-            scene: req.scene,
-            series: req.series,
-            level: req.level,
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        })
+        self.read_raw_compressed_tile(&req.source_tile())
     }
 
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {

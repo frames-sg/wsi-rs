@@ -85,14 +85,7 @@ impl SlideReader for ZeissReader {
             "Zeiss raw JPEG display",
         )?;
 
-        self.slide.read_raw_jpeg_tile(&TileRequest {
-            scene: req.scene,
-            series: req.series,
-            level: req.level,
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        })
+        self.slide.read_raw_jpeg_tile(&req.source_tile())
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

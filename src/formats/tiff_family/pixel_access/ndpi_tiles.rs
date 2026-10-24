@@ -195,12 +195,9 @@ impl TiffPixelReader {
                     continue;
                 }
                 let strip_req = TileRequest {
-                    scene: req.scene.get().into(),
-                    series: req.series.get().into(),
-                    level: req.level.get().into(),
-                    plane: req.plane,
                     col: i64::from(native_col),
                     row: i64::from(native_row),
+                    ..req.source_tile()
                 };
                 let raw = self.read_ndpi_raw_jpeg_tile(
                     &strip_req,
