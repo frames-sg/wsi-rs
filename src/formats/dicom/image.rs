@@ -108,16 +108,8 @@ impl DicomImage {
         } else {
             DicomGrid::Full
         };
-        let estimated_frame_bytes = dicom_frame_cache_entry_bytes(
-            tile_width,
-            tile_height,
-            meta.samples_per_pixel,
-            meta.bit_depth,
-        );
-        let encapsulated_frame_cache =
-            PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
-        let decoded_frame_cache =
-            PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
+        let encapsulated_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
+        let decoded_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
         let native_pixel_data = if transfer_syntax.is_encapsulated() {
             if meta.pixel_data != DicomPixelDataLocation::Encapsulated {
                 return Err(WsiError::invalid_slide(

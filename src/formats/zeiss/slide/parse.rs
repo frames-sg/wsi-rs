@@ -409,61 +409,13 @@ fn assemble_slide(
         source_icc_profiles: Vec::new(),
     };
 
-    let (tile_entry_bytes, level_entry_bytes) = dataset
-        .scenes
-        .first()
-        .and_then(|scene| scene.series.first())
-        .map(|series| {
-            let level_entry_bytes = series
-                .levels
-                .iter()
-                .map(|level| {
-                    level
-                        .dimensions
-                        .0
-                        .saturating_mul(level.dimensions.1)
-                        .saturating_mul(3)
-                })
-                .max()
-                .unwrap_or(1);
-            let tile_entry_bytes = series
-                .levels
-                .iter()
-                .filter_map(|level| match level.tile_layout {
-                    TileLayout::Regular {
-                        tile_width,
-                        tile_height,
-                        ..
-                    } => Some(
-                        u64::from(tile_width)
-                            .saturating_mul(u64::from(tile_height))
-                            .saturating_mul(3),
-                    ),
-                    TileLayout::Irregular { .. } | TileLayout::WholeLevel { .. } => None,
-                })
-                .max()
-                .unwrap_or(1);
-            (tile_entry_bytes, level_entry_bytes)
-        })
-        .unwrap_or((1, 1));
-    let associated_entry_bytes = dataset
-        .associated_images
-        .values()
-        .map(|image| {
-            u64::from(image.dimensions.0)
-                .saturating_mul(u64::from(image.dimensions.1))
-                .saturating_mul(u64::from(image.channels))
-        })
-        .max()
-        .unwrap_or(1);
-
     // Full-resolution Zeiss blocks can be ~14.5 MiB. Reserve half of the same
     // aggregate budget for source reuse, rather than raising the memory cap.
     let mut private_cache_budget = cache_config.private_cache_budget(6);
     let subblock_cache = PrivateCache::new(private_cache_budget.allocate_shares(3));
-    let level_cache = PrivateCache::new(private_cache_budget.allocate(level_entry_bytes));
-    let tile_cache = PrivateCache::new(private_cache_budget.allocate(tile_entry_bytes));
-    let associated_cache = PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
+    let level_cache = PrivateCache::new(private_cache_budget.allocate_share());
+    let tile_cache = PrivateCache::new(private_cache_budget.allocate_share());
+    let associated_cache = PrivateCache::new(private_cache_budget.allocate_share());
 
     ZeissSlide {
         probe: Default::default(),

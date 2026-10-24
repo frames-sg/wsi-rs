@@ -96,11 +96,7 @@ impl VmsJpeg {
             mcu_starts: Mutex::new(mcu_starts),
             unreliable_mcu_starts,
             decoded_tile_cache: Mutex::new(PrivateCache::new(
-                private_cache_budget.allocate(
-                    u64::from(geometry.tile_width)
-                        .saturating_mul(u64::from(geometry.tile_height))
-                        .saturating_mul(3),
-                ),
+                private_cache_budget.allocate_share(),
             )),
             comment: header.comment,
             encoded_unit_bytes,

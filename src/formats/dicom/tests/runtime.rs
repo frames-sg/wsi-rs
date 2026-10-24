@@ -39,7 +39,7 @@ fn test_private_cache<K: std::hash::Hash + Eq, V>() -> PrivateCache<K, V> {
     let mut budget = CacheConfig::deterministic()
         .with_shared_tile_bytes(4 * 1024)
         .private_cache_budget(1);
-    PrivateCache::new(budget.allocate(1024))
+    PrivateCache::new(budget.allocate_share())
 }
 
 /// Whether `image`'s lazy encapsulated frame index has been published.

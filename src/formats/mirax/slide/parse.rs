@@ -99,10 +99,8 @@ impl MiraxSlide {
         open_files: HashMap<PathBuf, CachedMiraxFile>,
     ) -> Self {
         let mut private_cache_budget = config.cache_config.private_cache_budget(2);
-        let decoded_cache =
-            PrivateCache::new(private_cache_budget.allocate(shared.decoded_image_bytes));
-        let associated_cache =
-            PrivateCache::new(private_cache_budget.allocate(shared.associated_image_bytes));
+        let decoded_cache = PrivateCache::new(private_cache_budget.allocate_share());
+        let associated_cache = PrivateCache::new(private_cache_budget.allocate_share());
         Self {
             probe: Default::default(),
             limits: config.limits,
@@ -670,26 +668,6 @@ fn assemble_shared(
         });
     }
 
-    let decoded_image_bytes = levels
-        .iter()
-        .flat_map(|level| level.tiles.iter())
-        .map(|tile| {
-            u64::from(tile.image.expected_width)
-                .saturating_mul(u64::from(tile.image.expected_height))
-                .saturating_mul(3)
-        })
-        .max()
-        .unwrap_or(1);
-    let associated_image_bytes = associated_metadata
-        .values()
-        .map(|image| {
-            u64::from(image.dimensions.0)
-                .saturating_mul(u64::from(image.dimensions.1))
-                .saturating_mul(u64::from(image.channels))
-        })
-        .max()
-        .unwrap_or(1);
-
     let dataset = Dataset {
         id: sources.dataset_id,
         scenes: vec![Scene {
@@ -714,8 +692,6 @@ fn assemble_shared(
             dataset,
             levels,
             associated: sources.associated,
-            decoded_image_bytes,
-            associated_image_bytes,
             datafile_identities,
         },
         sources.quickhash_files,

@@ -294,17 +294,7 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
         );
     }
 
-    let associated_entry_bytes = associated_images
-        .values()
-        .map(|image| {
-            u64::from(image.dimensions.0)
-                .saturating_mul(u64::from(image.dimensions.1))
-                .saturating_mul(u64::from(image.channels))
-        })
-        .max()
-        .unwrap_or(1);
-    let associated_cache =
-        PrivateCache::new(parts.private_cache_budget.allocate(associated_entry_bytes));
+    let associated_cache = PrivateCache::new(parts.private_cache_budget.allocate_share());
 
     let dataset = Dataset {
         id: parts.dataset_id,

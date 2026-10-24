@@ -360,10 +360,6 @@ struct MiraxShared {
     dataset: Dataset,
     levels: Vec<MiraxLevel>,
     associated: HashMap<String, MiraxRecord>,
-    /// Largest decoded source image, which sizes the decoded-image cache.
-    decoded_image_bytes: u64,
-    /// Largest associated image, which sizes the associated-image cache.
-    associated_image_bytes: u64,
     /// Each data file's identity when the slide was opened. Data files open
     /// lazily, and one that no longer matches is refused.
     datafile_identities: HashMap<PathBuf, crate::core::file_identity::FileIdentity>,
