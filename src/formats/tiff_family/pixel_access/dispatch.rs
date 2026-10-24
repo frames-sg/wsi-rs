@@ -93,51 +93,9 @@ impl TiffPixelReader {
             }
         }
 
-        let read_each_tile = || -> Result<Vec<CpuTile>, WsiError> {
-            reqs.iter()
-                .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
-                .collect()
-        };
-        let mut decode_reqs = Vec::with_capacity(reqs.len());
-        for req in reqs {
-            let source = self.tile_source_for(req)?;
-            let TileSource::TiledIfd {
-                ifd_id,
-                compression,
-                ..
-            } = source
-            else {
-                return read_each_tile();
-            };
-            let colorspace = match compression {
-                Compression::Jp2kRgb => Jp2kColorSpace::Rgb,
-                Compression::Jp2kYcbcr => Jp2kColorSpace::YCbCr,
-                _ => {
-                    return read_each_tile();
-                }
-            };
-
-            let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
-            if span.byte_count == 0 {
-                return read_each_tile();
-            }
-            let data = self.read_tiled_ifd_tile_span(span)?;
-            decode_reqs.push(Jp2kDecodeJob {
-                data: Cow::Owned(data),
-                expected_width: span.width,
-                expected_height: span.height,
-                rgb_color_space: matches!(colorspace, Jp2kColorSpace::Rgb),
-                backend,
-            });
-        }
-
-        decode_batch_jp2k(&decode_reqs)
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| {
-                let first = &reqs[0];
-                WsiError::tile_read(first, err.to_string())
-            })
+        reqs.iter()
+            .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
+            .collect()
     }
 
     pub(super) fn read_tile_cpu_with_backend_request(

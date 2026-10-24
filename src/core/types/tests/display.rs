@@ -28,6 +28,7 @@ fn to_rgba_from_rgb_u8_planar() {
     let img = buf.to_rgba().unwrap();
     assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
     assert_eq!(img.get_pixel(1, 0).0, [0, 255, 0, 255]);
+    assert_eq!(buf.to_rgb().unwrap().as_raw(), &[255, 0, 0, 0, 255, 0]);
 }
 
 #[test]
@@ -48,16 +49,21 @@ fn to_rgba_from_grayscale_u8() {
 fn to_rgba_from_palette() {
     let lut = vec![[255, 0, 0], [0, 255, 0]];
     let buf = CpuTile {
-        width: 2,
+        width: 3,
         height: 1,
         channels: 1,
         color_space: ColorSpace::Palette(Arc::new(lut)),
         layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(vec![0, 1]),
+        data: CpuTileData::u8(vec![0, 1, 255]),
     };
     let img = buf.to_rgba().unwrap();
     assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
     assert_eq!(img.get_pixel(1, 0).0, [0, 255, 0, 255]);
+    assert_eq!(img.get_pixel(2, 0).0, [0, 0, 0, 255]);
+    assert_eq!(
+        buf.to_rgb().unwrap().as_raw(),
+        &[255, 0, 0, 0, 255, 0, 0, 0, 0]
+    );
 }
 
 #[test]
@@ -93,6 +99,13 @@ fn to_rgba_from_ycbcr_matches_openslide_lookup_tables() {
         let img = buf.to_rgba().unwrap();
         let actual: Vec<[u8; 4]> = img.pixels().map(|pixel| pixel.0).collect();
         assert_eq!(actual, expected, "{layout:?}");
+        let actual: Vec<[u8; 3]> = buf
+            .to_rgb()
+            .unwrap()
+            .pixels()
+            .map(|pixel| pixel.0)
+            .collect();
+        assert_eq!(actual, expected.map(|[r, g, b, _]| [r, g, b]), "{layout:?}");
     }
 }
 
@@ -155,6 +168,16 @@ fn conversions_reject_storage_that_does_not_match_overflowing_dimensions() {
         ] {
             assert!(matches!(result, Err(WsiError::DisplayConversion(_))));
         }
+    }
+}
+
+#[test]
+fn u8_conversions_reject_unsupported_color_before_allocating_output() {
+    for color_space in [ColorSpace::Unknown, ColorSpace::Rgb] {
+        let buf =
+            CpuTile::from_u8_interleaved(u32::MAX, u32::MAX, 0, color_space, Vec::new()).unwrap();
+        assert!(matches!(buf.to_rgba(), Err(WsiError::DisplayConversion(_))));
+        assert!(matches!(buf.to_rgb(), Err(WsiError::DisplayConversion(_))));
     }
 }
 
@@ -270,24 +293,29 @@ fn into_rgba_reuses_interleaved_rgba_storage() {
 #[test]
 fn to_rgba_reads_interleaved_and_planar_rgba_layouts_identically() {
     let interleaved = CpuTile {
-        width: 1,
+        width: 2,
         height: 1,
         channels: 4,
         color_space: ColorSpace::Rgba,
         layout: CpuTileLayout::Interleaved,
-        data: CpuTileData::u8(vec![10, 20, 30, 40]),
+        data: CpuTileData::u8(vec![10, 20, 30, 0, 40, 50, 60, 80]),
     };
     let planar = CpuTile {
-        width: 1,
+        width: 2,
         height: 1,
         channels: 4,
         color_space: ColorSpace::Rgba,
         layout: CpuTileLayout::Planar,
-        data: CpuTileData::u8(vec![10, 20, 30, 40]),
+        data: CpuTileData::u8(vec![10, 40, 20, 50, 30, 60, 0, 80]),
     };
 
-    assert_eq!(interleaved.to_rgba().unwrap().as_raw(), &[10, 20, 30, 40]);
-    assert_eq!(planar.to_rgba().unwrap().as_raw(), &[10, 20, 30, 40]);
+    for buf in [interleaved, planar] {
+        assert_eq!(
+            buf.to_rgba().unwrap().as_raw(),
+            &[10, 20, 30, 0, 40, 50, 60, 80]
+        );
+        assert_eq!(buf.to_rgb().unwrap().as_raw(), &[10, 20, 30, 40, 50, 60]);
+    }
 }
 
 // --- CpuTile::new() ---
