@@ -7,6 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::{ReadControl, WsiError};
 
 pub(crate) const MAX_COMPRESSED_INPUT_BYTES: u64 = 128 * 1024 * 1024;
@@ -244,9 +245,7 @@ impl SlideAdmission {
                 limit: self.limit,
             });
         }
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(control)?;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let ticket = state.next_ticket;
         state.next_ticket = state.next_ticket.wrapping_add(1);

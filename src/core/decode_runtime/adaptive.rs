@@ -2,6 +2,7 @@
 //! on the calling read and the device on one background thread.
 use super::reader::{dataset_level, route_key_for_batch};
 use super::*;
+use crate::core::read_control::check_cancelled_opt;
 use crate::decode::jp2k::PreparedJp2kBatch;
 
 impl AdaptiveDecodeReader {
@@ -50,9 +51,9 @@ impl AdaptiveDecodeReader {
         ) {
             // Calibration deliberately bypasses decoded caches. A completed
             // decision applies only when ordinary reads still need decoding.
-            Self::check_control(control)?;
+            check_cancelled_opt(control)?;
             if let Some(cached) = self.inner.read_tiles_cpu_fastpath(reqs, control) {
-                Self::check_control(control)?;
+                check_cancelled_opt(control)?;
                 let tiles = crate::core::batch::expect_exact_count(
                     cached?,
                     reqs.len(),
@@ -120,7 +121,7 @@ impl AdaptiveDecodeReader {
         let Some((prepared, _extra)) = self.prepare_optional(reqs, &key, context)? else {
             return self.read_adaptive_cpu(reqs, control);
         };
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         if let Some((lease, background)) = calibration {
             return self.calibrate_prepared(lease, background, prepared, reqs, control);
         }
@@ -133,7 +134,7 @@ impl AdaptiveDecodeReader {
                 Ok(tiles)
             }
             Err(error) => {
-                Self::check_control(control)?;
+                check_cancelled_opt(control)?;
                 tracing::debug!(%error, "selected JP2K device route failed");
                 self.runtime
                     .store_route(key, DecodeRouteDecision::device_failure(), control)?;
@@ -161,10 +162,10 @@ impl AdaptiveDecodeReader {
         tiles: usize,
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         record_device_attempt(device, tiles);
         let result = self.runtime.read_prepared_device(device, prepared);
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         result
     }
 
@@ -193,7 +194,7 @@ impl AdaptiveDecodeReader {
         let started = Instant::now();
         let tiles = self.runtime.install_codec_cpu(|| prepared.read_cpu())?;
         let cpu_elapsed = started.elapsed();
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         if let Some(device) = self.configured_device() {
             record_adaptive_cpu_route(device, tiles.len());
         }
@@ -230,7 +231,7 @@ impl AdaptiveDecodeReader {
             let device_elapsed = match timed_warmup {
                 Ok(elapsed) => elapsed,
                 Err(error) => {
-                    Self::check_control(control)?;
+                    check_cancelled_opt(control)?;
                     tracing::debug!(%error, "JP2K device warmup failed");
                     lease.fail(control)?;
                     let tiles = self.read_inner_cpu(reqs, control)?;
@@ -240,11 +241,11 @@ impl AdaptiveDecodeReader {
             };
             // Time uncached CPU work over the same prepared inputs so a cache
             // hit cannot prematurely reject a useful device route.
-            Self::check_control(control)?;
+            check_cancelled_opt(control)?;
             let cpu_started = Instant::now();
             let tiles = self.runtime.install_codec_cpu(|| prepared.read_cpu())?;
             let cpu_elapsed = cpu_started.elapsed();
-            Self::check_control(control)?;
+            check_cancelled_opt(control)?;
             lease.complete(Some((cpu_elapsed, device_elapsed)), control)?;
             record_adaptive_cpu_route(device, tiles.len());
             return Ok(tiles);
@@ -253,9 +254,9 @@ impl AdaptiveDecodeReader {
             unreachable!()
         };
         let read_cpu = || {
-            Self::check_control(control)?;
+            check_cancelled_opt(control)?;
             let result = self.runtime.install_codec_cpu(|| prepared.read_cpu());
-            Self::check_control(control)?;
+            check_cancelled_opt(control)?;
             result
         };
         let timed_cpu = || {
@@ -281,7 +282,7 @@ impl AdaptiveDecodeReader {
                 Ok(cpu_tiles)
             }
             Err(error) => {
-                Self::check_control(control)?;
+                check_cancelled_opt(control)?;
                 tracing::debug!(%error, "JP2K route comparison failed");
                 lease.fail(control)?;
                 record_device_failure_fallback(device, reqs.len());
@@ -340,7 +341,7 @@ impl AdaptiveDecodeReader {
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                Self::check_control(context.control)?;
+                check_cancelled_opt(context.control)?;
                 tracing::debug!(%error, "optional JP2K preparation declined");
                 return Ok(None);
             }

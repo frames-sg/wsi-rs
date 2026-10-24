@@ -187,9 +187,7 @@ impl OlympusVsiReader {
         let mut payloads = Vec::new();
         let mut slots = Vec::with_capacity(reqs.len());
         for req in reqs {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            crate::core::read_control::check_cancelled_opt(control)?;
             let (scene, _, tile) = self.tile_for_request(req)?;
             let tile = tile.ok_or_else(|| WsiError::Unsupported {
                 reason: "device backend not available for sparse ETS background tile".into(),

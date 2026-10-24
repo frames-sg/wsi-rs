@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{CpuTile, TileRequest};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::JpegDecodeJob;
 use crate::error::WsiError;
 
 use super::batch_plan::{
-    attach_encapsulated_frame_bytes, check_read_control, DicomBatchPlanMode, DicomBatchPlanner,
-    DicomFrameBatchKind, DicomFrameBytes, DicomResolvedBatchPlanEntry,
+    attach_encapsulated_frame_bytes, DicomBatchPlanMode, DicomBatchPlanner, DicomFrameBatchKind,
+    DicomFrameBytes, DicomResolvedBatchPlanEntry,
 };
 use super::{dicom_level_for_request, DicomReader};
 use crate::formats::dicom::decode::{
@@ -28,7 +29,7 @@ impl DicomReader {
         backend: BackendRequest,
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         if reqs.is_empty() {
             return Ok(Vec::new());
         }
@@ -92,7 +93,7 @@ impl DicomReader {
 
         let jp2k_jobs =
             attach_encapsulated_frame_bytes(jp2k_metas, false, control, DicomFrameBatchKind::Cpu)?;
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let jp2k_decoded = if jp2k_jobs
             .first()
             .is_some_and(|(meta, _)| matches!(meta.image.bit_depth, DicomBitDepth::Uint16 { .. }))
@@ -129,7 +130,7 @@ impl DicomReader {
             jp2k_jobs.len(),
             "DICOM JP2K batch decode",
         )?;
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         for ((meta, _), decoded) in jp2k_jobs.into_iter().zip(jp2k_decoded) {
             let tile = decoded.map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
             if meta.cache_decoded_frame {
@@ -146,7 +147,7 @@ impl DicomReader {
         let rle_jobs =
             attach_encapsulated_frame_bytes(rle_metas, false, control, DicomFrameBatchKind::Cpu)?;
         for (meta, bytes) in rle_jobs {
-            check_read_control(control)?;
+            check_cancelled_opt(control)?;
             let tile = decode_rle_lossless_frame(
                 bytes.as_slice(),
                 meta.image.tile_width,
@@ -171,7 +172,7 @@ impl DicomReader {
             results[slot] = results[first_slot].clone();
         }
 
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         results
             .into_iter()
             .zip(reqs.iter())
@@ -221,13 +222,13 @@ fn decode_jpeg_frames_into(
             })
         })
         .collect::<Result<Vec<_>, WsiError>>()?;
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     let jpeg_decoded = crate::core::batch::expect_exact_count(
         decode_dicom_jpeg_batch(bit_depth, &jpeg_decode_jobs),
         jpeg_decode_jobs.len(),
         "DICOM JPEG batch decode",
     )?;
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
         let tile = decoded.map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
         if meta.cache_decoded_frame {

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
 pub(super) mod batch_io;
@@ -22,7 +23,7 @@ pub(super) fn scan_encapsulated_frames_controlled(
     number_of_frames: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<DicomEncapsulatedFrames, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let fast_started = index_diagnostic_timer(control);
     match raw_little_endian::scan_encapsulated_frames_raw_little_endian_controlled(
         path,
@@ -64,7 +65,7 @@ pub(super) fn scan_encapsulated_frames_controlled(
         }
     }
 
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let token_started = index_diagnostic_timer(control);
     let frames = token_stream::scan_encapsulated_frames_tokenized(
         path,
@@ -113,10 +114,6 @@ fn record_index_diagnostic(
     if let (Some(control), Some(elapsed)) = (control, elapsed) {
         control.record_diagnostic(crate::DicomIndexDiagnostic::new(outcome, elapsed));
     }
-}
-
-fn check_index_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
-    control.map_or(Ok(()), crate::ReadControl::check_cancelled)
 }
 
 pub(super) const PIXEL_DATA_TAG_LE: [u8; 4] = [0xE0, 0x7F, 0x10, 0x00];

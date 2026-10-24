@@ -3,6 +3,7 @@ use std::fs::File;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
 use super::DicomImage;
@@ -108,9 +109,7 @@ impl DicomImage {
         cache_result: bool,
         control: Option<&crate::ReadControl>,
     ) -> Result<HashMap<u32, Arc<Vec<u8>>>, WsiError> {
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(control)?;
         let mut results = HashMap::with_capacity(frame_indices.len());
         if frame_indices.is_empty() {
             return Ok(results);
@@ -125,9 +124,7 @@ impl DicomImage {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             for &frame_index in frame_indices {
-                if let Some(control) = control {
-                    control.check_cancelled()?;
-                }
+                check_cancelled_opt(control)?;
                 if !seen.insert(frame_index) {
                     continue;
                 }
@@ -139,9 +136,7 @@ impl DicomImage {
             }
         } else {
             for &frame_index in frame_indices {
-                if let Some(control) = control {
-                    control.check_cancelled()?;
-                }
+                check_cancelled_opt(control)?;
                 if seen.insert(frame_index) {
                     missing.push(frame_index);
                 }
@@ -159,9 +154,7 @@ impl DicomImage {
         let encapsulated_frames = self.ensure_encapsulated_frames_controlled(control)?;
         let mut spans = Vec::with_capacity(missing.len());
         for frame_index in missing {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            check_cancelled_opt(control)?;
             let frame_range = self.validated_encapsulated_frame_range(
                 &encapsulated_frames,
                 frame_index,
@@ -183,9 +176,7 @@ impl DicomImage {
         let mut file = File::open(&self.frame_store.path)
             .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
         for group in group_frame_read_spans(spans) {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            check_cancelled_opt(control)?;
             for (frame_index, bytes) in frame_index::read_encapsulated_frame_group(
                 &self.frame_store.path,
                 &mut file,
@@ -208,9 +199,7 @@ impl DicomImage {
             }
         }
 
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(control)?;
         Ok(results)
     }
 
@@ -351,9 +340,7 @@ impl DicomImage {
             .encapsulated_frames
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(control)?;
         if let Some(frames) = &*guard {
             let frames = frames.clone();
             tracing::trace!(
@@ -372,16 +359,12 @@ impl DicomImage {
         }
         let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
         let result = build();
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(control)?;
         let frames = Arc::new(result?);
         *guard = Some(frames.clone());
-        if let Some(control) = control {
-            if let Err(error) = control.check_cancelled() {
-                *guard = None;
-                return Err(error);
-            }
+        if let Err(error) = check_cancelled_opt(control) {
+            *guard = None;
+            return Err(error);
         }
         if let Some(started) = started {
             tracing::debug!(

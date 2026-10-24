@@ -7,9 +7,9 @@ use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
 use dicom_parser::stateful::decode::StatefulDecode;
 use dicom_transfer_syntax_registry::{TransferSyntaxIndex, TransferSyntaxRegistry};
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
-use super::check_index_control;
 use super::model::{DicomEncapsulatedFrames, DicomFragmentRef};
 use super::offset_tables::{build_encapsulated_frame_index, validate_basic_offset_table_len};
 use crate::formats::dicom::preflight::preflight_file_meta;
@@ -22,7 +22,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
     number_of_frames: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<DicomEncapsulatedFrames, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let transfer_syntax = DicomMetadataTransferSyntaxIndex
         .get(transfer_syntax_uid)
         .or_else(|| {
@@ -58,7 +58,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
     let mut fragments = Vec::new();
 
     while let Some(token) = tokens.advance() {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let token = token.map_err(|source| {
             WsiError::invalid_slide(path, format!("cannot read DICOM token: {source}"))
         })?;
@@ -75,7 +75,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
             LazyDataToken::LazyItemValue { len, decoder }
                 if in_pixel_sequence && awaiting_offset_table =>
             {
-                check_index_control(control)?;
+                check_cancelled_opt(control)?;
                 let entry_count =
                     validate_basic_offset_table_len(path, len, Some(number_of_frames))?;
                 offset_table.try_reserve_exact(entry_count).map_err(|_| {
@@ -92,7 +92,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 awaiting_offset_table = false;
             }
             LazyDataToken::LazyItemValue { len, decoder } if in_pixel_sequence => {
-                check_index_control(control)?;
+                check_cancelled_opt(control)?;
                 let payload_offset = decoder.position();
                 let item_offset = payload_offset.saturating_sub(8);
                 decoder.skip_bytes(len).map_err(|source| {
@@ -119,6 +119,6 @@ pub(super) fn scan_encapsulated_frames_tokenized(
         }
     }
 
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     build_encapsulated_frame_index(path, fragments, offset_table, number_of_frames)
 }

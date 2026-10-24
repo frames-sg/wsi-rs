@@ -363,9 +363,7 @@ impl ManagedSlideReader for RawJp2kReader {
             let jobs = reqs
                 .iter()
                 .map(|req| {
-                    if let Some(control) = control {
-                        control.check_cancelled()?;
-                    }
+                    crate::core::read_control::check_cancelled_opt(control)?;
                     self.validate_request(req)?;
                     Ok(crate::decode::jp2k::Jp2kDecodeJob {
                         data: Cow::Borrowed(self.data.as_slice()),

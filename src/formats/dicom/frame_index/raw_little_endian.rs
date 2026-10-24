@@ -3,6 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::core::positioned_file;
+use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
 use super::model::{
@@ -12,9 +13,9 @@ use super::offset_tables::{
     checked_padded_fragment_len, read_basic_offset_table_at, read_extended_offset_tables_le,
 };
 use super::{
-    check_index_control, explicit_vr_uses_u32_length, DICOM_ITEM_TAG_LE,
-    DICOM_SEQUENCE_DELIMITER_TAG_LE, EXPLICIT_VR_LONG_HEADER_LEN,
-    EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE, EXTENDED_OFFSET_TABLE_TAG_LE, PIXEL_DATA_TAG_LE,
+    explicit_vr_uses_u32_length, DICOM_ITEM_TAG_LE, DICOM_SEQUENCE_DELIMITER_TAG_LE,
+    EXPLICIT_VR_LONG_HEADER_LEN, EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE,
+    EXTENDED_OFFSET_TABLE_TAG_LE, PIXEL_DATA_TAG_LE,
 };
 use crate::formats::dicom::preflight::preflight_file_meta;
 
@@ -29,7 +30,7 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
     number_of_frames: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<FastDicomFrameIndex>, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let file_len = file
         .metadata()
@@ -55,7 +56,7 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
         file_len,
         control,
     )?;
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     if let Some(tables) = extended_offset_tables.as_ref() {
         match build_single_fragment_index_from_extended_offsets(
             &file,
@@ -82,7 +83,7 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
         }
     }
 
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let (fragments, offset_table) = scan_raw_encapsulated_pixel_sequence_with_reader_controlled(
         &mut file,
         path,
@@ -110,7 +111,7 @@ fn build_single_fragment_index_from_extended_offsets(
     number_of_frames: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<DicomEncapsulatedFrames, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     super::offset_tables::validate_extended_offset_table_shape(path, tables, number_of_frames)?;
     let offset_table_item = pixel_data_offset
         .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
@@ -143,7 +144,7 @@ fn build_single_fragment_index_from_extended_offsets(
     for (frame_index, (&offset, &declared_len)) in
         tables.offsets.iter().zip(&tables.lengths).enumerate()
     {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let padded_len = checked_padded_fragment_len(path, frame_index, declared_len)?;
         let item_offset = first_fragment_item
             .checked_add(offset)
@@ -254,7 +255,7 @@ fn find_encapsulated_layout_le(
     expected_table_len: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<DicomEncapsulatedLayout>, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     position_at_explicit_little_endian_dataset(file, path)?;
     let mut cursor = file
         .stream_position()
@@ -264,7 +265,7 @@ fn find_encapsulated_layout_le(
     let mut extended_lengths_value = None;
 
     while cursor < file_len {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let header = read_explicit_le_element_header(&mut reader, path, cursor, file_len)?;
         if header.tag == PIXEL_DATA_TAG_LE {
             if header.length != u32::MAX || !matches!(&header.vr, b"OB" | b"OW" | b"UN") {
@@ -453,7 +454,7 @@ fn skip_undefined_explicit_le_sequence(
     control: Option<&crate::ReadControl>,
 ) -> Result<u64, WsiError> {
     loop {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let (tag, length, value_offset) = read_item_header(reader, path, cursor, file_len)?;
         if tag == DICOM_SEQUENCE_DELIMITER_TAG_LE {
             if length != 0 {
@@ -489,7 +490,7 @@ fn skip_undefined_explicit_le_item(
     control: Option<&crate::ReadControl>,
 ) -> Result<u64, WsiError> {
     loop {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let mut tag_bytes = [0u8; 4];
         reader.read_exact_at(cursor, &mut tag_bytes)?;
         if tag_bytes == [0xFE, 0xFF, 0x0D, 0xE0] {
@@ -589,7 +590,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
     number_of_frames: Option<u32>,
     control: Option<&crate::ReadControl>,
 ) -> Result<(Vec<DicomFragmentRef>, Vec<u32>), WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let mut cursor = pixel_data_offset
         .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
         .ok_or_else(|| WsiError::invalid_slide(path, "DICOM raw Pixel Data offset overflow"))?;
@@ -597,7 +598,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
     let mut fragments = Vec::new();
 
     loop {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let mut item_header = [0u8; 8];
         read_exact_at(reader, path, cursor, &mut item_header)?;
         let tag = &item_header[0..4];
@@ -617,7 +618,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
                     format!("DICOM pixel sequence delimiter has non-zero length {len}"),
                 ));
             }
-            check_index_control(control)?;
+            check_cancelled_opt(control)?;
             return Ok((fragments, offset_table.unwrap_or_default()));
         }
         if tag != DICOM_ITEM_TAG_LE {
@@ -689,8 +690,8 @@ fn read_exact_file_at_controlled(
     buffer: &mut [u8],
     control: Option<&crate::ReadControl>,
 ) -> Result<(), WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     positioned_file::read_exact_at(file, buffer, offset)
         .map_err(|source| WsiError::io_with_path(path, source))?;
-    check_index_control(control)
+    check_cancelled_opt(control)
 }

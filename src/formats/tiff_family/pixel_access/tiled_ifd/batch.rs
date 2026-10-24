@@ -204,9 +204,7 @@ impl TiffPixelReader {
     ) -> Result<Vec<Jp2kDecodeJob<'static>>, WsiError> {
         let mut jobs = Vec::with_capacity(reqs.len());
         for req in reqs {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            crate::core::read_control::check_cancelled_opt(control)?;
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
                 ifd_id,

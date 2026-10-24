@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::error::WsiError;
 
-use super::check_index_control;
 use super::model::{
     DicomEncapsulatedFrames, DicomExtendedOffsetTables, DicomFragmentRef, FastDicomFrameIndex,
 };
@@ -386,7 +386,7 @@ pub(in super::super) fn read_extended_offset_tables_with_reader<R: Read + Seek>(
     file_len: u64,
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<DicomExtendedOffsetTables>, WsiError> {
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     for (name, value_offset) in [("offsets", offsets_value), ("lengths", lengths_value)] {
         let value_end = value_offset
             .checked_add(u64::from(table_len))
@@ -410,7 +410,7 @@ pub(in super::super) fn read_extended_offset_tables_with_reader<R: Read + Seek>(
     }
     let offsets = read_u64_table_controlled(reader, path, offsets_value, table_len, control)?;
     let lengths = read_u64_table_controlled(reader, path, lengths_value, table_len, control)?;
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
 
     Ok(Some(DicomExtendedOffsetTables { offsets, lengths }))
 }
@@ -432,7 +432,7 @@ fn read_u64_table_controlled<R: Read + Seek>(
     let mut buffer = [0u8; TABLE_READ_CHUNK_BYTES];
     let mut bytes_read = 0u32;
     while bytes_read < table_len {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let remaining =
             usize::try_from(table_len - bytes_read).expect("u32 DICOM table remainder fits usize");
         let chunk_len = remaining.min(buffer.len());
@@ -442,7 +442,7 @@ fn read_u64_table_controlled<R: Read + Seek>(
                 WsiError::invalid_slide(path, "DICOM extended offset table offset overflow")
             })?;
         read_exact_at(reader, path, chunk_offset, &mut buffer[..chunk_len])?;
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         values.extend(
             buffer[..chunk_len]
                 .as_chunks::<8>()
@@ -464,7 +464,7 @@ pub(in super::super) fn read_basic_offset_table_at(
     control: Option<&crate::ReadControl>,
 ) -> Result<Vec<u32>, WsiError> {
     let entry_count = validate_basic_offset_table_len(path, len, number_of_frames)?;
-    check_index_control(control)?;
+    check_cancelled_opt(control)?;
     let mut values = Vec::new();
     values
         .try_reserve_exact(entry_count)
@@ -472,7 +472,7 @@ pub(in super::super) fn read_basic_offset_table_at(
     let mut buffer = [0u8; TABLE_READ_CHUNK_BYTES];
     let mut bytes_read = 0u32;
     while bytes_read < len {
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         let remaining = usize::try_from(len - bytes_read)
             .expect("u32 DICOM basic offset table remainder fits usize");
         let chunk_len = remaining.min(buffer.len());
@@ -480,7 +480,7 @@ pub(in super::super) fn read_basic_offset_table_at(
             WsiError::invalid_slide(path, "DICOM basic offset table offset overflow")
         })?;
         read_exact_at(file, path, chunk_offset, &mut buffer[..chunk_len])?;
-        check_index_control(control)?;
+        check_cancelled_opt(control)?;
         values.extend(
             buffer[..chunk_len]
                 .as_chunks::<4>()

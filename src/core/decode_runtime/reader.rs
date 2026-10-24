@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::read_control::check_cancelled_opt;
 
 impl AdaptiveDecodeReader {
     pub(crate) fn new_managed(
@@ -14,7 +15,7 @@ impl AdaptiveDecodeReader {
         control: Option<&crate::ReadControl>,
         context: Option<&crate::core::limits::ReadExecutionContext<'_>>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         let _ = context;
         if reqs.is_empty() || self.runtime.options.acceleration == DecodeAcceleration::CpuOnly {
             return self.read_inner_cpu(reqs, control);
@@ -29,16 +30,12 @@ impl AdaptiveDecodeReader {
         }
     }
 
-    pub(super) fn check_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
-        control.map_or(Ok(()), crate::ReadControl::check_cancelled)
-    }
-
     pub(super) fn read_inner_cpu(
         &self,
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         let operation = || match control {
             Some(control) => self.inner.read_tiles_cpu_controlled(reqs, control),
             None => self.inner.read_tiles_cpu(reqs),
@@ -54,7 +51,7 @@ impl AdaptiveDecodeReader {
         } else {
             operation()
         };
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         result.and_then(|tiles| {
             crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive CPU tile batch")
         })

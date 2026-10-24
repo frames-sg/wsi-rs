@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{CpuTile, TileRequest};
 use crate::error::WsiError;
 
@@ -47,10 +48,6 @@ pub(super) enum DicomFrameBatchKind {
     Device,
 }
 
-pub(super) fn check_read_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
-    control.map_or(Ok(()), crate::ReadControl::check_cancelled)
-}
-
 pub(super) struct DicomBatchPlanner<'a> {
     slide: &'a DicomSlide,
     control: Option<&'a crate::ReadControl>,
@@ -76,7 +73,7 @@ impl<'a> DicomBatchPlanner<'a> {
         req: &TileRequest,
         _is_device_decodable: impl FnOnce(&DicomImage) -> bool,
     ) -> Result<DicomResolvedBatchPlanEntry, WsiError> {
-        check_read_control(self.control)?;
+        check_cancelled_opt(self.control)?;
         let level = dicom_level_for_request(self.slide, req)?;
         if req.col < 0
             || req.row < 0
@@ -186,11 +183,11 @@ pub(super) fn attach_encapsulated_frame_bytes(
     control: Option<&crate::ReadControl>,
     batch_kind: DicomFrameBatchKind,
 ) -> Result<Vec<DicomFrameBytes>, WsiError> {
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     let mut groups: HashMap<usize, (Arc<DicomImage>, Vec<DicomResolvedBatchFrame>)> =
         HashMap::new();
     for meta in metas {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let image = meta.image.clone();
         let key = Arc::as_ptr(&image) as usize;
         groups
@@ -202,7 +199,7 @@ pub(super) fn attach_encapsulated_frame_bytes(
 
     let mut jobs = Vec::new();
     for (_, (image, mut metas)) in groups {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let cache_decoded_frame = image.should_cache_decoded_frames_for_batch(metas.len());
         for meta in &mut metas {
             meta.cache_decoded_frame = cache_decoded_frame;
@@ -241,6 +238,6 @@ pub(super) fn attach_encapsulated_frame_bytes(
         }
     }
     jobs.sort_by_key(|(meta, _)| meta.slot);
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     Ok(jobs)
 }

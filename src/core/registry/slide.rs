@@ -3,6 +3,7 @@ use super::*;
 mod execution;
 mod region;
 use crate::core::limits::ReadExecutionContext;
+use crate::core::read_control::check_cancelled_opt;
 use execution::AdmittedReader;
 use std::sync::atomic::AtomicBool;
 
@@ -580,9 +581,7 @@ impl Slide {
         let calibration = AtomicBool::new(false);
         let mut start = 0;
         while start < reqs.len() {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            check_cancelled_opt(control)?;
             let (len, chunk_bytes) =
                 self.tile_chunk_len(&reqs[start..], &estimates[start..], target)?;
             let end = start + len;
