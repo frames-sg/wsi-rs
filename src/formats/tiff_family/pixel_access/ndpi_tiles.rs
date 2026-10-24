@@ -1,5 +1,14 @@
 use super::*;
 
+/// A tile read through its NDPI restart-marker segment.
+#[derive(Debug)]
+pub(super) enum NdpiRestartTile {
+    Decoded(CpuTile),
+    /// The MCU-starts table cannot locate the tile's restart segment; only a
+    /// full strip decode can serve it.
+    NeedsFullDecode,
+}
+
 impl TiffPixelReader {
     pub(super) fn get_or_decode_ndpi_full_image(
         &self,
@@ -29,7 +38,7 @@ impl TiffPixelReader {
         _restart_interval: u16,
         strip_offset: u64,
         strip_byte_count: u64,
-    ) -> Result<CpuTile, WsiError> {
+    ) -> Result<NdpiRestartTile, WsiError> {
         let col = req.col;
         let row = req.row;
 
@@ -72,7 +81,7 @@ impl TiffPixelReader {
             native_row: row as u32,
             scale_denom: 1,
         };
-        let strip = self.get_or_decode_ndpi_strip(
+        let strip = match self.get_or_decode_ndpi_strip(
             req,
             ifd_id,
             jpeg_header,
@@ -86,9 +95,27 @@ impl TiffPixelReader {
             vth,
             level_w as u32,
             level_h as u32,
-        )?;
+        ) {
+            Ok(strip) => strip,
+            // Checked only after a failed decode, so cached strips skip the
+            // table lookup. The decode runs the same lookup before reading the
+            // strip, so an unlocatable segment is what failed it.
+            Err(_)
+                if self.ndpi_restart_segment_is_unlocatable(
+                    ifd_id,
+                    mcu_starts_tag,
+                    tiles_across,
+                    strip_offset,
+                    strip_byte_count,
+                    strip_key,
+                ) =>
+            {
+                return Ok(NdpiRestartTile::NeedsFullDecode);
+            }
+            Err(err) => return Err(err),
+        };
 
-        Ok(strip.as_ref().clone())
+        Ok(NdpiRestartTile::Decoded(strip.as_ref().clone()))
     }
 
     #[allow(clippy::too_many_arguments)]

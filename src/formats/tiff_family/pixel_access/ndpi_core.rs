@@ -56,13 +56,51 @@ impl TiffPixelReader {
         }
     }
 
-    pub(super) fn ndpi_restart_error_allows_full_decode_fallback(err: &WsiError) -> bool {
-        let WsiError::TileRead { reason, .. } = err else {
-            return false;
-        };
-        reason.contains("NDPI MCU segment")
-            || reason.contains("NDPI MCU-starts table")
-            || reason.contains("NDPI MCU-starts index")
+    /// Locates `strip_key`'s restart segment. The outer error means the
+    /// MCU-starts table failed to load; the inner one that the table cannot
+    /// locate the segment.
+    fn ndpi_restart_segment(
+        &self,
+        ifd_id: IfdId,
+        mcu_starts_tag: u16,
+        tiles_across: u32,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        strip_key: NdpiStripKey,
+    ) -> Result<Result<(u64, u64), NdpiMcuSegmentError>, WsiError> {
+        let mcu_starts =
+            self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
+        let idx =
+            (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
+        Ok(ndpi_mcu_segment(
+            mcu_starts.as_slice(),
+            idx,
+            strip_byte_count,
+        ))
+    }
+
+    /// Whether the MCU-starts table loads but cannot locate `strip_key`'s
+    /// restart segment, so only a full strip decode can serve the tile.
+    pub(super) fn ndpi_restart_segment_is_unlocatable(
+        &self,
+        ifd_id: IfdId,
+        mcu_starts_tag: u16,
+        tiles_across: u32,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        strip_key: NdpiStripKey,
+    ) -> bool {
+        matches!(
+            self.ndpi_restart_segment(
+                ifd_id,
+                mcu_starts_tag,
+                tiles_across,
+                strip_offset,
+                strip_byte_count,
+                strip_key,
+            ),
+            Ok(Err(_))
+        )
     }
 
     fn ndpi_mcu_starts_are_file_absolute(
@@ -444,63 +482,16 @@ impl TiffPixelReader {
         let strip_width =
             virtual_tile_width.min(level_width.saturating_sub(strip_key.col * virtual_tile_width));
 
-        let mcu_starts =
-            self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
-        let mcu_starts = mcu_starts.as_slice();
-
-        let idx =
-            (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
-        if idx >= mcu_starts.len() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU-starts index {} out of range (len={})",
-                    idx,
-                    mcu_starts.len(),
-                ),
-            });
-        }
-
-        let segment_start = *mcu_starts.get(idx).ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: format!("NDPI MCU-starts index {idx} out of range"),
-        })?;
-        let next_segment_start = if idx + 1 < mcu_starts.len() {
-            Some(mcu_starts[idx + 1])
-        } else {
-            None
-        };
-
-        if idx + 1 < mcu_starts.len() && next_segment_start <= Some(segment_start) {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU-starts table is not strictly increasing at index {}",
-                    idx
-                ),
-            });
-        }
-
-        let segment_end = next_segment_start.unwrap_or(strip_byte_count);
-        if segment_start >= strip_byte_count
-            || segment_end > strip_byte_count
-            || segment_end <= segment_start
-        {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU segment [{segment_start}, {segment_end}) exceeds strip byte count {strip_byte_count}"
-                ),
-            });
-        }
+        let (segment_start, segment_end) = self
+            .ndpi_restart_segment(
+                ifd_id,
+                mcu_starts_tag,
+                tiles_across,
+                strip_offset,
+                strip_byte_count,
+                strip_key,
+            )?
+            .map_err(|err| Self::ndpi_full_decode_error(req, err.to_string()))?;
         if jpeg_header.is_empty() {
             return Err(WsiError::TileRead {
                 col: req.col,
@@ -649,4 +640,70 @@ impl TiffPixelReader {
             })
             .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
     }
+}
+
+/// Why the MCU-starts table cannot locate a strip's restart segment.
+#[derive(Debug)]
+enum NdpiMcuSegmentError {
+    IndexOutOfRange {
+        idx: usize,
+        len: usize,
+    },
+    NotIncreasing {
+        idx: usize,
+    },
+    OutsideStrip {
+        start: u64,
+        end: u64,
+        strip_byte_count: u64,
+    },
+}
+
+impl std::fmt::Display for NdpiMcuSegmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IndexOutOfRange { idx, len } => {
+                write!(f, "NDPI MCU-starts index {idx} out of range (len={len})")
+            }
+            Self::NotIncreasing { idx } => write!(
+                f,
+                "NDPI MCU-starts table is not strictly increasing at index {idx}"
+            ),
+            Self::OutsideStrip {
+                start,
+                end,
+                strip_byte_count,
+            } => write!(
+                f,
+                "NDPI MCU segment [{start}, {end}) exceeds strip byte count {strip_byte_count}"
+            ),
+        }
+    }
+}
+
+/// Strip-relative byte range of restart segment `idx`.
+fn ndpi_mcu_segment(
+    mcu_starts: &[u64],
+    idx: usize,
+    strip_byte_count: u64,
+) -> Result<(u64, u64), NdpiMcuSegmentError> {
+    let Some(&start) = mcu_starts.get(idx) else {
+        return Err(NdpiMcuSegmentError::IndexOutOfRange {
+            idx,
+            len: mcu_starts.len(),
+        });
+    };
+    let next = mcu_starts.get(idx + 1).copied();
+    if next.is_some_and(|next| next <= start) {
+        return Err(NdpiMcuSegmentError::NotIncreasing { idx });
+    }
+    let end = next.unwrap_or(strip_byte_count);
+    if start >= strip_byte_count || end > strip_byte_count || end <= start {
+        return Err(NdpiMcuSegmentError::OutsideStrip {
+            start,
+            end,
+            strip_byte_count,
+        });
+    }
+    Ok((start, end))
 }

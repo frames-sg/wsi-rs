@@ -37,6 +37,68 @@ fn ndpi_cpu_tile_falls_back_to_full_decode_when_mcu_table_is_invalid() {
 }
 
 #[test]
+fn ndpi_cpu_tile_falls_back_to_full_decode_for_each_unlocatable_segment() {
+    let colors = [[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]];
+    for (mode, (col, row), restart_error) in [
+        (
+            TestMcuStartsMode::InvalidFileAbsolute,
+            (0, 0),
+            "exceeds strip byte count",
+        ),
+        (
+            TestMcuStartsMode::Truncated,
+            (1, 1),
+            "NDPI MCU-starts index 3 out of range (len=3)",
+        ),
+        (
+            TestMcuStartsMode::NotIncreasing,
+            (0, 0),
+            "NDPI MCU-starts table is not strictly increasing at index 0",
+        ),
+    ] {
+        let (file, jpeg_header, strip_byte_count, strip_offset) =
+            build_ndpi_scan_data_tiff_from_blobs_with_mcu_mode_and_offset(
+                128, 16, &colors, false, mode,
+            );
+        let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+        let ifd_id = *container.top_ifds().first().unwrap();
+        let layout = build_test_ndpi_layout_from_header_with_strip_offset(
+            TestNdpiJpegLayout {
+                ifd_id,
+                dimensions: (128, 16),
+                virtual_tile: (64, 8),
+                tile_grid: (2, 2),
+                jpeg_header,
+                strip_byte_count,
+            },
+            strip_offset,
+        );
+        let reader = TiffPixelReader::new(container, layout);
+        let req = TileRequest::new(0usize, 0usize, 0u32, col, row);
+
+        let raw_err = reader.read_raw_compressed_tile(&req).unwrap_err();
+        assert!(
+            raw_err.to_string().contains(restart_error),
+            "unexpected restart error: {raw_err}"
+        );
+
+        let tile = reader
+            .read_tile_cpu(&req)
+            .unwrap_or_else(|err| panic!("no full-decode fallback after {restart_error}: {err}"));
+        assert_eq!((tile.width, tile.height), (64, 8));
+        let center = (4 * 64 + 32) * 3;
+        let expected = colors[(row * 2 + col) as usize];
+        let actual = &tile.data.as_u8().unwrap()[center..center + 3];
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!(
+                actual.abs_diff(expected) <= 16,
+                "tile ({col},{row}) pixel {actual:?} is not {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn ndpi_raw_compressed_display_tile_rejects_invalid_layouts_and_coordinates() {
     let colors = [[240, 20, 20], [20, 220, 20], [20, 20, 230], [220, 220, 30]];
     let (file, jpeg_header, strip_byte_count) =

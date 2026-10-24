@@ -1,3 +1,4 @@
+use super::ndpi_tiles::NdpiRestartTile;
 use super::*;
 
 impl TiffPixelReader {
@@ -541,17 +542,15 @@ impl SlideReader for TiffPixelReader {
                 *restart_interval,
                 *strip_offset,
                 *strip_byte_count,
-            ) {
-                Ok(tile) => Ok(tile),
-                Err(err) if Self::ndpi_restart_error_allows_full_decode_fallback(&err) => self
-                    .read_ndpi_full_decode_tile(
-                        req,
-                        *ifd_id,
-                        jpeg_header,
-                        *strip_offset,
-                        *strip_byte_count,
-                    ),
-                Err(err) => Err(err),
+            )? {
+                NdpiRestartTile::Decoded(tile) => Ok(tile),
+                NdpiRestartTile::NeedsFullDecode => self.read_ndpi_full_decode_tile(
+                    req,
+                    *ifd_id,
+                    jpeg_header,
+                    *strip_offset,
+                    *strip_byte_count,
+                ),
             },
             TileSource::NdpiFullDecode {
                 ifd_id,
