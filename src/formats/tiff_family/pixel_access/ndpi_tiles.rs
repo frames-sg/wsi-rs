@@ -214,25 +214,7 @@ impl TiffPixelReader {
                 let image = extract_dct_blocks(raw.data(), DctExtractOptions::default()).map_err(
                     |err| WsiError::Jpeg(format!("NDPI raw JPEG retile DCT extract failed: {err}")),
                 )?;
-                let mcu_width = image
-                    .components
-                    .iter()
-                    .map(|component| component.h_samp)
-                    .max()
-                    .unwrap_or(1) as u32
-                    * 8;
-                let mcu_height = image
-                    .components
-                    .iter()
-                    .map(|component| component.v_samp)
-                    .max()
-                    .unwrap_or(1) as u32
-                    * 8;
-                if mcu_width == 0 || mcu_height == 0 {
-                    return Err(WsiError::Unsupported {
-                        reason: "NDPI raw JPEG retile requires nonzero MCU dimensions".into(),
-                    });
-                }
+                let (mcu_width, mcu_height) = ndpi_dct_mcu_dimensions(&image)?;
                 if !(tile_origin_x as u32).is_multiple_of(mcu_width)
                     || !(tile_origin_y as u32).is_multiple_of(mcu_height)
                     || !crop_start_x.is_multiple_of(mcu_width)
