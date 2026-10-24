@@ -7,11 +7,11 @@ use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
-use super::{
+use super::common::{
     add_tiff_resolution_properties, compression_from_tag, finish_single_scene_uint8_tiff_layout,
-    regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor, DatasetLayout,
-    TiffLayoutInterpreter, TileSource, TileSourceKey,
+    regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor,
 };
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const TAG_SUBFILE_TYPE: u16 = 254;
 const TAG_MAKE: u16 = 271;

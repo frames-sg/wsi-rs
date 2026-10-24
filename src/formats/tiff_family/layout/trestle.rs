@@ -9,9 +9,9 @@ use crate::formats::tiff_family::error::TiffParseError;
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
+use super::common::{compression_from_tag, single_scene_uint8_pyramid_dataset};
 use super::{
-    compression_from_tag, compute_tiff_dataset_id_and_record_quickhash,
-    single_scene_uint8_pyramid_dataset, DatasetLayout, TiffLayoutInterpreter, TileSource,
+    compute_tiff_dataset_id_and_record_quickhash, DatasetLayout, TiffLayoutInterpreter, TileSource,
     TileSourceKey,
 };
 

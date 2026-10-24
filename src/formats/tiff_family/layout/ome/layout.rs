@@ -10,10 +10,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::super::{
-    compression_from_tag, compute_tiff_dataset_identity, regular_tiff_level, DatasetLayout,
-    TileSource, TileSourceKey,
-};
+use super::super::common::{compression_from_tag, regular_tiff_level};
+use super::super::{compute_tiff_dataset_identity, DatasetLayout, TileSource, TileSourceKey};
 use super::metadata::{parse_ome_xml, OmeDocument, OmeImage, OmePixels, PhysicalSize, PlaneShape};
 use super::VENDOR;
 

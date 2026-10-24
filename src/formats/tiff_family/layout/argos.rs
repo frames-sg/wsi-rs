@@ -9,11 +9,13 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
+use super::common::{
+    add_tiff_resolution_properties, compression_from_tag, single_scene_uint8_pyramid_dataset,
+    stripped_tile_source, tiled_ifd_descriptor, TiledIfdDescriptor as TiledIfd,
+};
 use super::{
-    add_tiff_resolution_properties, compression_from_tag,
-    compute_tiff_dataset_identity_with_extra_strings, single_scene_uint8_pyramid_dataset,
-    stripped_tile_source, tiled_ifd_descriptor, DatasetLayout, TiffLayoutInterpreter, TileSource,
-    TileSourceKey, TiledIfdDescriptor as TiledIfd,
+    compute_tiff_dataset_identity_with_extra_strings, DatasetLayout, TiffLayoutInterpreter,
+    TileSource, TileSourceKey,
 };
 
 const ARGOS_METADATA_TAG: u16 = 65_000;

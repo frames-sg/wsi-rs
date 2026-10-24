@@ -14,10 +14,10 @@ use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
-use super::{
+use super::common::{
     compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level,
-    DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── Interpreter ──────────────────────────────────────────────────────
 

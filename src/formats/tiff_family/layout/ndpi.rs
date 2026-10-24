@@ -15,10 +15,8 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
-use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, DatasetLayout,
-    TiffLayoutInterpreter, TileSource, TileSourceKey,
-};
+use super::common::{compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area};
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── NDPI-specific tag constants ───────────────────────────────────
 
