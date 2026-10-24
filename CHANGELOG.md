@@ -85,6 +85,11 @@
 - CUDA JPEG 2000 batches size their decode windows at 4 bytes per pixel, like
   Metal, so a window no longer admits about a third more pixels than its
   4 MiB target.
+- TIFF associated images (Aperio, Huron, ARGOS, Leica) whose SamplesPerPixel
+  tag is 0 or above 65535 report a channel count clamped to 1–65535 instead of
+  a wrapped value such as 0.
+- A missing tile in a TIFF slide no longer allocates an unbounded blank tile;
+  blank tiles larger than the decoded-image limit fail with an error.
 
 ## [0.8.0] - 2026-10-06
 
