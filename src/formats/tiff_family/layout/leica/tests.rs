@@ -609,3 +609,32 @@ fn opens_fluorescence_leica_channels_when_corpus_is_available() {
         assert!(tile.height() > 0);
     }
 }
+
+#[test]
+fn parse_rgb_hex_accepts_six_hex_digits_with_or_without_hash() {
+    assert_eq!(parse_rgb_hex("#ff8000"), Some([255, 128, 0]));
+    assert_eq!(parse_rgb_hex("00ff7f"), Some([0, 255, 127]));
+    assert_eq!(parse_rgb_hex("#fff"), None);
+    assert_eq!(parse_rgb_hex("#gg0000"), None);
+}
+
+#[test]
+fn parse_required_u64_attr_reports_missing_and_invalid_values() {
+    let node = xml::parse_xml(r#"<dimension sizeX="12" sizeY="tall"/>"#).unwrap();
+    assert_eq!(
+        parse_required_u64_attr(&node, "sizeX", "Leica dimension").unwrap(),
+        12
+    );
+
+    let missing = parse_required_u64_attr(&node, "ifd", "Leica dimension")
+        .expect_err("missing attribute must fail");
+    assert!(missing
+        .to_string()
+        .contains("Leica dimension: missing required attribute 'ifd'"));
+
+    let invalid = parse_required_u64_attr(&node, "sizeY", "Leica dimension")
+        .expect_err("non-integer attribute must fail");
+    assert!(invalid
+        .to_string()
+        .contains("Leica dimension: invalid integer 'tall' for attribute 'sizeY'"));
+}
