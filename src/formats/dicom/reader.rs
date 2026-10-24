@@ -59,11 +59,8 @@ impl SlideReader for DicomReader {
     }
 
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        self.slide
-            .levels
-            .get(req.level.get() as usize)
-            .map(|level| level.tile_codec_kind(req))
-            .unwrap_or(TileCodecKind::Other)
+        dicom_level_for_request(&self.slide, req)
+            .map_or(TileCodecKind::Other, |level| level.tile_codec_kind(req))
     }
 
     fn prepare_level_controlled(

@@ -74,7 +74,7 @@
 - DICOM tile reads, raw tile reads and `Slide::tile_is_present` reject a
   scene, series or plane the slide doesn't have with `SceneOutOfRange`,
   `SeriesOutOfRange` or `PlaneOutOfRange`, instead of answering for the first
-  one.
+  one. `Slide::tile_codec_kind` reports `TileCodecKind::Other` for them.
 - Zeiss CZI tile reads report a series the slide doesn't have as
   `SeriesOutOfRange` with the real count, instead of `SceneOutOfRange`.
 - XML metadata parsing applies its nesting-depth limit to self-closing
