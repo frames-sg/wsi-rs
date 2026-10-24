@@ -371,15 +371,7 @@ pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
     scale: J2kDownscale,
     color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
-    if image_width == 0
-        || image_height == 0
-        || image_width > u32::from(u16::MAX)
-        || image_height > u32::from(u16::MAX)
-    {
-        return Err(WsiError::Jpeg(
-            "JPEG size override requires nonzero u16 dimensions".into(),
-        ));
-    }
+    validate_jpeg_size_override(image_width, image_height)?;
     let input = prepare_jpeg_input(data, None, image_width, image_height, true)?;
     let view = parse_jpeg_view(input.as_ref(), color_transform)?;
     let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
@@ -410,6 +402,15 @@ pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
         height,
         pixels,
     })
+}
+
+pub(super) fn validate_jpeg_size_override(width: u32, height: u32) -> Result<(), WsiError> {
+    if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return Err(WsiError::Jpeg(
+            "JPEG size override requires nonzero u16 dimensions".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn j2k_downscale_for_dimensions(

@@ -299,27 +299,8 @@ impl ZeissSlide {
         let tile_origin_y = i32::try_from(tile_y)
             .map_err(|_| WsiError::DisplayConversion("Zeiss tile y overflow".into()))?;
 
-        let candidate_infos = {
-            let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let all = czi.subblocks();
-            let mut selected = Vec::new();
-            for index in candidate_indices {
-                let info = all.get(index).cloned().ok_or_else(|| {
-                    WsiError::DisplayConversion(format!(
-                        "Zeiss subblock index {index} out of range"
-                    ))
-                })?;
-                if !matches!(
-                    info.compression,
-                    CziCompressionMode::UnCompressed
-                        | CziCompressionMode::Jpg
-                        | CziCompressionMode::JpgXr
-                ) {
-                    return Ok(None);
-                }
-                selected.push(info);
-            }
-            selected
+        let Some(candidate_infos) = self.supported_candidate_subblocks(candidate_indices)? else {
+            return Ok(None);
         };
         let tile_rect = IntRect::new(
             tile_origin_x,
