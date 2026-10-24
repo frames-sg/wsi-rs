@@ -313,12 +313,10 @@ impl TiffPixelReader {
         factor: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
         if !factor.is_power_of_two() || factor < 2 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("invalid synthetic NDPI factor {factor}"),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("invalid synthetic NDPI factor {factor}"),
+            ));
         }
 
         if let Some(image) = self.try_decode_synthetic_level_with_j2k(req, base_level, factor)? {
@@ -746,7 +744,7 @@ impl TiffPixelReader {
                 self.decode_synthetic_level(req, base_level, factor)
                     .map_err(|err| err.to_string())
             })
-            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+            .map_err(|reason| WsiError::tile_read(req, reason))
     }
 }
 

@@ -120,12 +120,7 @@ impl DicomReader {
             .into_iter()
             .zip(reqs)
             .map(|(result, request)| {
-                result.map_err(|error| WsiError::TileRead {
-                    col: request.col,
-                    row: request.row,
-                    level: request.level.get(),
-                    reason: error.to_string(),
-                })
+                result.map_err(|error| WsiError::tile_read(request, error.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()
             .and_then(|tiles| {
@@ -156,12 +151,7 @@ impl DicomReader {
             .into_iter()
             .zip(reqs)
             .map(|(result, request)| {
-                result.map_err(|error| WsiError::TileRead {
-                    col: request.col,
-                    row: request.row,
-                    level: request.level.get(),
-                    reason: error.to_string(),
-                })
+                result.map_err(|error| WsiError::tile_read(request, error.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()
             .and_then(|tiles| {

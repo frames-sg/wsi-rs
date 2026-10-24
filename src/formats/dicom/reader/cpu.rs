@@ -131,12 +131,7 @@ impl DicomReader {
         )?;
         check_read_control(control)?;
         for ((meta, _), decoded) in jp2k_jobs.into_iter().zip(jp2k_decoded) {
-            let tile = decoded.map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
+            let tile = decoded.map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
             if meta.cache_decoded_frame {
                 meta.image
                     .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
@@ -160,12 +155,7 @@ impl DicomReader {
                 &meta.image.photometric_interpretation,
                 meta.image.bit_depth,
             )
-            .map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
+            .map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
             if meta.cache_decoded_frame {
                 meta.image
                     .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
@@ -186,11 +176,8 @@ impl DicomReader {
             .into_iter()
             .zip(reqs.iter())
             .map(|(tile, req)| {
-                tile.ok_or_else(|| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "DICOM CPU batch result was not populated".into(),
+                tile.ok_or_else(|| {
+                    WsiError::tile_read(req, "DICOM CPU batch result was not populated")
                 })
             })
             .collect()
@@ -222,12 +209,7 @@ fn decode_jpeg_frames_into(
                 bit_depth,
                 bytes.as_slice(),
             )
-            .map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
+            .map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
             Ok(JpegDecodeJob {
                 data: Cow::Borrowed(bytes.as_slice()),
                 tables: None,
@@ -247,12 +229,7 @@ fn decode_jpeg_frames_into(
     )?;
     check_read_control(control)?;
     for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
-        let tile = decoded.map_err(|err| WsiError::TileRead {
-            col: meta.req.col,
-            row: meta.req.row,
-            level: meta.req.level.get(),
-            reason: err.to_string(),
-        })?;
+        let tile = decoded.map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
         if meta.cache_decoded_frame {
             meta.image
                 .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));

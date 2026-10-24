@@ -305,20 +305,12 @@ impl MiraxReader {
                 "MIRAX levels must use irregular tiles".into(),
             ));
         };
-        let entry = tiles
-            .get(&(req.col, req.row))
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("no MIRAX tile at ({},{})", req.col, req.row),
-            })?;
-        let tile_index = entry.tiff_tile_index.ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "MIRAX tile is missing backing descriptor".into(),
+        let entry = tiles.get(&(req.col, req.row)).ok_or_else(|| {
+            WsiError::tile_read(req, format!("no MIRAX tile at ({},{})", req.col, req.row))
         })?;
+        let tile_index = entry
+            .tiff_tile_index
+            .ok_or_else(|| WsiError::tile_read(req, "MIRAX tile is missing backing descriptor"))?;
         let level_state =
             shared
                 .levels
@@ -327,15 +319,12 @@ impl MiraxReader {
                     level: req.level.get(),
                     count: shared.levels.len() as u32,
                 })?;
-        let tile = level_state
-            .tiles
-            .get(tile_index)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("invalid MIRAX tile descriptor index {tile_index}"),
-            })?;
+        let tile = level_state.tiles.get(tile_index).ok_or_else(|| {
+            WsiError::tile_read(
+                req,
+                format!("invalid MIRAX tile descriptor index {tile_index}"),
+            )
+        })?;
         Ok((entry, tile))
     }
 

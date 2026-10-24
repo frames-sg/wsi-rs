@@ -83,7 +83,7 @@ impl SlideReader for OlympusVsiReader {
                 jobs.push(
                     scene
                         .prepare_tile(tile, BackendRequest::Cpu)
-                        .map_err(|err| tile_error(req, err))?,
+                        .map_err(|err| WsiError::tile_read(req, err.to_string()))?,
                 );
                 slots.push(slot);
             } else {
@@ -94,7 +94,8 @@ impl SlideReader for OlympusVsiReader {
         let decoded =
             crate::core::batch::expect_exact_count(decoded, slots.len(), "Olympus ETS batch")?;
         for (slot, tile) in slots.into_iter().zip(decoded) {
-            output[slot] = Some(tile.map_err(|err| tile_error(&reqs[slot], err))?);
+            output[slot] =
+                Some(tile.map_err(|err| WsiError::tile_read(&reqs[slot], err.to_string()))?);
         }
         for (slot, source_slot) in duplicates {
             output[slot] = output[source_slot].clone();
@@ -135,7 +136,7 @@ impl SlideReader for OlympusVsiReader {
         crate::decode::jp2k::decode_batch_jp2k_metal(&stored.jobs(BackendRequest::Metal), sessions)
             .into_iter()
             .zip(reqs)
-            .map(|(result, req)| result.map_err(|err| tile_error(req, err)))
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 
@@ -149,7 +150,7 @@ impl SlideReader for OlympusVsiReader {
         crate::decode::jp2k::decode_batch_jp2k_cuda(&stored.jobs(BackendRequest::Cuda), sessions)
             .into_iter()
             .zip(reqs)
-            .map(|(result, req)| result.map_err(|err| tile_error(req, err)))
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 }
@@ -199,7 +200,7 @@ impl OlympusVsiReader {
                     payloads.push(
                         scene
                             .read_payload(tile)
-                            .map_err(|err| tile_error(req, err))?,
+                            .map_err(|err| WsiError::tile_read(req, err.to_string()))?,
                     );
                     *entry.insert(payloads.len() - 1)
                 }
@@ -218,7 +219,7 @@ impl OlympusVsiReader {
         match tile {
             Some(tile) => scene
                 .decode_tile(tile, backend)
-                .map_err(|err| tile_error(req, err)),
+                .map_err(|err| WsiError::tile_read(req, err.to_string())),
             None => scene.background_tile(level.tile_width, level.tile_height),
         }
     }
@@ -255,15 +256,13 @@ impl OlympusVsiReader {
             || req.col >= level.tiles_across as i64
             || req.row >= level.tiles_down as i64
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "tile ({},{}) out of range ({}x{})",
                     req.col, req.row, level.tiles_across, level.tiles_down
                 ),
-            });
+            ));
         }
 
         let key = tile_key(req);
@@ -280,10 +279,6 @@ fn tile_key(req: &TileRequest) -> EtsTileKey {
         col: req.col as u32,
         row: req.row as u32,
     }
-}
-
-fn tile_error(req: &TileRequest, err: WsiError) -> WsiError {
-    WsiError::tile_read(req, err.to_string())
 }
 
 impl ManagedSlideReader for OlympusVsiReader {

@@ -12,14 +12,10 @@ impl TiffPixelReader {
             c: req.plane.get().c,
             t: req.plane.get().t,
         };
-        self.layout
-            .tile_sources
-            .get(&key)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+        self.layout.tile_sources.get(&key).ok_or_else(|| {
+            WsiError::tile_read(
+                req,
+                format!(
                     "no tile source for scene={}, series={}, level={}, z={}, c={}, t={}",
                     req.scene.get(),
                     req.series.get(),
@@ -28,7 +24,8 @@ impl TiffPixelReader {
                     req.plane.get().c,
                     req.plane.get().t,
                 ),
-            })
+            )
+        })
     }
 
     fn display_request_matches_native_regular_grid(&self, req: &TileViewRequest) -> bool {
@@ -177,12 +174,7 @@ impl TiffPixelReader {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 let first = &reqs[0];
-                WsiError::TileRead {
-                    col: first.col,
-                    row: first.row,
-                    level: first.level.get(),
-                    reason: err.to_string(),
-                }
+                WsiError::tile_read(first, err.to_string())
             })
     }
 

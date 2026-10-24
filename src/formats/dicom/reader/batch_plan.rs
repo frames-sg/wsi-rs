@@ -84,15 +84,13 @@ impl<'a> DicomBatchPlanner<'a> {
             || req.row >= level.tiles_down as i64
         {
             return Err(match self.mode {
-                DicomBatchPlanMode::Cpu => WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
+                DicomBatchPlanMode::Cpu => WsiError::tile_read(
+                    req,
+                    format!(
                         "tile ({},{}) out of range ({}x{})",
                         req.col, req.row, level.tiles_across, level.tiles_down
                     ),
-                },
+                ),
                 #[cfg(any(feature = "metal", feature = "cuda"))]
                 DicomBatchPlanMode::Device { .. } => WsiError::Unsupported {
                     reason: format!(
@@ -226,11 +224,9 @@ pub(super) fn attach_encapsulated_frame_bytes(
             let frame_index = meta.frame_index;
             let bytes = frames.get(&frame_index).cloned().ok_or_else(|| {
                 let req = &meta.req;
-                WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: match batch_kind {
+                WsiError::tile_read(
+                    req,
+                    match batch_kind {
                         DicomFrameBatchKind::Cpu => {
                             format!("DICOM batch frame {frame_index} was not extracted")
                         }
@@ -239,7 +235,7 @@ pub(super) fn attach_encapsulated_frame_bytes(
                             format!("DICOM device batch frame {frame_index} was not extracted")
                         }
                     },
-                }
+                )
             })?;
             jobs.push((meta, bytes));
         }

@@ -216,15 +216,13 @@ impl RawJp2kReader {
             || req.series.get() != 0
             || req.level.get() as usize >= self.level_count()
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "raw JP2K source has one scene, one series, and {} levels",
                     self.level_count()
                 ),
-            });
+            ));
         }
         if req.plane.get() != PlaneSelection::default() {
             return Err(WsiError::Unsupported {
@@ -232,12 +230,10 @@ impl RawJp2kReader {
             });
         }
         if req.col != 0 || req.row != 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "raw JP2K source has exactly one tile at (0, 0)".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "raw JP2K source has exactly one tile at (0, 0)",
+            ));
         }
         Ok(())
     }
@@ -272,11 +268,11 @@ impl SlideReader for RawJp2kReader {
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.validate_request(req)?;
-        let reduction = u8::try_from(req.level.get()).map_err(|_| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "raw JP2K reduction level exceeds the codestream ladder".into(),
+        let reduction = u8::try_from(req.level.get()).map_err(|_| {
+            WsiError::tile_read(
+                req,
+                "raw JP2K reduction level exceeds the codestream ladder",
+            )
         })?;
         if reduction == 0 {
             decode_jp2k_to_sample_buffer(&self.data, self.width, self.height, Jp2kColorSpace::Rgb)

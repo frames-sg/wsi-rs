@@ -313,21 +313,11 @@ impl ZviSlide {
                     .plane_by_whole
                     .get(&(req.plane.get().z, req.plane.get().c, req.plane.get().t))
                     .copied()
-                    .ok_or_else(|| WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI plane has no image payload".into(),
-                    })?;
+                    .ok_or_else(|| WsiError::tile_read(req, "ZVI plane has no image payload"))?;
                 let x = req.col.saturating_mul(i64::from(*virtual_tile_width));
                 let y = req.row.saturating_mul(i64::from(*virtual_tile_height));
                 if x < 0 || y < 0 || x >= *width as i64 || y >= *height as i64 {
-                    return Err(WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI tile out of bounds".into(),
-                    });
+                    return Err(WsiError::tile_read(req, "ZVI tile out of bounds"));
                 }
                 let w = (*virtual_tile_width).min((*width as i64 - x) as u32);
                 let h = (*virtual_tile_height).min((*height as i64 - y) as u32);
@@ -344,21 +334,14 @@ impl ZviSlide {
                         req.row,
                     ))
                     .copied()
-                    .ok_or_else(|| WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI mosaic tile not found".into(),
-                    })?;
+                    .ok_or_else(|| WsiError::tile_read(req, "ZVI mosaic tile not found"))?;
                 let plane = &self.planes[plane_index];
                 self.read_plane_window(plane_index, 0, 0, plane.width, plane.height)
             }
-            TileLayout::Regular { .. } => Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "ZVI does not use regular native tiles".into(),
-            }),
+            TileLayout::Regular { .. } => Err(WsiError::tile_read(
+                req,
+                "ZVI does not use regular native tiles",
+            )),
         }
     }
 }

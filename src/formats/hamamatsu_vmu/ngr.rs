@@ -90,12 +90,10 @@ impl Ngr {
             || req.col >= i64::from(self.width.div_ceil(tw))
             || req.row >= i64::from(self.height.div_ceil(th))
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "NGR tile coordinates out of range".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "NGR tile coordinates out of range",
+            ));
         }
         let x = req.col as u32 * tw;
         let y = req.row as u32 * th;

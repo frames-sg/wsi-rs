@@ -94,12 +94,7 @@ impl TiffPixelReader {
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<Arc<CpuTile>, WsiError> {
-        let decode_error = |reason| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason,
-        };
+        let decode_error = |reason: String| WsiError::tile_read(req, reason);
         self.full_decode_cache.get_or_try_insert_with_error(
             FullDecodeKey::Level(ifd_id),
             || {
@@ -134,35 +129,24 @@ impl TiffPixelReader {
             tiles_down,
         } = level.tile_layout
         else {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "generic stripped TIFF level expects a regular tile layout".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "generic stripped TIFF level expects a regular tile layout",
+            ));
         };
         let (col, row) = validate_tile_coords(req.col, req.row, req.level.get())?;
         if u64::from(col) >= tiles_across || u64::from(row) >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("tile is outside the {tiles_across}x{tiles_down} grid"),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("tile is outside the {tiles_across}x{tiles_down} grid"),
+            ));
         }
 
         let dimensions = (
-            u32::try_from(level.dimensions.0).map_err(|_| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "generic stripped TIFF width exceeds u32".into(),
-            })?,
-            u32::try_from(level.dimensions.1).map_err(|_| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "generic stripped TIFF height exceeds u32".into(),
+            u32::try_from(level.dimensions.0)
+                .map_err(|_| WsiError::tile_read(req, "generic stripped TIFF width exceeds u32"))?,
+            u32::try_from(level.dimensions.1).map_err(|_| {
+                WsiError::tile_read(req, "generic stripped TIFF height exceeds u32")
             })?,
         );
         let src_x = col * tile_width;

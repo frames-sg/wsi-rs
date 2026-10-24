@@ -42,12 +42,7 @@ impl SlideReader for VmsReader {
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         self.read_raw_jpeg_tile(req).map_err(|error| match error {
             WsiError::TileRead { .. } | WsiError::Unsupported { .. } => error,
-            other => WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: other.to_string(),
-            },
+            other => WsiError::tile_read(req, other.to_string()),
         })
     }
 
@@ -166,15 +161,13 @@ impl VmsReader {
             || req.col >= tiles_across as i64
             || req.row >= tiles_down as i64
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "tile ({},{}) out of range ({}x{})",
                     req.col, req.row, tiles_across, tiles_down
                 ),
-            });
+            ));
         }
 
         let jpeg_col = req.col as u32 / level.base_tiles_across;
@@ -184,19 +177,12 @@ impl VmsReader {
         let jpeg = level
             .jpegs
             .get((jpeg_row * level.jpegs_across + jpeg_col) as usize)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "VMS tile resolved to missing JPEG shard".into(),
-            })?;
+            .ok_or_else(|| WsiError::tile_read(req, "VMS tile resolved to missing JPEG shard"))?;
         if local_tile_col >= jpeg.tiles_across || local_tile_row >= jpeg.tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "VMS local tile coordinates out of JPEG shard bounds".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "VMS local tile coordinates out of JPEG shard bounds",
+            ));
         }
         let tile_index = (local_tile_row * jpeg.tiles_across + local_tile_col) as usize;
         let width = jpeg
@@ -225,12 +211,7 @@ impl VmsReader {
             .decode_tile(tile.tile_index, tile.level.scale_denom, backend)
             .map_err(|err| match err {
                 WsiError::TileRead { .. } => err,
-                other => WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: other.to_string(),
-                },
+                other => WsiError::tile_read(req, other.to_string()),
             })
     }
 

@@ -22,7 +22,7 @@ impl TiffPixelReader {
                 self.decode_ndpi_full_image(req, ifd_id, strip_offset, strip_byte_count)
                     .map_err(|err| err.to_string())
             })
-            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+            .map_err(|reason| WsiError::tile_read(req, reason))
     }
 
     /// Read a tile from an NdpiJpeg source (MCU extraction fast path).
@@ -44,15 +44,13 @@ impl TiffPixelReader {
 
         // Bounds check
         if col < 0 || col >= tiles_across as i64 || row < 0 || row >= tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "tile ({},{}) out of range ({}x{})",
                     col, row, tiles_across, tiles_down,
                 ),
-            });
+            ));
         }
 
         // Compute tile dimensions first (needed for empty-tile fallback and decode)
@@ -306,15 +304,13 @@ impl TiffPixelReader {
     ) -> Result<RawCompressedTile, WsiError> {
         let (col, row) = validate_tile_coords(req.col, req.row, req.level.get())?;
         if col >= tiles_across || row >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "NDPI raw JPEG tile ({},{}) out of range ({}x{})",
                     req.col, req.row, tiles_across, tiles_down
                 ),
-            });
+            ));
         }
 
         let (level_w, level_h, virtual_tile_width, virtual_tile_height) = self
@@ -327,14 +323,10 @@ impl TiffPixelReader {
                 "NDPI raw JPEG passthrough expects WholeLevel tile layout",
             )?;
         if virtual_tile_width == 0 || virtual_tile_height == 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason:
-                    "NDPI raw JPEG passthrough requires nonzero WholeLevel virtual tile dimensions"
-                        .into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "NDPI raw JPEG passthrough requires nonzero WholeLevel virtual tile dimensions",
+            ));
         }
         if !ndpi_restart_segments_align_to_rows(level_w, virtual_tile_width, restart_interval) {
             return Err(WsiError::Unsupported {

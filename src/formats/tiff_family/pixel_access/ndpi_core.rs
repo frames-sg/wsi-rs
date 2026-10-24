@@ -47,10 +47,6 @@ impl TiffPixelReader {
         Some((clamped_width, clamped_height))
     }
 
-    pub(super) fn ndpi_full_decode_error(req: &TileRequest, reason: impl Into<String>) -> WsiError {
-        WsiError::tile_read(req, reason)
-    }
-
     /// Locates `strip_key`'s restart segment. The outer error means the
     /// MCU-starts table failed to load; the inner one that the table cannot
     /// locate the segment.
@@ -448,20 +444,16 @@ impl TiffPixelReader {
         level_height: u32,
     ) -> Result<NdpiJpegTilePayload, WsiError> {
         if strip_key.native_row >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("NDPI strip row {} out of range", strip_key.native_row),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("NDPI strip row {} out of range", strip_key.native_row),
+            ));
         }
         if strip_key.col >= tiles_across {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("NDPI strip column {} out of range", strip_key.col),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("NDPI strip column {} out of range", strip_key.col),
+            ));
         }
 
         let strip_origin_y = strip_key.native_row * virtual_tile_height;
@@ -478,26 +470,15 @@ impl TiffPixelReader {
                 strip_byte_count,
                 strip_key,
             )?
-            .map_err(|err| Self::ndpi_full_decode_error(req, err.to_string()))?;
+            .map_err(|err| WsiError::tile_read(req, err.to_string()))?;
         if jpeg_header.is_empty() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "NDPI JPEG header is empty".into(),
-            });
+            return Err(WsiError::tile_read(req, "NDPI JPEG header is empty"));
         }
 
         let segment_len = segment_end.saturating_sub(segment_start);
-        let read_offset =
-            strip_offset
-                .checked_add(segment_start)
-                .ok_or_else(|| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NDPI strip offset overflow".into(),
-                })?;
+        let read_offset = strip_offset
+            .checked_add(segment_start)
+            .ok_or_else(|| WsiError::tile_read(req, "NDPI strip offset overflow"))?;
         let segment = self
             .container
             .pread(read_offset, segment_len)
@@ -566,15 +547,13 @@ impl TiffPixelReader {
             )?
         } else {
             let scale = j2k_downscale_for_factor(strip_key.scale_denom).ok_or_else(|| {
-                WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
+                WsiError::tile_read(
+                    req,
+                    format!(
                         "invalid NDPI strip scale denominator {}",
                         strip_key.scale_denom
                     ),
-                }
+                )
             })?;
             decode_jpeg_rgb_downscaled_with_size_override(
                 &payload.jpeg,
@@ -625,7 +604,7 @@ impl TiffPixelReader {
                 )
                 .map_err(|err| err.to_string())
             })
-            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+            .map_err(|reason| WsiError::tile_read(req, reason))
     }
 }
 

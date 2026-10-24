@@ -63,45 +63,34 @@ impl TiffPixelReader {
     ) -> Result<CpuTile, WsiError> {
         let full_w = full_image.width as usize;
         let channels = full_image.channels as usize;
-        let src_data = full_image.data.as_u8().ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "expected U8 data in full decode cache".into(),
-        })?;
+        let src_data = full_image
+            .data
+            .as_u8()
+            .ok_or_else(|| WsiError::tile_read(req, "expected U8 data in full decode cache"))?;
 
         let tile_len = crate::core::limits::checked_product_to_usize(
             &[u64::from(tile_w), u64::from(tile_h), channels as u64],
             crate::core::limits::MAX_DECODED_IMAGE_BYTES,
             "NDPI decoded tile",
         )
-        .map_err(|reason| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason,
-        })?;
+        .map_err(|reason| WsiError::tile_read(req, reason))?;
         let mut tile_data = Vec::with_capacity(tile_len);
         for y in 0..tile_h {
             let row_start = ((src_y + y) as usize * full_w + src_x as usize) * channels;
             let row_end = row_start + tile_w as usize * channels;
             if row_end > src_data.len() {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "decoded image smaller than expected".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "decoded image smaller than expected",
+                ));
             }
             tile_data.extend_from_slice(&src_data[row_start..row_end]);
         }
         if tile_data.len() != tile_len {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "decoded NDPI tile length mismatch".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "decoded NDPI tile length mismatch",
+            ));
         }
 
         Ok(CpuTile {
@@ -142,12 +131,7 @@ impl TiffPixelReader {
         let tile_h = vth.min((level_h as u32).saturating_sub(src_y));
 
         if tile_w == 0 || tile_h == 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "tile has zero dimensions".into(),
-            });
+            return Err(WsiError::tile_read(req, "tile has zero dimensions"));
         }
 
         Self::crop_ndpi_full_image_tile(full_image.as_ref(), req, src_x, src_y, tile_w, tile_h)

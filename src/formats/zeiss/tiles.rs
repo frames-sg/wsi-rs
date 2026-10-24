@@ -27,15 +27,13 @@ impl ZeissSlide {
             || req.col >= tiles_across as i64
             || req.row >= tiles_down as i64
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "tile ({},{}) out of range ({}x{})",
                     req.col, req.row, tiles_across, tiles_down
                 ),
-            });
+            ));
         }
 
         let candidate_indices = self

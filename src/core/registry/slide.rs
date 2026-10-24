@@ -680,12 +680,7 @@ impl Slide {
             TileLayout::Irregular { tiles, .. } => tiles
                 .get(&(req.col, req.row))
                 .map(|entry| entry.dimensions)
-                .ok_or_else(|| WsiError::TileRead {
-                    level: req.level.get(),
-                    col: req.col,
-                    row: req.row,
-                    reason: "tile not found".into(),
-                })?,
+                .ok_or_else(|| WsiError::tile_read(req, "tile not found"))?,
         };
         let channels = u64::try_from(series.channels.len().max(4)).unwrap_or(u64::MAX);
         let output_bytes = u64::from(dimensions.0)

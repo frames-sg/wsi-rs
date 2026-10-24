@@ -131,12 +131,7 @@ impl SvcacheReader {
         let idx = level.tile_index(req.col, req.row, req.level.get())?;
         level
             .tile_meta_for_index(idx)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: ".svcache tile not populated".into(),
-            })
+            .ok_or_else(|| WsiError::tile_read(req, ".svcache tile not populated"))
     }
 
     fn read_tile_meta(&self, tile: &TileMeta) -> Result<CpuTile, WsiError> {

@@ -89,14 +89,7 @@ impl TiffPixelReader {
         decode_mixed_batch(jobs)?
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
@@ -146,12 +139,10 @@ impl TiffPixelReader {
                 compression: Compression::Jpeg,
             } = source
             else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "JPEG tiled batch received a non-JPEG tile source".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "JPEG tiled batch received a non-JPEG tile source",
+                ));
             };
             let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
             if span.byte_count == 0 {
@@ -223,23 +214,19 @@ impl TiffPixelReader {
                 ..
             } = source
             else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "JP2K tiled device batch received a non-tiled tile source".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "JP2K tiled device batch received a non-tiled tile source",
+                ));
             };
             if !matches!(
                 actual_compression,
                 Compression::Jp2kRgb | Compression::Jp2kYcbcr
             ) {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "strict TIFF device reads support JP2K/HTJ2K tiles only".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "strict TIFF device reads support JP2K/HTJ2K tiles only",
+                ));
             }
 
             let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
@@ -270,14 +257,7 @@ impl TiffPixelReader {
         crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 
@@ -291,14 +271,7 @@ impl TiffPixelReader {
         crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 }
