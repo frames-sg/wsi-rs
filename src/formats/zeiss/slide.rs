@@ -166,13 +166,10 @@ impl ZeissSlide {
         else {
             return false;
         };
-        let Some(level) = self
-            .dataset
-            .scenes
-            .first()
-            .and_then(|scene| scene.series.first())
-            .and_then(|series| series.levels.get(level_idx))
-        else {
+        let Some(level) = u32::try_from(level_idx).ok().and_then(|level_idx| {
+            self.dataset
+                .find_level(SceneId::new(0), SeriesId::new(0), LevelIdx::new(level_idx))
+        }) else {
             return false;
         };
         let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
