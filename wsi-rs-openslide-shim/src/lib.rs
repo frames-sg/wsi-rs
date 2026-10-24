@@ -853,6 +853,14 @@ pub unsafe extern "C" fn openslide_cache_release(cache: *mut openslide_cache_t) 
     }));
 }
 
+/// The repository's raw JPEG 2000 fixture that the unit tests open.
+#[cfg(test)]
+fn rgb_nomct_fixture() -> std::ffi::CString {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/jp2k/rgb_nomct.j2k");
+    std::ffi::CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
+}
+
 #[cfg(test)]
 #[path = "lib/tests/arithmetic.rs"]
 mod arithmetic_tests;

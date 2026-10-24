@@ -1,6 +1,10 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 use wsi_rs_openslide_shim::*;
+
+mod support;
+
+use support::public_fixture;
 
 const TWELVE_BIT_FIXTURES: [&str; 4] = [
     "mono2-extended",
@@ -9,21 +13,9 @@ const TWELVE_BIT_FIXTURES: [&str; 4] = [
     "ybr422-progressive",
 ];
 
-fn fixture_path(directory: &str, name: &str) -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join(directory)
-        .join(format!("{name}.dcm"))
-        .to_string_lossy()
-        .into_owned()
-}
-
 #[test]
 fn eight_bit_dicom_still_detects_and_opens() {
-    let path = fixture_path("public_dicom", "progressive-sof2");
-    let cpath = CString::new(path.as_bytes()).expect("fixture path has no NUL");
+    let cpath = public_fixture("public_dicom/progressive-sof2.dcm");
     // SAFETY: `cpath` is a live NUL-terminated path for each ABI call. The
     // vendor string is interned by the shim, and the handle is closed once.
     unsafe {
@@ -44,8 +36,8 @@ fn twelve_bit_dicom_keeps_openslide_rejection() {
     // HighBit 7. The native wsi-rs API decodes these files to U16, but the
     // shim keeps the exact rejection it reported before 12-bit support.
     for name in TWELVE_BIT_FIXTURES {
-        let path = fixture_path("dicom_12bit", name);
-        let cpath = CString::new(path.as_bytes()).expect("fixture path has no NUL");
+        let cpath = public_fixture(&format!("dicom_12bit/{name}.dcm"));
+        let path = cpath.to_string_lossy();
         // SAFETY: `cpath` is a live NUL-terminated path for each ABI call. The
         // error pointer is read while its handle is open, and the handle is
         // closed exactly once.

@@ -1,20 +1,9 @@
 use super::*;
-use std::ffi::CString;
 use std::sync::Arc;
-
-fn fixture_path() -> CString {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("jp2k")
-        .join("rgb_nomct.j2k");
-    CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
-}
 
 #[test]
 fn ffi_cache_is_shared_released_safely_and_replaced() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     // SAFETY: Every pointer is created by this shim, remains live for each
     // call, and is released or closed exactly once.
     unsafe {
