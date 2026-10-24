@@ -26,8 +26,6 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
-/// Compose small source units in bounded batches. The caller must fit every
-/// batch's source buffers within its admitted region staging reservation.
 fn plan_cache_keys<'a>(
     dataset_id: crate::core::types::DatasetId,
     req: &'a RegionRequest,
@@ -37,6 +35,9 @@ fn plan_cache_keys<'a>(
         .map(move |hit| CacheKey::from_region_tile(dataset_id, req, hit.col, hit.row))
 }
 
+/// Compose small source units in bounded batches. The caller must fit every
+/// batch's source buffers within its admitted region staging reservation.
+///
 /// An incomplete region composes on one pool worker, and its source decodes
 /// units in order there, so concurrent regions each occupy one worker rather
 /// than queueing behind each other's units.
@@ -51,7 +52,8 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     let dataset_id = source.dataset().id;
     let cached = cache
         .is_some_and(|cache| cache.contains_keys(plan_cache_keys(dataset_id, req, &plan.hits)));
-    let compose = || compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1));
+    let batch_ends = first_then_chunked_batch_ends(plan.hits.len(), batch_size);
+    let compose = || composite_region_from_plan(source, cache, req, plan, &batch_ends);
     if cached {
         // The hint changes scheduling only. Normal resolution still handles
         // eviction and decodes a late miss on this thread.
@@ -170,52 +172,20 @@ pub(in crate::core::registry) fn composite_region_from_plan<T: SlideReader + ?Si
         .finish()
 }
 
-fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
-    source: &T,
-    cache: Option<&TileCache>,
-    req: &RegionRequest,
-    plan: RegionReadPlan<'_>,
-    batch_size: usize,
-) -> Result<CpuTile, WsiError> {
-    let resolver = RegionTileResolver::new(source, cache, req);
-    if plan.hits.is_empty() {
-        return compose_empty_region(&resolver, req, &plan);
+/// Batch ends that resolve the first unit alone, since it sizes the output,
+/// and the rest `batch_size` at a time.
+fn first_then_chunked_batch_ends(hit_count: usize, batch_size: usize) -> Vec<usize> {
+    if hit_count == 0 {
+        return Vec::new();
     }
-
-    let first = resolver.resolve_one(plan.hits[0].col, plan.hits[0].row)?;
-    if plan.hits.len() == 1
-        && !composes_alpha_sources(&plan.hits, [first.as_ref()])
-        && hit_covers_output(
-            &plan.hits[0],
-            first.as_ref(),
-            plan.output_width,
-            plan.output_height,
+    let batch_size = batch_size.max(1);
+    std::iter::once(1)
+        .chain(
+            (1..hit_count)
+                .step_by(batch_size)
+                .map(|start| start.saturating_add(batch_size).min(hit_count)),
         )
-    {
-        return Ok(first.as_ref().clone());
-    }
-
-    let mut composer = RegionComposer::new(
-        plan.output_width,
-        plan.output_height,
-        first.as_ref(),
-        plan.preserve_alpha,
-        &plan.hits,
-    )?;
-    composer.blit(&plan.hits[0], first.as_ref())?;
-    drop(first);
-    for batch in plan.hits[1..].chunks(batch_size) {
-        if batch.len() == 1 {
-            let tile = resolver.resolve_one(batch[0].col, batch[0].row)?;
-            composer.blit(&batch[0], tile.as_ref())?;
-        } else {
-            let tiles = resolver.resolve_hits(batch)?;
-            for (hit, tile) in batch.iter().zip(&tiles) {
-                composer.blit(hit, tile.as_ref())?;
-            }
-        }
-    }
-    composer.finish()
+        .collect()
 }
 
 fn compose_empty_region<T: SlideReader + ?Sized>(

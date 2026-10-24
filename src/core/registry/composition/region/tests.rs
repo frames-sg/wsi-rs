@@ -23,7 +23,8 @@ pub(super) fn composite_region_from_source_streaming<T: SlideReader + ?Sized>(
     max_region_pixels: u64,
 ) -> Result<CpuTile, WsiError> {
     let plan = RegionReadPlan::integral(source.dataset(), req, max_region_pixels)?;
-    compose_resolved_region_streaming(source, cache, req, plan, 1)
+    let batch_ends = first_then_chunked_batch_ends(plan.hits.len(), 1);
+    composite_region_from_plan(source, cache, req, plan, &batch_ends)
 }
 
 struct StreamingSource {
@@ -762,6 +763,15 @@ fn metadata_probe_uses_row_major_order_for_irregular_tiles() {
     };
 
     assert_eq!(metadata_probe_coordinate(&layout), Some((3, 1)));
+}
+
+#[test]
+fn streamed_batches_resolve_the_first_unit_alone_then_fixed_chunks() {
+    assert_eq!(first_then_chunked_batch_ends(0, 3), Vec::<usize>::new());
+    assert_eq!(first_then_chunked_batch_ends(1, 3), [1]);
+    assert_eq!(first_then_chunked_batch_ends(7, 3), [1, 4, 7]);
+    assert_eq!(first_then_chunked_batch_ends(8, 3), [1, 4, 7, 8]);
+    assert_eq!(first_then_chunked_batch_ends(3, 0), [1, 2, 3]);
 }
 
 #[test]
