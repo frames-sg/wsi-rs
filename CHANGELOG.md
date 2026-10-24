@@ -62,7 +62,8 @@
   was opened on. A read after one is replaced fails instead of reading the new
   file.
 - `.svcache` errors about a corrupt cache name the cache file, not the source
-  slide or an empty path. A bad scene or series in an `.svcache` read or a
+  slide or an empty path, and a tile payload that cannot be read reports
+  `IoWithPath` with the cache file instead of a bare `Io` error. A bad scene or series in an `.svcache` read or a
   partial build reports `SceneOutOfRange` or `SeriesOutOfRange` with the real
   count, not `LevelOutOfRange` with a count of 0.
 - Partial `.svcache` builds that merge an existing cache copy nothing from a

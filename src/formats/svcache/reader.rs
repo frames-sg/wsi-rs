@@ -146,7 +146,9 @@ impl SvcacheReader {
                 .ok_or_else(|| {
                     invalid_svcache(&self.path, "svcache tile payload offset overflow")
                 })?;
-            self.file.read_exact_at(&mut encoded, offset)?;
+            self.file
+                .read_exact_at(&mut encoded, offset)
+                .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         }
         let actual_hash = format!("{:x}", Sha256::digest(&encoded));
         if actual_hash != tile.sha256 {

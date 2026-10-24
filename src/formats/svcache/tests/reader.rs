@@ -197,6 +197,34 @@ fn corrupt_cache_errors_name_the_cache_file_not_the_source_slide() {
 }
 
 #[test]
+fn payload_read_errors_name_the_cache_file() {
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = single_tile_cache(dir.path(), source.path(), false);
+    let reader = SvcacheBackend.open(&cache_path).unwrap();
+    // The tile payload ends the file, so a truncated cache cuts it short.
+    let cache_len = std::fs::metadata(&cache_path).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&cache_path)
+        .unwrap()
+        .set_len(cache_len - 1)
+        .unwrap();
+
+    let error = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            WsiError::IoWithPath { source, path }
+                if *path == cache_path && source.kind() == std::io::ErrorKind::UnexpectedEof
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
 fn reader_reports_which_scene_series_or_level_is_out_of_range() {
     let source = tempfile::NamedTempFile::new().unwrap();
     let dir = tempfile::tempdir().unwrap();
