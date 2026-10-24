@@ -52,7 +52,7 @@ pub(in super::super) fn preflight_compressed_frame_with_limit(
     )
 }
 
-pub(in super::super) fn preflight_compressed_lengths_with_limit(
+fn preflight_compressed_lengths_with_limit(
     path: &Path,
     lengths: impl IntoIterator<Item = usize>,
     limit: u64,

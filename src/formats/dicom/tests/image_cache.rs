@@ -308,6 +308,30 @@ fn encapsulated_extraction_rejects_invalid_index_graphs_before_io() {
 }
 
 #[test]
+fn native_frame_extraction_fails_without_reparsing_the_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native-pixel-data.dcm");
+    write_test_dicom(&path, TestDicomOptions::native(test_rgb_pixel_data()));
+    let (_reader, image) = reader_and_first_image(&path);
+    // A re-parse of the source would now fail with an InvalidSlide error.
+    std::fs::write(&path, b"no longer a DICOM file").unwrap();
+
+    let single = image.extract_encapsulated_frame(0, 2, 3, 4, false);
+    let batch = image.extract_encapsulated_frames_controlled(&[0], 2, 3, 4, false, None);
+    for error in [single.map(|_| ()), batch.map(|_| ())] {
+        let error = error.expect_err("native Pixel Data has no encapsulated frames");
+        assert!(
+            matches!(
+                &error,
+                WsiError::TileRead { col: 3, row: 4, level: 2, reason }
+                    if reason == "pixel data is not encapsulated"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn native_pixel_data_is_not_misclassified_as_encapsulated() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("native-pixel-data.dcm");

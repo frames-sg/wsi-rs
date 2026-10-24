@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use dicom_object::DefaultDicomObject;
-
 use crate::error::WsiError;
 
 pub(super) mod batch_io;
@@ -16,16 +14,7 @@ pub(super) use batch_io::{
     read_encapsulated_frame_group, DicomFrameReadSpan,
 };
 pub(super) use model::DicomEncapsulatedFrames;
-pub(super) use validation::{
-    preflight_compressed_frame_with_limit, preflight_compressed_lengths_with_limit,
-};
-
-pub(super) fn reopen_dicom_object(path: &Path) -> Result<DefaultDicomObject, WsiError> {
-    dicom_object::open_file(path).map_err(|source| WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: format!("failed to reopen DICOM object: {source}"),
-    })
-}
+pub(super) use validation::preflight_compressed_frame_with_limit;
 
 pub(super) fn scan_encapsulated_frames_controlled(
     path: &Path,
