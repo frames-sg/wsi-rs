@@ -355,6 +355,82 @@ fn subtile_batches_decode_each_stored_tile_once_with_a_one_tile_cache() {
 }
 
 #[test]
+fn mixed_batch_declines_a_missing_tile_before_reading_payloads() {
+    let file = build_tiled_encoded_tiff(16, 8, 8, 8, &[vec![1, 2, 3], Vec::new()], 33004, 3, 2);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    // Keep the parsed directory readable while making any payload read fail.
+    container.get_u64_array(ifd_id, tags::TILE_OFFSETS).unwrap();
+    container
+        .get_u64_array(ifd_id, tags::TILE_BYTE_COUNTS)
+        .unwrap();
+    let layout = single_series_layout(
+        DatasetId::new(33),
+        vec![regular_level(16, 8, 8, 8)],
+        HashMap::from([(
+            tile_source_key(0),
+            TileSource::TiledIfd {
+                ifd_id,
+                jpeg_tables: None,
+                compression: Compression::Jp2kRgb,
+            },
+        )]),
+    );
+    let reader = TiffPixelReader::new(container, layout);
+    file.as_file().set_len(0).unwrap();
+    let requests = [
+        TileRequest::new(0, 0, 0, 0, 0),
+        TileRequest::new(0, 0, 0, 1, 0),
+    ];
+    assert!(reader
+        .decode_tiled_ifd_mixed_batch(&requests, BackendRequest::Cpu)
+        .expect("a sparse batch must decline before reading any payload")
+        .is_none());
+}
+
+#[test]
+fn jp2k_batch_preserves_request_order_with_a_missing_tile() {
+    let encoded = [
+        include_bytes!("../../../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec(),
+        Vec::new(),
+        include_bytes!("../../../../../tests/fixtures/jp2k/rgb_rct.j2k").to_vec(),
+    ];
+    let expected = [
+        load_fixture_rgb(include_bytes!(
+            "../../../../../tests/fixtures/jp2k/rgb_nomct.ppm"
+        )),
+        load_fixture_rgb(include_bytes!(
+            "../../../../../tests/fixtures/jp2k/rgb_rct.ppm"
+        )),
+    ];
+    let (width, height) = expected[0].dimensions();
+    let reader = build_tiled_encoded_reader(
+        width * 3,
+        height,
+        width,
+        height,
+        &encoded,
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    for columns in [[2, 0, 2], [2, 1, 0]] {
+        let requests = columns.map(|col| TileRequest::new(0, 0, 0, col, 0));
+        let tiles = reader.read_tiles_cpu(&requests).unwrap();
+        assert_eq!(tiles.len(), requests.len());
+        for (col, tile) in columns.into_iter().zip(tiles) {
+            assert_eq!((tile.width(), tile.height()), (width, height));
+            if col == 1 {
+                assert!(tile.as_u8().unwrap().iter().all(|&value| value == 0));
+            } else {
+                assert_eq!(tile.as_u8().unwrap(), expected[col as usize / 2].as_raw());
+            }
+        }
+    }
+}
+
+#[test]
 fn malformed_jp2k_batch_preserves_tile_request_context() {
     let reader = build_tiled_encoded_reader(
         8,
