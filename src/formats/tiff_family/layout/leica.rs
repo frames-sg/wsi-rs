@@ -756,7 +756,7 @@ fn sample_type_for_ifd(container: &TiffContainer, ifd_id: IfdId) -> SampleType {
     let bits_per_sample = container
         .get_u32(ifd_id, tags::BITS_PER_SAMPLE)
         .unwrap_or(8);
-    let sample_format = container.get_u32(ifd_id, 339).unwrap_or(1);
+    let sample_format = container.get_u32(ifd_id, tags::SAMPLE_FORMAT).unwrap_or(1);
     match (bits_per_sample, sample_format) {
         (16, _) => SampleType::Uint16,
         (32, 3) => SampleType::Float32,

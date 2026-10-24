@@ -152,7 +152,7 @@ fn interpret_clamps_associated_samples_per_pixel_instead_of_wrapping() {
         associated(65_536),
         {
             let mut label = associated(0);
-            label.push(SyntheticTag::long(TIFF_SUBFILE_TYPE, 1));
+            label.push(SyntheticTag::long(tags::SUBFILE_TYPE, 1));
             label
         },
     ]);

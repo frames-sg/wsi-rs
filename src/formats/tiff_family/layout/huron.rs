@@ -14,10 +14,6 @@ use super::common::{
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-const TAG_SUBFILE_TYPE: u16 = 254;
-const TAG_MAKE: u16 = 271;
-const TAG_IMAGE_DEPTH: u16 = 32_997;
-
 pub(crate) struct HuronInterpreter;
 
 impl TiffLayoutInterpreter for HuronInterpreter {
@@ -33,7 +29,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             .ifd_by_id(first_ifd)
             .is_ok_and(|ifd| ifd.tags.contains_key(&tags::TILE_WIDTH))
             && container
-                .get_string(first_ifd, TAG_MAKE)
+                .get_string(first_ifd, tags::MAKE)
                 .is_ok_and(|make| make.starts_with("Huron"))
     }
 
@@ -50,7 +46,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
         let mut associated_images = HashMap::new();
         let mut associated_sources = HashMap::new();
         for (index, &ifd_id) in container.top_ifds().iter().enumerate() {
-            if let Ok(depth) = container.get_u32(ifd_id, TAG_IMAGE_DEPTH) {
+            if let Ok(depth) = container.get_u32(ifd_id, tags::IMAGE_DEPTH) {
                 if depth != 1 {
                     return Err(TiffParseError::Structure(format!(
                         "Huron IFD {ifd_id} has unsupported ImageDepth={depth}"
@@ -68,7 +64,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             let name = if index == 1 {
                 Some("thumbnail")
             } else {
-                match container.get_u32(ifd_id, TAG_SUBFILE_TYPE).ok() {
+                match container.get_u32(ifd_id, tags::SUBFILE_TYPE).ok() {
                     Some(1) => Some("label"),
                     Some(9) => Some("macro"),
                     _ => None,

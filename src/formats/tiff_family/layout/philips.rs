@@ -26,11 +26,6 @@ use super::common::{
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-// ── Constants ────────────────────────────────────────────────────────
-
-/// TIFF tag 305 (Software), which is not in the shared `tags::` constants.
-const TAG_SOFTWARE: u16 = 305;
-
 // ── PhilipsInterpreter ──────────────────────────────────────────────
 
 pub(crate) struct PhilipsInterpreter;
@@ -48,7 +43,7 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
 
         // Check Software tag starts with "Philips"
         let software_ok = container
-            .get_string(first_ifd, TAG_SOFTWARE)
+            .get_string(first_ifd, tags::SOFTWARE)
             .map(|s| s.starts_with("Philips"))
             .unwrap_or(false);
 
@@ -454,7 +449,7 @@ fn parse_properties(
     }
 
     // Software tag.
-    if let Ok(sw) = container.get_string(first_ifd, TAG_SOFTWARE) {
+    if let Ok(sw) = container.get_string(first_ifd, tags::SOFTWARE) {
         properties.insert("philips.Software", sw.to_string());
     }
 

@@ -27,7 +27,7 @@ fn interpret_builds_corrected_pyramid_properties_and_associated_images() {
             SyntheticTag::long(tags::TILE_WIDTH, 256),
             SyntheticTag::long(tags::TILE_LENGTH, 256),
             SyntheticTag::short(tags::COMPRESSION, 7),
-            SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"),
+            SyntheticTag::ascii(tags::SOFTWARE, "Philips DPUfsImport"),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, philips_description()),
         ],
         vec![
@@ -102,7 +102,7 @@ fn interpret_sorts_levels_whose_area_overflows_u64() {
         ]
     };
     let mut small = level(1 << 31);
-    small.push(SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"));
+    small.push(SyntheticTag::ascii(tags::SOFTWARE, "Philips DPUfsImport"));
     small.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         philips_description(),
@@ -124,7 +124,7 @@ fn interpret_rejects_zero_tiles_and_missing_pyramid() {
         SyntheticTag::long(tags::IMAGE_LENGTH, 64),
         SyntheticTag::long(tags::TILE_WIDTH, 0),
         SyntheticTag::long(tags::TILE_LENGTH, 32),
-        SyntheticTag::ascii(TAG_SOFTWARE, "Philips"),
+        SyntheticTag::ascii(tags::SOFTWARE, "Philips"),
         SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, philips_description()),
     ]]);
     let container = TiffContainer::open(zero_tile.path()).unwrap();
@@ -137,7 +137,7 @@ fn interpret_rejects_zero_tiles_and_missing_pyramid() {
     let stripped = build_tiff(&[vec![
         SyntheticTag::long(tags::IMAGE_WIDTH, 64),
         SyntheticTag::long(tags::IMAGE_LENGTH, 64),
-        SyntheticTag::ascii(TAG_SOFTWARE, "Philips"),
+        SyntheticTag::ascii(tags::SOFTWARE, "Philips"),
         SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, philips_description()),
     ]]);
     let container = TiffContainer::open(stripped.path()).unwrap();
@@ -155,7 +155,7 @@ fn detect_and_associated_classification_cover_negative_cases() {
 
     let file = build_tiff(&[
         vec![
-            SyntheticTag::ascii(TAG_SOFTWARE, "Other"),
+            SyntheticTag::ascii(tags::SOFTWARE, "Other"),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, philips_description()),
         ],
         vec![
@@ -224,7 +224,7 @@ fn interpret_preserves_high_precision_entity_quoted_spacing_in_xy_order() {
         SyntheticTag::long(tags::TILE_WIDTH, 256),
         SyntheticTag::long(tags::TILE_LENGTH, 256),
         SyntheticTag::short(tags::COMPRESSION, 7),
-        SyntheticTag::ascii(TAG_SOFTWARE, "Philips DPUfsImport"),
+        SyntheticTag::ascii(tags::SOFTWARE, "Philips DPUfsImport"),
         SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, description),
     ]]);
 

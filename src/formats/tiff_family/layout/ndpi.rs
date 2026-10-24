@@ -20,15 +20,6 @@ use super::common::{
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-// ── NDPI-specific tag constants ───────────────────────────────────
-
-const NDPI_SOURCELENS: u16 = 65421;
-const NDPI_XOFFSET: u16 = 65422;
-const NDPI_YOFFSET: u16 = 65423;
-const NDPI_FOCAL_PLANE: u16 = 65424;
-const NDPI_MCU_STARTS: u16 = 65426;
-const NDPI_REFERENCE: u16 = 65427;
-const NDPI_PROPERTY_MAP: u16 = 65449;
 const JPEG_HEADER_PROBE_BYTES: u64 = 4096;
 
 #[derive(Clone)]
@@ -257,12 +248,14 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                 continue;
             }
 
-            let source_lens = container.get_f64(ifd_id, NDPI_SOURCELENS).unwrap_or(0.0);
+            let source_lens = container
+                .get_f64(ifd_id, tags::NDPI_SOURCELENS)
+                .unwrap_or(0.0);
 
             if source_lens > 0.0 {
                 // Pyramid level
                 let focal_plane = container
-                    .get_f64(ifd_id, NDPI_FOCAL_PLANE)
+                    .get_f64(ifd_id, tags::NDPI_FOCAL_PLANE)
                     .map(|v| v as i64)
                     .unwrap_or(0);
 
@@ -533,7 +526,7 @@ impl NdpiInterpreter {
                         TileSource::NdpiJpeg {
                             ifd_id: ifd.ifd_id,
                             jpeg_header: ifd_probe.header,
-                            mcu_starts_tag: NDPI_MCU_STARTS,
+                            mcu_starts_tag: tags::NDPI_MCU_STARTS,
                             tiles_across: plane_ta,
                             tiles_down: plane_td,
                             restart_interval: plane_ri,
@@ -639,7 +632,7 @@ impl NdpiInterpreter {
         }
 
         // SourceLens -> objective power
-        if let Ok(lens) = container.get_f64(first_ifd, NDPI_SOURCELENS) {
+        if let Ok(lens) = container.get_f64(first_ifd, tags::NDPI_SOURCELENS) {
             if lens > 0.0 {
                 properties.insert("hamamatsu.SourceLens", format!("{}", lens));
                 properties.insert("openslide.objective-power", format!("{}", lens));
@@ -647,7 +640,7 @@ impl NdpiInterpreter {
         }
 
         // NDPI property map: key=value\r\n pairs
-        if let Ok(prop_map) = container.get_string(first_ifd, NDPI_PROPERTY_MAP) {
+        if let Ok(prop_map) = container.get_string(first_ifd, tags::NDPI_PROPERTY_MAP) {
             for line in prop_map.split("\r\n") {
                 if let Some((key, val)) = line.split_once('=') {
                     if !key.is_empty() && !val.is_empty() {
@@ -658,19 +651,19 @@ impl NdpiInterpreter {
         }
 
         // NDPI offsets
-        if let Ok(xoff) = container.get_f64(first_ifd, NDPI_XOFFSET) {
+        if let Ok(xoff) = container.get_f64(first_ifd, tags::NDPI_XOFFSET) {
             properties.insert(
                 "hamamatsu.XOffsetFromSlideCentre",
                 format!("{}", xoff as i64),
             );
         }
-        if let Ok(yoff) = container.get_f64(first_ifd, NDPI_YOFFSET) {
+        if let Ok(yoff) = container.get_f64(first_ifd, tags::NDPI_YOFFSET) {
             properties.insert(
                 "hamamatsu.YOffsetFromSlideCentre",
                 format!("{}", yoff as i64),
             );
         }
-        if let Ok(reference) = container.get_string(first_ifd, NDPI_REFERENCE) {
+        if let Ok(reference) = container.get_string(first_ifd, tags::NDPI_REFERENCE) {
             properties.insert("hamamatsu.Reference", reference.to_string());
         }
 

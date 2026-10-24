@@ -152,7 +152,10 @@ impl TiffPixelReader {
             .get_u32(ifd_id, tags::BITS_PER_SAMPLE)
             .unwrap_or(8);
         // Tag 339 SAMPLE_FORMAT: 1=unsigned int (default), 2=signed int, 3=float
-        let sample_format = self.container.get_u32(ifd_id, 339).unwrap_or(1);
+        let sample_format = self
+            .container
+            .get_u32(ifd_id, tags::SAMPLE_FORMAT)
+            .unwrap_or(1);
         // Tag 262 PHOTOMETRIC: 0=MinIsWhite, 1=MinIsBlack, 2=RGB, 3=Palette, 6=YCbCr.
         // When the tag is absent, prefer grayscale for single-sample images and
         // RGB otherwise. Real NDPI associated thumbnails omit PHOTOMETRIC while
@@ -162,7 +165,10 @@ impl TiffPixelReader {
             .get_u32(ifd_id, tags::PHOTOMETRIC)
             .unwrap_or(if spp == 1 { 1 } else { 2 });
         // Tag 284 PLANAR_CONFIGURATION: 1=chunky (default), 2=planar
-        let planar = self.container.get_u32(ifd_id, 284).unwrap_or(1);
+        let planar = self
+            .container
+            .get_u32(ifd_id, tags::PLANAR_CONFIGURATION)
+            .unwrap_or(1);
 
         let endian = self.container.endian();
 

@@ -17,9 +17,6 @@ use super::{
     TileSourceKey,
 };
 
-const TAG_SOFTWARE: u16 = 305;
-const TAG_X_POSITION: u16 = 286;
-const TAG_Y_POSITION: u16 = 287;
 const TRESTLE_SOFTWARE_PREFIX: &str = "MedScan";
 const MAX_TRESTLE_TILES_PER_LEVEL: u64 = 1_000_000;
 
@@ -35,7 +32,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             return false;
         };
 
-        let Ok(software) = container.get_string(first_ifd, TAG_SOFTWARE) else {
+        let Ok(software) = container.get_string(first_ifd, tags::SOFTWARE) else {
             return false;
         };
         if !software.starts_with(TRESTLE_SOFTWARE_PREFIX) {
@@ -181,16 +178,16 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
         let mut properties = Properties::new();
         properties.insert("openslide.vendor", "trestle");
         properties.insert("openslide.comment", desc.clone());
-        if let Ok(software) = container.get_string(first_ifd, TAG_SOFTWARE) {
+        if let Ok(software) = container.get_string(first_ifd, tags::SOFTWARE) {
             properties.insert("tiff.Software", software.to_string());
         }
-        if let Ok(datetime) = container.get_string(first_ifd, super::TAG_DATETIME) {
+        if let Ok(datetime) = container.get_string(first_ifd, tags::DATETIME) {
             properties.insert("tiff.DateTime", datetime.to_string());
         }
-        if let Ok(host) = container.get_string(first_ifd, super::TAG_HOST_COMPUTER) {
+        if let Ok(host) = container.get_string(first_ifd, tags::HOST_COMPUTER) {
             properties.insert("tiff.HostComputer", host.to_string());
         }
-        if let Ok(copyright) = container.get_string(first_ifd, super::TAG_COPYRIGHT) {
+        if let Ok(copyright) = container.get_string(first_ifd, tags::COPYRIGHT) {
             properties.insert("tiff.Copyright", copyright.to_string());
         }
         properties.insert("tiff.ImageDescription", desc);
@@ -203,10 +200,10 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             properties.insert("tiff.YResolution", y_res.to_string());
             properties.insert("openslide.mpp-y", y_res.to_string());
         }
-        if let Ok(x_pos) = container.get_f64(first_ifd, TAG_X_POSITION) {
+        if let Ok(x_pos) = container.get_f64(first_ifd, tags::X_POSITION) {
             properties.insert("tiff.XPosition", x_pos.to_string());
         }
-        if let Ok(y_pos) = container.get_f64(first_ifd, TAG_Y_POSITION) {
+        if let Ok(y_pos) = container.get_f64(first_ifd, tags::Y_POSITION) {
             properties.insert("tiff.YPosition", y_pos.to_string());
         }
         if let Ok(unit) = container.get_u32(first_ifd, tags::RESOLUTION_UNIT) {

@@ -26,14 +26,6 @@ pub(crate) mod trestle;
 pub(crate) mod ventana;
 
 const QUICKHASH_MAX_LEVEL_BYTES: u64 = 5 << 20;
-const TAG_DOCUMENT_NAME: u16 = 269;
-const TAG_MAKE: u16 = 271;
-const TAG_MODEL: u16 = 272;
-const TAG_SOFTWARE: u16 = 305;
-const TAG_DATETIME: u16 = 306;
-const TAG_ARTIST: u16 = 315;
-const TAG_HOST_COMPUTER: u16 = 316;
-const TAG_COPYRIGHT: u16 = 33432;
 
 fn compute_tiff_dataset_id_and_record_quickhash(
     container: &TiffContainer,
@@ -350,13 +342,13 @@ fn tiff_data_ranges(
 fn hash_tiff_string_properties(hash: &mut Quickhash1, container: &TiffContainer, ifd_id: IfdId) {
     const STRING_PROPS: [(&str, u16); 8] = [
         ("tiff.ImageDescription", tags::IMAGE_DESCRIPTION),
-        ("tiff.Make", TAG_MAKE),
-        ("tiff.Model", TAG_MODEL),
-        ("tiff.Software", TAG_SOFTWARE),
-        ("tiff.DateTime", TAG_DATETIME),
-        ("tiff.Artist", TAG_ARTIST),
-        ("tiff.HostComputer", TAG_HOST_COMPUTER),
-        ("tiff.Copyright", TAG_COPYRIGHT),
+        ("tiff.Make", tags::MAKE),
+        ("tiff.Model", tags::MODEL),
+        ("tiff.Software", tags::SOFTWARE),
+        ("tiff.DateTime", tags::DATETIME),
+        ("tiff.Artist", tags::ARTIST),
+        ("tiff.HostComputer", tags::HOST_COMPUTER),
+        ("tiff.Copyright", tags::COPYRIGHT),
     ];
 
     for (name, tag) in STRING_PROPS {
@@ -367,7 +359,7 @@ fn hash_tiff_string_properties(hash: &mut Quickhash1, container: &TiffContainer,
         container,
         ifd_id,
         "tiff.DocumentName",
-        TAG_DOCUMENT_NAME,
+        tags::DOCUMENT_NAME,
     );
 }
 

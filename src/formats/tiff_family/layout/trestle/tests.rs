@@ -15,13 +15,13 @@ fn tiled_ifd(width: u32, height: u32, tile_width: u32, tile_height: u32) -> Vec<
 fn interpret_builds_overlap_adjusted_levels_and_properties() {
     let mut first = tiled_ifd(512, 512, 256, 256);
     first.extend([
-        SyntheticTag::ascii(TAG_SOFTWARE, "MedScan 2.0"),
+        SyntheticTag::ascii(tags::SOFTWARE, "MedScan 2.0"),
         SyntheticTag::ascii(
             tags::IMAGE_DESCRIPTION,
             "Background Color=E6E6E6;White Balance=C0AAA1;Objective Power=10;OverlapsXY=16 8 4 2",
         ),
-        SyntheticTag::ascii(super::super::TAG_DATETIME, "2026:01:02 03:04:05"),
-        SyntheticTag::ascii(super::super::TAG_HOST_COMPUTER, "scanner-host"),
+        SyntheticTag::ascii(tags::DATETIME, "2026:01:02 03:04:05"),
+        SyntheticTag::ascii(tags::HOST_COMPUTER, "scanner-host"),
     ]);
     let file = build_tiff(&[first, tiled_ifd(256, 256, 128, 128)]);
     let container = TiffContainer::open(file.path()).unwrap();
@@ -54,7 +54,7 @@ fn interpret_builds_overlap_adjusted_levels_and_properties() {
 fn interpret_rejects_overlap_that_consumes_a_tile() {
     let mut tags = tiled_ifd(512, 512, 256, 256);
     tags.extend([
-        SyntheticTag::ascii(TAG_SOFTWARE, "MedScan"),
+        SyntheticTag::ascii(tags::SOFTWARE, "MedScan"),
         SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "OverlapsXY=256 0"),
     ]);
     let file = build_tiff(&[tags]);
@@ -70,7 +70,7 @@ fn detect_requires_vendor_description_and_all_tiled_ifds() {
 
     let file = build_tiff(&[
         vec![
-            SyntheticTag::ascii(TAG_SOFTWARE, "MedScan"),
+            SyntheticTag::ascii(tags::SOFTWARE, "MedScan"),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Objective Power=20"),
             SyntheticTag::long(tags::IMAGE_WIDTH, 64),
             SyntheticTag::long(tags::IMAGE_LENGTH, 64),

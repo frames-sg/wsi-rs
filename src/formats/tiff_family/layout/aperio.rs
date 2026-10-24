@@ -19,8 +19,6 @@ use super::common::{
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-const TIFF_SUBFILE_TYPE: u16 = 254;
-
 // ── AperioInterpreter ────────────────────────────────────────────
 
 pub(crate) struct AperioInterpreter;
@@ -181,7 +179,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
             let name = if sifd.ifd_index == 1 {
                 "thumbnail".to_string()
             } else {
-                match container.get_u32(sifd.ifd_id, TIFF_SUBFILE_TYPE).ok() {
+                match container.get_u32(sifd.ifd_id, tags::SUBFILE_TYPE).ok() {
                     Some(1) => Some("label".to_string()),
                     Some(9) => Some("macro".to_string()),
                     _ => None,

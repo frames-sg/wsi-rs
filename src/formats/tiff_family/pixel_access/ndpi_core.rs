@@ -1,9 +1,6 @@
 use super::*;
 use crate::core::execution_telemetry::{record, Event};
 
-const NDPI_MCU_STARTS_LOW: u16 = 65426;
-const NDPI_MCU_STARTS_HIGH: u16 = 65432;
-
 /// Relative offsets already live in the validated TIFF tag allocation. Only
 /// high-word combination or file-absolute normalization needs a separate table.
 #[derive(Debug)]
@@ -148,13 +145,13 @@ impl TiffPixelReader {
             .container
             .get_u64_array(ifd_id, mcu_starts_tag)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
-        let has_high_words = mcu_starts_tag == NDPI_MCU_STARTS_LOW
+        let has_high_words = mcu_starts_tag == tags::NDPI_MCU_STARTS
             && self
                 .container
                 .ifd_by_id(ifd_id)
                 .map_err(|e| e.into_wsi_error(self.container.path()))?
                 .tags
-                .contains_key(&NDPI_MCU_STARTS_HIGH);
+                .contains_key(&tags::NDPI_MCU_STARTS_HIGH);
         let file_absolute = !has_high_words
             && Self::ndpi_mcu_starts_are_file_absolute(raw_starts, strip_offset, strip_byte_count);
         if !has_high_words && !file_absolute {
@@ -168,7 +165,7 @@ impl TiffPixelReader {
         if has_high_words {
             let high = self
                 .container
-                .get_u64_array(ifd_id, NDPI_MCU_STARTS_HIGH)
+                .get_u64_array(ifd_id, tags::NDPI_MCU_STARTS_HIGH)
                 .map_err(|e| e.into_wsi_error(self.container.path()))?;
             if high.len() != starts.len() {
                 return Err(WsiError::UnsupportedFormat(format!(
