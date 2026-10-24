@@ -96,10 +96,15 @@ impl Slide {
         options: SlideOpenOptions,
         decode_runtime: Arc<DecodeRuntime>,
     ) -> Result<Self, WsiError> {
-        let resolved_path = crate::formats::svcache::resolve_open_path_with_policy(
-            path.as_ref(),
-            options.svcache_policy,
-        )?;
+        use crate::formats::svcache::SvcachePolicy;
+        // A registry without the `.svcache` backend cannot open a redirected
+        // path, so it opens the source; `RequireFresh` still errors.
+        let svcache_policy = match options.svcache_policy {
+            SvcachePolicy::PreferFresh if !options.registry.opens_svcache() => SvcachePolicy::Off,
+            policy => policy,
+        };
+        let resolved_path =
+            crate::formats::svcache::resolve_open_path_with_policy(path.as_ref(), svcache_policy)?;
         let source = options.registry.open_with_config(
             &resolved_path,
             BackendOpenConfig::new(options.cache_config, options.limits),

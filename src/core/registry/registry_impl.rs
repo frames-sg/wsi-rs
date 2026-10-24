@@ -41,6 +41,7 @@ impl<T: ConfiguredDatasetReader> ConfiguredDatasetReader for Arc<T> {
 #[derive(Default)]
 pub struct FormatRegistry {
     backends: Vec<RegisteredBackend>,
+    opens_svcache: bool,
 }
 
 impl std::fmt::Debug for FormatRegistry {
@@ -91,6 +92,21 @@ impl FormatRegistry {
             probe: Box::new(move |path, config| probe.probe_with_config(path, config)),
             reader: Box::new(move |path, config| reader.open_with_config(path, config)),
         });
+    }
+
+    /// Registers the `.svcache` backend. Only a registry with it lets
+    /// `Slide::open_with_options` redirect an open to a fresh `.svcache`.
+    pub(crate) fn register_svcache(
+        &mut self,
+        probe: impl ConfiguredFormatProbe + 'static,
+        reader: impl ConfiguredDatasetReader + 'static,
+    ) {
+        self.register_cache_configured(probe, reader);
+        self.opens_svcache = true;
+    }
+
+    pub(crate) fn opens_svcache(&self) -> bool {
+        self.opens_svcache
     }
 
     /// Probe all backends and return the best detected format without opening it.

@@ -81,3 +81,27 @@ fn require_fresh_reports_the_stale_candidate() {
     assert!(message.contains("stale candidate"));
     assert!(message.contains(&cache.display().to_string()));
 }
+
+#[test]
+fn custom_registry_without_svcache_backend_opens_the_source_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.j2c");
+    std::fs::write(
+        &source,
+        include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k"),
+    )
+    .unwrap();
+    let cache = default_svcache_path(&source);
+    build_svcache(&source, &cache).unwrap();
+    assert_eq!(
+        resolve_open_path_with_policy(&source, SvcachePolicy::PreferFresh).unwrap(),
+        cache
+    );
+
+    let options = crate::SlideOpenOptions::default()
+        .with_registry(crate::core::registry::FormatRegistry::builtin_native())
+        .with_svcache_policy(SvcachePolicy::PreferFresh);
+    let slide = crate::Slide::open_with_options(&source, options)
+        .expect("a registry without the svcache backend should open the source");
+    assert_eq!(slide.dataset().scenes.len(), 1);
+}
