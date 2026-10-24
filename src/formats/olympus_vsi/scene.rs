@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::core::registry::OpenBudget;
 use crate::core::types::{AxesShape, ChannelInfo, SampleType};
@@ -32,10 +31,7 @@ pub(super) struct EtsScene {
 
 impl EtsScene {
     pub(super) fn parse_with_budget(path: &Path, budget: &OpenBudget) -> Result<Self, WsiError> {
-        let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let header = EtsHeader::read(&mut file, path, budget)?;
         let index = EtsIndex::read(&mut file, path, budget, &header)?;
         let levels = index.levels(path, budget, header.tile_width, header.tile_height)?;

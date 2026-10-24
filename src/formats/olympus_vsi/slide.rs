@@ -4,7 +4,6 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{BackendOpenConfig, OpenBudget};
@@ -111,15 +110,11 @@ impl OlympusVsiSlide {
 
 pub(super) fn find_ets_files(dir: &Path, budget: &OpenBudget) -> Result<Vec<PathBuf>, WsiError> {
     let mut paths = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: dir.to_path_buf(),
-    })? {
+    for entry in fs::read_dir(dir).map_err(|source| WsiError::io_with_path(dir, source))? {
         let entry = entry?;
-        let file_type = entry.file_type().map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: entry.path(),
-        })?;
+        let file_type = entry
+            .file_type()
+            .map_err(|source| WsiError::io_with_path(&entry.path(), source))?;
         let path = entry.path();
         if !file_type.is_dir() {
             continue;

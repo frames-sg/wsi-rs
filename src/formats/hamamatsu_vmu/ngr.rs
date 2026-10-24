@@ -17,12 +17,15 @@ pub(super) struct Ngr {
 
 impl Ngr {
     pub(super) fn open(path: &Path) -> Result<Self, WsiError> {
-        let file = File::open(path).map_err(|e| io_error(path, e))?;
-        let length = file.metadata().map_err(|e| io_error(path, e))?.len();
+        let file = File::open(path).map_err(|e| WsiError::io_with_path(path, e))?;
+        let length = file
+            .metadata()
+            .map_err(|e| WsiError::io_with_path(path, e))?
+            .len();
         let file = PositionedFile::new(file);
         let mut header = [0u8; 28];
         file.read_exact_at(&mut header, 0)
-            .map_err(|e| io_error(path, e))?;
+            .map_err(|e| WsiError::io_with_path(path, e))?;
         if &header[..2] != b"GN" {
             return Err(WsiError::invalid_slide(path, "NGR magic must be GN"));
         }
@@ -127,7 +130,7 @@ impl Ngr {
                 let data = &mut row[..count as usize * 6];
                 self.file
                     .read_exact_at(data, self.start + pixel * 6)
-                    .map_err(|e| io_error(&self.path, e))?;
+                    .map_err(|e| WsiError::io_with_path(&self.path, e))?;
                 let dest = (dy as usize * width as usize + dx as usize) * 3;
                 for (out, pair) in samples[dest..dest + count as usize * 3]
                     .iter_mut()
@@ -147,8 +150,4 @@ impl Ngr {
             CpuTileData::u16(samples),
         )
     }
-}
-
-fn io_error(path: &Path, source: std::io::Error) -> WsiError {
-    WsiError::io_with_path(path, source)
 }

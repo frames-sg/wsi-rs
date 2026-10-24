@@ -11,16 +11,10 @@ fn cached_file<'a>(
     path: &Path,
 ) -> Result<&'a mut CachedMiraxFile, WsiError> {
     if !files.contains_key(path) {
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let len = file
             .metadata()
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?
+            .map_err(|source| WsiError::io_with_path(path, source))?
             .len();
         files.insert(path.to_path_buf(), CachedMiraxFile { file, len });
     }
@@ -38,18 +32,12 @@ pub(super) fn read_jpeg_dimensions_from_record(
 ) -> Result<(u32, u32), WsiError> {
     let file = &mut cached_file(quickhash_files, &record.path)?.file;
     file.seek(SeekFrom::Start(record.offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: record.path.as_ref().clone(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
 
     let probe_len = record.len.min(MIRAX_ASSOCIATED_DIMENSION_PROBE_BYTES) as usize;
     let mut probe = vec![0u8; probe_len];
     file.read_exact(&mut probe)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: record.path.as_ref().clone(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
     if let Ok(dimensions) = jpeg_dimensions(&probe) {
         return Ok(dimensions);
     }
@@ -70,10 +58,7 @@ pub(super) fn read_record_bytes_fields(
     offset: u64,
     len: u64,
 ) -> Result<Vec<u8>, WsiError> {
-    let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     read_record_bytes_from_file_with_limit(&file, path, offset, len, MAX_COMPRESSED_INPUT_BYTES)
 }
 
@@ -87,12 +72,8 @@ pub(super) fn read_record_bytes_from_file_with_limit(
     let len = checked_product_to_usize(&[len], limit, "MIRAX record")
         .map_err(|message| WsiError::invalid_slide(path, message))?;
     let mut buf = vec![0u8; len];
-    crate::core::positioned_file::read_exact_at(file, &mut buf, offset).map_err(|source| {
-        WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        }
-    })?;
+    crate::core::positioned_file::read_exact_at(file, &mut buf, offset)
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(buf)
 }
 
@@ -106,31 +87,28 @@ pub(super) fn quickhash_file_part_cached(
     let cached = cached_file(files, path)?;
     let file_len = cached.len;
     let file = &mut cached.file;
-    let range_end = offset
-        .checked_add(len)
-        .ok_or_else(|| WsiError::IoWithPath {
-            source: Arc::new(std::io::Error::new(
+    let range_end = offset.checked_add(len).ok_or_else(|| {
+        WsiError::io_with_path(
+            path,
+            std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 format!("MIRAX quickhash range offset {offset} plus {len} bytes overflows"),
-            )),
-            path: path.to_path_buf(),
-        })?;
+            ),
+        )
+    })?;
     if range_end > file_len {
-        return Err(WsiError::IoWithPath {
-            source: Arc::new(std::io::Error::new(
+        return Err(WsiError::io_with_path(
+            path,
+            std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 format!(
                     "MIRAX quickhash range at offset {offset} requires {len} bytes, but file length is {file_len}"
                 ),
-            )),
-            path: path.to_path_buf(),
-        });
+            ),
+        ));
     }
     file.seek(SeekFrom::Start(offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
 
     let mut staged = quickhash.clone();
     let mut remaining = len;
@@ -139,21 +117,18 @@ pub(super) fn quickhash_file_part_cached(
         let to_read = (remaining as usize).min(buf.len());
         let read = file
             .read(&mut buf[..to_read])
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         if read == 0 {
-            return Err(WsiError::IoWithPath {
-                source: Arc::new(std::io::Error::new(
+            return Err(WsiError::io_with_path(
+                path,
+                std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     format!(
                         "MIRAX quickhash range at offset {offset} requires {len} bytes; {} bytes remain unread",
                         remaining
                     ),
-                )),
-                path: path.to_path_buf(),
-            });
+                ),
+            ));
         }
         staged.update(&buf[..read]);
         remaining -= read as u64;
@@ -277,20 +252,14 @@ pub(super) fn read_exact_string(
 ) -> Result<String, WsiError> {
     let mut buf = vec![0u8; len];
     file.read_exact(&mut buf)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 pub(super) fn read_i32_le(file: &mut impl Read, path: &Path) -> Result<i32, WsiError> {
     let mut buf = [0u8; 4];
     file.read_exact(&mut buf)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(i32::from_le_bytes(buf))
 }
 

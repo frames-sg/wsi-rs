@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::core::positioned_file;
 use crate::error::WsiError;
@@ -31,16 +30,10 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<FastDicomFrameIndex>, WsiError> {
     check_index_control(control)?;
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let file_len = file
         .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
+        .map_err(|source| WsiError::io_with_path(path, source))?
         .len();
     let expected_table_len = u64::from(number_of_frames)
         .checked_mul(8)
@@ -265,10 +258,7 @@ fn find_encapsulated_layout_le(
     position_at_explicit_little_endian_dataset(file, path)?;
     let mut cursor = file
         .stream_position()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let mut reader = HeaderWindowReader::new(file, path, file_len, control);
     let mut extended_offsets_value = None;
     let mut extended_lengths_value = None;
@@ -579,22 +569,13 @@ fn position_at_explicit_little_endian_dataset(
     // that low-level compatibility path bounded by positioning directly after
     // a valid preamble instead of invoking the allocating metadata parser.
     file.seek(SeekFrom::Start(128))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let dataset_offset = if &magic == b"DICM" { 132 } else { 0 };
     file.seek(SeekFrom::Start(dataset_offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(())
 }
 
@@ -694,14 +675,9 @@ pub(in super::super) fn read_exact_at(
     buf: &mut [u8],
 ) -> Result<(), WsiError> {
     file.seek(SeekFrom::Start(offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
-    file.read_exact(buf).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })
+        .map_err(|source| WsiError::io_with_path(path, source))?;
+    file.read_exact(buf)
+        .map_err(|source| WsiError::io_with_path(path, source))
 }
 
 /// A positioned read with cancellation checked before and after it. Callers
@@ -714,11 +690,7 @@ fn read_exact_file_at_controlled(
     control: Option<&crate::ReadControl>,
 ) -> Result<(), WsiError> {
     check_index_control(control)?;
-    positioned_file::read_exact_at(file, buffer, offset).map_err(|source| {
-        WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        }
-    })?;
+    positioned_file::read_exact_at(file, buffer, offset)
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     check_index_control(control)
 }

@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::Arc;
 
 use dicom_dictionary_std::uids;
 use dicom_parser::dataset::{lazy_read::LazyDataSetReader, LazyDataToken};
@@ -38,10 +37,8 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 format!("unknown transfer syntax {transfer_syntax_uid}"),
             )
         })?;
-    let mut reader = BufReader::new(File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?);
+    let mut reader =
+        BufReader::new(File::open(path).map_err(|source| WsiError::io_with_path(path, source))?);
     let actual_transfer_syntax = preflight_file_meta(&mut reader, path)?;
     if actual_transfer_syntax != transfer_syntax_uid {
         return Err(WsiError::invalid_slide(

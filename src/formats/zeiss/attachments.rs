@@ -312,21 +312,12 @@ fn read_attachment_prefix(
     let read_len_usize = usize::try_from(read_len).map_err(|_| {
         WsiError::DisplayConversion("Zeiss attachment probe length overflow".into())
     })?;
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     file.seek(SeekFrom::Start(payload_offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let mut buffer = vec![0u8; read_len_usize];
     file.read_exact(&mut buffer)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(buffer)
 }
 
@@ -352,10 +343,7 @@ fn with_temporary_czi_blob_in<T>(
         .as_file_mut()
         .write_all(data)
         .and_then(|()| temporary.as_file_mut().flush())
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path,
-        })?;
+        .map_err(|source| WsiError::io_with_path(&path, source))?;
     operation(temporary.path())
 }
 

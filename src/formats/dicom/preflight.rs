@@ -57,17 +57,11 @@ pub(super) fn open_metadata_object_until_with_budget(
     stop_tag: Tag,
     budget: &OpenBudget,
 ) -> Result<OpenedDicomMetadata, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let pixel_data = preflight_dicom_metadata_with_budget(&mut file, path, budget)?;
     let source_identity = FileIdentity::from_open_file(path, &file)?;
     file.seek(SeekFrom::Start(0))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let object = OpenFileOptions::new()
         .transfer_syntax_index(DicomMetadataTransferSyntaxIndex)
         .read_until(stop_tag)
@@ -242,7 +236,7 @@ pub(super) fn preflight_dicom_metadata_with_budget(
             .ok_or_else(|| WsiError::invalid_slide(path, "DICOM Pixel Data range overflow"))?;
         let file_len = file
             .seek(SeekFrom::End(0))
-            .map_err(|source| io_error(path, source))?;
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         if value_end > file_len {
             return Err(WsiError::invalid_slide(
                 path,
@@ -268,13 +262,13 @@ pub(super) fn preflight_file_meta(
 ) -> Result<String, WsiError> {
     reader
         .seek(SeekFrom::Start(0))
-        .map_err(|source| io_error(path, source))?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let mut magic = [0u8; 4];
     read_exact(reader, path, &mut magic, "DICOM magic code")?;
     if &magic != b"DICM" {
         reader
             .seek(SeekFrom::Start(128))
-            .map_err(|source| io_error(path, source))?;
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         read_exact(reader, path, &mut magic, "DICOM magic code")?;
     }
     if &magic != b"DICM" {
@@ -355,17 +349,17 @@ pub(super) fn preflight_file_meta(
         } else {
             reader
                 .seek(SeekFrom::Current(i64::from(header.value_len)))
-                .map_err(|source| io_error(path, source))?;
+                .map_err(|source| WsiError::io_with_path(path, source))?;
         }
         remaining -= encoded_len;
     }
 
     let dataset_offset = reader
         .stream_position()
-        .map_err(|source| io_error(path, source))?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let file_len = reader
         .seek(SeekFrom::End(0))
-        .map_err(|source| io_error(path, source))?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     if dataset_offset > file_len {
         return Err(WsiError::invalid_slide(
             path,
@@ -374,7 +368,7 @@ pub(super) fn preflight_file_meta(
     }
     reader
         .seek(SeekFrom::Start(dataset_offset))
-        .map_err(|source| io_error(path, source))?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
 
     transfer_syntax_uid
         .filter(|uid| !uid.is_empty())
@@ -433,8 +427,4 @@ fn read_exact(
     reader
         .read_exact(bytes)
         .map_err(|source| WsiError::invalid_slide(path, format!("cannot read {context}: {source}")))
-}
-
-fn io_error(path: &Path, source: std::io::Error) -> WsiError {
-    WsiError::io_with_path(path, source)
 }

@@ -273,13 +273,8 @@ fn load_macro(
         .min(budget.limits().aggregate_metadata_bytes());
     let length = std::fs::metadata(&macro_path)?.len();
     budget.retain_metadata(length)?;
-    let bytes =
-        read_file_bounded(&macro_path, limit.min(length), "VMU macro JPEG").map_err(|source| {
-            WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: macro_path,
-            }
-        })?;
+    let bytes = read_file_bounded(&macro_path, limit.min(length), "VMU macro JPEG")
+        .map_err(|source| WsiError::io_with_path(&macro_path, source))?;
     let info = AssociatedImage {
         dimensions: jpeg_dimensions(&bytes)?,
         sample_type: SampleType::Uint8,

@@ -1,7 +1,6 @@
 use super::*;
 use crate::core::file_identity::FileIdentity;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SCENES: usize = 1_024;
@@ -480,10 +479,7 @@ pub fn svcache_matches_source(cache_path: &Path, source_path: &Path) -> Result<b
 }
 
 pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiError> {
-    let io_error = |source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    };
+    let io_error = |source| WsiError::io_with_path(path, source);
     // Checked before opening: opening a FIFO or device for reading can block.
     if !std::fs::metadata(path).map_err(io_error)?.is_file() {
         return Err(invalid_svcache(

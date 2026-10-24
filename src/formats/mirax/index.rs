@@ -146,17 +146,11 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
 
         index_file
             .seek(SeekFrom::Start(seek_location))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: index_path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(index_path, source))?;
         let ptr = read_u32_le(index_file, index_path)? as u64;
         index_file
             .seek(SeekFrom::Start(ptr))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: index_path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(index_path, source))?;
         if read_u32_le(index_file, index_path)? != 0 {
             return Err(WsiError::invalid_slide(
                 path,
@@ -169,10 +163,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
         loop {
             index_file
                 .seek(SeekFrom::Start(data_page))
-                .map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: index_path.to_path_buf(),
-                })?;
+                .map_err(|source| WsiError::io_with_path(index_path, source))?;
             let page_len = read_i32_le(index_file, index_path)?;
             let page_len = budget.record_page(path, data_page, page_len)?;
             let next_ptr = read_i32_le(index_file, index_path)?;
@@ -582,24 +573,15 @@ fn read_nonhier_record(
     }
     index_file
         .seek(SeekFrom::Start(nonhier_root))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let table_base = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(table_base + 4 * record_index as u64))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let list_head = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(list_head))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     if read_u32_le(index_file, path)? != 0 {
         return Err(WsiError::invalid_slide(
             path,
@@ -609,10 +591,7 @@ fn read_nonhier_record(
     let page_ptr = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(page_ptr))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let page_len = read_i32_le(index_file, path)?;
     if page_len < 1 {
         return Err(WsiError::invalid_slide(
@@ -654,10 +633,7 @@ pub(super) fn verify_index_header(
 ) -> Result<(), WsiError> {
     index_file
         .seek(SeekFrom::Start(0))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let version = read_exact_string(index_file, path, INDEX_VERSION.len())?;
     if version != INDEX_VERSION {
         return Err(WsiError::invalid_slide(

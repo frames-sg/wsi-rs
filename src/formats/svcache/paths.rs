@@ -1,7 +1,6 @@
 use super::storage::is_fresh_svcache;
 use super::*;
 use std::io::ErrorKind;
-use std::sync::Arc;
 
 pub fn default_svcache_path(source_path: &Path) -> PathBuf {
     let name = source_path
@@ -57,10 +56,7 @@ pub(crate) fn resolve_open_path_with_policy(
             Ok(_) => continue,
             Err(source) if source.kind() == ErrorKind::NotFound => continue,
             Err(source) => {
-                return Err(WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: candidate,
-                });
+                return Err(WsiError::io_with_path(&candidate, source));
             }
         }
     }

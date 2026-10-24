@@ -180,11 +180,8 @@ impl DicomImage {
             )?);
         }
 
-        let mut file =
-            File::open(&self.frame_store.path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.frame_store.path.clone(),
-            })?;
+        let mut file = File::open(&self.frame_store.path)
+            .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
         for group in group_frame_read_spans(spans) {
             if let Some(control) = control {
                 control.check_cancelled()?;

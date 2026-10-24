@@ -97,10 +97,8 @@ pub(super) fn parse_vms_opt_offsets(
         return Ok(vec![Vec::new(); headers.len()]);
     };
 
-    let mut file = File::open(opt_path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: opt_path.to_path_buf(),
-    })?;
+    let mut file =
+        File::open(opt_path).map_err(|source| WsiError::io_with_path(opt_path, source))?;
     let mut per_image = Vec::with_capacity(headers.len());
     for header in headers {
         let geometry = &header.geometry;

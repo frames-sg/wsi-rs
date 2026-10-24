@@ -70,17 +70,11 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: std::sync::Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let max_input = MAX_COMPRESSED_INPUT_BYTES.min(config.limits.encoded_unit_bytes());
         let declared_len = file
             .metadata()
-            .map_err(|source| WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: path.to_path_buf(),
-            })?
+            .map_err(|source| WsiError::io_with_path(path, source))?
             .len();
         if declared_len > max_input {
             return Err(WsiError::ResourceLimit {
@@ -89,12 +83,8 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
                 limit: max_input,
             });
         }
-        let data = read_to_end_bounded(file, max_input, "raw JP2K input").map_err(|source| {
-            WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: path.to_path_buf(),
-            }
-        })?;
+        let data = read_to_end_bounded(file, max_input, "raw JP2K input")
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         let view = j2k::J2kView::parse(&data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
         if let Some(layout) = &view.info().tile_layout {
             // Every tile needs at least one 12-byte SOT segment and a 2-byte

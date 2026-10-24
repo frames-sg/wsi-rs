@@ -104,10 +104,7 @@ impl DicomImage {
         native_pixel_data
             .source_file
             .read_exact_at(&mut frame, absolute_start)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.frame_store.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
         let planar_configuration = self.planar_configuration.unwrap_or(0);
         // Interleaved 8-bit RGB frames pass through without a copy.
         let data = match self.bit_depth {

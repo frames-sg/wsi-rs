@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::ops::Range;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::error::WsiError;
 
@@ -98,10 +97,7 @@ pub(in super::super) fn read_encapsulated_fragments(
     path: &Path,
     fragments: &[DicomFragmentRef],
 ) -> Result<Vec<u8>, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     read_encapsulated_fragments_with_file(&mut file, path, fragments)
 }
 

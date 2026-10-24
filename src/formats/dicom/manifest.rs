@@ -716,18 +716,11 @@ fn validate_uniform_level_bit_depth(path: &Path, levels: &[DicomLevel]) -> Resul
 
 pub(super) fn direct_child_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
     let mut paths = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: dir.to_path_buf(),
-    })? {
-        let entry = entry.map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: dir.to_path_buf(),
-        })?;
-        let file_type = entry.file_type().map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: entry.path(),
-        })?;
+    for entry in std::fs::read_dir(dir).map_err(|source| WsiError::io_with_path(dir, source))? {
+        let entry = entry.map_err(|source| WsiError::io_with_path(dir, source))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|source| WsiError::io_with_path(&entry.path(), source))?;
         if file_type.is_file() {
             if paths.len() >= MAX_DICOM_DIRECTORY_FILES {
                 return Err(WsiError::invalid_slide(

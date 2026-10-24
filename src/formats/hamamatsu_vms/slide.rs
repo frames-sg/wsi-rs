@@ -82,10 +82,7 @@ impl SlideReader for VmsReader {
             return Ok(None);
         };
         let encoded = std::fs::metadata(&file.path)
-            .map_err(|source| WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: file.path.clone(),
-            })?
+            .map_err(|source| WsiError::io_with_path(&file.path, source))?
             .len();
         Ok(Some(
             SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, encoded),
@@ -115,10 +112,7 @@ impl SlideReader for VmsReader {
         )?;
         let data =
             read_to_end_bounded(source, self.slide.encoded_unit_bytes, "VMS associated JPEG")
-                .map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: file.path.clone(),
-                })?;
+                .map_err(|source| WsiError::io_with_path(&file.path, source))?;
         crate::core::batch::exactly_one(
             decode_batch_jpeg(&[JpegDecodeJob {
                 data: Cow::Borrowed(&data),

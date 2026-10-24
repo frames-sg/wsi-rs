@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 #[cfg(unix)]
@@ -33,28 +32,18 @@ pub(crate) struct FileIdentity {
 impl FileIdentity {
     pub(crate) fn from_path(path: &Path) -> Result<Self, WsiError> {
         let canonical_path =
-            std::fs::canonicalize(path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-        let metadata =
-            std::fs::metadata(&canonical_path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: canonical_path.clone(),
-            })?;
+            std::fs::canonicalize(path).map_err(|source| WsiError::io_with_path(path, source))?;
+        let metadata = std::fs::metadata(&canonical_path)
+            .map_err(|source| WsiError::io_with_path(&canonical_path, source))?;
         Ok(Self::from_metadata(canonical_path, metadata))
     }
 
     pub(crate) fn from_open_file(path: &Path, file: &File) -> Result<Self, WsiError> {
         let canonical_path =
-            std::fs::canonicalize(path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
-        let metadata = file.metadata().map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: canonical_path.clone(),
-        })?;
+            std::fs::canonicalize(path).map_err(|source| WsiError::io_with_path(path, source))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| WsiError::io_with_path(&canonical_path, source))?;
         Ok(Self::from_metadata(canonical_path, metadata))
     }
 
@@ -80,10 +69,7 @@ impl FileIdentity {
         expected: &Self,
         message: &str,
     ) -> Result<File, WsiError> {
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         expected.ensure_same(&Self::from_open_file(path, &file)?, path, message)?;
         Ok(file)
     }

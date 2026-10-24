@@ -468,10 +468,8 @@ fn load_data_index_sources(
     open_budget: &OpenBudget,
 ) -> Result<MiraxIndexSources, WsiError> {
     let ini = &hierarchy.ini;
-    let mut index_file = File::open(&ini.index_path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: ini.index_path.clone(),
-    })?;
+    let mut index_file = File::open(&ini.index_path)
+        .map_err(|source| WsiError::io_with_path(&ini.index_path, source))?;
     verify_index_header(path, &mut index_file, &ini.slide_id)?;
 
     let associated = build_associated_records(
@@ -504,10 +502,7 @@ fn load_data_index_sources(
     let hier_root = (INDEX_VERSION.len() + ini.slide_id.len()) as u64;
     index_file
         .seek(SeekFrom::Start(hier_root))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: ini.index_path.clone(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(&ini.index_path, source))?;
     let seek_location = read_u32_le(&mut index_file, &ini.index_path)? as u64;
 
     let mut quickhash_files = HashMap::new();

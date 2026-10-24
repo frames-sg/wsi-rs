@@ -270,10 +270,7 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
     let mut associated_images = HashMap::new();
     let mut associated_files = HashMap::new();
     if let Some(macro_path) = parts.macro_path.filter(|path| path.is_file()) {
-        let io_error = |source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: macro_path.clone(),
-        };
+        let io_error = |source| WsiError::io_with_path(&macro_path, source);
         let file = File::open(&macro_path).map_err(io_error)?;
         let identity = FileIdentity::from_open_file(&macro_path, &file)?;
         let macro_bytes =

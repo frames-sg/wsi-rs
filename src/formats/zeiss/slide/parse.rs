@@ -106,10 +106,7 @@ fn open_and_validate_czi(
         .map_err(|message| WsiError::invalid_slide(path, message))?;
     }
     let file_len = std::fs::metadata(path)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
+        .map_err(|source| WsiError::io_with_path(path, source))?
         .len();
     for attachment in czi.attachments() {
         if attachment.data_size > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {

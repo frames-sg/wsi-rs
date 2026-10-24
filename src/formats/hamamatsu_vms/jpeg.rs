@@ -73,17 +73,12 @@ impl VmsJpeg {
         #[cfg(unix)]
         let payload_file = scan_file
             .try_clone()
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         // PositionedFile's non-Unix fallback seeks its handle. Keep that cursor
         // independent from the lazy restart scanner's cursor.
         #[cfg(not(unix))]
-        let payload_file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let payload_file =
+            File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -212,10 +207,7 @@ impl VmsJpeg {
         entropy.resize(data_len, 0);
         self.payload_file
             .read_exact_at(&mut entropy, start)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         if entropy.len() < 2 || entropy[entropy.len() - 2] != 0xFF {
             return Err(WsiError::Jpeg(format!(
                 "VMS JPEG entropy segment for {} does not end at a marker",
@@ -307,10 +299,7 @@ impl VmsJpeg {
         }
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(offset))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         let requested = target - first_good;
         let found = find_restart_offsets(
             &mut file,
@@ -338,16 +327,10 @@ impl VmsJpeg {
         }
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(offset - 2))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         let mut marker = [0u8; 2];
         file.read_exact(&mut marker)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         Ok(marker[0] == 0xFF && (0xD0..=0xD7).contains(&marker[1]))
     }
 }
@@ -406,16 +389,10 @@ pub(super) struct VmsJpegHeader {
 }
 
 pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let file_len = file
         .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
+        .map_err(|source| WsiError::io_with_path(path, source))?
         .len();
     let mut header = Vec::with_capacity(4096);
     let mut soi = [0u8; 2];
@@ -562,10 +539,7 @@ fn read_exact_header(
         )));
     }
     file.read_exact(buf)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     header.extend_from_slice(buf);
     Ok(())
 }
@@ -632,18 +606,14 @@ fn find_restart_offsets(
     let mut found = 0;
     let mut base = file
         .stream_position()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     loop {
         if base >= file_len {
             return Ok(found);
         }
-        let n = file.read(&mut buf).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         if n == 0 {
             return Ok(found);
         }
