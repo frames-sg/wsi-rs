@@ -10,8 +10,8 @@ the [README](../README.md).
 | `src/core/registry` | `Slide`, format detection, region and tile reads, composition. `slide/budget.rs` estimates read sizes and checks limits. `managed.rs` holds `ConservativeManagedReader`, which admits reads for readers without their own encoded-size planning. |
 | `src/core/cache.rs`, `src/core/cache/` | Byte-bounded tile caches and shared in-flight decodes. |
 | `src/core/limits.rs` | `SlideLimits` and checked size arithmetic. |
-| `src/core/batch.rs` | Idle-core accounting, and sharing a batch's CPU work between the caller and idle pool threads. |
-| `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | The process-wide CPU thread pool (`process_codec_cpu_pool`). Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
+| `src/core/batch.rs` | The process-wide CPU thread pool (`process_codec_cpu_pool`, `install_codec_cpu`), idle-core accounting, and sharing a batch's CPU work between the caller and idle pool threads. |
+| `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
 | `src/core/file_identity.rs` | Records a source file's identity and checks it before reads. |
 | `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`. `pixels/ycbcr.rs` converts YCbCr to RGB with OpenSlide 4.0.1's integer lookup tables. |
 | `src/formats/<format>` | One module per file format: parse metadata, locate and read tiles. |
