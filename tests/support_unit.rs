@@ -437,16 +437,16 @@ fn oracle_top_left_probe_prefers_sparse_layout_probe_when_available() {
 
 #[cfg(feature = "parity-openslide")]
 #[test]
-fn openslide_shim_missing_env_path_does_not_panic() {
+fn openslide_shim_reports_a_configured_library_that_fails_to_load() {
     let _guard = ENV_LOCK.lock().unwrap();
-    let _env = EnvGuard::set(
-        "OPENSLIDE_LIB_PATH",
-        "/definitely/does/not/exist/libopenslide.dylib",
-    );
+    let missing = "/definitely/does/not/exist/libopenslide.dylib";
+    let _env = EnvGuard::set("WSI_RS_OPENSLIDE_LIBRARY", missing);
 
-    let result = support::openslide_shim::try_load();
+    let error = support::openslide_shim::try_load()
+        .err()
+        .expect("a configured library that fails to load is an error");
 
-    let _ = result;
+    assert!(error.contains(missing), "{error}");
 }
 
 #[cfg(feature = "parity-openslide")]

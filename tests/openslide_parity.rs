@@ -446,7 +446,8 @@ fn dimensions_within_one_pixel(a: (u64, u64), b: (u64, u64)) -> bool {
 
 #[cfg(feature = "parity-openslide")]
 fn openslide_oracle() -> support::oracles::OpenSlideOracle {
-    let lib = support::openslide_shim::try_load()
-        .expect("libopenslide is required when parity-openslide is enabled");
+    let lib = support::openslide_shim::LoadedOpenSlide::discover().unwrap_or_else(|error| {
+        panic!("libopenslide is required when parity-openslide is enabled: {error}")
+    });
     support::oracles::OpenSlideOracle { lib }
 }

@@ -3,10 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
+use wsi_rs_test_support::openslide::{configured_library, LIBRARY_ENV_VARS};
 
 const CACHE_BYTES_ENV: &str = "WSI_RS_PERF_CACHE_BYTES";
-const OPENSLIDE_LIBRARY_ENV: &str = "WSI_RS_OPENSLIDE_LIBRARY";
-const OPENSLIDE_LIBRARY_FALLBACK_ENV: &str = "OPENSLIDE_LIB_PATH";
 const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
 const WSI_RS_LIBRARY_ENV: &str = "WSI_RS_BENCH_WSI_RS_LIBRARY";
 const PREVIOUS_LIBRARY_ENV: &str = "WSI_RS_BENCH_PREVIOUS_LIBRARY";
@@ -287,20 +286,15 @@ fn wsi_rs_library_candidate(target_dir: &Path, override_path: Option<&OsStr>) ->
 }
 
 fn explicit_openslide_library() -> Result<PathBuf, String> {
-    explicit_openslide_library_from(
-        std::env::var_os(OPENSLIDE_LIBRARY_ENV),
-        std::env::var_os(OPENSLIDE_LIBRARY_FALLBACK_ENV),
-    )
+    explicit_openslide_library_from(configured_library())
 }
 
-fn explicit_openslide_library_from(
-    configured: Option<OsString>,
-    fallback: Option<OsString>,
-) -> Result<PathBuf, String> {
-    let path = configured.or(fallback).map(PathBuf::from).ok_or_else(|| {
+fn explicit_openslide_library_from(configured: Option<PathBuf>) -> Result<PathBuf, String> {
+    let [primary, fallback] = LIBRARY_ENV_VARS;
+    let path = configured.ok_or_else(|| {
         format!(
             "OpenSlide capture requires an exact {PINNED_OPENSLIDE_VERSION} library path in \
-                 {OPENSLIDE_LIBRARY_ENV} (or {OPENSLIDE_LIBRARY_FALLBACK_ENV})"
+                 {primary} (or {fallback})"
         )
     })?;
     exact_library_path(&path, "OpenSlide library")

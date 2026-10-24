@@ -96,7 +96,9 @@ fn public_brightfield_color_sanity_svs_ndpi_dicom() {
 #[cfg(feature = "parity-openslide")]
 #[test]
 fn svs_and_ndpi_overview_color_matches_openslide() {
-    let Some(lib) = support::openslide_shim::try_load() else {
+    let Some(lib) = support::openslide_shim::try_load()
+        .unwrap_or_else(|error| panic!("[color-openslide] {error}"))
+    else {
         eprintln!("[color-openslide] libopenslide unavailable; skipping");
         return;
     };

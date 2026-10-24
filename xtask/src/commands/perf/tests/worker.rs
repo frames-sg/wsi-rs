@@ -140,12 +140,14 @@ fn worker_paths_and_workspace_metadata_are_resolved_fail_closed() {
     assert!(exact_library_path(Path::new("missing-library"), "fixture")
         .unwrap_err()
         .contains("is not a file"));
-    assert!(explicit_openslide_library_from(None, None)
-        .unwrap_err()
-        .contains("requires an exact"));
+    let missing = explicit_openslide_library_from(None).unwrap_err();
+    assert!(missing.contains("requires an exact"), "{missing}");
+    assert!(
+        missing.contains("WSI_RS_OPENSLIDE_LIBRARY (or OPENSLIDE_LIB_PATH)"),
+        "{missing}"
+    );
     assert_eq!(
-        explicit_openslide_library_from(Some(manifest.clone().into_os_string()), None)
-            .expect("configured OpenSlide path"),
+        explicit_openslide_library_from(Some(manifest.clone())).expect("configured OpenSlide path"),
         manifest.canonicalize().expect("canonical manifest")
     );
 }

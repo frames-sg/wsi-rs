@@ -140,8 +140,9 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
     use support::compare::{compare_rgba, tolerance_failure};
     use support::oracles::OpenSlideOracle;
 
-    let lib = support::openslide_shim::try_load()
-        .expect("libopenslide is required for DICOM OpenSlide parity");
+    let lib = support::openslide_shim::LoadedOpenSlide::discover().unwrap_or_else(|error| {
+        panic!("libopenslide is required for DICOM OpenSlide parity: {error}")
+    });
     let openslide = OpenSlideOracle { lib };
     let manifest = load_public().expect("load public manifest");
     let required_entries = manifest

@@ -1,9 +1,26 @@
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use libloading::{Library, Symbol};
+
+/// Environment variables that name an exact OpenSlide library, highest
+/// precedence first.
+pub const LIBRARY_ENV_VARS: [&str; 2] = ["WSI_RS_OPENSLIDE_LIBRARY", "OPENSLIDE_LIB_PATH"];
+
+/// The OpenSlide library the environment names, if any: the first of
+/// [`LIBRARY_ENV_VARS`] that is set.
+pub fn configured_library() -> Option<PathBuf> {
+    configured_library_from(std::env::var_os)
+}
+
+fn configured_library_from(var: impl Fn(&'static str) -> Option<OsString>) -> Option<PathBuf> {
+    LIBRARY_ENV_VARS
+        .into_iter()
+        .find_map(var)
+        .map(PathBuf::from)
+}
 
 #[repr(C)]
 struct OpenSlideHandle {
@@ -87,9 +104,24 @@ impl OpenSlideApi {
         Ok(Self(Arc::new(api)))
     }
 
+    /// Load the library [`configured_library`] names, or else the first
+    /// default install location that loads. A configured library that fails
+    /// to load is an error; the defaults are not tried.
     pub fn discover() -> Result<Self, String> {
+        Self::discover_with(configured_library())
+    }
+
+    fn discover_with(configured: Option<PathBuf>) -> Result<Self, String> {
+        if let Some(path) = configured {
+            return Self::load(&path).map_err(|error| {
+                format!(
+                    "configured OpenSlide library ({}): {error}",
+                    LIBRARY_ENV_VARS.join(" or ")
+                )
+            });
+        }
         let mut errors = Vec::new();
-        for path in library_candidates() {
+        for path in default_library_candidates() {
             match Self::load(&path) {
                 Ok(api) => return Ok(api),
                 Err(error) => errors.push(error),
@@ -99,6 +131,19 @@ impl OpenSlideApi {
             "failed to load libopenslide; tried: {}",
             errors.join(" | ")
         ))
+    }
+
+    /// Fail unless the library reports a version starting with `expected`,
+    /// such as `"4.0.1"`.
+    pub fn ensure_version(&self, expected: &str) -> Result<(), String> {
+        let version = self.version()?;
+        if version.starts_with(expected) {
+            Ok(())
+        } else {
+            Err(format!(
+                "OpenSlide library reports version {version}, expected {expected}"
+            ))
+        }
     }
 
     pub fn version(&self) -> Result<String, String> {
@@ -158,8 +203,18 @@ impl OpenSlideApi {
     }
 }
 
-pub fn try_load() -> Option<OpenSlideApi> {
-    OpenSlideApi::discover().ok()
+/// The OpenSlide oracle when one is available. `Ok(None)` means no library is
+/// configured and none of the default locations loads; a configured library
+/// that fails to load is an error.
+pub fn try_load() -> Result<Option<OpenSlideApi>, String> {
+    try_load_with(configured_library())
+}
+
+fn try_load_with(configured: Option<PathBuf>) -> Result<Option<OpenSlideApi>, String> {
+    match configured {
+        Some(path) => OpenSlideApi::discover_with(Some(path)).map(Some),
+        None => Ok(OpenSlideApi::discover_with(None).ok()),
+    }
 }
 
 #[derive(Clone)]
@@ -500,34 +555,31 @@ fn argb_to_rgba(argb: Vec<u32>) -> Vec<u8> {
     rgba
 }
 
-fn library_candidates() -> Vec<PathBuf> {
-    let mut candidates = ["OPENSLIDE_LIB_PATH", "WSI_RS_OPENSLIDE_LIBRARY"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    candidates.extend(
-        [
-            "/opt/homebrew/lib/libopenslide.1.dylib",
-            "/opt/homebrew/lib/libopenslide.dylib",
-            "/usr/local/lib/libopenslide.1.dylib",
-            "/usr/local/lib/libopenslide.dylib",
-            "/usr/lib/x86_64-linux-gnu/libopenslide.so.0",
-            "/usr/lib/x86_64-linux-gnu/libopenslide.so",
-            "/usr/lib/libopenslide.so.0",
-            "/usr/lib/libopenslide.so",
-            "libopenslide.1.dylib",
-            "libopenslide.dylib",
-            "libopenslide.so.1",
-            "libopenslide.so.0",
-            "libopenslide.so",
-            "libopenslide.dll",
-            r"C:\Program Files\OpenSlide\bin\libopenslide.dll",
-        ]
-        .into_iter()
-        .map(PathBuf::from),
-    );
-    candidates
+/// Install locations tried when no library is configured. OpenSlide 4 ships
+/// `libopenslide-1.dll` on Windows; 3.x used `libopenslide.dll`.
+fn default_library_candidates() -> Vec<PathBuf> {
+    [
+        "/opt/homebrew/lib/libopenslide.1.dylib",
+        "/opt/homebrew/lib/libopenslide.dylib",
+        "/usr/local/lib/libopenslide.1.dylib",
+        "/usr/local/lib/libopenslide.dylib",
+        "/usr/lib/x86_64-linux-gnu/libopenslide.so.0",
+        "/usr/lib/x86_64-linux-gnu/libopenslide.so",
+        "/usr/lib/libopenslide.so.0",
+        "/usr/lib/libopenslide.so",
+        "libopenslide.1.dylib",
+        "libopenslide.dylib",
+        "libopenslide.so.1",
+        "libopenslide.so.0",
+        "libopenslide.so",
+        "libopenslide-1.dll",
+        r"C:\Program Files\OpenSlide\bin\libopenslide-1.dll",
+        "libopenslide.dll",
+        r"C:\Program Files\OpenSlide\bin\libopenslide.dll",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 /// # Safety
@@ -878,7 +930,7 @@ mod tests {
         assert!(plain.associated_names().is_empty());
         assert!(plain.associated_dimensions("label").is_err());
         assert!(plain.associated_dimensions("bad\0name").is_err());
-        assert!(!library_candidates().is_empty());
+        assert!(!default_library_candidates().is_empty());
     }
 
     #[test]
@@ -922,6 +974,67 @@ mod tests {
                 .contains("libraries differ")
         );
         assert!(error(fake_api(null_version).version()).contains("returned NULL"));
+    }
+
+    #[test]
+    fn configured_library_prefers_the_wsi_rs_variable() {
+        let env = |values: &[(&str, &str)]| {
+            let values = values
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), OsString::from(value)))
+                .collect::<Vec<_>>();
+            configured_library_from(move |name| {
+                values
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        assert_eq!(env(&[]), None);
+        assert_eq!(
+            env(&[("OPENSLIDE_LIB_PATH", "/fallback/libopenslide.so")]),
+            Some(PathBuf::from("/fallback/libopenslide.so"))
+        );
+        assert_eq!(
+            env(&[
+                ("OPENSLIDE_LIB_PATH", "/fallback/libopenslide.so"),
+                ("WSI_RS_OPENSLIDE_LIBRARY", "/exact/libopenslide.so"),
+            ]),
+            Some(PathBuf::from("/exact/libopenslide.so"))
+        );
+    }
+
+    #[test]
+    fn a_configured_library_that_fails_to_load_is_an_error_not_a_fallback() {
+        let missing = PathBuf::from("/definitely/missing/libopenslide.so");
+        let error = error(try_load_with(Some(missing.clone())));
+        assert!(error.contains("configured OpenSlide library"), "{error}");
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        assert!(
+            !error.contains("failed to load libopenslide") && !error.contains("/opt/homebrew"),
+            "defaults must not be tried: {error}"
+        );
+    }
+
+    #[test]
+    fn windows_defaults_try_the_openslide_4_name_first() {
+        let candidates = default_library_candidates();
+        let position = |name: &str| {
+            candidates
+                .iter()
+                .position(|path| path.as_os_str() == name)
+                .unwrap_or_else(|| panic!("missing candidate {name}"))
+        };
+        assert!(position("libopenslide-1.dll") < position("libopenslide.dll"));
+    }
+
+    #[test]
+    fn version_check_compares_the_reported_prefix() {
+        let api = fake_api(fake_version);
+        api.ensure_version("4.0.1").unwrap();
+        api.ensure_version("4.0").unwrap();
+        assert!(error(api.ensure_version("4.0.2")).contains("reports version 4.0.1-fake"));
+        assert!(error(fake_api(null_version).ensure_version("4.0.1")).contains("returned NULL"));
     }
 
     #[test]
