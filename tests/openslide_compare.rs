@@ -101,17 +101,15 @@ fn aperio_jpeg_rgb_regression_path() -> Option<PathBuf> {
 }
 
 fn resolve_compare_path(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        return std::fs::canonicalize(&path).unwrap_or(path);
-    }
-
-    if path.is_file() {
-        return std::fs::canonicalize(&path).unwrap_or(path);
-    }
-
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let rooted = workspace_root.join(&path);
-    std::fs::canonicalize(&rooted).unwrap_or(rooted)
+    let resolved = if path.is_absolute() || path.is_file() {
+        path
+    } else {
+        support::corpus::local_testdata_candidates(&path)
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+            .unwrap_or(path)
+    };
+    std::fs::canonicalize(&resolved).unwrap_or(resolved)
 }
 
 #[test]

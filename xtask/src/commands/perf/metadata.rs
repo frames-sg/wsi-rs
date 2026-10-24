@@ -5,6 +5,7 @@ use std::process::Command;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use wsi_rs_test_support::corpus::corpus_cache_dir;
 
 use super::capture::WorkerMatrix;
 use super::comparison::{P95_MIN_SAMPLE_COUNT, P99_MIN_SAMPLE_COUNT, REGRESSION_RATIO};
@@ -375,16 +376,20 @@ fn gpu_identity() -> String {
 }
 
 fn corpus_tier(slides: &[SlideSpec]) -> &'static str {
+    corpus_tier_in(slides, &corpus_cache_dir())
+}
+
+fn corpus_tier_in(slides: &[SlideSpec], corpus_cache: &Path) -> &'static str {
     if slides.iter().all(|slide| {
         let path = slide.path.to_string_lossy();
         path.contains("tests/fixtures/")
     }) {
         return "public-fixture";
     }
-    if slides.iter().any(|slide| {
-        let path = slide.path.to_string_lossy();
-        path.contains(".cache/wsi-rs/parity-corpus")
-    }) {
+    if slides
+        .iter()
+        .any(|slide| slide.path.starts_with(corpus_cache))
+    {
         return "local-parity";
     }
     "custom"

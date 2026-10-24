@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 #[allow(unused_imports)]
 pub(crate) use wsi_rs_test_support::corpus::{
-    alias_selected, apply_alias_filter, corpus_cache_dir, format_default_extension, parse_aliases,
-    parse_manifest, selected_aliases, CorpusEntry, CorpusManifest,
+    alias_selected, apply_alias_filter, corpus_cache_dir, format_default_extension,
+    local_testdata_candidates, parse_aliases, parse_manifest, selected_aliases, CorpusEntry,
+    CorpusManifest,
 };
 use wsi_rs_test_support::corpus::{load_manifest, resolve_entry_path as resolve_shared_entry};
 

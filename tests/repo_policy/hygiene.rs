@@ -165,6 +165,45 @@ fn referenced_parity_corpus_fetch_script_exists() {
 }
 
 #[test]
+fn corpus_fetch_script_names_cached_slides_like_the_rust_lookup() {
+    let script = fs::read_to_string(crate_root().join("scripts/parity-corpus-fetch.sh"))
+        .expect("read fetch script");
+    let table = script
+        .split_once("FORMAT_EXTENSIONS = {")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(table, _)| table)
+        .expect("fetch script defines FORMAT_EXTENSIONS");
+    let python = table
+        .lines()
+        .filter_map(|line| {
+            let (format, extension) = line.trim().trim_end_matches(',').split_once(':')?;
+            Some((
+                format.trim().trim_matches('"').to_string(),
+                extension.trim().trim_matches('"').to_string(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert!(!python.is_empty(), "FORMAT_EXTENSIONS parsed no entries");
+
+    let manifest = wsi_rs_test_support::corpus::load_manifest(
+        &crate_root().join("tests/fixtures/parity_corpus.public.toml"),
+    )
+    .expect("load public manifest");
+    let formats = python
+        .keys()
+        .cloned()
+        .chain(manifest.slides.into_iter().map(|slide| slide.format))
+        .collect::<std::collections::BTreeSet<_>>();
+    for format in formats {
+        assert_eq!(
+            python.get(&format).map(String::as_str),
+            wsi_rs_test_support::corpus::format_default_extension(&format),
+            "fetch script and format_default_extension disagree on {format}"
+        );
+    }
+}
+
+#[test]
 fn corpus_ci_reuses_verified_parent_cache_and_serializes_coverage() {
     let workflow = fs::read_to_string(crate_root().join(".github/workflows/ci.yml"))
         .expect("read CI workflow")

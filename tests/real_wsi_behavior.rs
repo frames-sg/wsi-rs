@@ -41,14 +41,11 @@ fn hamamatsu1_ndpi_slide() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("WSI_RS_HAMAMATSU1_NDPI_PATH").map(PathBuf::from) {
         return Some(path);
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("downloads/openslide-testdata/Hamamatsu/Hamamatsu-1.ndpi");
-    if path.exists() {
-        return Some(path);
-    }
-    None
+    support::corpus::local_testdata_candidates(Path::new(
+        "downloads/openslide-testdata/Hamamatsu/Hamamatsu-1.ndpi",
+    ))
+    .into_iter()
+    .find(|path| path.exists())
 }
 
 fn open_with_large_cache(path: &Path) -> Slide {

@@ -368,6 +368,23 @@ pub fn corpus_cache_dir() -> PathBuf {
     )
 }
 
+/// Where a local test-data path such as
+/// `downloads/openslide-testdata/Aperio/CMU-1.svs` may live, in search
+/// order: under the workspace root, its parent, then its grandparent.
+pub fn local_testdata_candidates(relative: &Path) -> Vec<PathBuf> {
+    workspace_root()
+        .ancestors()
+        .take(3)
+        .map(|root| root.join(relative))
+        .collect()
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("test-support is a workspace member")
+}
+
 pub fn resolve_entry_path(entry: &CorpusEntry, workspace_root: &Path) -> Option<PathBuf> {
     if !entry.path.is_empty() {
         let configured = PathBuf::from(&entry.path);
@@ -770,6 +787,26 @@ mod tests {
         };
         let error = verify_entry_sha256(&entry, Path::new("Cargo.toml")).unwrap_err();
         assert!(error.contains("source archive is missing"), "{error}");
+    }
+
+    #[test]
+    fn local_testdata_is_searched_from_the_workspace_root_outwards() {
+        let relative = Path::new("downloads/openslide-testdata/Aperio/CMU-1.svs");
+        let candidates = local_testdata_candidates(relative);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert_eq!(
+            candidates,
+            [
+                root.join(relative),
+                root.parent().unwrap().join(relative),
+                root.parent().unwrap().parent().unwrap().join(relative),
+            ]
+        );
+        assert!(local_testdata_candidates(Path::new("Cargo.toml"))[0]
+            .parent()
+            .unwrap()
+            .join("test-support")
+            .is_dir());
     }
 
     #[test]

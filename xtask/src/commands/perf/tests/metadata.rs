@@ -284,3 +284,18 @@ fn previous_release_summary_records_the_shim_instead_of_the_workspace() {
     .unwrap_err();
     assert!(error.contains("one shim library"), "{error}");
 }
+
+#[test]
+fn corpus_tier_recognizes_slides_in_the_configured_corpus_cache() {
+    let cache = Path::new("/custom/corpus-cache");
+    let fixture = slide("tests/fixtures/jp2k/rgb_nomct.j2k", "fixture", "raw_jp2k");
+    let cached = slide("/custom/corpus-cache/svs-001.svs", "svs-001", "aperio");
+    let elsewhere = slide("/slides/svs-001.svs", "svs-001", "aperio");
+
+    assert_eq!(
+        corpus_tier_in(std::slice::from_ref(&fixture), cache),
+        "public-fixture"
+    );
+    assert_eq!(corpus_tier_in(&[fixture, cached], cache), "local-parity");
+    assert_eq!(corpus_tier_in(&[elsewhere], cache), "custom");
+}

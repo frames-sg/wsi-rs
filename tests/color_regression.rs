@@ -204,22 +204,10 @@ fn resolve_case_path(case: &ColorCase) -> Option<PathBuf> {
         }
     }
 
-    for relative in case.relative_paths {
-        for root in candidate_roots() {
-            let path = root.join(relative);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-fn candidate_roots() -> Vec<PathBuf> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_parent = manifest_dir.parent().unwrap_or(manifest_dir);
-    vec![manifest_dir.to_path_buf(), workspace_parent.to_path_buf()]
+    case.relative_paths
+        .iter()
+        .flat_map(|relative| support::corpus::local_testdata_candidates(Path::new(relative)))
+        .find(|path| path.is_file())
 }
 
 fn read_overview_region(path: &Path) -> Result<RgbaRegion, String> {
