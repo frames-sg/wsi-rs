@@ -72,6 +72,8 @@
   scene, series or plane the slide doesn't have with `SceneOutOfRange`,
   `SeriesOutOfRange` or `PlaneOutOfRange`, instead of answering for the first
   one.
+- XML metadata parsing applies its nesting-depth limit to self-closing
+  elements too, not only to elements with content.
 
 ## [0.8.0] - 2026-10-06
 
