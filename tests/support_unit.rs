@@ -309,6 +309,32 @@ fn corpus_alias_filter_keeps_requested_manifest_entries() {
 }
 
 #[test]
+fn resolve_present_records_missing_corpus_slides() {
+    let entry = |path: &str| support::corpus::CorpusEntry {
+        alias: "support-unit-missing-fixture".into(),
+        path: path.into(),
+        format: "raw_jp2k".into(),
+        ..Default::default()
+    };
+    let mut failures = Vec::new();
+
+    let present = support::corpus::resolve_present(
+        &entry("tests/fixtures/jp2k/rgb_nomct.j2k"),
+        &mut failures,
+    );
+    assert!(present.is_some_and(|path| path.is_file()));
+    assert!(failures.is_empty());
+
+    let missing = support::corpus::resolve_present(&entry("definitely/missing.j2k"), &mut failures);
+    assert_eq!(missing, None);
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].starts_with("support-unit-missing-fixture: corpus slide missing at "),
+        "{failures:?}"
+    );
+}
+
+#[test]
 fn oracle_names_are_stable() {
     assert_eq!(J2kOracle.name(), "j2k");
     assert_eq!(ReferenceOracle.name(), "reference");

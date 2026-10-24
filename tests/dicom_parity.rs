@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::corpus::{load_public, resolve_entry_path};
+use support::corpus::{load_public, resolve_present};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
 #[test]
@@ -42,17 +42,8 @@ fn public_dicom_frames_match_independent_decoder_pixels() {
 #[test]
 #[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
 fn dicom_public_corpus_decodes_with_wsi_rs() {
-    let strict_corpus = strict_corpus_required();
-    let manifest = match load_public() {
-        Ok(manifest) => manifest,
-        Err(err) => {
-            if strict_corpus {
-                panic!("[dicom-parity] public manifest unavailable in strict mode: {err}");
-            }
-            eprintln!("[dicom-parity] manifest unavailable: {err}; skipping");
-            return;
-        }
-    };
+    let manifest = load_public()
+        .unwrap_or_else(|err| panic!("[dicom-parity] public manifest unavailable: {err}"));
 
     let mut checked = 0u32;
     let mut missing_slides = 0u32;
@@ -62,23 +53,10 @@ fn dicom_public_corpus_decodes_with_wsi_rs() {
         .iter()
         .filter(|entry| entry.format == "dicom")
     {
-        let path = resolve_entry_path(entry);
-        if !path.is_file() {
+        let Some(path) = resolve_present(entry, &mut failures) else {
             missing_slides += 1;
-            eprintln!(
-                "[dicom-parity] {} missing at {}; skipping",
-                entry.alias,
-                path.display()
-            );
-            if strict_corpus {
-                failures.push(format!(
-                    "{}: corpus slide missing at {}",
-                    entry.alias,
-                    path.display()
-                ));
-            }
             continue;
-        }
+        };
         let slide = match J2kOracle.open(&path) {
             Ok(slide) => slide,
             Err(err) => {
@@ -160,15 +138,9 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
     let mut failures = Vec::new();
 
     for entry in required_entries {
-        let path = resolve_entry_path(entry);
-        if !path.is_file() {
-            failures.push(format!(
-                "{}: corpus slide missing at {}",
-                entry.alias,
-                path.display()
-            ));
+        let Some(path) = resolve_present(entry, &mut failures) else {
             continue;
-        }
+        };
         let ours = match J2kOracle.open(&path) {
             Ok(slide) => slide,
             Err(err) => {
@@ -241,12 +213,10 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
                 "[dicom-parity] {} level={level}: max_abs={} mean_abs={:.4} passed={}",
                 entry.alias, report.max_abs, report.mean_abs, report.passed
             );
-            if let Some(failure) = tolerance_failure(
+            failures.extend(tolerance_failure(
                 &format!("{} level={level}: wsi_rs vs OpenSlide", entry.alias),
                 &report,
-            ) {
-                failures.push(failure);
-            }
+            ));
             checked += 1;
         }
     }
@@ -255,8 +225,4 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
         failures.push("DICOM OpenSlide parity checked zero tiles".to_string());
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-fn strict_corpus_required() -> bool {
-    true
 }

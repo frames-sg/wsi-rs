@@ -5,23 +5,14 @@ mod support;
 use std::path::Path;
 
 use support::compare::{compare_rgba, tolerance_failure};
-use support::corpus::{load_public_unfiltered, resolve_entry_path};
+use support::corpus::{load_public_unfiltered, resolve_present};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
 #[test]
 #[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
 fn j2k_cpu_vs_reference_within_tolerance() {
-    let strict_corpus = strict_corpus_required();
-    let manifest = match load_public_unfiltered() {
-        Ok(manifest) => manifest,
-        Err(err) => {
-            if strict_corpus {
-                panic!("[sc-parity] public manifest unavailable in strict mode: {err}");
-            }
-            eprintln!("[sc-parity] manifest unavailable: {err}; skipping");
-            return;
-        }
-    };
+    let manifest = load_public_unfiltered()
+        .unwrap_or_else(|err| panic!("[sc-parity] public manifest unavailable: {err}"));
     let mut checked = 0u32;
     let mut missing_slides = 0u32;
     let mut failures = Vec::new();
@@ -33,23 +24,10 @@ fn j2k_cpu_vs_reference_within_tolerance() {
                 .iter()
                 .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
     }) {
-        let path = resolve_entry_path(entry);
-        if !path.is_file() {
+        let Some(path) = resolve_present(entry, &mut failures) else {
             missing_slides += 1;
-            eprintln!(
-                "[sc-parity] {} missing at {}; skipping",
-                entry.alias,
-                path.display()
-            );
-            if strict_corpus {
-                failures.push(format!(
-                    "{}: corpus slide missing at {}",
-                    entry.alias,
-                    path.display()
-                ));
-            }
             continue;
-        }
+        };
 
         let sc = match J2kOracle.open(&path) {
             Ok(slide) => slide,
@@ -110,11 +88,10 @@ fn j2k_cpu_vs_reference_within_tolerance() {
                 "[sc-parity] {} level={level}: max_abs={} mean_abs={:.4} passed={}",
                 entry.alias, cmp.max_abs, cmp.mean_abs, cmp.passed
             );
-            record_comparison_failure(
+            failures.extend(tolerance_failure(
                 &format!("{} level={level}: j2k vs reference", entry.alias),
                 &cmp,
-                &mut failures,
-            );
+            ));
             checked += 1;
         }
     }
@@ -128,21 +105,6 @@ fn j2k_cpu_vs_reference_within_tolerance() {
         failures.len()
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-fn strict_corpus_required() -> bool {
-    true
-}
-
-fn record_comparison_failure(
-    label: &str,
-    report: &support::compare::CompareReport,
-    failures: &mut Vec<String>,
-) {
-    let Some(failure) = tolerance_failure(label, report) else {
-        return;
-    };
-    failures.push(failure);
 }
 
 /// Level 0 is compared with `{stem}.ppm`; reduced level `k` with the
