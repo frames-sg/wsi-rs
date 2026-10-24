@@ -11,14 +11,13 @@ pub(super) fn blit_integral_samples<T: Copy>(
     hit: &TileHit,
     shape: CompositionShape,
 ) {
-    let tile_width = i64::from(tile.width);
-    let tile_height = i64::from(tile.height);
-    let src_x = 0i64.max(-hit.dest_x) as usize;
-    let src_y = 0i64.max(-hit.dest_y) as usize;
-    let dest_x = 0i64.max(hit.dest_x) as usize;
-    let dest_y = 0i64.max(hit.dest_y) as usize;
-    let copy_width = ((tile_width - src_x as i64) as usize).min(shape.width - dest_x);
-    let copy_height = ((tile_height - src_y as i64) as usize).min(shape.height - dest_y);
+    let Some((dest_x, dest_y, end_x, end_y)) = integral_tile_rect(tile, hit, shape) else {
+        return;
+    };
+    let src_x = (dest_x as i64 - hit.dest_x) as usize;
+    let src_y = (dest_y as i64 - hit.dest_y) as usize;
+    let copy_width = end_x - dest_x;
+    let copy_height = end_y - dest_y;
     let tile_row_stride = tile.width as usize * shape.channels;
     let out_row_stride = shape.width * shape.channels;
 
@@ -78,14 +77,11 @@ pub(super) fn mark_integral_tile_opaque(
     hit: &TileHit,
     shape: CompositionShape,
 ) {
-    let tile_width = i64::from(tile.width);
-    let tile_height = i64::from(tile.height);
-    let src_x = 0i64.max(-hit.dest_x) as usize;
-    let src_y = 0i64.max(-hit.dest_y) as usize;
-    let dest_x = 0i64.max(hit.dest_x) as usize;
-    let dest_y = 0i64.max(hit.dest_y) as usize;
-    let copy_width = ((tile_width - src_x as i64) as usize).min(shape.width - dest_x);
-    let copy_height = ((tile_height - src_y as i64) as usize).min(shape.height - dest_y);
+    let Some((dest_x, dest_y, end_x, end_y)) = integral_tile_rect(tile, hit, shape) else {
+        return;
+    };
+    let copy_width = end_x - dest_x;
+    let copy_height = end_y - dest_y;
 
     for row in 0..copy_height {
         let dest_offset = (dest_y + row) * shape.width + dest_x;

@@ -349,37 +349,8 @@ impl Slide {
     /// tiles return `WsiError::DisplayConversion`.
     pub fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
         let output_bytes = self.check_region_output(req)?;
-        let mut planned = self.plan_region_read(req, None, output_bytes)?;
-        let reservation = self.admission.reserve(planned.work_bytes, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
-        let admitted = AdmittedReader {
-            source: self.source.as_ref(),
-            execution: &execution,
-        };
-        let cache = self.shared_tile_cache();
-        let mut ctx = SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
-        if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
-            let tile = result?;
-            self.validate_decoded_output(&tile, "decoded region")?;
-            return Ok(tile);
-        }
-        let (batch_ends, _parallel_staging) =
-            planned.batch_ends(self, req, output_bytes, &execution)?;
-        let tile = composition::composite_region_from_plan(
-            &admitted,
-            Some(cache.as_ref()),
-            req,
-            planned.plan,
-            &batch_ends,
-        )?;
-        self.validate_decoded_output(&tile, "decoded region")?;
-        Ok(tile)
+        let planned = self.plan_region_read(req, None, output_bytes)?;
+        self.execute_region_plan(req, output_bytes, planned, true)
     }
 
     /// Read a region whose origin includes a fractional level-pixel offset.
@@ -411,7 +382,17 @@ impl Slide {
             req.origin_px.0 as f64 + offset_px.0,
             req.origin_px.1 as f64 + offset_px.1,
         );
-        let mut planned = self.plan_region_read(req, Some(origin), output_bytes)?;
+        let planned = self.plan_region_read(req, Some(origin), output_bytes)?;
+        self.execute_region_plan(req, output_bytes, planned, false)
+    }
+
+    fn execute_region_plan(
+        &self,
+        req: &RegionRequest,
+        output_bytes: u64,
+        mut planned: region::PlannedRegionRead<'_>,
+        allow_fastpath: bool,
+    ) -> Result<CpuTile, WsiError> {
         let reservation = self.admission.reserve(planned.work_bytes, None)?;
         let calibration = AtomicBool::new(false);
         let execution = ReadExecutionContext::new(
@@ -425,6 +406,14 @@ impl Slide {
             execution: &execution,
         };
         let cache = self.shared_tile_cache();
+        if allow_fastpath {
+            let mut ctx = SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
+            if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
+                let tile = result?;
+                self.validate_decoded_output(&tile, "decoded region")?;
+                return Ok(tile);
+            }
+        }
         let (batch_ends, _parallel_staging) =
             planned.batch_ends(self, req, output_bytes, &execution)?;
         let tile = composition::composite_region_from_plan(

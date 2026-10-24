@@ -70,18 +70,7 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
     let resolver = RegionTileResolver::new(source, cache, req);
 
     if plan.hits.is_empty() {
-        let level = &plan.series.levels[req.level.get() as usize];
-        if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
-            if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
-                return zero_sample_buffer_from_template(
-                    plan.output_width,
-                    plan.output_height,
-                    template.as_ref(),
-                );
-            }
-        }
-
-        return zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series);
+        return compose_empty_region(&resolver, req, &plan);
     }
 
     let hit_tiles = resolver.resolve_hits(&plan.hits)?;
@@ -190,17 +179,7 @@ fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
 ) -> Result<CpuTile, WsiError> {
     let resolver = RegionTileResolver::new(source, cache, req);
     if plan.hits.is_empty() {
-        let level = &plan.series.levels[req.level.get() as usize];
-        if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
-            if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
-                return zero_sample_buffer_from_template(
-                    plan.output_width,
-                    plan.output_height,
-                    template.as_ref(),
-                );
-            }
-        }
-        return zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series);
+        return compose_empty_region(&resolver, req, &plan);
     }
 
     let first = resolver.resolve_one(plan.hits[0].col, plan.hits[0].row)?;
@@ -237,6 +216,24 @@ fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
         }
     }
     composer.finish()
+}
+
+fn compose_empty_region<T: SlideReader + ?Sized>(
+    resolver: &RegionTileResolver<'_, T>,
+    req: &RegionRequest,
+    plan: &RegionReadPlan<'_>,
+) -> Result<CpuTile, WsiError> {
+    let level = &plan.series.levels[req.level.get() as usize];
+    if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
+        if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
+            return zero_sample_buffer_from_template(
+                plan.output_width,
+                plan.output_height,
+                template.as_ref(),
+            );
+        }
+    }
+    zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series)
 }
 
 fn compose_region_tiles(
