@@ -135,11 +135,13 @@ impl SlideReader for OlympusVsiReader {
         sessions: &crate::output::metal::MetalBackendSessions,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
         let stored = self.stored_jp2k_tiles(reqs, None)?;
-        crate::decode::jp2k::decode_batch_jp2k_metal(&stored.jobs(BackendRequest::Metal), sessions)
-            .into_iter()
-            .zip(reqs)
-            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
-            .collect()
+        crate::decode::jp2k::map_tile_results(
+            crate::decode::jp2k::decode_batch_jp2k_metal(
+                &stored.jobs(BackendRequest::Metal),
+                sessions,
+            ),
+            reqs,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -149,11 +151,13 @@ impl SlideReader for OlympusVsiReader {
         sessions: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
         let stored = self.stored_jp2k_tiles(reqs, None)?;
-        crate::decode::jp2k::decode_batch_jp2k_cuda(&stored.jobs(BackendRequest::Cuda), sessions)
-            .into_iter()
-            .zip(reqs)
-            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
-            .collect()
+        crate::decode::jp2k::map_tile_results(
+            crate::decode::jp2k::decode_batch_jp2k_cuda(
+                &stored.jobs(BackendRequest::Cuda),
+                sessions,
+            ),
+            reqs,
+        )
     }
 }
 
