@@ -255,6 +255,21 @@ impl RawJp2kReader {
         }
         Ok(())
     }
+
+    /// One decode job for the stored full-resolution codestream.
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn jp2k_job(
+        &self,
+        backend: j2k_core::BackendRequest,
+    ) -> crate::decode::jp2k::Jp2kDecodeJob<'_> {
+        crate::decode::jp2k::Jp2kDecodeJob {
+            data: Cow::Borrowed(self.data.as_slice()),
+            expected_width: self.width,
+            expected_height: self.height,
+            rgb_color_space: true,
+            backend,
+        }
+    }
 }
 
 impl SlideReader for RawJp2kReader {
@@ -292,20 +307,11 @@ impl SlideReader for RawJp2kReader {
         }
         let jobs = reqs
             .iter()
-            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
-                data: Cow::Borrowed(self.data.as_slice()),
-                expected_width: self.width,
-                expected_height: self.height,
-                rgb_color_space: true,
-                backend: j2k_core::BackendRequest::Metal,
-            })
+            .map(|_| self.jp2k_job(j2k_core::BackendRequest::Metal))
             .collect::<Vec<_>>();
         crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K Metal batch")
-            })
+            .collect()
     }
 
     #[cfg(feature = "cuda")]
@@ -319,20 +325,11 @@ impl SlideReader for RawJp2kReader {
         }
         let jobs = reqs
             .iter()
-            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
-                data: Cow::Borrowed(self.data.as_slice()),
-                expected_width: self.width,
-                expected_height: self.height,
-                rgb_color_space: true,
-                backend: j2k_core::BackendRequest::Cuda,
-            })
+            .map(|_| self.jp2k_job(j2k_core::BackendRequest::Cuda))
             .collect::<Vec<_>>();
         crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K CUDA batch")
-            })
+            .collect()
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -365,13 +362,7 @@ impl ManagedSlideReader for RawJp2kReader {
                 .map(|req| {
                     crate::core::read_control::check_cancelled_opt(control)?;
                     self.validate_request(req)?;
-                    Ok(crate::decode::jp2k::Jp2kDecodeJob {
-                        data: Cow::Borrowed(self.data.as_slice()),
-                        expected_width: self.width,
-                        expected_height: self.height,
-                        rgb_color_space: true,
-                        backend: j2k_core::BackendRequest::Cpu,
-                    })
+                    Ok(self.jp2k_job(j2k_core::BackendRequest::Cpu))
                 })
                 .collect::<Result<Vec<_>, WsiError>>()?;
             crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)

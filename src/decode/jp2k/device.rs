@@ -1,5 +1,6 @@
 use super::prepare::prepare_jp2k_job;
 use super::Jp2kDecodeJob;
+use crate::core::types::TileRequest;
 use crate::error::WsiError;
 
 #[cfg(feature = "metal")]
@@ -28,6 +29,21 @@ pub(crate) fn decode_batch_jp2k_cuda(
     sessions: &crate::output::cuda::CudaBackendSessions,
 ) -> Vec<Result<crate::output::cuda::CudaDeviceTile, WsiError>> {
     super::cuda::decode_prepared_jobs(jobs.iter().map(prepare_jp2k_job).collect(), sessions)
+}
+
+/// Pairs device decode results with their requests in order, naming the
+/// request of the first failing tile.
+pub(crate) fn map_tile_results<T>(
+    results: Vec<Result<T, WsiError>>,
+    reqs: &[TileRequest],
+) -> Result<Vec<T>, WsiError> {
+    results
+        .into_iter()
+        .zip(reqs)
+        .map(|(result, request)| {
+            result.map_err(|error| WsiError::tile_read(request, error.to_string()))
+        })
+        .collect()
 }
 
 /// Device batch windows bound both the image count and the decoded bytes. A

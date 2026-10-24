@@ -53,18 +53,7 @@ impl ManagedSlideReader for DicomReader {
         Some((|| {
             // Strict planning deliberately bypasses decoded-frame cache entries.
             let frames = self.strict_jp2k_frames(reqs, control)?;
-            let jobs = frames
-                .iter()
-                .map(|(frame, bytes)| crate::decode::jp2k::Jp2kDecodeJob {
-                    data: std::borrow::Cow::Borrowed(bytes.as_slice()),
-                    expected_width: frame.actual_width,
-                    expected_height: frame.actual_height,
-                    rgb_color_space: !crate::formats::dicom::decode::jp2k_photometric_is_ycbcr(
-                        &frame.image.photometric_interpretation,
-                    ),
-                    backend: BackendRequest::Cpu,
-                })
-                .collect::<Vec<_>>();
+            let jobs = super::device::jp2k_jobs(&frames, BackendRequest::Cpu);
             crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
         })())
     }
