@@ -11,6 +11,8 @@ const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
 const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-08-13";
+/// Names the shim `tests/hamamatsu_vmu.rs` loads through the OpenSlide ABI.
+const VMU_SHIM_LIBRARY_ENV: &str = "WSI_RS_VMU_SHIM_LIBRARY";
 const FUZZ_TARGETS: [&str; 9] = [
     "open_wsi_bytes",
     "open_jp2k_codestream_bytes",
@@ -249,7 +251,7 @@ fn run_corpus(run: &CorpusRun, runner: &[&str]) -> Result<(), String> {
     let mut args = test_command(runner, run.target, run.features, false);
     match run.tests {
         CorpusTests::Prefix(prefix) => {
-            return run_ignored_with(runner, run.target, prefix, run.features, false)
+            return run_ignored_with(runner, run.target, prefix, run.features, false, &[])
         }
         CorpusTests::Exact(name) => args.extend(["--", name, "--exact", "--ignored"]),
         CorpusTests::AllIgnored => args.extend(["--", "--ignored"]),
@@ -274,12 +276,20 @@ pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
             None,
             false,
         ),
-        "vmu" => run_ignored(
-            &["--test", "hamamatsu_vmu"],
-            "vmu_",
-            Some("parity-openslide"),
-            false,
-        ),
+        "vmu" => {
+            let shim = super::perf::build_release_shim()?;
+            let shim = shim
+                .to_str()
+                .ok_or_else(|| format!("shim path is not UTF-8: {}", shim.display()))?;
+            run_ignored_with(
+                CARGO_TEST,
+                &["--test", "hamamatsu_vmu"],
+                "vmu_",
+                Some("parity-openslide"),
+                false,
+                &[(VMU_SHIM_LIBRARY_ENV, shim)],
+            )
+        }
         "openslide" => {
             run_ignored(
                 &["--test", "openslide_compare"],
@@ -372,7 +382,7 @@ fn run_ignored(
     features: Option<&str>,
     release: bool,
 ) -> Result<(), String> {
-    run_ignored_with(CARGO_TEST, target, filter, features, release)
+    run_ignored_with(CARGO_TEST, target, filter, features, release, &[])
 }
 
 /// `runner`, a cargo subcommand with its options, followed by the test
@@ -400,6 +410,7 @@ fn run_ignored_with(
     filter: &str,
     features: Option<&str>,
     release: bool,
+    envs: &[(&str, &str)],
 ) -> Result<(), String> {
     if features.is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
         && !cfg!(target_os = "macos")
@@ -409,7 +420,7 @@ fn run_ignored_with(
     let base = test_command(runner, target, features, release);
     let mut list = base.clone();
     list.extend(["--", "--ignored", "--list"]);
-    let output = run_program_capture(cargo(), &list, &[])?;
+    let output = run_program_capture(cargo(), &list, envs)?;
     let names: Vec<_> = output
         .lines()
         .filter_map(|line| line.strip_suffix(": test"))
@@ -423,7 +434,7 @@ fn run_ignored_with(
     for name in names {
         let mut args = base.clone();
         args.extend(["--", name, "--exact", "--ignored", "--test-threads=1"]);
-        run_cargo(&args)?;
+        run_cargo_with_env(&args, envs)?;
     }
     Ok(())
 }

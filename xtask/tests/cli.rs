@@ -408,11 +408,20 @@ EOF
                 .collect::<Vec<_>>()
                 .join(" ");
             let script = format!(
-                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n",
+                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n\
+                 [ -z \"$WSI_RS_VMU_SHIM_LIBRARY\" ] || printf 'shim %s\\n' \"$WSI_RS_VMU_SHIM_LIBRARY\" >> \"$XTASK_FAKE_LOG\"\n",
                 fs::read_to_string(&fixture.cargo).unwrap()
             );
             write_executable(&fixture.cargo, &script);
-            let output = fixture.run("conformance-test", &[suite]);
+            let target_dir = fixture.root.join("target");
+            let output = fixture
+                .command()
+                .env("CARGO_TARGET_DIR", &target_dir)
+                .env_remove("WSI_RS_VMU_SHIM_LIBRARY")
+                .env_remove("WSI_RS_PERF_GPU_FEATURE")
+                .args(["conformance-test", suite])
+                .output()
+                .unwrap();
             let log = fs::read_to_string(&fixture.log_path).unwrap();
             if features == Some("metal") && !cfg!(target_os = "macos") {
                 assert!(!output.status.success(), "{suite}");
@@ -426,7 +435,36 @@ EOF
                 "{suite}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert_eq!(log.lines().count(), selections.len() * 2, "{suite}: {log}");
+            // The VMU lane first builds the release shim, then names it to
+            // both of its test invocations.
+            let shim_lines = if suite == "vmu" {
+                let library = if cfg!(target_os = "macos") {
+                    "libwsi_rs_openslide_shim.dylib"
+                } else {
+                    "libwsi_rs_openslide_shim.so"
+                };
+                let shim = target_dir.join("release").join(library);
+                assert!(
+                    log.starts_with(&format!(
+                        "{} build --locked --release -p wsi-rs-openslide-shim --features route-telemetry\n",
+                        fixture.cargo.display()
+                    )),
+                    "{suite}: {log}"
+                );
+                assert_eq!(
+                    log.matches(&format!("shim {}\n", shim.display())).count(),
+                    2,
+                    "{suite}: {log}"
+                );
+                3
+            } else {
+                0
+            };
+            assert_eq!(
+                log.lines().count(),
+                selections.len() * 2 + shim_lines,
+                "{suite}: {log}"
+            );
             let features = features.map_or(String::new(), |value| format!(" --features {value}"));
             for (target, filter) in selections {
                 assert!(

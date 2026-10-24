@@ -12,5 +12,6 @@ mod worker;
 pub(super) use capture::{capture, capture_openslide, capture_pair};
 pub(super) use comparison::compare;
 pub(super) use profile::profile;
+pub(super) use worker::build_release_shim;
 
 pub(super) const PERF_CAPTURE_SCHEMA_VERSION: u32 = 6;

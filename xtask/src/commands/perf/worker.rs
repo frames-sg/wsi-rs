@@ -315,6 +315,14 @@ fn build_wsi_rs_shim() -> Result<(), String> {
     .map_err(|error| format!("failed to build wsi-rs-openslide-shim: {error}"))
 }
 
+/// Build the release OpenSlide shim as the benchmarks do and return its path.
+pub(in crate::commands) fn build_release_shim() -> Result<PathBuf, String> {
+    build_wsi_rs_shim()?;
+    Ok(target_directory()?
+        .join("release")
+        .join(shim_library_name()))
+}
+
 pub(super) fn target_directory() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("CARGO_TARGET_DIR") {
         let path = PathBuf::from(path);
