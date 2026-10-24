@@ -22,6 +22,31 @@ impl Slide {
     }
 }
 
+/// A slide over `source` on its own CPU-only decode runtime.
+fn cpu_only_slide(
+    source: Box<dyn ManagedSlideReader>,
+    cache_config: CacheConfig,
+    limits: SlideLimits,
+) -> Slide {
+    Slide::from_managed_source_with_config_and_runtime(
+        source,
+        cache_config,
+        limits,
+        Arc::new(
+            DecodeRuntime::new(
+                DecodeExecutionOptions::default()
+                    .with_acceleration(crate::DecodeAcceleration::CpuOnly),
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+/// Request count of each recorded source read, in order.
+fn batch_lengths(calls: &RecordedTileBatches) -> Vec<usize> {
+    calls.lock().unwrap().iter().map(Vec::len).collect()
+}
+
 struct TinySource {
     dataset: Dataset,
 }
@@ -234,20 +259,13 @@ fn region_batches_preserve_pixels_and_fit_staging_and_encoded_bounds() {
             .unwrap();
             let expected_order: Vec<_> = calls.lock().unwrap().iter().flatten().copied().collect();
             calls.lock().unwrap().clear();
-            let slide = Slide::from_managed_source_with_config_and_runtime(
+            let slide = cpu_only_slide(
                 Box::new(ConservativeManagedReader::new(
                     Box::new(source),
                     encoded_bound,
                 )),
                 CacheConfig::deterministic().with_shared_tile_bytes(0),
                 SlideLimits::default(),
-                Arc::new(
-                    DecodeRuntime::new(
-                        DecodeExecutionOptions::default()
-                            .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-                    )
-                    .unwrap(),
-                ),
             );
             // No idle cores: streamed batches keep their bounded structure.
             let actual = pool
@@ -258,8 +276,8 @@ fn region_batches_preserve_pixels_and_fit_staging_and_encoded_bounds() {
                 })
                 .unwrap();
             assert_eq!(actual.to_rgba().unwrap(), expected.to_rgba().unwrap());
+            let lengths = batch_lengths(&calls);
             let calls = calls.lock().unwrap();
-            let lengths: Vec<_> = calls.iter().map(Vec::len).collect();
             if encoded_bound == 0 {
                 assert_eq!(lengths, [2; 8], "two tiles plus codec work fit staging");
             } else {
@@ -297,17 +315,10 @@ fn a_complete_region_fitting_admission_keeps_one_batch_with_one_worker() {
     let req = RegionRequest::new(0, 0, 0, (0, 0), (8, 8));
     let expected = composite_region_from_source(&source, None, &req, 1024).unwrap();
     calls.lock().unwrap().clear();
-    let slide = Slide::from_managed_source_with_config_and_runtime(
+    let slide = cpu_only_slide(
         Box::new(ConservativeManagedReader::new(Box::new(source), 0)),
         CacheConfig::deterministic().with_shared_tile_bytes(0),
         SlideLimits::default(),
-        Arc::new(
-            DecodeRuntime::new(
-                DecodeExecutionOptions::default()
-                    .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-            )
-            .unwrap(),
-        ),
     );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
@@ -315,15 +326,7 @@ fn a_complete_region_fitting_admission_keeps_one_batch_with_one_worker() {
         .unwrap();
     let actual = pool.install(|| slide.read_region(&req)).unwrap();
     assert_eq!(actual.as_u8(), expected.as_u8());
-    assert_eq!(
-        calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>(),
-        [4]
-    );
+    assert_eq!(batch_lengths(&calls), [4]);
 }
 
 impl ManagedSlideReader for RegionBatchSource {
@@ -362,17 +365,10 @@ fn streamed_batches_do_not_repurpose_encoded_allowance_as_decoded_staging() {
         ),
         calls: calls.clone(),
     };
-    let slide = Slide::from_managed_source_with_config_and_runtime(
+    let slide = cpu_only_slide(
         Box::new(source),
         CacheConfig::deterministic().with_shared_tile_bytes(0),
         SlideLimits::default(),
-        Arc::new(
-            DecodeRuntime::new(
-                DecodeExecutionOptions::default()
-                    .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-            )
-            .unwrap(),
-        ),
     );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(8)
@@ -386,15 +382,7 @@ fn streamed_batches_do_not_repurpose_encoded_allowance_as_decoded_staging() {
         })
         .unwrap();
     assert_eq!((tile.width(), tile.height()), (8, 8));
-    assert_eq!(
-        calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>(),
-        [1; 9]
-    );
+    assert_eq!(batch_lengths(&calls), [1; 9]);
 }
 
 #[test]
@@ -419,17 +407,10 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
         let req = RegionRequest::new(0, 0, 0, (1, 1), (size, size));
         let expected = composite_region_from_source(&source, None, &req, 2 * 1024 * 1024).unwrap();
         calls.lock().unwrap().clear();
-        let slide = Slide::from_managed_source_with_config_and_runtime(
+        let slide = cpu_only_slide(
             Box::new(source),
             CacheConfig::default().with_shared_tile_bytes(8 * 1024 * 1024),
             SlideLimits::default(),
-            Arc::new(
-                DecodeRuntime::new(
-                    DecodeExecutionOptions::default()
-                        .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-                )
-                .unwrap(),
-            ),
         );
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(8)
@@ -439,12 +420,7 @@ fn streamed_regions_bound_codec_staging_without_changing_pixels() {
             .install(|| crate::core::test_hooks::with_idle_cores(0, || slide.read_region(&req)))
             .unwrap();
         assert_eq!(actual.as_u8(), expected.as_u8());
-        let lengths = calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>();
+        let lengths = batch_lengths(&calls);
         let expected_batches = if size == 512 {
             vec![1; 9]
         } else {
@@ -483,28 +459,15 @@ fn streamed_batches_decode_several_tiles_on_idle_cores_when_admission_allows() {
         let req = RegionRequest::new(0, 0, 0, (1, 1), (8, 8));
         let expected = composite_region_from_source(&source, None, &req, 1024).unwrap();
         calls.lock().unwrap().clear();
-        let slide = Slide::from_managed_source_with_config_and_runtime(
+        let slide = cpu_only_slide(
             Box::new(source),
             CacheConfig::deterministic().with_shared_tile_bytes(0),
             limits,
-            Arc::new(
-                DecodeRuntime::new(
-                    DecodeExecutionOptions::default()
-                        .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-                )
-                .unwrap(),
-            ),
         );
         let tile =
             crate::core::test_hooks::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
         assert_eq!(tile.as_u8(), expected.as_u8());
-        let lengths = calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>();
-        lengths
+        batch_lengths(&calls)
     };
     // Three idle cores let each streamed batch hold four tiles.
     assert_eq!(read(3, SlideLimits::default()), [4, 4, 1]);
@@ -539,28 +502,15 @@ fn streamed_tiles_larger_than_the_region_share_a_batch_on_idle_cores() {
         let req = RegionRequest::new(0, 0, 0, (48, 48), (32, 32));
         let expected = composite_region_from_source(&source, None, &req, 1 << 20).unwrap();
         calls.lock().unwrap().clear();
-        let slide = Slide::from_managed_source_with_config_and_runtime(
+        let slide = cpu_only_slide(
             Box::new(source),
             CacheConfig::deterministic().with_shared_tile_bytes(0),
             SlideLimits::default(),
-            Arc::new(
-                DecodeRuntime::new(
-                    DecodeExecutionOptions::default()
-                        .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-                )
-                .unwrap(),
-            ),
         );
         let tile =
             crate::core::test_hooks::with_idle_cores(idle, || slide.read_region(&req)).unwrap();
         assert_eq!(tile.as_u8(), expected.as_u8());
-        let lengths = calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>();
-        lengths
+        batch_lengths(&calls)
     };
     assert_eq!(read(0), [1; 4]);
     assert_eq!(read(3), [4]);
@@ -609,17 +559,10 @@ impl ManagedSlideReader for RegionFastpathOnly {
 #[test]
 fn a_region_fastpath_does_not_require_unused_generic_tile_bounds() {
     let source = RegionFastpathOnly(TinySource::new());
-    let slide = Slide::from_managed_source_with_config_and_runtime(
+    let slide = cpu_only_slide(
         Box::new(source),
         CacheConfig::default(),
         SlideLimits::default(),
-        Arc::new(
-            DecodeRuntime::new(
-                DecodeExecutionOptions::default()
-                    .with_acceleration(crate::DecodeAcceleration::CpuOnly),
-            )
-            .unwrap(),
-        ),
     );
     assert_eq!(
         slide
