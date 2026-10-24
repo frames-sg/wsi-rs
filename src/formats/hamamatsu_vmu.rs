@@ -22,15 +22,11 @@ const GROUP: &str = "Uncompressed Virtual Microscope Specimen";
 
 pub(crate) struct HamamatsuVmuBackend;
 
-fn invalid(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::invalid_slide(path, message)
-}
-
 fn key_file(path: &Path, budget: &OpenBudget) -> Result<ParsedIni, WsiError> {
     parse_ini_file_with_budget(
         path,
         64 << 10,
-        |p| invalid(p, "VMU key file too large"),
+        |p| WsiError::invalid_slide(p, "VMU key file too large"),
         false,
         budget,
     )
@@ -87,14 +83,14 @@ impl VmuReader {
         let group = key_file(path, budget.as_ref())?
             .groups
             .remove(GROUP)
-            .ok_or_else(|| invalid(path, "missing VMU specimen group"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "missing VMU specimen group"))?;
         if group
             .get("BitsPerPixel")
             .and_then(|s| s.parse::<u32>().ok())
             != Some(36)
             || group.get("PixelOrder").map(String::as_str) != Some("RGB")
         {
-            return Err(invalid(
+            return Err(WsiError::invalid_slide(
                 path,
                 "VMU requires BitsPerPixel=36 and PixelOrder=RGB",
             ));
@@ -110,31 +106,34 @@ impl VmuReader {
                 continue;
             }
             if col != 0 || row != 0 || image.is_some() {
-                return Err(invalid(
+                return Err(WsiError::invalid_slide(
                     path,
                     "VMU requires exactly one base image at (0,0)",
                 ));
             }
             image = Some(resolve_companion_file(path, root, value)?);
         }
-        let image = image.ok_or_else(|| invalid(path, "missing VMU ImageFile"))?;
+        let image = image.ok_or_else(|| WsiError::invalid_slide(path, "missing VMU ImageFile"))?;
         let map = resolve_companion_file(
             path,
             root,
             group
                 .get("MapFile")
-                .ok_or_else(|| invalid(path, "missing VMU MapFile"))?,
+                .ok_or_else(|| WsiError::invalid_slide(path, "missing VMU MapFile"))?,
         )?;
         let levels = [Ngr::open(&image)?, Ngr::open(&map)?];
         if levels[1].width > levels[0].width || levels[1].height > levels[0].height {
-            return Err(invalid(path, "VMU map dimensions exceed base image"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "VMU map dimensions exceed base image",
+            ));
         }
         let mut quickhash = Quickhash1::new();
         quickhash.hash_file(path)?;
         quickhash.hash_file(&map)?;
         let hash = quickhash
             .finish()
-            .ok_or_else(|| invalid(path, "VMU quickhash unavailable"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "VMU quickhash unavailable"))?;
         let id = dataset_id_from_quickhash(path, &hash, "VMU quickhash")?;
         let properties = properties(&group, &levels[0], hash);
         let mut associated_images = HashMap::new();
@@ -208,16 +207,16 @@ fn image_coordinates(path: &Path, key: &str) -> Result<(u32, u32, u32), WsiError
     let suffix = key
         .strip_prefix("ImageFile(")
         .and_then(|s| s.strip_suffix(')'))
-        .ok_or_else(|| invalid(path, "invalid VMU ImageFile coordinates"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "invalid VMU ImageFile coordinates"))?;
     let fields = suffix
         .split(',')
         .map(|s| s.trim().parse::<u32>())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| invalid(path, "invalid VMU ImageFile coordinate integer"))?;
+        .map_err(|_| WsiError::invalid_slide(path, "invalid VMU ImageFile coordinate integer"))?;
     match fields.as_slice() {
         [x, y] => Ok((0, *x, *y)),
         [z, x, y] => Ok((*z, *x, *y)),
-        _ => Err(invalid(
+        _ => Err(WsiError::invalid_slide(
             path,
             "VMU ImageFile needs two or three coordinates",
         )),

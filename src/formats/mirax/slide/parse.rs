@@ -135,15 +135,15 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
     let general = slidedat
         .groups
         .get(GROUP_GENERAL)
-        .ok_or_else(|| invalid_slide(path, "missing [GENERAL] group"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "missing [GENERAL] group"))?;
     let hierarchical = slidedat
         .groups
         .get(GROUP_HIERARCHICAL)
-        .ok_or_else(|| invalid_slide(path, "missing [HIERARCHICAL] group"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "missing [HIERARCHICAL] group"))?;
     let datafile_group = slidedat
         .groups
         .get(GROUP_DATAFILE)
-        .ok_or_else(|| invalid_slide(path, "missing [DATAFILE] group"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "missing [DATAFILE] group"))?;
 
     let slide_id = required_ini_string(path, general, KEY_SLIDE_ID)?;
     let images_x = parse_ini_u32(path, general, KEY_IMAGE_NUMBER_X)?;
@@ -156,7 +156,10 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
         .transpose()?
         .unwrap_or(1);
     if images_x == 0 || images_y == 0 || image_divisions == 0 {
-        return Err(invalid_slide(path, "MIRAX image counts must be positive"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "MIRAX image counts must be positive",
+        ));
     }
     if images_x < image_divisions
         || images_y < image_divisions
@@ -164,7 +167,7 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
             .checked_mul(u64::from(images_y))
             .is_none_or(|count| count > MAX_MIRAX_BASE_IMAGES)
     {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "MIRAX image grid exceeds supported safety limits",
         ));
@@ -176,7 +179,7 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
         || hier_count > MAX_MIRAX_HIERARCHIES
         || !(0..=MAX_MIRAX_NONHIERARCHIES).contains(&nonhier_count)
     {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "MIRAX hierarchy counts must be positive/non-negative",
         ));
@@ -189,16 +192,19 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
                 .map(|value| value == VALUE_SLIDE_ZOOM_LEVEL)
                 .unwrap_or(false)
         })
-        .ok_or_else(|| invalid_slide(path, "cannot find Slide zoom level hierarchy"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "cannot find Slide zoom level hierarchy"))?;
     if slide_zoom_level_value != 0 {
-        return Err(invalid_slide(path, "Slide zoom level not HIER_0"));
+        return Err(WsiError::invalid_slide(path, "Slide zoom level not HIER_0"));
     }
 
     let index_filename = required_ini_string(path, hierarchical, KEY_INDEXFILE)?;
     let index_path = resolve_companion_file(path, &slide_dir, &index_filename)?;
     let zoom_levels = parse_ini_i32(path, hierarchical, &fmt_key(KEY_HIER_COUNT_FMT, 0))?;
     if zoom_levels <= 0 || zoom_levels > MAX_MIRAX_ZOOM_LEVELS {
-        return Err(invalid_slide(path, "MIRAX slide has no zoom levels"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "MIRAX slide has no zoom levels",
+        ));
     }
     let zoom_sections = (0..zoom_levels)
         .map(|idx| {
@@ -212,7 +218,10 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
 
     let datafile_count = parse_ini_i32(path, datafile_group, KEY_FILE_COUNT)?;
     if datafile_count <= 0 || datafile_count > MAX_MIRAX_DATA_FILES {
-        return Err(invalid_slide(path, "MIRAX slide has no data files"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "MIRAX slide has no data files",
+        ));
     }
     let datafile_paths = (0..datafile_count)
         .map(|idx| {
@@ -221,7 +230,10 @@ fn preflight_slidedat(path: &Path, budget: &OpenBudget) -> Result<MiraxIniPrefli
         })
         .collect::<Result<Vec<_>, _>>()?;
     if datafile_paths.iter().collect::<HashSet<_>>().len() != datafile_paths.len() {
-        return Err(invalid_slide(path, "duplicate MIRAX data file path"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "duplicate MIRAX data file path",
+        ));
     }
 
     Ok(MiraxIniPreflight {
@@ -244,13 +256,12 @@ fn build_hierarchy_geometry(
 ) -> Result<(MiraxHierarchyGeometry, Quickhash1), WsiError> {
     let mut section_defs = Vec::with_capacity(ini.zoom_sections.len());
     for (idx, section_name) in ini.zoom_sections.iter().enumerate() {
-        let group =
-            ini.slidedat.groups.get(section_name).ok_or_else(|| {
-                invalid_slide(path, format!("missing MIRAX section {section_name}"))
-            })?;
+        let group = ini.slidedat.groups.get(section_name).ok_or_else(|| {
+            WsiError::invalid_slide(path, format!("missing MIRAX section {section_name}"))
+        })?;
         let concat_exponent = parse_ini_i32(path, group, KEY_IMAGE_CONCAT_FACTOR)?;
         if (idx == 0 && concat_exponent < 0) || (idx > 0 && concat_exponent <= 0) {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("invalid IMAGE_CONCAT_FACTOR on {section_name}"),
             ));
@@ -258,7 +269,7 @@ fn build_hierarchy_geometry(
         let image_w = parse_ini_u32(path, group, KEY_DIGITIZER_WIDTH)?;
         let image_h = parse_ini_u32(path, group, KEY_DIGITIZER_HEIGHT)?;
         if image_w == 0 || image_h == 0 {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("zero digitizer size on {section_name}"),
             ));
@@ -342,16 +353,19 @@ fn build_hierarchy_geometry(
         section_defs[0].image_w,
         section_defs[0].overlap_x,
     )
-    .ok_or_else(|| invalid_slide(path, "MIRAX base width overflow"))?;
+    .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX base width overflow"))?;
     let base_h = base_dimension(
         images_y,
         image_divisions,
         section_defs[0].image_h,
         section_defs[0].overlap_y,
     )
-    .ok_or_else(|| invalid_slide(path, "MIRAX base height overflow"))?;
+    .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX base height overflow"))?;
     if base_w <= 0 || base_h <= 0 {
-        return Err(invalid_slide(path, "invalid MIRAX base dimensions"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "invalid MIRAX base dimensions",
+        ));
     }
 
     let mut params = Vec::with_capacity(section_defs.len());
@@ -360,9 +374,12 @@ fn build_hierarchy_geometry(
     for (idx, section) in section_defs.iter().enumerate() {
         total_concat_exponent = total_concat_exponent
             .checked_add(section.concat_exponent)
-            .ok_or_else(|| invalid_slide(path, "MIRAX concat exponent overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX concat exponent overflow"))?;
         if total_concat_exponent >= 30 {
-            return Err(invalid_slide(path, "MIRAX concat exponent too large"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "MIRAX concat exponent too large",
+            ));
         }
         let image_concat = 1u32 << total_concat_exponent;
         let positions_per_image = (image_concat / image_divisions).max(1);
@@ -414,7 +431,7 @@ fn build_hierarchy_geometry(
             || tile_advance_x <= 0.0
             || tile_advance_y <= 0.0
         {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("invalid MIRAX tile advance at level {idx}"),
             ));
@@ -512,7 +529,7 @@ fn load_data_index_sources(
 
     let quickhash = quickhash
         .finish()
-        .ok_or_else(|| invalid_slide(path, "failed to compute MIRAX quickhash"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "failed to compute MIRAX quickhash"))?;
     let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
     Ok(MiraxIndexSources {
         hierarchy,
@@ -557,7 +574,7 @@ fn build_associated_images_and_properties(
         let dimensions =
             read_jpeg_dimensions_from_record(path, &mut sources.quickhash_files, record).map_err(
                 |err| {
-                    invalid_slide(
+                    WsiError::invalid_slide(
                         path,
                         format!("failed to read MIRAX associated image {name} dimensions: {err}"),
                     )
@@ -587,7 +604,10 @@ fn occupied_level_bounds(
         let right = left + f64::from(tile.dimensions.0);
         let bottom = top + f64::from(tile.dimensions.1);
         if ![left, top, right, bottom].into_iter().all(f64::is_finite) {
-            return Err(invalid_slide(path, "non-finite MIRAX occupied bounds"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "non-finite MIRAX occupied bounds",
+            ));
         }
         bounds = Some(bounds.map_or((left, top, right, bottom), |current| {
             (
@@ -611,18 +631,21 @@ fn occupied_level_bounds(
         || right >= I64_MAX_EXCLUSIVE
         || bottom >= I64_MAX_EXCLUSIVE
     {
-        return Err(invalid_slide(path, "MIRAX occupied bounds exceed i64"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "MIRAX occupied bounds exceed i64",
+        ));
     }
     let x = left as i64;
     let y = top as i64;
     let right = right as i64;
     let bottom = bottom as i64;
     let width = u64::try_from(i128::from(right) - i128::from(x))
-        .map_err(|_| invalid_slide(path, "invalid MIRAX occupied width"))?;
+        .map_err(|_| WsiError::invalid_slide(path, "invalid MIRAX occupied width"))?;
     let height = u64::try_from(i128::from(bottom) - i128::from(y))
-        .map_err(|_| invalid_slide(path, "invalid MIRAX occupied height"))?;
+        .map_err(|_| WsiError::invalid_slide(path, "invalid MIRAX occupied height"))?;
     if width == 0 || height == 0 {
-        return Err(invalid_slide(path, "empty MIRAX occupied bounds"));
+        return Err(WsiError::invalid_slide(path, "empty MIRAX occupied bounds"));
     }
     Ok(Some((x, y, width, height)))
 }

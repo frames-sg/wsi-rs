@@ -6,8 +6,6 @@ mod slide;
 #[cfg(test)]
 mod tests;
 
-use helpers::invalid_slide;
-
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -502,10 +500,10 @@ fn slide_dir_from_entry(path: &Path) -> Result<PathBuf, WsiError> {
     }
     let stem = path
         .file_stem()
-        .ok_or_else(|| invalid_slide(path, "MIRAX entry has no stem"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX entry has no stem"))?;
     let dir = path.with_file_name(stem);
     if !dir.is_dir() {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("missing MIRAX directory {}", dir.display()),
         ));

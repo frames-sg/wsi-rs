@@ -55,7 +55,7 @@ pub(super) fn read_jpeg_dimensions_from_record(
     }
 
     jpeg_dimensions(&read_record_bytes(record)?).map_err(|err| {
-        invalid_slide(
+        WsiError::invalid_slide(
             path,
             format!(
                 "failed to derive MIRAX associated JPEG dimensions from {}: {err}",
@@ -85,7 +85,7 @@ pub(super) fn read_record_bytes_from_file_with_limit(
     limit: u64,
 ) -> Result<Vec<u8>, WsiError> {
     let len = checked_product_to_usize(&[len], limit, "MIRAX record")
-        .map_err(|message| invalid_slide(path, message))?;
+        .map_err(|message| WsiError::invalid_slide(path, message))?;
     let mut buf = vec![0u8; len];
     crate::core::positioned_file::read_exact_at(file, &mut buf, offset).map_err(|source| {
         WsiError::IoWithPath {
@@ -197,7 +197,7 @@ pub(super) fn required_ini_string(
     group
         .get(key)
         .cloned()
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX key {key}")))
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX key {key}")))
 }
 
 pub(super) fn parse_ini_i32(
@@ -207,9 +207,9 @@ pub(super) fn parse_ini_i32(
 ) -> Result<i32, WsiError> {
     group
         .get(key)
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX key {key}")))?
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX key {key}")))?
         .parse::<i32>()
-        .map_err(|_| invalid_slide(path, format!("invalid MIRAX integer for {key}")))
+        .map_err(|_| WsiError::invalid_slide(path, format!("invalid MIRAX integer for {key}")))
 }
 
 pub(super) fn parse_optional_objective_magnification(
@@ -226,7 +226,7 @@ pub(super) fn parse_optional_objective_magnification(
         .unwrap_or(raw);
     let value = normalized
         .parse::<i32>()
-        .map_err(|_| invalid_slide(path, format!("invalid MIRAX integer for {key}")))?;
+        .map_err(|_| WsiError::invalid_slide(path, format!("invalid MIRAX integer for {key}")))?;
     Ok((value > 0).then_some(value))
 }
 
@@ -240,14 +240,14 @@ pub(super) fn parse_ini_u32(
         key,
         group
             .get(key)
-            .ok_or_else(|| invalid_slide(path, format!("missing MIRAX key {key}")))?,
+            .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX key {key}")))?,
     )
 }
 
 pub(super) fn parse_u32_value(path: &Path, key: &str, value: &str) -> Result<u32, WsiError> {
     value
         .parse::<u32>()
-        .map_err(|_| invalid_slide(path, format!("invalid MIRAX integer for {key}")))
+        .map_err(|_| WsiError::invalid_slide(path, format!("invalid MIRAX integer for {key}")))
 }
 
 pub(super) fn parse_ini_f64(
@@ -257,13 +257,13 @@ pub(super) fn parse_ini_f64(
 ) -> Result<f64, WsiError> {
     let value = group
         .get(key)
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX key {key}")))?
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX key {key}")))?
         .parse::<f64>()
-        .map_err(|_| invalid_slide(path, format!("invalid MIRAX float for {key}")))?;
+        .map_err(|_| WsiError::invalid_slide(path, format!("invalid MIRAX float for {key}")))?;
     if value.is_finite() {
         Ok(value)
     } else {
-        Err(invalid_slide(
+        Err(WsiError::invalid_slide(
             path,
             format!("non-finite MIRAX float for {key}"),
         ))
@@ -297,7 +297,7 @@ pub(super) fn read_i32_le(file: &mut impl Read, path: &Path) -> Result<i32, WsiE
 pub(super) fn read_u32_le(file: &mut impl Read, path: &Path) -> Result<u32, WsiError> {
     let value = read_i32_le(file, path)?;
     if value < 0 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("negative MIRAX pointer value {value}"),
         ));
@@ -312,8 +312,4 @@ pub(super) fn fmt_key(fmt: &str, value: i32) -> String {
 pub(super) fn fmt_key2(fmt: &str, value1: i32, value2: i32) -> String {
     fmt.replacen("%d", &value1.to_string(), 1)
         .replacen("%d", &value2.to_string(), 1)
-}
-
-pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::invalid_slide(path, message)
 }

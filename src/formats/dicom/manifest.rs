@@ -82,7 +82,7 @@ impl DicomSlide {
             .collect::<Result<Vec<_>, _>>()?;
 
         if level_images.is_empty() {
-            return Err(invalid_slide(path, "No pyramid levels found"));
+            return Err(WsiError::invalid_slide(path, "No pyramid levels found"));
         }
 
         dedupe_associated(path, &mut associated_images)?;
@@ -99,7 +99,7 @@ impl DicomSlide {
 
         let level0 = levels
             .first()
-            .ok_or_else(|| invalid_slide(path, "No pyramid levels found"))?
+            .ok_or_else(|| WsiError::invalid_slide(path, "No pyramid levels found"))?
             .clone();
 
         let quickhash = quickhash_for_series_uid(&series_instance_uid)?;
@@ -293,7 +293,7 @@ impl DicomLevel {
             || self.photometric_interpretation() != image.photometric_interpretation
             || self.bit_depth() != image.bit_depth
         {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "DICOM level {}x{} has incompatible split image {}",
@@ -601,7 +601,7 @@ impl DicomSeriesManifest {
             return Err(WsiError::UnsupportedFormat(path.display().to_string()));
         }
         if by_series.len() != 1 {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "DICOM directory contains {} VL WSI series; select a directory containing exactly one series",
@@ -623,7 +623,7 @@ impl DicomSeriesManifest {
     ) -> Result<Self, WsiError> {
         let first = metas
             .first()
-            .ok_or_else(|| invalid_slide(path, "No DICOM VL WSI objects found"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "No DICOM VL WSI objects found"))?;
         let series_instance_uid = first.series_instance_uid.clone();
         let study_instance_uid = common_optional_value(path, "StudyInstanceUID", &metas, |meta| {
             meta.study_instance_uid.as_deref()
@@ -647,7 +647,7 @@ impl DicomSeriesManifest {
 
         for meta in &metas {
             if meta.series_instance_uid != series_instance_uid {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "DICOM series resolver received mixed SeriesInstanceUID values",
                 ));
@@ -700,7 +700,7 @@ fn validate_uniform_level_bit_depth(path: &Path, levels: &[DicomLevel]) -> Resul
         .iter()
         .find(|level| level.bit_depth() != first.bit_depth())
     {
-        Some(mixed) => Err(invalid_slide(
+        Some(mixed) => Err(WsiError::invalid_slide(
             path,
             format!(
                 "DICOM series mixes {}-bit and {}-bit pyramid images ({} vs. {})",
@@ -730,7 +730,7 @@ pub(super) fn direct_child_files(dir: &Path) -> Result<Vec<PathBuf>, WsiError> {
         })?;
         if file_type.is_file() {
             if paths.len() >= MAX_DICOM_DIRECTORY_FILES {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     dir,
                     format!("DICOM directory exceeds {MAX_DICOM_DIRECTORY_FILES} direct files"),
                 ));
@@ -758,7 +758,7 @@ where
         };
         match &common {
             Some(expected) if expected != actual => {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     format!(
                         "DICOM series has incompatible {name} values ({expected} vs. {actual})"

@@ -69,7 +69,3 @@ impl VmsLevel {
         })
     }
 }
-
-pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::invalid_slide(path, message)
-}

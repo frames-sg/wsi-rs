@@ -17,7 +17,6 @@ use super::{
     DICOM_SEQUENCE_DELIMITER_TAG_LE, EXPLICIT_VR_LONG_HEADER_LEN,
     EXTENDED_OFFSET_TABLE_LENGTHS_TAG_LE, EXTENDED_OFFSET_TABLE_TAG_LE, PIXEL_DATA_TAG_LE,
 };
-use crate::formats::dicom::metadata::invalid_slide;
 use crate::formats::dicom::preflight::preflight_file_meta;
 
 struct DicomEncapsulatedLayout {
@@ -46,7 +45,7 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
     let expected_table_len = u64::from(number_of_frames)
         .checked_mul(8)
         .and_then(|length| u32::try_from(length).ok())
-        .ok_or_else(|| invalid_slide(path, "DICOM extended offset table is too large"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM extended offset table is too large"))?;
     let Some(layout) =
         find_encapsulated_layout_le(&mut file, path, file_len, expected_table_len, control)?
     else {
@@ -122,11 +121,11 @@ fn build_single_fragment_index_from_extended_offsets(
     super::offset_tables::validate_extended_offset_table_shape(path, tables, number_of_frames)?;
     let offset_table_item = pixel_data_offset
         .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
-        .ok_or_else(|| invalid_slide(path, "DICOM Pixel Data offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM Pixel Data offset overflow"))?;
     let mut item_header = [0u8; 8];
     read_exact_file_at_controlled(file, path, offset_table_item, &mut item_header, control)?;
     if item_header[0..4] != DICOM_ITEM_TAG_LE {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM Pixel Data is missing its basic offset table item",
         ));
@@ -137,7 +136,7 @@ fn build_single_fragment_index_from_extended_offsets(
             .expect("DICOM item length header is 4 bytes"),
     );
     if !basic_offset_table_len.is_multiple_of(4) {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM basic offset table length is not a multiple of four",
         ));
@@ -145,7 +144,7 @@ fn build_single_fragment_index_from_extended_offsets(
     let first_fragment_item = offset_table_item
         .checked_add(8)
         .and_then(|offset| offset.checked_add(u64::from(basic_offset_table_len)))
-        .ok_or_else(|| invalid_slide(path, "DICOM first fragment offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM first fragment offset overflow"))?;
 
     let mut fragments = Vec::with_capacity(number_of_frames as usize);
     for (frame_index, (&offset, &declared_len)) in
@@ -155,15 +154,15 @@ fn build_single_fragment_index_from_extended_offsets(
         let padded_len = checked_padded_fragment_len(path, frame_index, declared_len)?;
         let item_offset = first_fragment_item
             .checked_add(offset)
-            .ok_or_else(|| invalid_slide(path, "DICOM extended frame offset overflow"))?;
-        let payload_offset = item_offset
-            .checked_add(8)
-            .ok_or_else(|| invalid_slide(path, "DICOM fragment payload offset overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "DICOM extended frame offset overflow"))?;
+        let payload_offset = item_offset.checked_add(8).ok_or_else(|| {
+            WsiError::invalid_slide(path, "DICOM fragment payload offset overflow")
+        })?;
         let fragment_end = payload_offset
             .checked_add(u64::from(padded_len))
-            .ok_or_else(|| invalid_slide(path, "DICOM fragment end offset overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "DICOM fragment end offset overflow"))?;
         if fragment_end > file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("DICOM frame {frame_index} extends beyond the source file"),
             ));
@@ -171,9 +170,9 @@ fn build_single_fragment_index_from_extended_offsets(
         if let Some(next_offset) = tables.offsets.get(frame_index + 1) {
             let next_item = first_fragment_item
                 .checked_add(*next_offset)
-                .ok_or_else(|| invalid_slide(path, "DICOM next frame offset overflow"))?;
+                .ok_or_else(|| WsiError::invalid_slide(path, "DICOM next frame offset overflow"))?;
             if fragment_end != next_item {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     format!(
                         "DICOM frame {frame_index} spans multiple fragments or has inconsistent extended length"
@@ -192,14 +191,16 @@ fn build_single_fragment_index_from_extended_offsets(
 
     let last = fragments
         .last()
-        .ok_or_else(|| invalid_slide(path, "DICOM extended offset table is empty"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM extended offset table is empty"))?;
     let delimiter_offset = last
         .payload_offset
         .checked_add(u64::from(last.len))
-        .ok_or_else(|| invalid_slide(path, "DICOM pixel sequence delimiter offset overflow"))?;
+        .ok_or_else(|| {
+            WsiError::invalid_slide(path, "DICOM pixel sequence delimiter offset overflow")
+        })?;
     read_exact_file_at_controlled(file, path, delimiter_offset, &mut item_header, control)?;
     if item_header[0..4] != DICOM_SEQUENCE_DELIMITER_TAG_LE || item_header[4..8] != [0; 4] {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM final fragment is not followed by a valid sequence delimiter",
         ));
@@ -233,7 +234,7 @@ fn validate_extended_item_header_sample(
                 .expect("DICOM item length header is 4 bytes"),
         );
         if header[0..4] != DICOM_ITEM_TAG_LE || item_len != fragment.len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("DICOM frame {frame_index} Item header does not match its extended length"),
             ));
@@ -277,7 +278,7 @@ fn find_encapsulated_layout_le(
         let header = read_explicit_le_element_header(&mut reader, path, cursor, file_len)?;
         if header.tag == PIXEL_DATA_TAG_LE {
             if header.length != u32::MAX || !matches!(&header.vr, b"OB" | b"OW" | b"UN") {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "DICOM Pixel Data is not an encapsulated explicit-VR element",
                 ));
@@ -329,11 +330,11 @@ impl<'a> HeaderWindowReader<'a> {
     }
 
     fn read_exact_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), WsiError> {
-        let end = offset
-            .checked_add(buffer.len() as u64)
-            .ok_or_else(|| invalid_slide(self.path, "DICOM header read offset overflow"))?;
+        let end = offset.checked_add(buffer.len() as u64).ok_or_else(|| {
+            WsiError::invalid_slide(self.path, "DICOM header read offset overflow")
+        })?;
         if end > self.file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 self.path,
                 "DICOM header read extends beyond the source file",
             ));
@@ -377,9 +378,9 @@ fn read_explicit_le_element_header(
 ) -> Result<ExplicitLeElementHeader, WsiError> {
     let header_end = offset
         .checked_add(8)
-        .ok_or_else(|| invalid_slide(path, "DICOM element header offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM element header offset overflow"))?;
     if header_end > file_len {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM element header extends beyond the source file",
         ));
@@ -393,23 +394,23 @@ fn read_explicit_le_element_header(
         .try_into()
         .expect("DICOM VR header is two bytes");
     if !vr.iter().all(u8::is_ascii_uppercase) {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("invalid explicit-VR DICOM header at byte {offset}"),
         ));
     }
     let (length, value_offset) = if explicit_vr_uses_u32_length(vr) {
         if prefix[6..8] != [0, 0] {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("invalid reserved bytes in DICOM header at byte {offset}"),
             ));
         }
         let value_offset = offset
             .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
-            .ok_or_else(|| invalid_slide(path, "DICOM value offset overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "DICOM value offset overflow"))?;
         if value_offset > file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 "DICOM long element header exceeds the source file",
             ));
@@ -466,7 +467,7 @@ fn skip_undefined_explicit_le_sequence(
         let (tag, length, value_offset) = read_item_header(reader, path, cursor, file_len)?;
         if tag == DICOM_SEQUENCE_DELIMITER_TAG_LE {
             if length != 0 {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "DICOM sequence delimiter has non-zero length",
                 ));
@@ -474,7 +475,7 @@ fn skip_undefined_explicit_le_sequence(
             return Ok(value_offset);
         }
         if tag != DICOM_ITEM_TAG_LE {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "unexpected DICOM sequence tag {:02x?} at byte {cursor}",
@@ -505,7 +506,7 @@ fn skip_undefined_explicit_le_item(
             let (tag, length, value_offset) = read_item_header(reader, path, cursor, file_len)?;
             debug_assert_eq!(tag, [0xFE, 0xFF, 0x0D, 0xE0]);
             if length != 0 {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "DICOM item delimiter has non-zero length",
                 ));
@@ -525,9 +526,9 @@ fn read_item_header(
 ) -> Result<([u8; 4], u32, u64), WsiError> {
     let value_offset = offset
         .checked_add(8)
-        .ok_or_else(|| invalid_slide(path, "DICOM item header offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM item header offset overflow"))?;
     if value_offset > file_len {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM item header extends beyond the source file",
         ));
@@ -555,9 +556,9 @@ fn checked_value_end(
 ) -> Result<u64, WsiError> {
     let end = value_offset
         .checked_add(u64::from(length))
-        .ok_or_else(|| invalid_slide(path, "DICOM element value offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM element value offset overflow"))?;
     if end > file_len {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "DICOM element value extends beyond the source file",
         ));
@@ -610,7 +611,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
     check_index_control(control)?;
     let mut cursor = pixel_data_offset
         .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
-        .ok_or_else(|| invalid_slide(path, "DICOM raw Pixel Data offset overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM raw Pixel Data offset overflow"))?;
     let mut offset_table = None;
     let mut fragments = Vec::new();
 
@@ -626,11 +627,11 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
         );
         cursor = cursor
             .checked_add(item_header.len() as u64)
-            .ok_or_else(|| invalid_slide(path, "DICOM raw item offset overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "DICOM raw item offset overflow"))?;
 
         if tag == DICOM_SEQUENCE_DELIMITER_TAG_LE {
             if len != 0 {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     format!("DICOM pixel sequence delimiter has non-zero length {len}"),
                 ));
@@ -639,7 +640,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
             return Ok((fragments, offset_table.unwrap_or_default()));
         }
         if tag != DICOM_ITEM_TAG_LE {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "unexpected DICOM pixel sequence tag {:02x?} at byte {}",
@@ -649,11 +650,11 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
             ));
         }
 
-        let payload_end = cursor
-            .checked_add(u64::from(len))
-            .ok_or_else(|| invalid_slide(path, "DICOM raw item payload offset overflow"))?;
+        let payload_end = cursor.checked_add(u64::from(len)).ok_or_else(|| {
+            WsiError::invalid_slide(path, "DICOM raw item payload offset overflow")
+        })?;
         if payload_end > file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 "DICOM pixel sequence item extends beyond the source file",
             ));
@@ -670,7 +671,7 @@ pub(in super::super) fn scan_raw_encapsulated_pixel_sequence_with_reader_control
             )?);
         } else {
             if len == 0 || len == u32::MAX {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "zero or undefined-length DICOM pixel fragment is not supported",
                 ));

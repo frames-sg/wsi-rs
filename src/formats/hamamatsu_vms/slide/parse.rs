@@ -2,7 +2,7 @@ use super::super::ini::*;
 use super::super::levels::{
     base_level_dimensions, expanded_levels, total_tiles_across, total_tiles_down,
 };
-use super::super::model::{invalid_slide, VmsAssociatedFile, VmsJpeg, VmsLevel, VmsSlide};
+use super::super::model::{VmsAssociatedFile, VmsJpeg, VmsLevel, VmsSlide};
 use super::super::*;
 use super::vms_image_count;
 
@@ -45,19 +45,22 @@ fn load_vms_sources(
     budget: &OpenBudget,
 ) -> Result<VmsSources, WsiError> {
     let mut ini = parse_vms_ini_with_budget(path, budget)?;
-    let group = ini
-        .groups
-        .remove(GROUP_VMS)
-        .ok_or_else(|| invalid_slide(path, "missing [Virtual Microscope Specimen] group"))?;
+    let group = ini.groups.remove(GROUP_VMS).ok_or_else(|| {
+        WsiError::invalid_slide(path, "missing [Virtual Microscope Specimen] group")
+    })?;
     let num_cols = parse_u32(path, &group, KEY_NUM_JPEG_COLS)?;
     let num_rows = parse_u32(path, &group, KEY_NUM_JPEG_ROWS)?;
     if num_cols == 0 || num_rows == 0 {
-        return Err(invalid_slide(path, "VMS file has no columns or rows"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "VMS file has no columns or rows",
+        ));
     }
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let image_count = vms_image_count(num_cols, num_rows)
-        .ok_or_else(|| invalid_slide(path, "VMS JPEG shard count exceeds safety limit"))?;
+    let image_count = vms_image_count(num_cols, num_rows).ok_or_else(|| {
+        WsiError::invalid_slide(path, "VMS JPEG shard count exceeds safety limit")
+    })?;
     let mut private_cache_budget = cache_config.private_cache_budget(image_count.saturating_add(2));
     let image_index_bytes = u64::try_from(image_count)
         .unwrap_or(u64::MAX)
@@ -81,14 +84,14 @@ fn load_vms_sources(
             continue;
         }
         if dims.col >= num_cols || dims.row >= num_rows {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("invalid VMS image coordinates ({},{})", dims.col, dims.row),
             ));
         }
         let idx = (dims.row * num_cols + dims.col) as usize;
         if image_paths[idx].is_some() {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("duplicate VMS image for ({},{})", dims.col, dims.row),
             ));
@@ -99,11 +102,16 @@ fn load_vms_sources(
         .into_iter()
         .enumerate()
         .map(|(idx, path_opt)| {
-            path_opt.ok_or_else(|| invalid_slide(path, format!("missing VMS image filename {idx}")))
+            path_opt.ok_or_else(|| {
+                WsiError::invalid_slide(path, format!("missing VMS image filename {idx}"))
+            })
         })
         .collect::<Result<_, _>>()?;
     if image_paths.iter().collect::<HashSet<_>>().len() != image_paths.len() {
-        return Err(invalid_slide(path, "duplicate VMS image file path"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "duplicate VMS image file path",
+        ));
     }
 
     let map_path = resolve_companion_file(
@@ -111,7 +119,7 @@ fn load_vms_sources(
         dir,
         group
             .get(KEY_MAP_FILE)
-            .ok_or_else(|| invalid_slide(path, "missing MapFile"))?,
+            .ok_or_else(|| WsiError::invalid_slide(path, "missing MapFile"))?,
     )?;
     let macro_path = group
         .get(KEY_MACRO_IMAGE)
@@ -127,7 +135,7 @@ fn load_vms_sources(
     quickhash.hash_file(&map_path)?;
     let quickhash = quickhash
         .finish()
-        .ok_or_else(|| invalid_slide(path, "failed to compute VMS quickhash"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "failed to compute VMS quickhash"))?;
     let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
     let headers = image_paths
         .iter()
@@ -221,7 +229,7 @@ fn build_levels_and_properties(
     let largest = base_level_dimensions(
         levels
             .first()
-            .ok_or_else(|| invalid_slide(path, "VMS slide created no levels"))?,
+            .ok_or_else(|| WsiError::invalid_slide(path, "VMS slide created no levels"))?,
     );
     let dataset_levels = levels
         .iter()
@@ -256,7 +264,9 @@ fn assemble_slide(mut parts: VmsDatasetParts) -> Result<VmsSlide, WsiError> {
         .first()
         .and_then(|level| level.jpegs.first())
         .map(|jpeg| jpeg.encoded_unit_bytes)
-        .ok_or_else(|| invalid_slide(Path::new(""), "VMS slide created no JPEG sources"))?;
+        .ok_or_else(|| {
+            WsiError::invalid_slide(Path::new(""), "VMS slide created no JPEG sources")
+        })?;
     let mut associated_images = HashMap::new();
     let mut associated_files = HashMap::new();
     if let Some(macro_path) = parts.macro_path.filter(|path| path.is_file()) {

@@ -13,7 +13,6 @@ use super::DICOM_ITEM_TAG_LE;
 use crate::formats::dicom::image::{
     BATCH_FRAME_READ_MAX_GAP_BYTES, BATCH_FRAME_READ_MAX_SPAN_BYTES,
 };
-use crate::formats::dicom::metadata::invalid_slide;
 
 #[derive(Debug)]
 pub(in super::super) struct DicomFrameReadSpan {
@@ -79,15 +78,17 @@ pub(in super::super) fn copy_fragments_from_window(
         let rel_start = fragment
             .payload_offset
             .checked_sub(window_start)
-            .ok_or_else(|| invalid_slide(path, "DICOM batch fragment offset underflow"))?;
+            .ok_or_else(|| {
+                WsiError::invalid_slide(path, "DICOM batch fragment offset underflow")
+            })?;
         let rel_start = usize::try_from(rel_start)
-            .map_err(|_| invalid_slide(path, "DICOM batch fragment offset overflow"))?;
+            .map_err(|_| WsiError::invalid_slide(path, "DICOM batch fragment offset overflow"))?;
         let rel_end = rel_start
             .checked_add(fragment.len as usize)
-            .ok_or_else(|| invalid_slide(path, "DICOM batch fragment length overflow"))?;
-        let payload = window
-            .get(rel_start..rel_end)
-            .ok_or_else(|| invalid_slide(path, "DICOM batch fragment outside read window"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "DICOM batch fragment length overflow"))?;
+        let payload = window.get(rel_start..rel_end).ok_or_else(|| {
+            WsiError::invalid_slide(path, "DICOM batch fragment outside read window")
+        })?;
         data.extend_from_slice(payload);
     }
     Ok(data)
@@ -120,9 +121,9 @@ fn read_encapsulated_fragments_with_file(
         })?;
     for fragment in fragments {
         let start = data.len();
-        let end = start
-            .checked_add(fragment.len as usize)
-            .ok_or_else(|| invalid_slide(path, "DICOM compressed frame length overflow"))?;
+        let end = start.checked_add(fragment.len as usize).ok_or_else(|| {
+            WsiError::invalid_slide(path, "DICOM compressed frame length overflow")
+        })?;
         data.resize(end, 0);
         read_exact_at(file, path, fragment.payload_offset, &mut data[start..])?;
     }
@@ -194,9 +195,9 @@ pub(in super::super) fn read_encapsulated_frame_group<R: Read + Seek>(
     let span_len = group
         .end
         .checked_sub(group.start)
-        .ok_or_else(|| invalid_slide(path, "DICOM batch frame read span underflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "DICOM batch frame read span underflow"))?;
     let span_len = usize::try_from(span_len)
-        .map_err(|_| invalid_slide(path, "DICOM batch frame read span overflow"))?;
+        .map_err(|_| WsiError::invalid_slide(path, "DICOM batch frame read span overflow"))?;
     if span_len as u64 > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
         return Err(WsiError::ResourceLimit {
             resource: "compressed DICOM batch read span",
@@ -223,7 +224,7 @@ pub(in super::super) fn read_encapsulated_frame_group<R: Read + Seek>(
                 .fragments
                 .get(span.frame_range.clone())
                 .ok_or_else(|| {
-                    invalid_slide(path, "DICOM batch frame fragment range out of bounds")
+                    WsiError::invalid_slide(path, "DICOM batch frame fragment range out of bounds")
                 })?;
             for fragment in fragments {
                 let relative_start =
@@ -231,16 +232,19 @@ pub(in super::super) fn read_encapsulated_frame_group<R: Read + Seek>(
                         .item_offset
                         .checked_sub(group.start)
                         .ok_or_else(|| {
-                            invalid_slide(path, "DICOM batch fragment Item offset underflow")
+                            WsiError::invalid_slide(
+                                path,
+                                "DICOM batch fragment Item offset underflow",
+                            )
                         })?;
                 let relative_start = usize::try_from(relative_start).map_err(|_| {
-                    invalid_slide(path, "DICOM batch fragment Item offset overflow")
+                    WsiError::invalid_slide(path, "DICOM batch fragment Item offset overflow")
                 })?;
                 let relative_end = relative_start.checked_add(8).ok_or_else(|| {
-                    invalid_slide(path, "DICOM batch fragment Item header overflow")
+                    WsiError::invalid_slide(path, "DICOM batch fragment Item header overflow")
                 })?;
                 let header = window.get(relative_start..relative_end).ok_or_else(|| {
-                    invalid_slide(
+                    WsiError::invalid_slide(
                         path,
                         "DICOM batch fragment Item header is outside the read window",
                     )
@@ -273,17 +277,17 @@ fn validate_encapsulated_fragment_header(
 ) -> Result<(), WsiError> {
     let tag = header
         .get(..4)
-        .ok_or_else(|| invalid_slide(path, "truncated DICOM fragment Item tag"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "truncated DICOM fragment Item tag"))?;
     let length = header
         .get(4..8)
-        .ok_or_else(|| invalid_slide(path, "truncated DICOM fragment Item length"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "truncated DICOM fragment Item length"))?;
     let length = u32::from_le_bytes(
         length
             .try_into()
             .expect("validated DICOM fragment Item length is four bytes"),
     );
     if tag != DICOM_ITEM_TAG_LE || length != fragment.len {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "DICOM fragment Item header at byte {} does not match its indexed length",

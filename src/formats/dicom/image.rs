@@ -22,9 +22,7 @@ use super::decode::{
     validate_jpeg_transfer_syntax_frame,
 };
 use super::frame_index::DicomEncapsulatedFrames;
-use super::metadata::{
-    invalid_slide, parse_sparse_tile_map_with_budget, DicomBitDepth, ParsedDicomMetadata,
-};
+use super::metadata::{parse_sparse_tile_map_with_budget, DicomBitDepth, ParsedDicomMetadata};
 use super::preflight::DicomPixelDataLocation;
 
 mod frame_decode;
@@ -123,7 +121,7 @@ impl DicomImage {
             PrivateCache::new(private_cache_budget.allocate(estimated_frame_bytes));
         let native_pixel_data = if is_encapsulated_transfer_syntax(&meta.transfer_syntax_uid) {
             if meta.pixel_data != DicomPixelDataLocation::Encapsulated {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     &meta.path,
                     "encapsulated transfer syntax does not have encapsulated Pixel Data",
                 ));
@@ -135,7 +133,7 @@ impl DicomImage {
                 value_len,
             } = meta.pixel_data
             else {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     &meta.path,
                     "native transfer syntax does not have native Pixel Data",
                 ));
@@ -324,7 +322,7 @@ impl DicomImage {
             .checked_native_frame_bytes()
             .and_then(|frame_bytes| frame_bytes.checked_mul(u64::from(self.number_of_frames)))
             .ok_or_else(|| {
-                invalid_slide(
+                WsiError::invalid_slide(
                     &self.frame_store.path,
                     "DICOM decoded image size overflows u64",
                 )

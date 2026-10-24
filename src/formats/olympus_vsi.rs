@@ -339,9 +339,5 @@ fn is_vsi_path(path: &Path) -> bool {
     )
 }
 
-fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::invalid_slide(path, message)
-}
-
 #[cfg(test)]
 mod tests;

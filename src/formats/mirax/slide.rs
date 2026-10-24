@@ -224,7 +224,7 @@ impl MiraxSlide {
             self.encoded_unit_bytes,
             "MIRAX record",
         )
-        .map_err(|message| invalid_slide(&record.path, message))?;
+        .map_err(|message| WsiError::invalid_slide(&record.path, message))?;
         let mut bytes = vec![0; len];
         file.read_exact_at(&mut bytes, record.offset)
             .map_err(|source| WsiError::IoWithPath {
@@ -247,11 +247,9 @@ impl MiraxSlide {
             return Ok(Arc::clone(file));
         }
 
-        let identity = self
-            .shared
-            .datafile_identities
-            .get(path)
-            .ok_or_else(|| invalid_slide(path, "MIRAX record names an unlisted data file"))?;
+        let identity = self.shared.datafile_identities.get(path).ok_or_else(|| {
+            WsiError::invalid_slide(path, "MIRAX record names an unlisted data file")
+        })?;
         let file = FileIdentity::open_verified(
             path,
             identity,

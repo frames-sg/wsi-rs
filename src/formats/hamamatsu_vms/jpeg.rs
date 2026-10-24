@@ -1,4 +1,4 @@
-use super::model::{invalid_slide, VmsJpeg};
+use super::model::VmsJpeg;
 use super::*;
 use memchr::memchr;
 
@@ -24,7 +24,7 @@ impl VmsJpeg {
 
     pub(super) fn read_header(path: &Path) -> Result<VmsJpegHeader, WsiError> {
         read_vms_jpeg_header(path).map_err(|err| {
-            invalid_slide(
+            WsiError::invalid_slide(
                 path,
                 format!("failed to derive VMS JPEG tile geometry: {err}"),
             )
@@ -362,7 +362,7 @@ fn checked_vms_tile_count(
     let index_bytes = tile_count
         .checked_mul(2)
         .and_then(|count| count.checked_mul(std::mem::size_of::<Option<u64>>() as u64))
-        .ok_or_else(|| invalid_slide(path, "VMS JPEG tile index size overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "VMS JPEG tile index size overflow"))?;
     if index_bytes > MAX_VMS_TILE_INDEX_BYTES {
         return Err(WsiError::ResourceLimit {
             resource: "VMS JPEG tile index",

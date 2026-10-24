@@ -76,7 +76,7 @@ fn open_and_validate_czi(
     )?;
 
     if czi.subblocks().len() > MAX_CZI_SUBBLOCKS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI subblock count {} exceeds the {MAX_CZI_SUBBLOCKS}-entry safety limit",
@@ -85,7 +85,7 @@ fn open_and_validate_czi(
         ));
     }
     if czi.attachments().len() > MAX_CZI_ATTACHMENTS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI attachment count {} exceeds the {MAX_CZI_ATTACHMENTS}-entry safety limit",
@@ -103,7 +103,7 @@ fn open_and_validate_czi(
             MAX_DECODED_IMAGE_BYTES.min(limits.decoded_output_bytes()),
             "CZI decoded subblock",
         )
-        .map_err(|message| invalid_slide(path, message))?;
+        .map_err(|message| WsiError::invalid_slide(path, message))?;
     }
     let file_len = std::fs::metadata(path)
         .map_err(|source| WsiError::IoWithPath {
@@ -113,7 +113,7 @@ fn open_and_validate_czi(
         .len();
     for attachment in czi.attachments() {
         if attachment.data_size > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "CZI attachment {} declares {} bytes, exceeding the {}-byte safety limit",
@@ -127,9 +127,9 @@ fn open_and_validate_czi(
             .file_position
             .checked_add(32 + 256)
             .and_then(|offset| offset.checked_add(attachment.data_size))
-            .ok_or_else(|| invalid_slide(path, "CZI attachment range overflows"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "CZI attachment range overflows"))?;
         if payload_end > file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "CZI attachment {} ends at {payload_end}, beyond file length {file_len}",
@@ -147,7 +147,10 @@ fn open_and_validate_czi(
             limits,
         )?;
         if subblock.file_part != 0 {
-            return Err(invalid_slide(path, "multipart CZI is unsupported"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "multipart CZI is unsupported",
+            ));
         }
     }
     let header = czi.file_header().clone();
@@ -155,7 +158,7 @@ fn open_and_validate_czi(
         .metadata_xml()
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
     if xml.len() as u64 > MAX_CZI_METADATA_BYTES {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI metadata has {} bytes, exceeding the {MAX_CZI_METADATA_BYTES}-byte safety limit",
@@ -209,12 +212,12 @@ fn build_dataset_parts(
 ) -> Result<CziDatasetParts, WsiError> {
     let scene_indices = scene_indices(&input.statistics, &input.summary)?;
     if scene_indices.is_empty() {
-        return Err(invalid_slide(path, "Zeiss slide has no scenes"));
+        return Err(WsiError::invalid_slide(path, "Zeiss slide has no scenes"));
     }
 
     let level_ratios = common_level_ratios(&input.subblocks, &scene_indices, &input.statistics)?;
     if level_ratios.len() > MAX_CZI_LEVELS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI level count {} exceeds the {MAX_CZI_LEVELS}-level safety limit",
@@ -230,7 +233,7 @@ fn build_dataset_parts(
         || canvas_dimensions.0 > u64::from(u32::MAX)
         || canvas_dimensions.1 > u64::from(u32::MAX)
     {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI canvas dimensions {}x{} are outside the supported nonzero u32 range",

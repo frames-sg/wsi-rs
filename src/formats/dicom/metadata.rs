@@ -193,7 +193,7 @@ fn parse_metadata_object_until_with_budget(
     let columns = required_nonzero_u32(&obj, tags::COLUMNS, "Columns", path)?;
     let number_of_frames = optional_u32(&obj, tags::NUMBER_OF_FRAMES)?.unwrap_or(1);
     if number_of_frames == 0 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "NumberOfFrames must be greater than zero",
         ));
@@ -275,7 +275,7 @@ fn required_nonzero_u32(
 ) -> Result<u32, WsiError> {
     let value = required_u32(obj, tag, name)?;
     if value == 0 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("{name} must be greater than zero"),
         ));
@@ -291,7 +291,7 @@ fn optional_nonzero_u32(
 ) -> Result<Option<u32>, WsiError> {
     let value = optional_u32(obj, tag)?;
     if value == Some(0) {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("{name} must be greater than zero"),
         ));
@@ -393,7 +393,7 @@ pub(super) fn validate_monotonic_levels(
         let finer = &pair[0];
         let coarser = &pair[1];
         if coarser.width > finer.width || coarser.height > finer.height {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "DICOM pyramid levels are not monotonic ({}x{} before {}x{})",
@@ -421,7 +421,10 @@ pub(super) fn reject_huge_base_only_dicom(
     if tile_count >= BASE_ONLY_GUARD_MIN_TILE_COUNT
         || max_dimension >= BASE_ONLY_GUARD_MIN_DIMENSION
     {
-        return Err(invalid_slide(path, BASE_ONLY_DICOM_PYRAMID_MESSAGE));
+        return Err(WsiError::invalid_slide(
+            path,
+            BASE_ONLY_DICOM_PYRAMID_MESSAGE,
+        ));
     }
 
     Ok(())
@@ -449,7 +452,7 @@ pub(super) fn ensure_same_sop(path: &Path, current: &str, previous: &str) -> Res
     if current == previous {
         Ok(())
     } else {
-        Err(invalid_slide(
+        Err(WsiError::invalid_slide(
             path,
             format!("Slide contains unexpected image ({current} vs. {previous})"),
         ))
@@ -460,7 +463,7 @@ pub(super) fn validate_supported_pixel_format(
     meta: &ParsedDicomMetadata,
 ) -> Result<DicomBitDepth, WsiError> {
     if !SUPPORTED_TRANSFER_SYNTAXES.contains(&meta.transfer_syntax_uid.as_str()) {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             &meta.path,
             format!("Unsupported transfer syntax {}", meta.transfer_syntax_uid),
         ));
@@ -469,7 +472,7 @@ pub(super) fn validate_supported_pixel_format(
     match meta.samples_per_pixel {
         1 | 3 => {}
         value => {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 &meta.path,
                 format!("Attribute SamplesPerPixel value {value} is not supported"),
             ));
@@ -485,7 +488,7 @@ pub(super) fn validate_supported_pixel_format(
     match (meta.samples_per_pixel, meta.planar_configuration) {
         (1, _) | (3, None | Some(0) | Some(1)) => {}
         (3, Some(value)) => {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 &meta.path,
                 format!("Attribute PlanarConfiguration value {value} is not supported"),
             ));
@@ -521,7 +524,7 @@ pub(super) fn validate_supported_pixel_format(
     if supported {
         Ok(bit_depth)
     } else {
-        Err(invalid_slide(
+        Err(WsiError::invalid_slide(
             &meta.path,
             format!(
                 "Unsupported photometric interpretation {photometric} for {}",
@@ -540,7 +543,7 @@ fn validate_sample_bit_depth(meta: &ParsedDicomMetadata) -> Result<DicomBitDepth
         return Ok(DicomBitDepth::Eight);
     }
     if bits_allocated != 16 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             &meta.path,
             format!("Attribute BitsAllocated value {bits_allocated} is not supported"),
         ));
@@ -548,13 +551,13 @@ fn validate_sample_bit_depth(meta: &ParsedDicomMetadata) -> Result<DicomBitDepth
 
     let bits_stored = required_u32(&meta.obj, tags::BITS_STORED, "BitsStored")?;
     if is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid) && bits_stored != 12 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             &meta.path,
             format!("Attribute BitsStored value {bits_stored} != 12"),
         ));
     }
     if !(9..=16).contains(&bits_stored) {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             &meta.path,
             format!("Attribute BitsStored value {bits_stored} is not supported"),
         ));
@@ -563,7 +566,7 @@ fn validate_sample_bit_depth(meta: &ParsedDicomMetadata) -> Result<DicomBitDepth
         && !is_lossless_jpeg_transfer_syntax(&meta.transfer_syntax_uid)
         && !is_twelve_bit_jpeg_transfer_syntax(&meta.transfer_syntax_uid)
     {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             &meta.path,
             format!(
                 "Attribute BitsAllocated value 16 is not supported for transfer syntax {}",
@@ -671,10 +674,6 @@ pub(super) fn canonicalize_or_fallback(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::invalid_slide(path, message)
-}
-
 pub(super) fn required_string(
     obj: &DefaultDicomObject,
     tag: dicom_core::Tag,
@@ -759,7 +758,7 @@ pub(super) fn verify_required_int(
     if value == expected {
         Ok(())
     } else {
-        Err(invalid_slide(
+        Err(WsiError::invalid_slide(
             path,
             format!("Attribute {name} value {value} != {expected}"),
         ))
@@ -774,7 +773,7 @@ pub(super) fn verify_optional_int(
     path: &Path,
 ) -> Result<(), WsiError> {
     match optional_u32(obj, tag)? {
-        Some(value) if value != expected => Err(invalid_slide(
+        Some(value) if value != expected => Err(WsiError::invalid_slide(
             path,
             format!("Attribute {name} value {value} != {expected}"),
         )),

@@ -2,7 +2,6 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use super::invalid;
 use crate::core::positioned_file::PositionedFile;
 use crate::core::types::*;
 use crate::error::WsiError;
@@ -25,7 +24,7 @@ impl Ngr {
         file.read_exact_at(&mut header, 0)
             .map_err(|e| io_error(path, e))?;
         if &header[..2] != b"GN" {
-            return Err(invalid(path, "NGR magic must be GN"));
+            return Err(WsiError::invalid_slide(path, "NGR magic must be GN"));
         }
         let word = |offset| {
             u32::from_le_bytes(
@@ -38,7 +37,7 @@ impl Ngr {
             (word(4), word(8), word(12), u64::from(word(24)));
         if width == 0 || height == 0 || column_width == 0 || width % column_width != 0 || start < 28
         {
-            return Err(invalid(
+            return Err(WsiError::invalid_slide(
                 path,
                 "invalid NGR dimensions, column width, or data offset",
             ));
@@ -47,9 +46,9 @@ impl Ngr {
             .checked_mul(u64::from(height))
             .and_then(|n| n.checked_mul(6))
             .and_then(|n| n.checked_add(start))
-            .ok_or_else(|| invalid(path, "NGR data span overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "NGR data span overflow"))?;
         if end > length {
-            return Err(invalid(path, "truncated NGR pixel data"));
+            return Err(WsiError::invalid_slide(path, "truncated NGR pixel data"));
         }
         Ok(Self {
             file,

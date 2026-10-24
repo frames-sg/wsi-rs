@@ -13,7 +13,6 @@ use crate::error::WsiError;
 use super::check_index_control;
 use super::model::{DicomEncapsulatedFrames, DicomFragmentRef};
 use super::offset_tables::{build_encapsulated_frame_index, validate_basic_offset_table_len};
-use crate::formats::dicom::metadata::invalid_slide;
 use crate::formats::dicom::preflight::preflight_file_meta;
 use crate::formats::dicom::preflight::DicomMetadataTransferSyntaxIndex;
 use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
@@ -34,7 +33,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 .flatten()
         })
         .ok_or_else(|| {
-            invalid_slide(
+            WsiError::invalid_slide(
                 path,
                 format!("unknown transfer syntax {transfer_syntax_uid}"),
             )
@@ -45,15 +44,16 @@ pub(super) fn scan_encapsulated_frames_tokenized(
     })?);
     let actual_transfer_syntax = preflight_file_meta(&mut reader, path)?;
     if actual_transfer_syntax != transfer_syntax_uid {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "DICOM transfer syntax changed from {transfer_syntax_uid} to {actual_transfer_syntax}"
             ),
         ));
     }
-    let mut tokens = LazyDataSetReader::new_with_ts(reader, transfer_syntax)
-        .map_err(|source| invalid_slide(path, format!("cannot stream DICOM dataset: {source}")))?;
+    let mut tokens = LazyDataSetReader::new_with_ts(reader, transfer_syntax).map_err(|source| {
+        WsiError::invalid_slide(path, format!("cannot stream DICOM dataset: {source}"))
+    })?;
 
     let mut in_pixel_sequence = false;
     let mut awaiting_offset_table = false;
@@ -62,8 +62,9 @@ pub(super) fn scan_encapsulated_frames_tokenized(
 
     while let Some(token) = tokens.advance() {
         check_index_control(control)?;
-        let token = token
-            .map_err(|source| invalid_slide(path, format!("cannot read DICOM token: {source}")))?;
+        let token = token.map_err(|source| {
+            WsiError::invalid_slide(path, format!("cannot read DICOM token: {source}"))
+        })?;
         match token {
             LazyDataToken::PixelSequenceStart => {
                 in_pixel_sequence = true;
@@ -80,13 +81,13 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 check_index_control(control)?;
                 let entry_count =
                     validate_basic_offset_table_len(path, len, Some(number_of_frames))?;
-                offset_table
-                    .try_reserve_exact(entry_count)
-                    .map_err(|_| invalid_slide(path, "cannot allocate DICOM basic offset table"))?;
+                offset_table.try_reserve_exact(entry_count).map_err(|_| {
+                    WsiError::invalid_slide(path, "cannot allocate DICOM basic offset table")
+                })?;
                 decoder
                     .read_u32_to_vec(len, &mut offset_table)
                     .map_err(|source| {
-                        invalid_slide(
+                        WsiError::invalid_slide(
                             path,
                             format!("cannot read DICOM basic offset table: {source}"),
                         )
@@ -98,7 +99,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 let payload_offset = decoder.position();
                 let item_offset = payload_offset.saturating_sub(8);
                 decoder.skip_bytes(len).map_err(|source| {
-                    invalid_slide(path, format!("cannot skip DICOM fragment: {source}"))
+                    WsiError::invalid_slide(path, format!("cannot skip DICOM fragment: {source}"))
                 })?;
                 fragments.push(DicomFragmentRef {
                     payload_offset,
@@ -107,7 +108,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
                 });
             }
             LazyDataToken::ItemStart { len } if in_pixel_sequence && len.0 == 0 => {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     "zero-length DICOM pixel fragment is not supported",
                 ));
@@ -115,7 +116,7 @@ pub(super) fn scan_encapsulated_frames_tokenized(
             LazyDataToken::SequenceEnd if in_pixel_sequence => break,
             other => {
                 other.skip().map_err(|source| {
-                    invalid_slide(path, format!("cannot skip DICOM token: {source}"))
+                    WsiError::invalid_slide(path, format!("cannot skip DICOM token: {source}"))
                 })?;
             }
         }
