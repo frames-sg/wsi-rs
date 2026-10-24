@@ -1,94 +1,8 @@
+use crate::core::types::ycbcr::ycbcr_to_rgb_u8;
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::decode::jp2k::Jp2kColorSpace;
 use crate::decode::jp2k_backend::DecodedInterleavedImage;
 use crate::error::WsiError;
-
-const CHROMA_VALUES: usize = 256;
-
-// Full-range YCbCr to RGB coefficients as integer ratios: the red and blue
-// terms are over `YCBCR_RED_BLUE_SCALE`, the green terms over
-// `YCBCR_GREEN_SCALE`.
-pub(crate) const YCBCR_RED_FROM_CR: i64 = 1_402;
-pub(crate) const YCBCR_BLUE_FROM_CB: i64 = 1_772;
-pub(crate) const YCBCR_RED_BLUE_SCALE: i64 = 1_000;
-pub(crate) const YCBCR_GREEN_FROM_CB: i64 = 34_414;
-pub(crate) const YCBCR_GREEN_FROM_CR: i64 = 71_414;
-pub(crate) const YCBCR_GREEN_SCALE: i64 = 100_000;
-
-struct YcbcrTables {
-    red_from_cr: [i16; CHROMA_VALUES],
-    green_from_cb: [i32; CHROMA_VALUES],
-    green_from_cr: [i32; CHROMA_VALUES],
-    blue_from_cb: [i16; CHROMA_VALUES],
-}
-
-pub(crate) const fn round_ratio(numerator: i64, denominator: i64) -> i64 {
-    if numerator >= 0 {
-        (numerator + denominator / 2) / denominator
-    } else {
-        -((-numerator + denominator / 2) / denominator)
-    }
-}
-
-const fn build_ycbcr_tables() -> YcbcrTables {
-    let mut tables = YcbcrTables {
-        red_from_cr: [0; CHROMA_VALUES],
-        green_from_cb: [0; CHROMA_VALUES],
-        green_from_cr: [0; CHROMA_VALUES],
-        blue_from_cb: [0; CHROMA_VALUES],
-    };
-    let mut index = 0;
-    while index < CHROMA_VALUES {
-        let chroma = index as i64 - 128;
-        tables.red_from_cr[index] =
-            round_ratio(YCBCR_RED_FROM_CR * chroma, YCBCR_RED_BLUE_SCALE) as i16;
-        tables.green_from_cb[index] = round_ratio(
-            65_536 * (YCBCR_GREEN_SCALE / 2 - YCBCR_GREEN_FROM_CB * chroma),
-            YCBCR_GREEN_SCALE,
-        ) as i32;
-        tables.green_from_cr[index] =
-            round_ratio(65_536 * (-YCBCR_GREEN_FROM_CR * chroma), YCBCR_GREEN_SCALE) as i32;
-        tables.blue_from_cb[index] =
-            round_ratio(YCBCR_BLUE_FROM_CB * chroma, YCBCR_RED_BLUE_SCALE) as i16;
-        index += 1;
-    }
-    tables
-}
-
-// OpenSlide 4.0.1 uses these lookup-table values, including the precomputed
-// half-unit in the green Cb term, before combining green in 16-bit fixed point.
-static YCBCR_TABLES: YcbcrTables = build_ycbcr_tables();
-
-/// Constant-buffer order shared with the Metal converter: red, green Cb,
-/// green Cr, blue. Widening the short terms preserves every CPU table value.
-#[cfg(feature = "metal")]
-pub(crate) fn ycbcr_shader_tables() -> [i32; CHROMA_VALUES * 4] {
-    let mut values = [0; CHROMA_VALUES * 4];
-    for index in 0..CHROMA_VALUES {
-        values[index] = i32::from(YCBCR_TABLES.red_from_cr[index]);
-        values[CHROMA_VALUES + index] = YCBCR_TABLES.green_from_cb[index];
-        values[CHROMA_VALUES * 2 + index] = YCBCR_TABLES.green_from_cr[index];
-        values[CHROMA_VALUES * 3 + index] = i32::from(YCBCR_TABLES.blue_from_cb[index]);
-    }
-    values
-}
-
-#[inline]
-fn clamp_u8(v: i32) -> u8 {
-    v.clamp(0, 255) as u8
-}
-
-#[inline]
-fn ycbcr_to_rgb(yy: u8, cb: u8, cr: u8) -> [u8; 3] {
-    let yy = i32::from(yy);
-    let cb = usize::from(cb);
-    let cr = usize::from(cr);
-    [
-        clamp_u8(yy + i32::from(YCBCR_TABLES.red_from_cr[cr])),
-        clamp_u8(yy + ((YCBCR_TABLES.green_from_cb[cb] + YCBCR_TABLES.green_from_cr[cr]) >> 16)),
-        clamp_u8(yy + i32::from(YCBCR_TABLES.blue_from_cb[cb])),
-    ]
-}
 
 pub(crate) fn interleaved_image_to_sample_buffer(
     image: DecodedInterleavedImage,
@@ -97,7 +11,7 @@ pub(crate) fn interleaved_image_to_sample_buffer(
     let mut pixels = image.pixels;
     if image.colorspace == Jp2kColorSpace::YCbCr {
         for pixel in pixels.as_chunks_mut::<3>().0 {
-            let rgb = ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]);
+            let rgb = ycbcr_to_rgb_u8(pixel[0], pixel[1], pixel[2]);
             pixel.copy_from_slice(&rgb);
         }
     }
@@ -159,7 +73,7 @@ pub(crate) fn interleaved_image_to_cropped_sample_buffer(
     {
         if image.colorspace == Jp2kColorSpace::YCbCr {
             for pixel in row[..row_bytes].as_chunks::<3>().0 {
-                pixels.extend_from_slice(&ycbcr_to_rgb(pixel[0], pixel[1], pixel[2]));
+                pixels.extend_from_slice(&ycbcr_to_rgb_u8(pixel[0], pixel[1], pixel[2]));
             }
         } else {
             pixels.extend_from_slice(&row[..row_bytes]);

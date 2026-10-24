@@ -1,8 +1,5 @@
 use super::*;
-use crate::decode::jp2k_raster::{
-    round_ratio, YCBCR_BLUE_FROM_CB, YCBCR_GREEN_FROM_CB, YCBCR_GREEN_FROM_CR, YCBCR_GREEN_SCALE,
-    YCBCR_RED_BLUE_SCALE, YCBCR_RED_FROM_CR,
-};
+use crate::core::types::ycbcr::ycbcr_to_rgb_u16;
 use crate::decode::jpeg::{decode_batch_jpeg, decode_batch_jpeg_rgb16, JpegDecodeJob};
 use j2k::CpuDecodeParallelism;
 
@@ -195,23 +192,8 @@ pub(super) fn decode_dicom_jp2k_u16(
 }
 
 fn convert_ybr_full_u16_to_rgb(samples: &mut [u16], bits_stored: u8) {
-    let midpoint = 1_i64 << (bits_stored - 1);
-    let max = (1_i64 << bits_stored) - 1;
     for pixel in samples.as_chunks_mut::<3>().0 {
-        let y = i64::from(pixel[0]);
-        let cb = i64::from(pixel[1]) - midpoint;
-        let cr = i64::from(pixel[2]) - midpoint;
-        let red = y + round_ratio(YCBCR_RED_FROM_CR * cr, YCBCR_RED_BLUE_SCALE);
-        let green = y - round_ratio(
-            YCBCR_GREEN_FROM_CB * cb + YCBCR_GREEN_FROM_CR * cr,
-            YCBCR_GREEN_SCALE,
-        );
-        let blue = y + round_ratio(YCBCR_BLUE_FROM_CB * cb, YCBCR_RED_BLUE_SCALE);
-        pixel.copy_from_slice(&[
-            red.clamp(0, max) as u16,
-            green.clamp(0, max) as u16,
-            blue.clamp(0, max) as u16,
-        ]);
+        *pixel = ycbcr_to_rgb_u16(pixel[0], pixel[1], pixel[2], bits_stored);
     }
 }
 

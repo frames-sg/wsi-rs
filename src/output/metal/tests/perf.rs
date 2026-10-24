@@ -54,7 +54,7 @@ fn ycbcr_selected_u32_stays_within_five_percent_of_reference() {
         .expect("create performance command queue");
     let tables = j2k_metal_support::checked_shared_buffer_with_slice(
         &device,
-        &crate::decode::jp2k_raster::ycbcr_shader_tables(),
+        &crate::core::types::ycbcr::ycbcr_shader_tables(),
     )
     .unwrap();
 

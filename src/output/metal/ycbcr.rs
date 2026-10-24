@@ -40,7 +40,7 @@ impl YcbcrToRgb8Converter {
             .map_err(|source| interop::support_error("metal-ycbcr-command-queue", source))?;
         let tables = j2k_metal_support::checked_shared_buffer_with_slice(
             session.device(),
-            &crate::decode::jp2k_raster::ycbcr_shader_tables(),
+            &crate::core::types::ycbcr::ycbcr_shader_tables(),
         )
         .map_err(|source| interop::support_error("metal-ycbcr-tables", source))?;
         Ok(Self {
