@@ -43,6 +43,14 @@
 
 - JPEG XR tiles decode inside the codec thread pool. A caller holding slide
   admission no longer waits on global Rayon workers blocked on the same slide.
+- TIFF files whose level areas exceed 64 bits no longer panic in debug builds
+  or order pyramid levels wrongly.
+- Generic tiled TIFF files read each level's own JPEG tables, falling back to
+  the first level's, instead of using the first level's tables for every level.
+- DICOM files with an SV or UV element before Pixel Data are indexed by the
+  fast frame scanner instead of falling back to the slower parser.
+- JPEG tiles decoded with forced dimensions patch the frame header itself, not
+  `FF Cx` bytes inside an earlier APPn, DQT or COM segment.
 
 ## [0.8.0] - 2026-10-06
 
