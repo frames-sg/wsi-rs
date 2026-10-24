@@ -39,6 +39,10 @@ fn manifest_alias_selection_records_format_and_expected_hash() {
     assert_eq!(slides[0].format, "raw_jp2k");
     assert_eq!(slides[0].benchmark_group, "raw_jp2k/j2k");
     assert_eq!(
+        slides[0].pixel_tolerance,
+        Some(wsi_rs_test_support::corpus::Tolerance::TOLERANT)
+    );
+    assert_eq!(
         slides[0].manifest_sha256.as_deref(),
         Some("c06bf36f197a8057cbe0d496682c1eab5483c6667db8c64e236d087c747896ab")
     );

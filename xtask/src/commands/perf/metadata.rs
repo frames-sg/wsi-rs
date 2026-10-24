@@ -82,6 +82,7 @@ pub(super) fn capture_summary(
             "format": slide.format,
             "benchmark_group": slide.benchmark_group,
             "manifest_sha256": slide.manifest_sha256,
+            "pixel_tolerance": slide.pixel_tolerance,
         })).collect::<Vec<_>>(),
         "metadata": metadata,
         "runs": runs,

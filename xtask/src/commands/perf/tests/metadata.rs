@@ -8,6 +8,7 @@ fn slide(path: &str, alias: &str, format: &str) -> SlideSpec {
         format: format.into(),
         benchmark_group: format.into(),
         manifest_sha256: None,
+        pixel_tolerance: Some(wsi_rs_test_support::corpus::Tolerance::TOLERANT),
     }
 }
 
@@ -158,6 +159,10 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
     );
     assert_eq!(summary["slide_manifest"][0]["alias"], "fixture-jp2k");
     assert_eq!(summary["slide_manifest"][0]["format"], "raw_jp2k");
+    assert_eq!(
+        summary["slide_manifest"][0]["pixel_tolerance"],
+        json!({"max_abs": 4, "mean_abs": 1.0})
+    );
     assert_eq!(
         summary["metadata"]["benchmark"]["planned_workloads"],
         json!(["single_tile_l0"])

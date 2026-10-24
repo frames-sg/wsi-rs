@@ -100,6 +100,78 @@ fn cross_capture_accepts_bound_numerical_parity_and_rejects_invalid_evidence() {
 }
 
 #[test]
+fn numerical_parity_uses_the_tolerance_recorded_for_each_corpus_entry() {
+    use wsi_rs_test_support::corpus::CorpusEntry;
+
+    let entry = |format: &str, codec: &str, lossless: bool| CorpusEntry {
+        alias: "fixture".into(),
+        format: format.into(),
+        codecs: vec![codec.into()],
+        lossless,
+        ..CorpusEntry::default()
+    };
+    let captures = |entry: &CorpusEntry, max_abs: u8, max_mean_abs: f64| {
+        let mut reference = declared_capture();
+        reference["metadata"]["benchmark"]["library"] = json!("openslide");
+        reference["runs"][0]["workloads"][0]["checksum_sha256"] = json!("reference-pixels");
+        let mut candidate = declared_capture();
+        candidate["metadata"]["benchmark"]["library"] = json!("wsi_rs");
+        candidate["slide_manifest"][0]["pixel_tolerance"] =
+            serde_json::to_value(entry.pixel_tolerance()).unwrap();
+        for capture in [&mut reference, &mut candidate] {
+            capture["runs"][0]["format"] = json!(entry.format);
+            capture["runs"][0]["benchmark_group"] = json!(entry.benchmark_group());
+        }
+        candidate["runs"][0]["workloads"][0]["n"] = json!(128);
+        candidate["runs"][0]["pixel_comparison"] = json!({
+            "reference_version": "4.0.1",
+            "workloads": [{
+                "name": "pan_trace_l0",
+                "candidate_checksum_sha256": "pixels",
+                "reference_checksum_sha256": "reference-pixels",
+                "regions": 128,
+                "max_abs": max_abs,
+                "max_mean_abs": max_mean_abs,
+                "alpha_exact": true,
+            }],
+        });
+        (reference, candidate)
+    };
+    let gate = |entry: &CorpusEntry, max_abs: u8, max_mean_abs: f64| {
+        let (reference, candidate) = captures(entry, max_abs, max_mean_abs);
+        validate_cross_capture_checksums(&reference, &candidate)
+    };
+
+    let dicom_jpeg = entry("dicom", "jpeg-baseline", false);
+    assert_eq!(dicom_jpeg.benchmark_group(), "dicom/jpeg-baseline");
+    gate(&dicom_jpeg, 1, 0.05).expect("lossy DICOM JPEG gets the JPEG parity tolerance");
+    assert!(gate(&dicom_jpeg, 2, 0.01).is_err());
+    assert!(gate(&dicom_jpeg, 1, 0.051).is_err());
+
+    let htj2k = entry("raw_jp2k", "htj2k", false);
+    gate(&htj2k, 4, 1.0).expect("lossy HTJ2K gets the JPEG 2000 parity tolerance");
+    assert!(gate(&htj2k, 5, 0.5).is_err());
+    assert!(gate(&htj2k, 4, 1.01).is_err());
+
+    let lossless = entry("raw_jp2k", "j2k", true);
+    assert_eq!(lossless.benchmark_group(), "raw_jp2k/j2k");
+    assert!(
+        gate(&lossless, 1, 0.01).is_err(),
+        "a lossless entry must match exactly"
+    );
+
+    // A capture written before tolerances were recorded keeps the rule it was
+    // gated by, which allowed any `/j2k` group the JPEG 2000 tolerance.
+    let (reference, mut legacy) = captures(&lossless, 1, 0.01);
+    legacy["slide_manifest"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("pixel_tolerance");
+    validate_cross_capture_checksums(&reference, &legacy)
+        .expect("legacy captures keep their benchmark-group tolerance");
+}
+
+#[test]
 fn cross_capture_checksum_validation_rejects_unequal_geometry() {
     let capture = |bounds_x: i64| {
         json!({

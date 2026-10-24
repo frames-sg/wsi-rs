@@ -4,8 +4,8 @@ mod support;
 
 use std::path::Path;
 
-use support::compare::{compare_rgba, tolerance_failure, Tolerance};
-use support::corpus::{load_public_unfiltered, resolve_entry_path, CorpusEntry};
+use support::compare::{compare_rgba, tolerance_failure};
+use support::corpus::{load_public_unfiltered, resolve_entry_path};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
 #[test]
@@ -104,7 +104,7 @@ fn j2k_cpu_vs_reference_within_tolerance() {
                 ));
                 continue;
             }
-            let tolerance = tolerance_for_entry(entry);
+            let tolerance = entry.pixel_tolerance();
             let cmp = compare_rgba(&sc_buf.pixels_rgba, &ref_buf.pixels_rgba, tolerance);
             eprintln!(
                 "[sc-parity] {} level={level}: max_abs={} mean_abs={:.4} passed={}",
@@ -143,20 +143,6 @@ fn record_comparison_failure(
         return;
     };
     failures.push(failure);
-}
-
-fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
-    if entry.lossless {
-        Tolerance::EXACT
-    } else if entry
-        .codecs
-        .iter()
-        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
-    {
-        Tolerance::TOLERANT
-    } else {
-        Tolerance::JPEG_TIGHT
-    }
 }
 
 /// Level 0 is compared with `{stem}.ppm`; reduced level `k` with the

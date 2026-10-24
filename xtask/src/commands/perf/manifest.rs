@@ -2,20 +2,22 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use wsi_rs_test_support::corpus::{
-    self, CorpusEntry as ManifestSlide, CorpusManifest as ParityManifest,
+    self, CorpusEntry as ManifestSlide, CorpusManifest as ParityManifest, Tolerance,
 };
 
 use super::worker::workspace_root;
 
 const MANIFEST_ENV: &str = "WSI_RS_PERF_MANIFEST";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct SlideSpec {
     pub(super) path: PathBuf,
     pub(super) alias: String,
     pub(super) format: String,
     pub(super) benchmark_group: String,
     pub(super) manifest_sha256: Option<String>,
+    /// The corpus entry's parity tolerance; `None` for a slide outside the manifest.
+    pub(super) pixel_tolerance: Option<Tolerance>,
 }
 
 impl SlideSpec {
@@ -31,6 +33,7 @@ impl SlideSpec {
             format: "custom".into(),
             benchmark_group: "custom".into(),
             manifest_sha256: None,
+            pixel_tolerance: None,
         }
     }
 }
@@ -149,6 +152,7 @@ fn slide_spec(entry: &ManifestSlide, path: PathBuf) -> Result<SlideSpec, String>
         format: entry.format.clone(),
         benchmark_group: benchmark_group(entry),
         manifest_sha256: (!entry.sha256.is_empty()).then(|| entry.sha256.clone()),
+        pixel_tolerance: Some(entry.pixel_tolerance()),
     })
 }
 

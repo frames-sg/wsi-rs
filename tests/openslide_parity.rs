@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use wsi_rs::Slide;
 
-use support::compare::{compare_rgba, tolerance_failure, Tolerance};
+use support::compare::{compare_rgba, tolerance_failure};
 use support::corpus::{load_public, resolve_entry_path, CorpusEntry};
 use support::oracles::{
     is_reference_oracle_unsupported, read_probe, top_left_probe, J2kOracle, Oracle, ReferenceOracle,
@@ -180,7 +180,7 @@ fn preflight() {
                 match read_probe(j2k, probe) {
                     Ok(sc_buf) => {
                         if let Some(ref baseline_buf) = baseline_buf {
-                            let tolerance = tolerance_for_entry(entry);
+                            let tolerance = entry.pixel_tolerance();
                             let report = compare_rgba(
                                 &sc_buf.pixels_rgba,
                                 &baseline_buf.pixels_rgba,
@@ -244,7 +244,7 @@ fn preflight() {
                             let report = compare_rgba(
                                 &baseline_buf.pixels_rgba,
                                 &os_buf.pixels_rgba,
-                                tolerance_for_entry(entry),
+                                entry.pixel_tolerance(),
                             );
                             eprintln!(
                             "[preflight] {} level={level} reference-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
@@ -255,7 +255,7 @@ fn preflight() {
                             let report = compare_rgba(
                                 &sc_buf.pixels_rgba,
                                 &os_buf.pixels_rgba,
-                                tolerance_for_entry(entry),
+                                entry.pixel_tolerance(),
                             );
                             eprintln!(
                             "[preflight] {} level={level} j2k-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
@@ -437,22 +437,6 @@ fn record_comparison_failure(
         return;
     };
     failures.push(failure);
-}
-
-fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
-    if entry.lossless {
-        Tolerance::EXACT
-    } else if entry
-        .codecs
-        .iter()
-        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
-    {
-        Tolerance::TOLERANT
-    } else if entry.format == "huron" && entry.codecs.iter().any(|codec| codec == "jpeg") {
-        Tolerance::JPEG_DECODER_COMPAT
-    } else {
-        Tolerance::JPEG_TIGHT
-    }
 }
 
 #[cfg(feature = "parity-openslide")]

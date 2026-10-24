@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::Value;
+use wsi_rs_test_support::corpus::Tolerance;
 
 use super::schema::{CaptureDocument, CaptureRun};
 #[cfg(test)]
@@ -202,17 +203,32 @@ fn numerical_parity_matches(
     {
         return false;
     }
-    // Match the existing corpus parity contract; alpha never uses a tolerance.
-    let (max_abs, mean_abs) = if key.benchmark_group.ends_with("/jpeg") {
-        (1, 0.05)
-    } else if key.benchmark_group.ends_with("/j2k") {
-        (4, 1.0)
-    } else {
-        (0, 0.0)
-    };
-    proof.max_abs <= max_abs
+    // Alpha never uses a tolerance; `alpha_exact` is checked above.
+    let tolerance = declared_pixel_tolerance(after, key);
+    proof.max_abs <= tolerance.max_abs
         && proof.max_mean_abs.is_finite()
-        && (0.0..=mean_abs).contains(&proof.max_mean_abs)
+        && (0.0..=tolerance.mean_abs).contains(&proof.max_mean_abs)
+}
+
+/// The corpus parity tolerance the capture recorded for the cell's slide.
+///
+/// Captures written before tolerances were recorded keep the rule they were
+/// gated by: one per benchmark-group suffix, and exact for any other group.
+fn declared_pixel_tolerance(capture: &CaptureDocument, key: &ChecksumKey) -> Tolerance {
+    let recorded = capture
+        .slide_manifest
+        .iter()
+        .find(|slide| slide.alias == key.alias)
+        .and_then(|slide| slide.pixel_tolerance);
+    recorded.unwrap_or_else(|| {
+        if key.benchmark_group.ends_with("/jpeg") {
+            Tolerance::JPEG_TIGHT
+        } else if key.benchmark_group.ends_with("/j2k") {
+            Tolerance::TOLERANT
+        } else {
+            Tolerance::EXACT
+        }
+    })
 }
 
 pub(super) fn validate_declared_capture_plan(capture: &Value) -> Result<(), String> {

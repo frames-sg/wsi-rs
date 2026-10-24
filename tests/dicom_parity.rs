@@ -2,8 +2,6 @@
 
 mod support;
 
-#[cfg(feature = "parity-openslide")]
-use support::corpus::CorpusEntry;
 use support::corpus::{load_public, resolve_entry_path};
 use support::oracles::{read_probe, top_left_probe, J2kOracle, Oracle};
 
@@ -236,7 +234,7 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
             let report = compare_rgba(
                 &ours_buf.pixels_rgba,
                 &theirs_buf.pixels_rgba,
-                tolerance_for_entry(entry),
+                entry.pixel_tolerance(),
             );
             eprintln!(
                 "[dicom-parity] {} level={level}: max_abs={} mean_abs={:.4} passed={}",
@@ -260,19 +258,4 @@ fn dicom_public_corpus_matches_openslide_within_tolerance() {
 
 fn strict_corpus_required() -> bool {
     true
-}
-
-#[cfg(feature = "parity-openslide")]
-fn tolerance_for_entry(entry: &CorpusEntry) -> support::compare::Tolerance {
-    if entry.lossless {
-        support::compare::Tolerance::EXACT
-    } else if entry
-        .codecs
-        .iter()
-        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
-    {
-        support::compare::Tolerance::TOLERANT
-    } else {
-        support::compare::Tolerance::JPEG_TIGHT
-    }
 }

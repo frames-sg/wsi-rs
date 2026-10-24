@@ -96,6 +96,7 @@ fn run_context_rejects_non_objects_and_worker_mismatches() {
         format: "aperio".into(),
         benchmark_group: "aperio/jpeg".into(),
         manifest_sha256: None,
+        pixel_tolerance: None,
     };
     let order = ["wsi_rs"];
     assert!(annotate_run_context(
@@ -129,6 +130,7 @@ fn custom_single_engine_slide_resolution_preserves_path_identity() {
     assert_eq!(slides.len(), 1);
     assert_eq!(slides[0].format, "custom");
     assert_eq!(slides[0].path, path);
+    assert_eq!(slides[0].pixel_tolerance, None);
 }
 
 #[test]
@@ -139,6 +141,7 @@ fn run_context_records_manifest_identity_worker_and_engine_order() {
         format: "aperio".into(),
         benchmark_group: "aperio/jpeg".into(),
         manifest_sha256: Some("manifest-hash".into()),
+        pixel_tolerance: None,
     };
     let mut run = json!({"worker_count": 2});
     let order = ["openslide", "wsi_rs"];
@@ -178,6 +181,7 @@ fn openslide_run_context_records_per_handle_decode_budget() {
         format: "aperio".into(),
         benchmark_group: "aperio/jpeg".into(),
         manifest_sha256: None,
+        pixel_tolerance: None,
     };
     let mut run = json!({"worker_count": 4});
     let order = ["wsi_rs", "openslide"];

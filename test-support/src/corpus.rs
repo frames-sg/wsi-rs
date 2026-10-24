@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const CORPUS_CACHE_ENV: &str = "WSI_RS_PARITY_CORPUS_CACHE";
 
@@ -27,6 +27,36 @@ pub const REQUIRED_RELEASE_FORMATS: &[&str] = &[
     "ventana",
     "zeiss_zvi",
 ];
+
+/// Per-channel limits for an RGBA pixel comparison. Alpha is always compared
+/// exactly; these limits apply to the colour channels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tolerance {
+    pub max_abs: u8,
+    pub mean_abs: f64,
+}
+
+impl Tolerance {
+    pub const EXACT: Self = Self {
+        max_abs: 0,
+        mean_abs: 0.0,
+    };
+
+    pub const JPEG_TIGHT: Self = Self {
+        max_abs: 1,
+        mean_abs: 0.05,
+    };
+
+    pub const JPEG_DECODER_COMPAT: Self = Self {
+        max_abs: 3,
+        mean_abs: 0.125,
+    };
+
+    pub const TOLERANT: Self = Self {
+        max_abs: 4,
+        mean_abs: 1.0,
+    };
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +158,24 @@ impl CorpusEntry {
         self.must_decode.iter().filter_map(|requirement| {
             (!is_level_requirement(requirement)).then_some(requirement.as_str())
         })
+    }
+
+    /// The pixel tolerance every comparison of this entry against a reference
+    /// uses: the parity tests and the release performance gate.
+    pub fn pixel_tolerance(&self) -> Tolerance {
+        if self.lossless {
+            Tolerance::EXACT
+        } else if self
+            .codecs
+            .iter()
+            .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
+        {
+            Tolerance::TOLERANT
+        } else if self.format == "huron" && self.codecs.iter().any(|codec| codec == "jpeg") {
+            Tolerance::JPEG_DECODER_COMPAT
+        } else {
+            Tolerance::JPEG_TIGHT
+        }
     }
 
     pub fn benchmark_group(&self) -> String {
@@ -468,6 +516,34 @@ mod tests {
             ..CorpusEntry::default()
         };
         assert_eq!(entry.benchmark_group(), "aperio/j2k+jpeg");
+    }
+
+    #[test]
+    fn pixel_tolerance_follows_lossiness_codec_and_vendor() {
+        let entry = |format: &str, codec: &str, lossless: bool| CorpusEntry {
+            alias: format!("{format}-{codec}"),
+            format: format.into(),
+            codecs: vec![codec.into()],
+            lossless,
+            ..CorpusEntry::default()
+        };
+        for (format, codec, lossless, expected) in [
+            ("raw_jp2k", "j2k", true, Tolerance::EXACT),
+            ("raw_jp2k", "htj2k", true, Tolerance::EXACT),
+            ("svcache", "zstd", true, Tolerance::EXACT),
+            ("raw_jp2k", "j2k", false, Tolerance::TOLERANT),
+            ("dicom", "htj2k", false, Tolerance::TOLERANT),
+            ("huron", "jpeg", false, Tolerance::JPEG_DECODER_COMPAT),
+            ("aperio", "jpeg", false, Tolerance::JPEG_TIGHT),
+            ("dicom", "jpeg-baseline", false, Tolerance::JPEG_TIGHT),
+            ("huron", "none", false, Tolerance::JPEG_TIGHT),
+        ] {
+            assert_eq!(
+                entry(format, codec, lossless).pixel_tolerance(),
+                expected,
+                "{format}/{codec} lossless={lossless}"
+            );
+        }
     }
 
     #[test]
