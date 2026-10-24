@@ -2,6 +2,7 @@ use super::*;
 
 mod execution;
 mod region;
+use super::open_config::validate_dataset_limits;
 use crate::core::limits::ReadExecutionContext;
 use crate::core::read_control::check_cancelled_opt;
 use execution::AdmittedReader;
@@ -846,100 +847,6 @@ fn checked_rgba_bytes(width: u32, height: u32, resource: &'static str) -> Result
             requested: u64::MAX,
             limit: u64::MAX,
         })
-}
-
-fn validate_dataset_limits(dataset: &Dataset, limits: SlideLimits) -> Result<(), WsiError> {
-    let mut aggregate = 0_u64;
-    let mut add_metadata = |bytes: u64| -> Result<(), WsiError> {
-        if bytes > limits.metadata_value_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "individual metadata value",
-                requested: bytes,
-                limit: limits.metadata_value_bytes(),
-            });
-        }
-        aggregate = aggregate.saturating_add(bytes);
-        if aggregate > limits.aggregate_metadata_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "aggregate metadata",
-                requested: aggregate,
-                limit: limits.aggregate_metadata_bytes(),
-            });
-        }
-        Ok(())
-    };
-
-    for (key, value) in dataset.properties.iter() {
-        add_metadata(u64::try_from(key.len()).unwrap_or(u64::MAX))?;
-        add_metadata(u64::try_from(value.len()).unwrap_or(u64::MAX))?;
-    }
-    for scene in &dataset.scenes {
-        add_metadata(u64::try_from(scene.id.len()).unwrap_or(u64::MAX))?;
-        if let Some(name) = &scene.name {
-            add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-        }
-        for series in &scene.series {
-            add_metadata(u64::try_from(series.id.len()).unwrap_or(u64::MAX))?;
-            for channel in &series.channels {
-                if let Some(name) = &channel.name {
-                    add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-                }
-            }
-        }
-    }
-    for (name, image) in &dataset.associated_images {
-        add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-        add_metadata(u64::try_from(image.icc_profile.len()).unwrap_or(u64::MAX))?;
-    }
-    for profile in dataset.icc_profiles.values() {
-        add_metadata(u64::try_from(profile.len()).unwrap_or(u64::MAX))?;
-    }
-    for profile in &dataset.source_icc_profiles {
-        add_metadata(u64::try_from(profile.bytes.len()).unwrap_or(u64::MAX))?;
-        match &profile.provenance {
-            IccProfileProvenance::DicomOpticalPath {
-                sop_instance_uid,
-                optical_path_identifier,
-            } => {
-                add_metadata(u64::try_from(sop_instance_uid.len()).unwrap_or(u64::MAX))?;
-                if let Some(identifier) = optical_path_identifier {
-                    add_metadata(u64::try_from(identifier.len()).unwrap_or(u64::MAX))?;
-                }
-            }
-            IccProfileProvenance::ReaderMetadata { source } => {
-                add_metadata(u64::try_from(source.len()).unwrap_or(u64::MAX))?;
-            }
-            IccProfileProvenance::TiffTag { .. } => {}
-        }
-    }
-
-    let mut index_bytes = 0_u64;
-    for scene in &dataset.scenes {
-        for series in &scene.series {
-            for level in &series.levels {
-                let entries = match &level.tile_layout {
-                    TileLayout::Regular {
-                        tiles_across,
-                        tiles_down,
-                        ..
-                    } => tiles_across.checked_mul(*tiles_down).unwrap_or(u64::MAX),
-                    TileLayout::WholeLevel { .. } => 1,
-                    TileLayout::Irregular { tiles, .. } => {
-                        u64::try_from(tiles.len()).unwrap_or(u64::MAX)
-                    }
-                };
-                index_bytes = index_bytes.saturating_add(entries.saturating_mul(64));
-                if index_bytes > limits.tile_index_bytes() {
-                    return Err(WsiError::ResourceLimit {
-                        resource: "tile/frame index",
-                        requested: index_bytes,
-                        limit: limits.tile_index_bytes(),
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn check_subpixel_offset(offset_px: (f64, f64)) -> Result<(), WsiError> {
