@@ -119,6 +119,27 @@ pub(crate) struct JpegDecodeJob<'a> {
     pub requested_size: Option<(u32, u32)>,
 }
 
+impl<'a> JpegDecodeJob<'a> {
+    /// A self-contained JPEG decoded at the size its SOF declares: no
+    /// external tables, no dimension patch, no rescale.
+    pub(crate) fn standalone(data: &'a [u8]) -> Self {
+        Self {
+            data: Cow::Borrowed(data),
+            tables: None,
+            expected_width: 0,
+            expected_height: 0,
+            color_transform: J2kColorTransform::Auto,
+            force_dimensions: false,
+            requested_size: None,
+        }
+    }
+}
+
+/// Decode a self-contained JPEG, such as an associated image, to RGB.
+pub(crate) fn decode_standalone_jpeg(data: &[u8]) -> Result<CpuTile, WsiError> {
+    decode_one_jpeg_job(&JpegDecodeJob::standalone(data))
+}
+
 #[derive(Clone, Copy)]
 struct ScaledJpegDecode<'a> {
     data: &'a [u8],

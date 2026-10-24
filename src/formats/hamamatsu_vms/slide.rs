@@ -99,19 +99,7 @@ impl SlideReader for VmsReader {
         let data =
             read_to_end_bounded(source, self.slide.encoded_unit_bytes, "VMS associated JPEG")
                 .map_err(|source| WsiError::io_with_path(&file.path, source))?;
-        crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: Cow::Borrowed(&data),
-                tables: None,
-                expected_width: 0,
-                expected_height: 0,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
-            "VMS associated JPEG decode",
-        )?
-        .map(|tile| {
+        crate::decode::jpeg::decode_standalone_jpeg(&data).map(|tile| {
             let tile = Arc::new(tile);
             let retained_bytes = u64::try_from(tile.data.byte_size()).unwrap_or(u64::MAX);
             self.slide

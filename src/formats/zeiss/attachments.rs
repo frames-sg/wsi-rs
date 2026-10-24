@@ -40,18 +40,7 @@ pub(super) fn decode_associated_attachment(
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
 
     if attachment.content_file_type.eq_ignore_ascii_case("JPG") {
-        let buffer = crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: Cow::Borrowed(&blob.data),
-                tables: None,
-                expected_width: 0,
-                expected_height: 0,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
-            "CZI associated JPEG decode",
-        )??;
+        let buffer = crate::decode::jpeg::decode_standalone_jpeg(&blob.data)?;
         return Ok(Some((
             AssociatedImage {
                 dimensions: (buffer.width, buffer.height),

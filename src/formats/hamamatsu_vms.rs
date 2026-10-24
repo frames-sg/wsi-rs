@@ -7,7 +7,6 @@ mod slide;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -24,7 +23,6 @@ use crate::core::registry::{
     ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
-use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::decode::jpeg::{jpeg_dimensions, JpegTileGeometry};
 use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;

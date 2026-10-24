@@ -36,6 +36,23 @@ fn repeated_color_overrides_match_explicit_codec_decodes() {
 }
 
 #[test]
+fn standalone_jpeg_decodes_at_the_size_its_header_declares() {
+    let mut rgb = image::RgbImage::new(12, 6);
+    for (idx, pixel) in rgb.pixels_mut().enumerate() {
+        *pixel = image::Rgb([idx as u8 * 3, 120, 40]);
+    }
+    let data = encode_test_jpeg(&rgb);
+
+    let tile = decode_standalone_jpeg(&data).unwrap();
+
+    assert_eq!((tile.width, tile.height, tile.channels), (12, 6, 3));
+    assert_eq!(tile.color_space, ColorSpace::Rgb);
+    let expected =
+        decode_jpeg_rgb_with_color_transform(&data, None, 12, 6, J2kColorTransform::Auto).unwrap();
+    assert_eq!(tile.as_u8(), Some(expected.pixels.as_slice()));
+}
+
+#[test]
 fn decode_valid_jpeg() {
     let mut rgb = image::RgbImage::new(8, 8);
     for pixel in rgb.pixels_mut() {

@@ -8,13 +8,12 @@ use crate::core::registry::{
     ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
-use crate::decode::jpeg::{decode_batch_jpeg, jpeg_dimensions, JpegDecodeJob};
+use crate::decode::jpeg::{decode_standalone_jpeg, jpeg_dimensions};
 use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::{parse_ini_file_with_budget, ParsedIni};
 use crate::properties::Properties;
 use ngr::Ngr;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -299,18 +298,7 @@ impl SlideReader for VmuReader {
             .as_ref()
             .filter(|_| name == "macro")
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: Cow::Borrowed(bytes),
-                tables: None,
-                expected_width: 0,
-                expected_height: 0,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
-            "VMU macro JPEG decode",
-        )?
+        decode_standalone_jpeg(bytes)
     }
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         let decoded = self
