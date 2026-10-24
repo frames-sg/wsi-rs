@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

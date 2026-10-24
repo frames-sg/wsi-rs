@@ -1,4 +1,4 @@
-use super::storage::{hex_encode, is_fresh_svcache};
+use super::storage::is_fresh_svcache;
 use super::*;
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ pub fn default_svcache_path(source_path: &Path) -> PathBuf {
 pub fn cache_dir_svcache_path(source_path: &Path) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(source_path.to_string_lossy().as_bytes());
-    let hash = hex_encode(&hasher.finalize());
+    let hash = format!("{:x}", hasher.finalize());
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));

@@ -1,4 +1,4 @@
-use super::storage::{dataset_from_metadata, hex_encode, read_svcache_with_budget};
+use super::storage::{dataset_from_metadata, read_svcache_with_budget};
 use super::*;
 
 impl FormatProbe for SvcacheBackend {
@@ -153,7 +153,7 @@ impl SvcacheReader {
                 })?;
             self.file.read_exact_at(&mut encoded, offset)?;
         }
-        let actual_hash = hex_encode(&Sha256::digest(&encoded));
+        let actual_hash = format!("{:x}", Sha256::digest(&encoded));
         if actual_hash != tile.sha256 {
             return Err(invalid_svcache(
                 &self.path,

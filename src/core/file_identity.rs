@@ -58,6 +58,20 @@ impl FileIdentity {
         Ok(Self::from_metadata(canonical_path, metadata))
     }
 
+    pub(crate) fn canonical_path(&self) -> &Path {
+        &self.canonical_path
+    }
+
+    pub(crate) fn length(&self) -> u64 {
+        self.length
+    }
+
+    /// Modification time in nanoseconds since the Unix epoch, when the
+    /// filesystem reports one.
+    pub(crate) fn modified_ns(&self) -> Option<u128> {
+        self.modified_ns
+    }
+
     /// Opens `path` and fails with `InvalidSlide` carrying `message` unless
     /// the opened file is `expected`. The identity comes from the open file,
     /// so the path cannot be swapped between the check and the open.

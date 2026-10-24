@@ -1,4 +1,4 @@
-use super::storage::{fingerprint_source, hex_encode, read_svcache, svcache_matches_source};
+use super::storage::{fingerprint_source, read_svcache, svcache_matches_source};
 use super::*;
 
 /// The opened source slide, its fingerprint and a scratch payload file, with
@@ -536,7 +536,7 @@ pub(super) fn write_tile_payload(file: &mut File, tile: &CpuTile) -> Result<Tile
         channels: tile.channels,
         color_space,
         codec: PayloadCodec::Zstd,
-        sha256: hex_encode(&Sha256::digest(&encoded)),
+        sha256: format!("{:x}", Sha256::digest(&encoded)),
     })
 }
 

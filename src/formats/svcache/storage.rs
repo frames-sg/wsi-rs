@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::file_identity::FileIdentity;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -89,13 +90,7 @@ fn validate_svcache_metadata(
         return Err(invalid_svcache(path, "svcache metadata extends past EOF"));
     }
     validate_string(path, "source path", &metadata.source.path)?;
-    if metadata.source.sha256.len() != 64
-        || !metadata
-            .source
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_hex(&metadata.source.sha256) {
         return Err(invalid_svcache(path, "svcache source checksum is invalid"));
     }
     if metadata.scenes.len() > MAX_SCENES {
@@ -373,16 +368,20 @@ fn validate_tile(
             "svcache tile payload extends past EOF",
         ));
     }
-    if tile.sha256.len() != 64
-        || !tile
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_hex(&tile.sha256) {
         return Err(invalid_svcache(path, "svcache tile checksum is invalid"));
     }
     payload_ranges.push((tile.payload_offset, payload_end));
     Ok(())
+}
+
+/// Whether `value` is a SHA-256 digest as the cache writes it: 64 lowercase
+/// hex digits.
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn svcache_payload_count(path: &Path, metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
@@ -481,61 +480,38 @@ pub fn svcache_matches_source(cache_path: &Path, source_path: &Path) -> Result<b
 }
 
 pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiError> {
-    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let before = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
+    let io_error = |source| WsiError::IoWithPath {
         source: Arc::new(source),
         path: path.to_path_buf(),
-    })?;
-    if !before.is_file() {
+    };
+    // Checked before opening: opening a FIFO or device for reading can block.
+    if !std::fs::metadata(path).map_err(io_error)?.is_file() {
         return Err(invalid_svcache(
             path,
             "svcache source fingerprint requires a regular file",
         ));
     }
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let modified_unix_nanos = before
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
-    let len = before.len();
+    let mut file = File::open(path).map_err(io_error)?;
+    let identity = FileIdentity::from_open_file(path, &file)?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
+        let read = file.read(&mut buffer).map_err(io_error)?;
         if read == 0 {
             break;
         }
         digest.update(&buffer[..read]);
     }
-    let after = file.metadata().map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let after_modified = after
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
-    if after.len() != len || after_modified != modified_unix_nanos {
-        return Err(invalid_svcache(
-            path,
-            "svcache source changed while computing its fingerprint",
-        ));
-    }
+    identity.ensure_same(
+        &FileIdentity::from_open_file(path, &file)?,
+        path,
+        "svcache source changed while computing its fingerprint",
+    )?;
     Ok(SourceFingerprint {
-        path: canonical_path.to_string_lossy().into_owned(),
-        len,
-        modified_unix_nanos,
-        sha256: hex_encode(&digest.finalize()),
+        path: identity.canonical_path().to_string_lossy().into_owned(),
+        len: identity.length(),
+        modified_unix_nanos: identity.modified_ns(),
+        sha256: format!("{:x}", digest.finalize()),
     })
 }
 
@@ -618,16 +594,6 @@ pub(super) fn dataset_from_metadata(path: &Path, metadata: &SvcacheMetadata) -> 
         icc_profiles: HashMap::new(),
         source_icc_profiles: Vec::new(),
     }
-}
-
-pub(super) fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 impl TryFrom<&ColorSpace> for ColorSpaceMeta {

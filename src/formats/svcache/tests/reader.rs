@@ -144,7 +144,7 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
         channels: 3,
         color_space: ColorSpaceMeta::Rgb,
         codec: PayloadCodec::Zstd,
-        sha256: super::super::storage::hex_encode(&Sha256::digest([0])),
+        sha256: format!("{:x}", Sha256::digest([0])),
     };
     let codec_metadata =
         single_level_svcache_metadata(source.path(), true, 1, 1, vec![Some(codec_meta)]);
