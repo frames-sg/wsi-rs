@@ -90,6 +90,10 @@
   a wrapped value such as 0.
 - A missing tile in a TIFF slide no longer allocates an unbounded blank tile;
   blank tiles larger than the decoded-image limit fail with an error.
+- `Slide::open_with_options` with `SvcachePolicy::PreferFresh` and a custom
+  registry (`SlideOpenOptions::with_registry`) that has no `.svcache` backend
+  opens the source slide instead of redirecting to a `.svcache` file and
+  failing.
 
 ## [0.8.0] - 2026-10-06
 
