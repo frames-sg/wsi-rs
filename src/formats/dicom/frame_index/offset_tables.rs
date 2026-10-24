@@ -14,6 +14,8 @@ use super::raw_little_endian::read_exact_at;
 const MAX_BASIC_OFFSET_TABLE_BYTES: u32 = 64 * 1024 * 1024;
 const MAX_EXTENDED_OFFSET_TABLE_BYTES: u32 = 128 * 1024 * 1024;
 const TABLE_READ_CHUNK_BYTES: usize = 64 * 1024;
+const BASIC_TABLE: &str = "basic";
+const EXTENDED_TABLE: &str = "extended";
 
 pub(in super::super) fn checked_padded_fragment_len(
     path: &Path,
@@ -172,43 +174,8 @@ fn frame_ranges_from_basic_offsets(
             ),
         ));
     }
-    if offset_table.first().copied() != Some(0) {
-        return Err(WsiError::invalid_slide(
-            path,
-            "DICOM basic offset table must begin at offset zero",
-        ));
-    }
-    if offset_table.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(WsiError::invalid_slide(
-            path,
-            "DICOM basic offset table offsets are not strictly increasing",
-        ));
-    }
-
-    let base_item_offset = fragments[0].item_offset;
-    let fragment_indices_by_offset: HashMap<u64, usize> = fragments
-        .iter()
-        .enumerate()
-        .map(|(index, fragment)| (fragment.item_offset, index))
-        .collect();
-    let mut start_indices = Vec::with_capacity(offset_table.len());
-    for offset in offset_table {
-        let target = base_item_offset
-            .checked_add(u64::from(*offset))
-            .ok_or_else(|| {
-                WsiError::invalid_slide(path, "DICOM basic offset table offset overflow")
-            })?;
-        let index = fragment_indices_by_offset
-            .get(&target)
-            .copied()
-            .ok_or_else(|| {
-                WsiError::invalid_slide(
-                    path,
-                    format!("DICOM basic offset table points to missing fragment offset {offset}"),
-                )
-            })?;
-        start_indices.push(index);
-    }
+    validate_offsets(path, BASIC_TABLE, offset_table)?;
+    let start_indices = start_indices_from_offsets(path, BASIC_TABLE, fragments, offset_table)?;
     frame_ranges_from_start_indices(path, start_indices, fragments.len())
 }
 
@@ -219,32 +186,8 @@ pub(in super::super) fn frame_ranges_from_extended_offsets(
     number_of_frames: u32,
 ) -> Result<Vec<std::ops::Range<usize>>, WsiError> {
     validate_extended_offset_table_shape(path, tables, number_of_frames)?;
-    let expected = number_of_frames as usize;
-
-    let base_item_offset = fragments[0].item_offset;
-    let fragment_indices_by_offset: HashMap<u64, usize> = fragments
-        .iter()
-        .enumerate()
-        .map(|(index, fragment)| (fragment.item_offset, index))
-        .collect();
-    let mut start_indices = Vec::with_capacity(expected);
-    for offset in &tables.offsets {
-        let target = base_item_offset.checked_add(*offset).ok_or_else(|| {
-            WsiError::invalid_slide(path, "DICOM extended offset table offset overflow")
-        })?;
-        let index = fragment_indices_by_offset
-            .get(&target)
-            .copied()
-            .ok_or_else(|| {
-                WsiError::invalid_slide(
-                    path,
-                    format!(
-                        "DICOM extended offset table points to missing fragment offset {offset}"
-                    ),
-                )
-            })?;
-        start_indices.push(index);
-    }
+    let start_indices =
+        start_indices_from_offsets(path, EXTENDED_TABLE, fragments, &tables.offsets)?;
     let ranges = frame_ranges_from_start_indices(path, start_indices, fragments.len())?;
     for (frame_index, (range, declared_len)) in ranges.iter().zip(&tables.lengths).enumerate() {
         validate_extended_frame_length(path, fragments, range, frame_index, *declared_len)?;
@@ -269,19 +212,65 @@ pub(super) fn validate_extended_offset_table_shape(
             ),
         ));
     }
-    if tables.offsets.first().copied() != Some(0) {
+    validate_offsets(path, EXTENDED_TABLE, &tables.offsets)
+}
+
+/// Checks that a `table` ("basic" or "extended") offset table starts at zero
+/// and strictly increases.
+fn validate_offsets<T: Copy + PartialOrd + Into<u64>>(
+    path: &Path,
+    table: &str,
+    offsets: &[T],
+) -> Result<(), WsiError> {
+    if offsets.first().copied().map(Into::<u64>::into) != Some(0) {
         return Err(WsiError::invalid_slide(
             path,
-            "DICOM extended offset table must begin at offset zero",
+            format!("DICOM {table} offset table must begin at offset zero"),
         ));
     }
-    if tables.offsets.windows(2).any(|pair| pair[0] >= pair[1]) {
+    if offsets.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(WsiError::invalid_slide(
             path,
-            "DICOM extended offset table offsets are not strictly increasing",
+            format!("DICOM {table} offset table offsets are not strictly increasing"),
         ));
     }
     Ok(())
+}
+
+/// The fragment each offset points at. Offsets count from the first
+/// fragment's Item header, so `fragments` must not be empty.
+fn start_indices_from_offsets<T: Copy + Into<u64>>(
+    path: &Path,
+    table: &str,
+    fragments: &[DicomFragmentRef],
+    offsets: &[T],
+) -> Result<Vec<usize>, WsiError> {
+    let base_item_offset = fragments[0].item_offset;
+    let fragment_indices_by_offset: HashMap<u64, usize> = fragments
+        .iter()
+        .enumerate()
+        .map(|(index, fragment)| (fragment.item_offset, index))
+        .collect();
+    let mut start_indices = Vec::with_capacity(offsets.len());
+    for &offset in offsets {
+        let offset: u64 = offset.into();
+        let target = base_item_offset.checked_add(offset).ok_or_else(|| {
+            WsiError::invalid_slide(path, format!("DICOM {table} offset table offset overflow"))
+        })?;
+        let index = fragment_indices_by_offset
+            .get(&target)
+            .copied()
+            .ok_or_else(|| {
+                WsiError::invalid_slide(
+                    path,
+                    format!(
+                        "DICOM {table} offset table points to missing fragment offset {offset}"
+                    ),
+                )
+            })?;
+        start_indices.push(index);
+    }
+    Ok(start_indices)
 }
 
 fn frame_ranges_from_start_indices(
@@ -408,26 +397,68 @@ pub(in super::super) fn read_extended_offset_tables_with_reader<R: Read + Seek>(
             "DICOM extended offset table length is not a multiple of eight",
         ));
     }
-    let offsets = read_u64_table_controlled(reader, path, offsets_value, table_len, control)?;
-    let lengths = read_u64_table_controlled(reader, path, lengths_value, table_len, control)?;
+    let offsets = read_le_table(
+        reader,
+        path,
+        EXTENDED_TABLE,
+        offsets_value,
+        table_len,
+        u64::from_le_bytes,
+        control,
+    )?;
+    let lengths = read_le_table(
+        reader,
+        path,
+        EXTENDED_TABLE,
+        lengths_value,
+        table_len,
+        u64::from_le_bytes,
+        control,
+    )?;
     check_cancelled_opt(control)?;
 
     Ok(Some(DicomExtendedOffsetTables { offsets, lengths }))
 }
 
-fn read_u64_table_controlled<R: Read + Seek>(
-    reader: &mut R,
+pub(in super::super) fn read_basic_offset_table_at(
+    file: &mut (impl Read + Seek),
     path: &Path,
+    offset: u64,
+    len: u32,
+    number_of_frames: Option<u32>,
+    control: Option<&crate::ReadControl>,
+) -> Result<Vec<u32>, WsiError> {
+    validate_basic_offset_table_len(path, len, number_of_frames)?;
+    read_le_table(
+        file,
+        path,
+        BASIC_TABLE,
+        offset,
+        len,
+        u32::from_le_bytes,
+        control,
+    )
+}
+
+/// The `table_len / N` little-endian entries of a `table` offset table at
+/// `value_offset`, read in bounded chunks with cancellation checked around
+/// each read. Callers check that `table_len` is a multiple of `N`.
+fn read_le_table<T, const N: usize>(
+    reader: &mut (impl Read + Seek),
+    path: &Path,
+    table: &str,
     value_offset: u64,
     table_len: u32,
+    from_le_bytes: impl Fn([u8; N]) -> T,
     control: Option<&crate::ReadControl>,
-) -> Result<Vec<u64>, WsiError> {
-    let entry_count = usize::try_from(table_len / 8).map_err(|_| {
-        WsiError::invalid_slide(path, "DICOM extended offset table length overflow")
+) -> Result<Vec<T>, WsiError> {
+    check_cancelled_opt(control)?;
+    let entry_count = usize::try_from(table_len).map(|len| len / N).map_err(|_| {
+        WsiError::invalid_slide(path, format!("DICOM {table} offset table length overflow"))
     })?;
     let mut values = Vec::new();
     values.try_reserve_exact(entry_count).map_err(|_| {
-        WsiError::invalid_slide(path, "cannot allocate DICOM extended offset table")
+        WsiError::invalid_slide(path, format!("cannot allocate DICOM {table} offset table"))
     })?;
     let mut buffer = [0u8; TABLE_READ_CHUNK_BYTES];
     let mut bytes_read = 0u32;
@@ -439,54 +470,16 @@ fn read_u64_table_controlled<R: Read + Seek>(
         let chunk_offset = value_offset
             .checked_add(u64::from(bytes_read))
             .ok_or_else(|| {
-                WsiError::invalid_slide(path, "DICOM extended offset table offset overflow")
+                WsiError::invalid_slide(path, format!("DICOM {table} offset table offset overflow"))
             })?;
         read_exact_at(reader, path, chunk_offset, &mut buffer[..chunk_len])?;
         check_cancelled_opt(control)?;
         values.extend(
             buffer[..chunk_len]
-                .as_chunks::<8>()
+                .as_chunks::<N>()
                 .0
                 .iter()
-                .map(|chunk| u64::from_le_bytes(*chunk)),
-        );
-        bytes_read += u32::try_from(chunk_len).expect("bounded table read chunk fits u32");
-    }
-    Ok(values)
-}
-
-pub(in super::super) fn read_basic_offset_table_at(
-    file: &mut (impl Read + Seek),
-    path: &Path,
-    offset: u64,
-    len: u32,
-    number_of_frames: Option<u32>,
-    control: Option<&crate::ReadControl>,
-) -> Result<Vec<u32>, WsiError> {
-    let entry_count = validate_basic_offset_table_len(path, len, number_of_frames)?;
-    check_cancelled_opt(control)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(entry_count)
-        .map_err(|_| WsiError::invalid_slide(path, "cannot allocate DICOM basic offset table"))?;
-    let mut buffer = [0u8; TABLE_READ_CHUNK_BYTES];
-    let mut bytes_read = 0u32;
-    while bytes_read < len {
-        check_cancelled_opt(control)?;
-        let remaining = usize::try_from(len - bytes_read)
-            .expect("u32 DICOM basic offset table remainder fits usize");
-        let chunk_len = remaining.min(buffer.len());
-        let chunk_offset = offset.checked_add(u64::from(bytes_read)).ok_or_else(|| {
-            WsiError::invalid_slide(path, "DICOM basic offset table offset overflow")
-        })?;
-        read_exact_at(file, path, chunk_offset, &mut buffer[..chunk_len])?;
-        check_cancelled_opt(control)?;
-        values.extend(
-            buffer[..chunk_len]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|chunk| u32::from_le_bytes(*chunk)),
+                .map(|chunk| from_le_bytes(*chunk)),
         );
         bytes_read += u32::try_from(chunk_len).expect("bounded table read chunk fits u32");
     }
