@@ -58,6 +58,45 @@ impl FileIdentity {
         Ok(Self::from_metadata(canonical_path, metadata))
     }
 
+    /// Opens `path` and fails with `InvalidSlide` carrying `message` unless
+    /// the opened file is `expected`. The identity comes from the open file,
+    /// so the path cannot be swapped between the check and the open.
+    pub(crate) fn open_verified(
+        path: &Path,
+        expected: &Self,
+        message: &str,
+    ) -> Result<File, WsiError> {
+        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?;
+        expected.ensure_same(&Self::from_open_file(path, &file)?, path, message)?;
+        Ok(file)
+    }
+
+    /// Fails with `InvalidSlide` carrying `message` unless the file now at
+    /// `path` is this one.
+    pub(crate) fn ensure_matches(&self, path: &Path, message: &str) -> Result<(), WsiError> {
+        self.ensure_same(&Self::from_path(path)?, path, message)
+    }
+
+    /// Fails with `InvalidSlide` carrying `message` unless `actual` is this
+    /// identity.
+    pub(crate) fn ensure_same(
+        &self,
+        actual: &Self,
+        path: &Path,
+        message: &str,
+    ) -> Result<(), WsiError> {
+        if actual == self {
+            return Ok(());
+        }
+        Err(WsiError::InvalidSlide {
+            path: path.to_path_buf(),
+            message: message.into(),
+        })
+    }
+
     fn from_metadata(canonical_path: PathBuf, metadata: std::fs::Metadata) -> Self {
         let modified_ns = metadata
             .modified()

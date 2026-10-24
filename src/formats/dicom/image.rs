@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -141,16 +140,11 @@ impl DicomImage {
                     "native transfer syntax does not have native Pixel Data",
                 ));
             };
-            let source_file = File::open(&meta.path).map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: meta.path.clone(),
-            })?;
-            if FileIdentity::from_open_file(&meta.path, &source_file)? != meta.source_identity {
-                return Err(invalid_slide(
-                    &meta.path,
-                    "DICOM source changed while metadata was parsed",
-                ));
-            }
+            let source_file = FileIdentity::open_verified(
+                &meta.path,
+                &meta.source_identity,
+                "DICOM source changed while metadata was parsed",
+            )?;
             Some(NativePixelData {
                 source_identity: meta.source_identity,
                 source_file: PositionedFile::new(source_file),

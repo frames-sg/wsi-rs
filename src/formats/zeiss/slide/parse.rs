@@ -63,24 +63,17 @@ fn open_and_validate_czi(
     limits: crate::SlideLimits,
 ) -> Result<ValidatedCzi, WsiError> {
     let source_identity = preflight_czi_file_with_limits(path, limits)?;
-    let mut preflight_file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if FileIdentity::from_open_file(path, &preflight_file)? != source_identity {
-        return Err(invalid_slide(
-            path,
-            "CZI source identity changed before subblock preflight",
-        ));
-    }
+    let mut preflight_file = FileIdentity::open_verified(
+        path,
+        &source_identity,
+        "CZI source identity changed before subblock preflight",
+    )?;
     let mut czi = CziContainer::open(path)
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-    if FileIdentity::from_path(path)? != source_identity {
-        return Err(invalid_slide(
-            path,
-            "CZI source identity changed between preflight and parser open",
-        ));
-    }
+    source_identity.ensure_matches(
+        path,
+        "CZI source identity changed between preflight and parser open",
+    )?;
 
     if czi.subblocks().len() > MAX_CZI_SUBBLOCKS {
         return Err(invalid_slide(

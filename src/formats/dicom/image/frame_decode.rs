@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
-use crate::core::file_identity::FileIdentity;
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::JpegDecodeJob;
@@ -16,7 +15,7 @@ use crate::formats::dicom::decode::{
     dicom_jpeg_color_transform, interleaved_rgb_samples, jp2k_photometric_is_ycbcr,
     validate_jpeg_transfer_syntax_frame,
 };
-use crate::formats::dicom::metadata::{invalid_slide, DicomBitDepth};
+use crate::formats::dicom::metadata::DicomBitDepth;
 use crate::formats::dicom::{JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
 
 impl DicomImage {
@@ -98,12 +97,10 @@ impl DicomImage {
                 limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
             })?;
         frame.resize(frame_len, 0);
-        if FileIdentity::from_path(&self.frame_store.path)? != native_pixel_data.source_identity {
-            return Err(invalid_slide(
-                &self.frame_store.path,
-                "DICOM source changed after metadata was parsed",
-            ));
-        }
+        native_pixel_data.source_identity.ensure_matches(
+            &self.frame_store.path,
+            "DICOM source changed after metadata was parsed",
+        )?;
         native_pixel_data
             .source_file
             .read_exact_at(&mut frame, absolute_start)

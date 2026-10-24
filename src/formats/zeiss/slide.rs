@@ -284,12 +284,10 @@ impl ZeissSlide {
             .associated_sources
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        if FileIdentity::from_path(&self.source_path)? != self.source_identity {
-            return Err(WsiError::InvalidSlide {
-                path: self.source_path.clone(),
-                message: "CZI source identity changed before associated-image read".into(),
-            });
-        }
+        self.source_identity.ensure_matches(
+            &self.source_path,
+            "CZI source identity changed before associated-image read",
+        )?;
         let buffer = {
             let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
             let (_, buffer) = decode_associated_attachment(&mut czi, attachment, self.limits)?
