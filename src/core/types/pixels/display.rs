@@ -51,29 +51,6 @@ impl CpuTile {
         }
     }
 
-    fn u8_quad_at(&self, bytes: &[u8], idx: usize) -> Result<[u8; 4], WsiError> {
-        match self.layout {
-            CpuTileLayout::Interleaved => {
-                let base = idx * 4;
-                Ok([
-                    bytes[base],
-                    bytes[base + 1],
-                    bytes[base + 2],
-                    bytes[base + 3],
-                ])
-            }
-            CpuTileLayout::Planar => {
-                let plane = self.width as usize * self.height as usize;
-                Ok([
-                    bytes[idx],
-                    bytes[plane + idx],
-                    bytes[2 * plane + idx],
-                    bytes[3 * plane + idx],
-                ])
-            }
-        }
-    }
-
     fn u16_triplet_at(&self, samples: &[u16], idx: usize) -> Result<[u16; 3], WsiError> {
         match self.layout {
             CpuTileLayout::Interleaved => {
@@ -169,59 +146,102 @@ impl CpuTile {
             )
         })?;
         self.validate_invariants()?;
+        let rgba = self.u8_display_bytes::<true>(bytes)?;
+        Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
+            .expect("validated samples produce exactly one RGBA pixel per input pixel"))
+    }
+
+    /// Uint8 samples as interleaved RGB, followed by each pixel's alpha (255
+    /// unless the source has alpha) when `INCLUDE_ALPHA` is set. The output
+    /// shape is fixed at compilation, so pixels need no runtime alpha switch.
+    fn u8_display_bytes<const INCLUDE_ALPHA: bool>(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Vec<u8>, WsiError> {
+        match (&self.color_space, self.channels) {
+            (ColorSpace::Rgba, 4)
+            | (ColorSpace::Rgb | ColorSpace::YCbCr, 3)
+            | (ColorSpace::Grayscale | ColorSpace::Palette(_), 1) => {}
+            (ColorSpace::Unknown, _) => {
+                return Err(WsiError::DisplayConversion("unknown color space".into()));
+            }
+            (other, _) => {
+                return Err(WsiError::DisplayConversion(format!(
+                    "unsupported color space {:?} with {} channels for {}",
+                    other,
+                    self.channels,
+                    if INCLUDE_ALPHA {
+                        "to_rgba()"
+                    } else {
+                        "to_rgb()"
+                    },
+                )));
+            }
+        }
         let pixel_count = self.width as usize * self.height as usize;
+        let mut output = Vec::with_capacity(pixel_count * if INCLUDE_ALPHA { 4 } else { 3 });
+        let mut push = |rgb: [u8; 3], alpha: u8| {
+            if INCLUDE_ALPHA {
+                output.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+            } else {
+                output.extend_from_slice(&rgb);
+            }
+        };
         match &self.color_space {
-            ColorSpace::Rgba if self.channels == 4 => {
-                let mut rgba = Vec::with_capacity(pixel_count * 4);
-                for idx in 0..pixel_count {
-                    rgba.extend_from_slice(&self.u8_quad_at(bytes, idx)?);
+            ColorSpace::Rgba => match self.layout {
+                CpuTileLayout::Interleaved if INCLUDE_ALPHA => {
+                    output.extend_from_slice(bytes);
                 }
-                Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
-                    .expect("validated RGBA sample count matches image dimensions"))
-            }
-            ColorSpace::Rgb if self.channels == 3 => {
-                let mut rgba = Vec::with_capacity(pixel_count * 4);
-                for idx in 0..pixel_count {
-                    rgba.extend_from_slice(&self.u8_triplet_at(bytes, idx)?);
-                    rgba.push(255);
+                CpuTileLayout::Interleaved => {
+                    for pixel in bytes.as_chunks::<4>().0 {
+                        output.extend_from_slice(&pixel[..3]);
+                    }
                 }
-                Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
-                    .expect("validated RGB sample count expands to exact RGBA dimensions"))
+                CpuTileLayout::Planar => {
+                    let (red, rest) = bytes.split_at(pixel_count);
+                    let (green, rest) = rest.split_at(pixel_count);
+                    let (blue, alpha) = rest.split_at(pixel_count);
+                    let pixels = red.iter().zip(green).zip(blue).zip(alpha);
+                    if INCLUDE_ALPHA {
+                        output.resize(pixel_count * 4, 0);
+                        for (pixel, (((&r, &g), &b), &a)) in
+                            output.as_chunks_mut::<4>().0.iter_mut().zip(pixels)
+                        {
+                            *pixel = [r, g, b, a];
+                        }
+                    } else {
+                        for (((&r, &g), &b), &a) in pixels {
+                            push([r, g, b], a);
+                        }
+                    }
+                }
+            },
+            ColorSpace::Rgb => {
+                for idx in 0..pixel_count {
+                    push(self.u8_triplet_at(bytes, idx)?, 255);
+                }
             }
-            ColorSpace::Grayscale if self.channels == 1 => {
-                let mut rgba = Vec::with_capacity(pixel_count * 4);
+            ColorSpace::Grayscale => {
                 for &val in bytes {
-                    rgba.extend_from_slice(&[val, val, val, 255]);
+                    push([val, val, val], 255);
                 }
-                Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
-                    .expect("validated grayscale samples expand to exact RGBA dimensions"))
             }
-            ColorSpace::YCbCr if self.channels == 3 => {
-                let mut rgba = Vec::with_capacity(pixel_count * 4);
+            ColorSpace::YCbCr => {
                 for idx in 0..pixel_count {
                     let [y, cb, cr] = self.u8_triplet_at(bytes, idx)?;
-                    rgba.extend_from_slice(&super::ycbcr::ycbcr_to_rgb_u8(y, cb, cr));
-                    rgba.push(255);
+                    push(super::ycbcr::ycbcr_to_rgb_u8(y, cb, cr), 255);
                 }
-                Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
-                    .expect("validated YCbCr samples expand to exact RGBA dimensions"))
             }
-            ColorSpace::Palette(lut) if self.channels == 1 => {
-                let mut rgba = Vec::with_capacity(pixel_count * 4);
+            ColorSpace::Palette(lut) => {
                 for &idx in bytes {
-                    let rgb = lut.get(idx as usize).unwrap_or(&[0, 0, 0]);
-                    rgba.extend_from_slice(rgb);
-                    rgba.push(255);
+                    push(*lut.get(idx as usize).unwrap_or(&[0, 0, 0]), 255);
                 }
-                Ok(image::RgbaImage::from_raw(self.width, self.height, rgba)
-                    .expect("validated palette samples expand to exact RGBA dimensions"))
             }
-            ColorSpace::Unknown => Err(WsiError::DisplayConversion("unknown color space".into())),
-            other => Err(WsiError::DisplayConversion(format!(
-                "unsupported color space {:?} with {} channels for to_rgba()",
-                other, self.channels
-            ))),
+            ColorSpace::Unknown | ColorSpace::Cmyk => {
+                unreachable!("unsupported color space rejected before allocation")
+            }
         }
+        Ok(output)
     }
 
     /// Convert this buffer into an owned RgbaImage, reusing the underlying
@@ -256,8 +276,7 @@ impl CpuTile {
             .expect("windowed samples produce exactly one RGBA pixel per input pixel"))
     }
 
-    /// Convert Uint8 data to RgbImage. Direct path for RGB8 and Grayscale;
-    /// other color spaces fall through RGBA conversion.
+    /// Convert Uint8 data to RgbImage without an intermediate RGBA image.
     pub fn to_rgb(&self) -> Result<image::RgbImage, WsiError> {
         let bytes = self.data.as_u8().ok_or_else(|| {
             WsiError::DisplayConversion(
@@ -273,25 +292,10 @@ impl CpuTile {
                         .expect("validated RGB samples match image dimensions"),
                 )
             }
-            (ColorSpace::Grayscale, 1, _) => {
-                let pixel_count = self.width as usize * self.height as usize;
-                let mut rgb_data = Vec::with_capacity(pixel_count * 3);
-                for &val in bytes {
-                    rgb_data.extend_from_slice(&[val, val, val]);
-                }
-                Ok(image::RgbImage::from_raw(self.width, self.height, rgb_data)
-                    .expect("validated grayscale samples expand to exact RGB dimensions"))
-            }
             _ => {
-                // Fallback: go through RGBA and strip alpha
-                let rgba = self.to_rgba()?;
-                let (w, h) = rgba.dimensions();
-                let mut rgb_data = Vec::with_capacity(w as usize * h as usize * 3);
-                for pixel in rgba.pixels() {
-                    rgb_data.extend_from_slice(&pixel.0[..3]);
-                }
-                Ok(image::RgbImage::from_raw(w, h, rgb_data)
-                    .expect("RGBA fallback strips exactly one alpha sample per pixel"))
+                let rgb = self.u8_display_bytes::<false>(bytes)?;
+                Ok(image::RgbImage::from_raw(self.width, self.height, rgb)
+                    .expect("validated samples produce exactly one RGB pixel per input pixel"))
             }
         }
     }
