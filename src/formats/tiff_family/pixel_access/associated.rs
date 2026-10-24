@@ -1,6 +1,22 @@
 use super::*;
 use std::sync::OnceLock;
 
+fn validate_strip_metadata(
+    name: &str,
+    strip_offsets: &[u64],
+    strip_byte_counts: &[u64],
+) -> Result<(), WsiError> {
+    if strip_offsets.len() != strip_byte_counts.len() {
+        return Err(WsiError::UnsupportedFormat(format!(
+            "associated image '{}' has mismatched strip metadata ({} offsets vs {} byte counts)",
+            name,
+            strip_offsets.len(),
+            strip_byte_counts.len()
+        )));
+    }
+    Ok(())
+}
+
 impl TiffPixelReader {
     pub(super) fn stripped_associated_decode_pool() -> Result<&'static rayon::ThreadPool, WsiError>
     {
@@ -27,14 +43,7 @@ impl TiffPixelReader {
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<Vec<u8>, WsiError> {
-        if strip_offsets.len() != strip_byte_counts.len() {
-            return Err(WsiError::UnsupportedFormat(format!(
-                "associated image '{}' has mismatched strip metadata ({} offsets vs {} byte counts)",
-                name,
-                strip_offsets.len(),
-                strip_byte_counts.len()
-            )));
-        }
+        validate_strip_metadata(name, strip_offsets, strip_byte_counts)?;
 
         let total_bytes = strip_byte_counts.iter().try_fold(0usize, |acc, count| {
             acc.checked_add(usize::try_from(*count).ok()?)
@@ -72,14 +81,7 @@ impl TiffPixelReader {
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<Vec<u8>, WsiError> {
-        if strip_offsets.len() != strip_byte_counts.len() {
-            return Err(WsiError::UnsupportedFormat(format!(
-                "associated image '{}' has mismatched strip metadata ({} offsets vs {} byte counts)",
-                name,
-                strip_offsets.len(),
-                strip_byte_counts.len()
-            )));
-        }
+        validate_strip_metadata(name, strip_offsets, strip_byte_counts)?;
         let (width, height) = dimensions;
         let rows_per_strip = self
             .container
@@ -171,14 +173,7 @@ impl TiffPixelReader {
         strip_offsets: &[u64],
         strip_byte_counts: &[u64],
     ) -> Result<CpuTile, WsiError> {
-        if strip_offsets.len() != strip_byte_counts.len() {
-            return Err(WsiError::UnsupportedFormat(format!(
-                "associated image '{}' has mismatched strip metadata ({} offsets vs {} byte counts)",
-                name,
-                strip_offsets.len(),
-                strip_byte_counts.len()
-            )));
-        }
+        validate_strip_metadata(name, strip_offsets, strip_byte_counts)?;
 
         let (width, height) = dimensions;
         let rows_per_strip = self

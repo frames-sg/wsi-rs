@@ -126,24 +126,14 @@ impl TiffPixelReader {
             self.get_or_decode_ndpi_full_image(req, ifd_id, strip_offset, strip_byte_count)?;
 
         // Extract the requested tile from the full image
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
-        let (level_w, level_h) = level.dimensions;
-        let (vtw, vth) = match &level.tile_layout {
-            TileLayout::WholeLevel {
-                virtual_tile_width,
-                virtual_tile_height,
-                ..
-            } => (*virtual_tile_width, *virtual_tile_height),
-            _ => {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NdpiFullDecode expects WholeLevel tile layout".into(),
-                });
-            }
-        };
+        let (level_w, level_h, vtw, vth) = self.ndpi_whole_level_geometry(
+            req.scene,
+            req.series,
+            req.level,
+            req.col,
+            req.row,
+            "NdpiFullDecode expects WholeLevel tile layout",
+        )?;
 
         let (col_u32, row_u32) = validate_tile_coords(req.col, req.row, req.level.get())?;
         let src_x = col_u32 * vtw;
@@ -180,8 +170,10 @@ impl TiffPixelReader {
         };
         let full_image =
             self.get_or_decode_ndpi_full_image(&tile_req, ifd_id, strip_offset, strip_byte_count)?;
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let (level_w, level_h) = (level.dimensions.0 as i64, level.dimensions.1 as i64);
         let tile_origin_x = req.col.saturating_mul(i64::from(req.tile_width));
         let tile_origin_y = req.row.saturating_mul(i64::from(req.tile_height));

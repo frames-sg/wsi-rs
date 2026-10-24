@@ -223,8 +223,10 @@ impl TiffPixelReader {
             .pread(strip_offset, strip_byte_count)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
 
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let (level_w, level_h) = level.dimensions;
         let options = j2k_decode_options(
             self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, None)
@@ -259,24 +261,14 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<CpuTile, WsiError> {
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
-        let (level_w, level_h) = level.dimensions;
-        let (vtw, vth) = match &level.tile_layout {
-            TileLayout::WholeLevel {
-                virtual_tile_width,
-                virtual_tile_height,
-                ..
-            } => (*virtual_tile_width, *virtual_tile_height),
-            _ => {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NdpiJpeg display tile expects WholeLevel layout".into(),
-                });
-            }
-        };
+        let (level_w, level_h, vtw, vth) = self.ndpi_whole_level_geometry(
+            req.scene,
+            req.series,
+            req.level,
+            req.col,
+            req.row,
+            "NdpiJpeg display tile expects WholeLevel layout",
+        )?;
 
         let tile_origin_x = req.col.saturating_mul(i64::from(req.tile_width));
         let tile_origin_y = req.row.saturating_mul(i64::from(req.tile_height));

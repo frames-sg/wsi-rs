@@ -12,7 +12,8 @@ use crate::properties::Properties;
 use super::{
     add_tiff_resolution_properties, compression_from_tag,
     compute_tiff_dataset_identity_with_extra_strings, single_scene_uint8_pyramid_dataset,
-    DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+    stripped_tile_source, tiled_ifd_descriptor, DatasetLayout, TiffLayoutInterpreter, TileSource,
+    TileSourceKey, TiledIfdDescriptor as TiledIfd,
 };
 
 const ARGOS_METADATA_TAG: u16 = 65_000;
@@ -20,17 +21,6 @@ const ARGOS_ROOT: &str = "Argos.Scan.Metadata";
 const MAX_ARGOS_TILES_PER_LEVEL: u64 = 1_000_000;
 
 pub(crate) struct ArgosInterpreter;
-
-#[derive(Clone)]
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
-    jpeg_tables: Option<Vec<u8>>,
-}
 
 struct ParsedMetadata {
     xml: String,
@@ -270,18 +260,7 @@ fn collect_tiled_ifds(container: &TiffContainer) -> Result<Vec<TiledIfd>, TiffPa
         }
         let compression = compression_from_tag(container.get_u32(ifd_id, tags::COMPRESSION)?);
         ensure_supported_compression("ARGOS", compression)?;
-        tiled.push(TiledIfd {
-            ifd_id,
-            width: container.get_u64(ifd_id, tags::IMAGE_WIDTH)?,
-            height: container.get_u64(ifd_id, tags::IMAGE_LENGTH)?,
-            tile_width: container.get_u32(ifd_id, tags::TILE_WIDTH)?,
-            tile_height: container.get_u32(ifd_id, tags::TILE_LENGTH)?,
-            compression,
-            jpeg_tables: container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec),
-        });
+        tiled.push(tiled_ifd_descriptor(container, ifd_id, compression)?);
     }
     if tiled.is_empty() {
         return Err(TiffParseError::Structure(
@@ -528,20 +507,7 @@ fn insert_stripped_associated(
     );
     sources.insert(
         name.to_owned(),
-        TileSource::Stripped {
-            ifd_id,
-            jpeg_tables: container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec),
-            compression,
-            strip_offsets: container
-                .get_u64_array(ifd_id, tags::STRIP_OFFSETS)?
-                .to_vec(),
-            strip_byte_counts: container
-                .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)?
-                .to_vec(),
-        },
+        stripped_tile_source(container, ifd_id, compression)?,
     );
     Ok(())
 }

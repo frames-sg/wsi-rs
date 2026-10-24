@@ -110,6 +110,57 @@ fn regular_tiff_level(
     })
 }
 
+#[derive(Clone)]
+struct TiledIfdDescriptor {
+    ifd_id: IfdId,
+    width: u64,
+    height: u64,
+    tile_width: u32,
+    tile_height: u32,
+    compression: Compression,
+    jpeg_tables: Option<Vec<u8>>,
+}
+
+fn tiled_ifd_descriptor(
+    container: &TiffContainer,
+    ifd_id: IfdId,
+    compression: Compression,
+) -> Result<TiledIfdDescriptor, TiffParseError> {
+    Ok(TiledIfdDescriptor {
+        ifd_id,
+        width: container.get_u64(ifd_id, tags::IMAGE_WIDTH)?,
+        height: container.get_u64(ifd_id, tags::IMAGE_LENGTH)?,
+        tile_width: container.get_u32(ifd_id, tags::TILE_WIDTH)?,
+        tile_height: container.get_u32(ifd_id, tags::TILE_LENGTH)?,
+        compression,
+        jpeg_tables: container
+            .get_bytes(ifd_id, tags::JPEG_TABLES)
+            .ok()
+            .map(<[u8]>::to_vec),
+    })
+}
+
+fn stripped_tile_source(
+    container: &TiffContainer,
+    ifd_id: IfdId,
+    compression: Compression,
+) -> Result<TileSource, TiffParseError> {
+    Ok(TileSource::Stripped {
+        ifd_id,
+        jpeg_tables: container
+            .get_bytes(ifd_id, tags::JPEG_TABLES)
+            .ok()
+            .map(<[u8]>::to_vec),
+        compression,
+        strip_offsets: container
+            .get_u64_array(ifd_id, tags::STRIP_OFFSETS)?
+            .to_vec(),
+        strip_byte_counts: container
+            .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)?
+            .to_vec(),
+    })
+}
+
 fn add_tiff_resolution_properties(
     container: &TiffContainer,
     ifd_id: IfdId,
