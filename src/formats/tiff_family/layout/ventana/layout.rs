@@ -169,14 +169,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
 
         let mut tile_sources = HashMap::with_capacity(pyramid_ifds.len());
         tile_sources.insert(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+            TileSourceKey::plane0(0),
             TileSource::TiledIfd {
                 ifd_id: pyramid_ifds[0].ifd_id,
                 jpeg_tables: pyramid_ifds[0].jpeg_tables.clone(),
@@ -214,14 +207,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
                 tile_layout: ventana_tilemap_layout(&bif, downsample, &info.stored_level())?,
             });
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: level_idx,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(level_idx),
                 TileSource::TiledIfdSubtiles {
                     ifd_id: info.ifd_id,
                     jpeg_tables: info.jpeg_tables.clone(),

@@ -10,7 +10,7 @@ use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
 use super::common::{
-    add_tiff_resolution_properties, associated_channels, compression_from_tag,
+    add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
     single_scene_uint8_pyramid_dataset, stripped_tile_source, tiled_ifd_descriptor,
     TiledIfdDescriptor as TiledIfd,
 };
@@ -92,15 +92,14 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
         // derived from that same stack.
         let middle_stack = (metadata.z_planes as usize - 1) / 2;
         let representative = &stacks[middle_stack];
-        let base_width = representative[0].width as f64;
-        let base_height = representative[0].height as f64;
+        let base_dims = (representative[0].width, representative[0].height);
         let mut levels = Vec::with_capacity(representative.len());
         let mut level0_bounds = None;
         for (level_index, ifd) in representative.iter().enumerate() {
             let downsample = if level_index == 0 {
                 1.0
             } else {
-                ((base_width / ifd.width as f64) + (base_height / ifd.height as f64)) / 2.0
+                averaged_downsample(base_dims, (ifd.width, ifd.height))
             };
             let sparse = sparse_level(container, ifd, downsample)?;
             if level_index == 0 {

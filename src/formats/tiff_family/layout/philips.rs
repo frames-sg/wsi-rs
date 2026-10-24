@@ -21,7 +21,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 use base64::Engine;
 
-use super::common::{compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area};
+use super::common::{
+    compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area, TiledIfdDescriptor,
+};
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -64,7 +66,7 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
-        let mut tiled_ifds: Vec<TiledIfdInfo> = Vec::new();
+        let mut tiled_ifds: Vec<TiledIfdDescriptor> = Vec::new();
         let mut associated_images: HashMap<String, AssociatedImage> = HashMap::new();
         let mut associated_sources: HashMap<String, TileSource> = HashMap::new();
 
@@ -97,12 +99,12 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
                     .ok()
                     .map(|b| b.to_vec());
 
-                tiled_ifds.push(TiledIfdInfo {
+                tiled_ifds.push(TiledIfdDescriptor {
                     ifd_id,
                     width,
                     height,
-                    tile_w,
-                    tile_h,
+                    tile_width: tile_w,
+                    tile_height: tile_h,
                     compression,
                     jpeg_tables,
                 });
@@ -177,14 +179,14 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
 
             // Tiles across/down computed from the *padded* TIFF dimensions
             // (the real tile grid extent).
-            if info.tile_w == 0 || info.tile_h == 0 {
+            if info.tile_width == 0 || info.tile_height == 0 {
                 return Err(TiffParseError::Structure(format!(
                     "Philips: tile dimensions must be > 0 (got {}x{})",
-                    info.tile_w, info.tile_h
+                    info.tile_width, info.tile_height
                 )));
             }
-            let tiles_across = info.width.div_ceil(info.tile_w as u64);
-            let tiles_down = info.height.div_ceil(info.tile_h as u64);
+            let tiles_across = info.width.div_ceil(info.tile_width as u64);
+            let tiles_down = info.height.div_ceil(info.tile_height as u64);
 
             let downsample = 2u64.pow(level_idx as u32) as f64;
 
@@ -192,21 +194,14 @@ impl TiffLayoutInterpreter for PhilipsInterpreter {
                 dimensions: corrected_dims,
                 downsample,
                 tile_layout: TileLayout::Regular {
-                    tile_width: info.tile_w,
-                    tile_height: info.tile_h,
+                    tile_width: info.tile_width,
+                    tile_height: info.tile_height,
                     tiles_across,
                     tiles_down,
                 },
             });
 
-            let key = TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: level_idx as u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            };
+            let key = TileSourceKey::plane0(level_idx as u32);
             tile_sources.insert(
                 key,
                 TileSource::TiledIfd {
@@ -247,17 +242,6 @@ fn philips_public_level_dimensions(base_dims: (u64, u64), level_idx: u32) -> (u6
 
 // ── Internal types ──────────────────────────────────────────────────
 
-/// Intermediate info for a tiled pyramid IFD.
-struct TiledIfdInfo {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_w: u32,
-    tile_h: u32,
-    compression: Compression,
-    jpeg_tables: Option<Vec<u8>>,
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// Classify a stripped IFD as "label", "macro", or None.
@@ -283,7 +267,7 @@ fn classify_associated(container: &TiffContainer, ifd_id: IfdId) -> Option<Strin
 /// parsing fails or no spacings are found.
 fn extract_pixel_spacings(
     container: &TiffContainer,
-    tiled_ifds: &[TiledIfdInfo],
+    tiled_ifds: &[TiledIfdDescriptor],
 ) -> Option<Vec<f64>> {
     let first_ifd = *container.top_ifds().first()?;
     let desc = container

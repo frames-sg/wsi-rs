@@ -35,7 +35,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
-        let mut tiled_ifds: Vec<TiledIfd> = Vec::new();
+        let mut tiled_ifds: Vec<TiledIfdDescriptor> = Vec::new();
         let mut stripped_ifds: Vec<StrippedIfd> = Vec::new();
 
         // Phase 1: Walk all top-level IFDs and classify.
@@ -56,18 +56,12 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
 
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
                 // Tiled IFD: pyramid level.
-                let tile_width = container.get_u32(ifd_id, tags::TILE_WIDTH)?;
-                let tile_height = container.get_u32(ifd_id, tags::TILE_LENGTH)?;
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
-
-                tiled_ifds.push(TiledIfd {
+                tiled_ifds.push(tiled_ifd_descriptor(
+                    container,
                     ifd_id,
-                    width,
-                    height,
-                    tile_width,
-                    tile_height,
-                    compression: compression_from_tag(compression_val),
-                });
+                    compression_from_tag(compression_val),
+                )?);
             } else {
                 // Stripped IFD: associated image.
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
@@ -113,15 +107,9 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
 
         // Phase 3: JPEG tables (tag 347) are read per level; a level without
         // its own tables falls back to level 0's.
-        let level_jpeg_tables = |ifd_id| {
-            container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec)
-        };
         let base_jpeg_tables = tiled_ifds
             .first()
-            .and_then(|first| level_jpeg_tables(first.ifd_id));
+            .and_then(|first| first.jpeg_tables.clone());
 
         // Phase 4: Build levels and tile sources.
         let mut levels = Vec::with_capacity(tiled_ifds.len());
@@ -131,9 +119,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             let downsample = if level_idx == 0 {
                 1.0
             } else {
-                let dw = base_w as f64 / tifd.width as f64;
-                let dh = base_h as f64 / tifd.height as f64;
-                (dw + dh) / 2.0
+                averaged_downsample((base_w, base_h), (tifd.width, tifd.height))
             };
 
             levels.push(regular_tiff_level(
@@ -145,19 +131,14 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 downsample,
             )?);
 
-            let key = TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: level_idx as u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            };
+            let key = TileSourceKey::plane0(level_idx as u32);
             tile_sources.insert(
                 key,
                 TileSource::TiledIfd {
                     ifd_id: tifd.ifd_id,
-                    jpeg_tables: level_jpeg_tables(tifd.ifd_id)
+                    jpeg_tables: tifd
+                        .jpeg_tables
+                        .clone()
                         .or_else(|| base_jpeg_tables.clone()),
                     compression: tifd.compression,
                 },
@@ -175,14 +156,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 1.0,
             )?);
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0,
-                    series: 0,
-                    level: 0,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(0),
                 TileSource::StrippedLevel {
                     ifd_id: stripped.ifd_id,
                     compression: stripped.compression,
@@ -293,15 +267,6 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             source_icc_ifds,
         )
     }
-}
-
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
 }
 
 struct StrippedIfd {

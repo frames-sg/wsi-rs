@@ -36,6 +36,12 @@ pub(super) fn level_area(width: u64, height: u64) -> u128 {
     u128::from(width) * u128::from(height)
 }
 
+/// Downsample of a `level`-sized pyramid level against a `base`-sized level 0:
+/// the mean of its width and height ratios.
+pub(super) fn averaged_downsample(base: (u64, u64), level: (u64, u64)) -> f64 {
+    (base.0 as f64 / level.0 as f64 + base.1 as f64 / level.1 as f64) / 2.0
+}
+
 pub(super) fn single_scene_uint8_pyramid_dataset(
     dataset_id: DatasetId,
     axes: AxesShape,

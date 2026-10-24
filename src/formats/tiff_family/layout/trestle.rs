@@ -9,7 +9,9 @@ use crate::formats::tiff_family::error::TiffParseError;
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::common::{compression_from_tag, single_scene_uint8_pyramid_dataset};
+use super::common::{
+    averaged_downsample, compression_from_tag, single_scene_uint8_pyramid_dataset,
+};
 use super::{
     compute_tiff_dataset_id_and_record_quickhash, DatasetLayout, TiffLayoutInterpreter, TileSource,
     TileSourceKey,
@@ -103,10 +105,8 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
                 height
             };
 
-            let downsample = if let Some((base_w, base_h)) = base_dims {
-                let dw = base_w as f64 / public_width as f64;
-                let dh = base_h as f64 / public_height as f64;
-                (dw + dh) / 2.0
+            let downsample = if let Some(base) = base_dims {
+                averaged_downsample(base, (public_width, public_height))
             } else {
                 base_dims = Some((public_width, public_height));
                 1.0
@@ -138,14 +138,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             });
 
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: level_idx as u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(level_idx as u32),
                 TileSource::TiledIfd {
                     ifd_id,
                     jpeg_tables: container

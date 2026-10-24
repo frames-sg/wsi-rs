@@ -104,6 +104,20 @@ pub(crate) struct TileSourceKey {
     pub t: u32,
 }
 
+impl TileSourceKey {
+    /// Key of `level`'s single plane in scene 0, series 0.
+    pub(crate) fn plane0(level: u32) -> Self {
+        Self {
+            scene: 0,
+            series: 0,
+            level,
+            z: 0,
+            c: 0,
+            t: 0,
+        }
+    }
+}
+
 impl From<&TileRequest> for TileSourceKey {
     fn from(req: &TileRequest) -> Self {
         let plane = req.plane.get();

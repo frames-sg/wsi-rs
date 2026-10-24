@@ -10,7 +10,7 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::super::common::{compression_from_tag, regular_tiff_level};
+use super::super::common::{averaged_downsample, compression_from_tag, regular_tiff_level};
 use super::super::{compute_tiff_dataset_identity, DatasetLayout, TileSource, TileSourceKey};
 use super::metadata::{parse_ome_xml, OmeDocument, OmeImage, OmePixels, PhysicalSize, PlaneShape};
 use super::VENDOR;
@@ -397,7 +397,7 @@ fn build_series(
         let downsample = if level == 0 {
             1.0
         } else {
-            (base_width as f64 / width as f64 + base_height as f64 / height as f64) / 2.0
+            averaged_downsample((base_width, base_height), (width, height))
         };
         levels.push(regular_tiff_level(
             "OME-TIFF",

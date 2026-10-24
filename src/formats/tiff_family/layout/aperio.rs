@@ -13,8 +13,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    associated_channels, compression_from_tag, finish_single_scene_uint8_tiff_layout, level_area,
-    regular_tiff_level,
+    associated_channels, averaged_downsample, compression_from_tag,
+    finish_single_scene_uint8_tiff_layout, level_area, regular_tiff_level, tiled_ifd_descriptor,
+    TiledIfdDescriptor,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -23,16 +24,6 @@ const TIFF_SUBFILE_TYPE: u16 = 254;
 // ── AperioInterpreter ────────────────────────────────────────────
 
 pub(crate) struct AperioInterpreter;
-
-/// Intermediate: a tiled IFD classified as a pyramid level.
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
-}
 
 /// Intermediate: a stripped IFD classified as an associated image.
 struct StrippedIfd {
@@ -73,7 +64,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
-        let mut tiled_ifds: Vec<TiledIfd> = Vec::new();
+        let mut tiled_ifds: Vec<TiledIfdDescriptor> = Vec::new();
         let mut stripped_ifds: Vec<StrippedIfd> = Vec::new();
 
         // Phase 1: Classify each top-level IFD as tiled (pyramid) or stripped (associated)
@@ -82,21 +73,9 @@ impl TiffLayoutInterpreter for AperioInterpreter {
 
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
                 // Tiled IFD → pyramid level
-                let width = container.get_u64(ifd_id, tags::IMAGE_WIDTH)?;
-                let height = container.get_u64(ifd_id, tags::IMAGE_LENGTH)?;
-                let tile_width = container.get_u32(ifd_id, tags::TILE_WIDTH)?;
-                let tile_height = container.get_u32(ifd_id, tags::TILE_LENGTH)?;
                 let comp_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
                 let compression = compression_from_tag(comp_val);
-
-                tiled_ifds.push(TiledIfd {
-                    ifd_id,
-                    width,
-                    height,
-                    tile_width,
-                    tile_height,
-                    compression,
-                });
+                tiled_ifds.push(tiled_ifd_descriptor(container, ifd_id, compression)?);
             } else {
                 // Stripped IFD → associated image
                 let width =
@@ -138,14 +117,10 @@ impl TiffLayoutInterpreter for AperioInterpreter {
         tiled_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Some Aperio slides store different JPEG tables per pyramid level.
-        let base_jpeg_tables = container
-            .get_bytes(tiled_ifds[0].ifd_id, tags::JPEG_TABLES)
-            .ok()
-            .map(|b| b.to_vec());
+        let base_jpeg_tables = tiled_ifds[0].jpeg_tables.clone();
 
         // Build levels and tile sources
-        let base_w = tiled_ifds[0].width as f64;
-        let base_h = tiled_ifds[0].height as f64;
+        let base_dims = (tiled_ifds[0].width, tiled_ifds[0].height);
 
         let mut levels = Vec::new();
         let mut tile_sources = HashMap::new();
@@ -154,9 +129,7 @@ impl TiffLayoutInterpreter for AperioInterpreter {
             let downsample = if level_idx == 0 {
                 1.0
             } else {
-                let dw = base_w / tifd.width as f64;
-                let dh = base_h / tifd.height as f64;
-                (dw + dh) / 2.0
+                averaged_downsample(base_dims, (tifd.width, tifd.height))
             };
 
             levels.push(regular_tiff_level(
@@ -168,19 +141,10 @@ impl TiffLayoutInterpreter for AperioInterpreter {
                 downsample,
             )?);
 
-            let key = TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: level_idx as u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            };
+            let key = TileSourceKey::plane0(level_idx as u32);
             let jpeg_tables = if tifd.compression == Compression::Jpeg {
-                container
-                    .get_bytes(tifd.ifd_id, tags::JPEG_TABLES)
-                    .ok()
-                    .map(|bytes| bytes.to_vec())
+                tifd.jpeg_tables
+                    .clone()
                     .or_else(|| base_jpeg_tables.clone())
             } else {
                 None

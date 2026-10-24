@@ -8,7 +8,7 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    add_tiff_resolution_properties, associated_channels, compression_from_tag,
+    add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
     finish_single_scene_uint8_tiff_layout, regular_tiff_level, stripped_tile_source,
     tiled_ifd_descriptor,
 };
@@ -91,15 +91,14 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             ));
         }
 
-        let base_width = tiled[0].width as f64;
-        let base_height = tiled[0].height as f64;
+        let base_dims = (tiled[0].width, tiled[0].height);
         let mut levels = Vec::with_capacity(tiled.len());
         let mut tile_sources = HashMap::with_capacity(tiled.len());
         for (index, ifd) in tiled.iter().enumerate() {
             let downsample = if index == 0 {
                 1.0
             } else {
-                ((base_width / ifd.width as f64) + (base_height / ifd.height as f64)) / 2.0
+                averaged_downsample(base_dims, (ifd.width, ifd.height))
             };
             levels.push(regular_tiff_level(
                 "Huron",
@@ -110,14 +109,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
                 downsample,
             )?);
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0,
-                    series: 0,
-                    level: index as u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(index as u32),
                 TileSource::TiledIfd {
                     ifd_id: ifd.ifd_id,
                     jpeg_tables: ifd.jpeg_tables.clone(),
