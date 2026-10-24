@@ -610,16 +610,7 @@ fn reads_htj2k_rpcl_raw_compressed_frame_without_dicom_padding() {
     let codestream = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(codestream.clone()),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, codestream.clone()),
     );
 
     let raw = read_first_raw_compressed_tile(&path);

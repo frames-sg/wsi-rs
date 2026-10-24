@@ -58,6 +58,16 @@ impl TestDicomOptions {
         }
     }
 
+    /// The native fixture with its Pixel Data replaced by one encapsulated
+    /// frame of `transfer_syntax`.
+    pub(super) fn encapsulated(transfer_syntax: &'static str, frame: Vec<u8>) -> Self {
+        Self {
+            transfer_syntax,
+            pixel_data: TestPixelData::Encapsulated(frame),
+            ..Self::native(Vec::new())
+        }
+    }
+
     /// The native fixture with unsigned samples in 16-bit words.
     pub(super) fn uint16(pixel_data: TestPixelData) -> Self {
         Self {
