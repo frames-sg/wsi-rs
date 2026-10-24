@@ -1,10 +1,12 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
 use wsi_rs_perf::{Engine, WorkerConfig, DEFAULT_CACHE_BYTES, PINNED_OPENSLIDE_VERSION};
 use wsi_rs_test_support::openslide::{configured_library, LIBRARY_ENV_VARS};
+
+use crate::commands::process::{capture, cargo, git, git_dirty, run_cargo, workspace_root};
 
 const CACHE_BYTES_ENV: &str = "WSI_RS_PERF_CACHE_BYTES";
 const RESULT_DIR_ENV: &str = "WSI_RS_PERF_RESULTS_DIR";
@@ -291,46 +293,26 @@ fn exact_library_path(path: &Path, description: &str) -> Result<PathBuf, String>
 }
 
 fn build_package(package: &str) -> Result<(), String> {
-    eprintln!("+ cargo build --locked --release -p {package}");
-    let status = Command::new(cargo())
-        .args(["build", "--locked", "--release", "-p", package])
-        .status()
-        .map_err(|err| format!("failed to build {package}: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to build {package}: cargo exited with {status}"
-        ))
-    }
+    run_cargo(&["build", "--locked", "--release", "-p", package])
+        .map_err(|error| format!("failed to build {package}: {error}"))
 }
 
 fn build_wsi_rs_shim() -> Result<(), String> {
-    let feature = performance_gpu_feature()?;
     let mut features = vec!["route-telemetry".to_string()];
-    let mut args = vec![
-        "build".to_string(),
-        "--locked".to_string(),
-        "--release".to_string(),
-        "-p".to_string(),
-        "wsi-rs-openslide-shim".to_string(),
-    ];
-    if let Some(feature) = feature {
+    if let Some(feature) = performance_gpu_feature()? {
         features.push(format!("wsi-rs/{feature}"));
     }
-    args.extend(["--features".to_string(), features.join(",")]);
-    eprintln!("+ cargo {}", args.join(" "));
-    let status = Command::new(cargo())
-        .args(&args)
-        .status()
-        .map_err(|err| format!("failed to build wsi-rs-openslide-shim: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "cargo build for wsi-rs-openslide-shim exited with {status}"
-        ))
-    }
+    let features = features.join(",");
+    run_cargo(&[
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "wsi-rs-openslide-shim",
+        "--features",
+        &features,
+    ])
+    .map_err(|error| format!("failed to build wsi-rs-openslide-shim: {error}"))
 }
 
 pub(super) fn target_directory() -> Result<PathBuf, String> {
@@ -342,30 +324,14 @@ pub(super) fn target_directory() -> Result<PathBuf, String> {
             workspace_root().join(path)
         });
     }
-    let output = Command::new(cargo())
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .output()
-        .map_err(|err| format!("failed to run cargo metadata: {err}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let metadata: Value = serde_json::from_slice(&output.stdout)
+    let stdout = capture(cargo(), ["metadata", "--format-version", "1", "--no-deps"])?;
+    let metadata: Value = serde_json::from_str(&stdout)
         .map_err(|err| format!("invalid cargo metadata JSON: {err}"))?;
     metadata
         .get("target_directory")
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .ok_or_else(|| "cargo metadata did not report target_directory".into())
-}
-
-pub(super) fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask manifest has a workspace parent")
-        .to_path_buf()
 }
 
 pub(super) fn shim_library_name() -> &'static str {
@@ -398,12 +364,17 @@ pub(super) fn result_dir() -> PathBuf {
     std::env::var_os(RESULT_DIR_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let host = command_text(Command::new("hostname"))
-                .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
-            let commit =
-                git_text(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
-            let dirty = git_status_dirty();
-            default_result_dir(&host, &commit, dirty)
+            let host = capture("hostname", std::iter::empty::<&str>()).map_or_else(
+                |_| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+                |host| host.trim().to_string(),
+            );
+            let commit = git(&["rev-parse", "--short=12", "HEAD"])
+                .ok()
+                .map(|commit| commit.trim().to_string())
+                .filter(|commit| !commit.is_empty())
+                .unwrap_or_else(|| "unknown".into());
+            // An unknown tree state gets its own directory, never a clean one.
+            default_result_dir(&host, &commit, git_dirty().ok())
         })
 }
 
@@ -441,40 +412,12 @@ fn path_component(raw: &str) -> String {
     }
 }
 
-fn command_text(mut command: Command) -> Option<String> {
-    let output = command.output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn git_text(args: &[&str]) -> Option<String> {
-    let mut command = Command::new("git");
-    command.current_dir(workspace_root()).args(args);
-    command_text(command).filter(|value| !value.is_empty())
-}
-
-fn git_status_dirty() -> Option<bool> {
-    let mut command = Command::new("git");
-    let output = command
-        .current_dir(workspace_root())
-        .args(["status", "--porcelain", "--untracked-files=normal"])
-        .output()
-        .ok()?;
-    output.status.success().then_some(!output.stdout.is_empty())
-}
-
 pub(super) fn default_public_fixture() -> PathBuf {
     workspace_root()
         .join("tests")
         .join("fixtures")
         .join("jp2k")
         .join("rgb_nomct.j2k")
-}
-
-fn cargo() -> OsString {
-    std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
 
 #[cfg(test)]

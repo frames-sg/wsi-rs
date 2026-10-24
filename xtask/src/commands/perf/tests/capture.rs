@@ -123,7 +123,7 @@ fn run_context_rejects_non_objects_and_worker_mismatches() {
 
 #[test]
 fn custom_single_engine_slide_resolution_preserves_path_identity() {
-    let path = crate::commands::perf::worker::workspace_root().join("Cargo.toml");
+    let path = crate::commands::process::workspace_root().join("Cargo.toml");
     let slides = resolve_single_engine_slides(&[path.display().to_string()], Engine::WsiRs)
         .expect("custom slide");
 

@@ -3,9 +3,10 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use serde::Deserialize;
+
+use super::process::{capture, run_quiet};
 
 const OFFICIAL_EXPORTS: [&str; 23] = [
     "openslide_cache_create",
@@ -428,8 +429,8 @@ fn compile_and_run_smoke(
                 source.as_os_str().to_owned(),
                 OsString::from(format!("/Fe:{}", executable.display())),
             ];
-            run("cl", &args)?;
-            run(executable.as_os_str(), &[library.as_os_str().to_owned()])
+            run_quiet("cl", &args)?;
+            run_quiet(executable.as_os_str(), &[library.as_os_str().to_owned()])
         }
         ArtifactPlatform::MacOS | ArtifactPlatform::Linux => {
             let parent = library
@@ -447,8 +448,8 @@ fn compile_and_run_smoke(
                 OsString::from("-o"),
                 executable.as_os_str().to_owned(),
             ];
-            run("cc", &args)?;
-            run(executable.as_os_str(), &[])
+            run_quiet("cc", &args)?;
+            run_quiet(executable.as_os_str(), &[])
         }
     }
 }
@@ -484,42 +485,6 @@ int main(void) {
     return 0;
 }
 "#
-    }
-}
-
-fn capture<I, S>(program: &str, arguments: I) -> Result<String, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = Command::new(program)
-        .args(arguments)
-        .output()
-        .map_err(|err| format!("failed to start `{program}`: {err}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(format!(
-            "`{program}` exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ))
-    }
-}
-
-fn run(program: impl AsRef<OsStr>, arguments: &[OsString]) -> Result<(), String> {
-    let program = program.as_ref();
-    let status = Command::new(program)
-        .args(arguments)
-        .status()
-        .map_err(|err| format!("failed to start `{}`: {err}", program.to_string_lossy()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{}` exited with {status}",
-            program.to_string_lossy()
-        ))
     }
 }
 

@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::process::Command;
 
 use serde_json::Value;
 use wsi_rs_perf::Engine;
@@ -15,6 +14,7 @@ use super::worker::{
     cache_bytes, prepare_bench, prepare_pair, previous_invocation, result_dir, run_bench,
     run_pixel_comparison, BenchInvocation, WORKER_BINARY,
 };
+use crate::commands::process;
 
 const DEFAULT_REPEAT_COUNT: u32 = 5;
 const SLIDES_ENV: &str = "WSI_RS_PERF_SLIDES";
@@ -456,27 +456,19 @@ fn parse_worker_matrix(raw: &str) -> Result<Vec<usize>, String> {
 
 fn physical_core_count() -> (usize, String) {
     if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("sysctl")
-            .args(["-n", "hw.physicalcpu"])
-            .output()
+        if let Some(count) = process::capture("sysctl", ["-n", "hw.physicalcpu"])
+            .ok()
+            .and_then(|stdout| parse_positive_usize(&stdout))
         {
-            if output.status.success() {
-                if let Some(count) = parse_positive_usize(&String::from_utf8_lossy(&output.stdout))
-                {
-                    return (count, "macos:sysctl -n hw.physicalcpu".into());
-                }
-            }
+            return (count, "macos:sysctl -n hw.physicalcpu".into());
         }
     }
     if cfg!(target_os = "linux") {
-        if let Ok(output) = Command::new("lscpu").arg("-p=CORE,SOCKET").output() {
-            if output.status.success() {
-                if let Some(count) =
-                    parse_linux_physical_cores(&String::from_utf8_lossy(&output.stdout))
-                {
-                    return (count, "linux:lscpu -p=CORE,SOCKET".into());
-                }
-            }
+        if let Some(count) = process::capture("lscpu", ["-p=CORE,SOCKET"])
+            .ok()
+            .and_then(|stdout| parse_linux_physical_cores(&stdout))
+        {
+            return (count, "linux:lscpu -p=CORE,SOCKET".into());
         }
     }
     let count = std::thread::available_parallelism()

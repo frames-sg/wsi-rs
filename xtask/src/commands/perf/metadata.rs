@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -13,9 +12,10 @@ use super::comparison::{P95_MIN_SAMPLE_COUNT, P99_MIN_SAMPLE_COUNT, REGRESSION_R
 use super::manifest::SlideSpec;
 use super::worker::{
     cache_bytes, default_public_fixture, performance_gpu_feature, required_version_prefix,
-    result_dir, workspace_root, WORKER_BINARY,
+    result_dir, WORKER_BINARY,
 };
 use super::PERF_CAPTURE_SCHEMA_VERSION;
+use crate::commands::process::{git_dirty, git_lenient, run_capture_lenient, workspace_root};
 
 const TRACKED_ENV_VARS: [&str; 20] = [
     "RUSTFLAGS",
@@ -105,13 +105,13 @@ fn capture_metadata(
         && !runs.is_empty();
     let mut metadata = json!({
         "toolchain": {
-            "rustc": command_stdout("rustc", &["--version"]),
-            "cargo": command_stdout("cargo", &["--version"]),
+            "rustc": run_capture_lenient("rustc", &["--version"]),
+            "cargo": run_capture_lenient("cargo", &["--version"]),
         },
         "host": {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "uname": command_stdout("uname", &["-a"]),
+            "uname": run_capture_lenient("uname", &["-a"]),
             "cpu": cpu_identity(),
             "gpu": gpu_identity(),
             "pinned_host_id": std::env::var("WSI_RS_PERF_PINNED_HOST_ID").ok(),
@@ -297,10 +297,11 @@ fn run_decode_concurrency_matches(library: Engine, run: &Value) -> bool {
 
 fn git_metadata() -> Value {
     json!({
-        "branch": command_stdout("git", &["branch", "--show-current"]),
-        "commit": command_stdout("git", &["rev-parse", "HEAD"]),
-        "dirty": !command_stdout("git", &["status", "--porcelain"]).is_empty(),
-        "status_short": command_stdout("git", &["status", "--short"]),
+        "branch": git_lenient(&["branch", "--show-current"]),
+        "commit": git_lenient(&["rev-parse", "HEAD"]),
+        // A tree whose state cannot be read is recorded as dirty, never clean.
+        "dirty": git_dirty().unwrap_or(true),
+        "status_short": git_lenient(&["status", "--short"]),
     })
 }
 
@@ -317,28 +318,14 @@ fn tracked_environment() -> Value {
     Value::Object(env)
 }
 
-fn command_stdout(program: &str, args: &[&str]) -> String {
-    match Command::new(program).args(args).output() {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
-        Ok(output) => format!(
-            "unavailable: {program} exited with {}; {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(err) => format!("unavailable: failed to run {program}: {err}"),
-    }
-}
-
 fn cpu_identity() -> String {
     if cfg!(target_os = "macos") {
-        let brand = command_stdout("sysctl", &["-n", "machdep.cpu.brand_string"]);
-        let model = command_stdout("sysctl", &["-n", "hw.model"]);
-        let cores = command_stdout("sysctl", &["-n", "hw.ncpu"]);
+        let brand = run_capture_lenient("sysctl", &["-n", "machdep.cpu.brand_string"]);
+        let model = run_capture_lenient("sysctl", &["-n", "hw.model"]);
+        let cores = run_capture_lenient("sysctl", &["-n", "hw.ncpu"]);
         return format!("model={model}; cores={cores}; brand={brand}");
     }
-    command_stdout(
+    run_capture_lenient(
         "sh",
         &[
             "-c",
@@ -349,7 +336,7 @@ fn cpu_identity() -> String {
 
 fn gpu_identity() -> String {
     if cfg!(target_os = "macos") {
-        let text = command_stdout(
+        let text = run_capture_lenient(
             "system_profiler",
             &["SPDisplaysDataType", "-detailLevel", "mini"],
         );
@@ -365,7 +352,7 @@ fn gpu_identity() -> String {
         return text;
     }
     if cfg!(target_os = "linux") {
-        return command_stdout(
+        return run_capture_lenient(
             "nvidia-smi",
             &[
                 "--query-gpu=name,uuid,driver_version",

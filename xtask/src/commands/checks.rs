@@ -3,7 +3,7 @@ use std::{env, ffi::OsString, fs, path::Path};
 use wsi_rs_test_support::corpus;
 
 use super::process::{
-    ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
+    cargo, ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
 use super::{artifact, coverage};
 
@@ -409,11 +409,7 @@ fn run_ignored_with(
     let base = test_command(runner, target, features, release);
     let mut list = base.clone();
     list.extend(["--", "--ignored", "--list"]);
-    let output = run_program_capture(
-        env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
-        &list,
-        &[],
-    )?;
+    let output = run_program_capture(cargo(), &list, &[])?;
     let names: Vec<_> = output
         .lines()
         .filter_map(|line| line.strip_suffix(": test"))

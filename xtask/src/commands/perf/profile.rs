@@ -4,9 +4,10 @@ use super::capture::worker_count;
 use wsi_rs_perf::{Engine, DEFAULT_CACHE_BYTES};
 
 use super::worker::{
-    cache_bytes, shim_library_name, target_directory, worker_config, worker_path, workspace_root,
-    BenchInvocation, RAYON_NUM_THREADS_ENV,
+    cache_bytes, shim_library_name, target_directory, worker_config, worker_path, BenchInvocation,
+    RAYON_NUM_THREADS_ENV,
 };
+use crate::commands::process::workspace_root;
 
 const PROFILE_DIR_ENV: &str = "WSI_RS_PERF_PROFILE_DIR";
 

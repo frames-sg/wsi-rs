@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::lcov::FileCoverage;
 use super::paths::{git_repo_root, is_production_coverage_path};
+use crate::commands::process::git_in;
 
 pub(super) const DEFAULT_CHANGED_PATH_COVERAGE_THRESHOLD: f64 = 80.0;
 
@@ -252,19 +252,7 @@ pub(super) fn collect_git_diff_lines(
     if let Some(position) = args.iter().position(|arg| *arg == "--name-only") {
         args[position] = "--unified=0";
     }
-    let output = Command::new("git")
-        .current_dir(repo_root)
-        .args(&args)
-        .output()
-        .map_err(|err| format!("failed to start `git {}`: {err}", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git {}` exited with {}",
-            args.join(" "),
-            output.status
-        ));
-    }
-    parse_diff_added_lines(lines, &String::from_utf8_lossy(&output.stdout));
+    parse_diff_added_lines(lines, &git_in(repo_root, &args)?);
     Ok(())
 }
 
@@ -312,24 +300,13 @@ fn parse_new_hunk_start(hunk: &str) -> Option<u32> {
 }
 
 pub(super) fn untracked_rust_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
-    let args = ["ls-files", "--others", "--exclude-standard"];
-    let output = Command::new("git")
-        .current_dir(repo_root)
-        .args(args)
-        .output()
-        .map_err(|err| format!("failed to start `git {}`: {err}", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git {}` exited with {}",
-            args.join(" "),
-            output.status
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(PathBuf::from)
-        .filter(|path| is_production_coverage_path(path))
-        .collect())
+    Ok(
+        git_in(repo_root, &["ls-files", "--others", "--exclude-standard"])?
+            .lines()
+            .map(PathBuf::from)
+            .filter(|path| is_production_coverage_path(path))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

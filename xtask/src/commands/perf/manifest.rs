@@ -5,7 +5,7 @@ use wsi_rs_test_support::corpus::{
     self, CorpusEntry as ManifestSlide, CorpusManifest as ParityManifest, Tolerance,
 };
 
-use super::worker::workspace_root;
+use crate::commands::process::workspace_root;
 
 const MANIFEST_ENV: &str = "WSI_RS_PERF_MANIFEST";
 

@@ -1,21 +1,14 @@
 #[cfg(test)]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use crate::commands::process::git_in;
+
+/// The repository containing the current directory, which coverage gates
+/// inspect.
 pub(super) fn git_repo_root() -> Result<PathBuf, String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|err| format!("failed to start `git rev-parse --show-toplevel`: {err}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git rev-parse --show-toplevel` exited with {}",
-            output.status
-        ));
-    }
     Ok(PathBuf::from(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        git_in(Path::new("."), &["rev-parse", "--show-toplevel"])?.trim(),
     ))
 }
 
@@ -76,21 +69,6 @@ pub(super) fn collect_git_paths(
     paths: &mut BTreeSet<PathBuf>,
     args: &[&str],
 ) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|err| format!("failed to start `git {}`: {err}", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git {}` exited with {}",
-            args.join(" "),
-            output.status
-        ));
-    }
-    paths.extend(
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(PathBuf::from),
-    );
+    paths.extend(git_in(Path::new("."), args)?.lines().map(PathBuf::from));
     Ok(())
 }

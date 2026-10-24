@@ -303,7 +303,7 @@ fn declared_plan_validation_rejects_malformed_or_extra_run_cells() {
 
 #[test]
 fn worker_run_validation_checks_kind_engine_repeat_and_canonical_slide() {
-    let slide = crate::commands::perf::worker::workspace_root().join("Cargo.toml");
+    let slide = crate::commands::process::workspace_root().join("Cargo.toml");
     let canonical = slide.canonicalize().expect("canonical slide");
     let valid = || {
         json!({
