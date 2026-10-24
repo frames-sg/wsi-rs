@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, OsString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
@@ -39,6 +40,7 @@ type GetVersion = unsafe extern "C" fn() -> *const c_char;
 type GetLevelCount = unsafe extern "C" fn(*mut OpenSlideHandle) -> c_int;
 type GetLevelDimensions = unsafe extern "C" fn(*mut OpenSlideHandle, c_int, *mut i64, *mut i64);
 type GetLevelDownsample = unsafe extern "C" fn(*mut OpenSlideHandle, c_int) -> f64;
+type GetPropertyNames = unsafe extern "C" fn(*mut OpenSlideHandle) -> *const *const c_char;
 type GetPropertyValue = unsafe extern "C" fn(*mut OpenSlideHandle, *const c_char) -> *const c_char;
 type ReadRegion = unsafe extern "C" fn(*mut OpenSlideHandle, *mut u32, i64, i64, c_int, i64, i64);
 type CacheCreate = unsafe extern "C" fn(usize) -> *mut OpenSlideCacheHandle;
@@ -57,6 +59,7 @@ struct Api {
     get_level_count: GetLevelCount,
     get_level_dimensions: GetLevelDimensions,
     get_level_downsample: GetLevelDownsample,
+    get_property_names: GetPropertyNames,
     get_property_value: GetPropertyValue,
     read_region: ReadRegion,
     cache: Option<(CacheCreate, SetCache, CacheRelease)>,
@@ -94,6 +97,7 @@ impl OpenSlideApi {
                 get_level_count: load_symbol(&library, b"openslide_get_level_count\0")?,
                 get_level_dimensions: load_symbol(&library, b"openslide_get_level_dimensions\0")?,
                 get_level_downsample: load_symbol(&library, b"openslide_get_level_downsample\0")?,
+                get_property_names: load_symbol(&library, b"openslide_get_property_names\0")?,
                 get_property_value: load_symbol(&library, b"openslide_get_property_value\0")?,
                 read_region: load_symbol(&library, b"openslide_read_region\0")?,
                 cache,
@@ -313,6 +317,27 @@ impl OpenSlide {
         self.property_value(&name).ok().flatten()
     }
 
+    /// Every property the library reports, read through the loaded library
+    /// rather than a separately installed command-line tool.
+    pub fn properties(&self) -> Result<BTreeMap<String, String>, String> {
+        // SAFETY: `raw` is live and the returned array is null terminated.
+        let names = unsafe { (self.api.get_property_names)(self.raw) };
+        self.check_error()?;
+        // SAFETY: OpenSlide returns a library-owned, null-terminated array of
+        // C strings that stays valid while the handle is open.
+        let names = unsafe { c_string_array(names) };
+        names
+            .into_iter()
+            .map(|name| {
+                let key = CString::new(name.as_str()).map_err(|error| error.to_string())?;
+                let value = self
+                    .property_value(&key)?
+                    .ok_or_else(|| format!("OpenSlide lists property {name} without a value"))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
     pub fn level0_bounds(&self) -> Result<Option<OpenSlideBounds>, String> {
         let x = self.property_value(c"openslide.bounds-x")?;
         let y = self.property_value(c"openslide.bounds-y")?;
@@ -407,24 +432,9 @@ impl OpenSlide {
         };
         // SAFETY: `raw` is live and the returned array is null terminated.
         let names = unsafe { names(self.raw) };
-        if names.is_null() {
-            return Vec::new();
-        }
-        let mut output = Vec::new();
-        for index in 0.. {
-            // SAFETY: OpenSlide guarantees a null-terminated pointer array.
-            let name = unsafe { *names.add(index) };
-            if name.is_null() {
-                break;
-            }
-            // SAFETY: Each non-null entry is a library-owned C string.
-            output.push(
-                unsafe { CStr::from_ptr(name) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-        output
+        // SAFETY: OpenSlide returns a library-owned, null-terminated array of
+        // C strings that stays valid while the handle is open.
+        unsafe { c_string_array(names) }
     }
 
     pub fn associated_dimensions(&self, name: &str) -> Result<(u32, u32), String> {
@@ -534,6 +544,32 @@ fn open_handle(
     };
     slide.check_error()?;
     Ok(slide)
+}
+
+/// Copy a null-terminated array of C strings; a null array is empty.
+///
+/// # Safety
+/// A non-null `array` must point to C string pointers ending in null, each
+/// valid for the duration of the copy.
+unsafe fn c_string_array(array: *const *const c_char) -> Vec<String> {
+    if array.is_null() {
+        return Vec::new();
+    }
+    let mut output = Vec::new();
+    for index in 0.. {
+        // SAFETY: The caller guarantees a null-terminated pointer array.
+        let entry = unsafe { *array.add(index) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: Each non-null entry is a live NUL-terminated C string.
+        output.push(
+            unsafe { CStr::from_ptr(entry) }
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    output
 }
 
 fn argb_to_rgba(argb: Vec<u32>) -> Vec<u8> {
@@ -656,6 +692,7 @@ mod tests {
     struct FakeSlide {
         mode: FakeMode,
         error: Option<CString>,
+        property_names: [*const c_char; 5],
     }
 
     unsafe extern "C" fn fake_open(path: *const c_char) -> *mut OpenSlideHandle {
@@ -680,7 +717,19 @@ mod tests {
         let error = path
             .contains("open-error")
             .then(|| CString::new("fake open failure").unwrap());
-        Box::into_raw(Box::new(FakeSlide { mode, error })).cast()
+        let property_names = [
+            c"openslide.bounds-x".as_ptr(),
+            c"openslide.bounds-y".as_ptr(),
+            c"openslide.bounds-width".as_ptr(),
+            c"openslide.bounds-height".as_ptr(),
+            ptr::null(),
+        ];
+        Box::into_raw(Box::new(FakeSlide {
+            mode,
+            error,
+            property_names,
+        }))
+        .cast()
     }
 
     unsafe extern "C" fn fake_close(slide: *mut OpenSlideHandle) {
@@ -738,6 +787,12 @@ mod tests {
 
     unsafe extern "C" fn fake_level_downsample(_slide: *mut OpenSlideHandle, level: c_int) -> f64 {
         f64::from(1 << level)
+    }
+
+    unsafe extern "C" fn fake_property_names(slide: *mut OpenSlideHandle) -> *const *const c_char {
+        // SAFETY: Every handle comes from `fake_open` and remains live.
+        let slide = unsafe { &*slide.cast::<FakeSlide>() };
+        slide.property_names.as_ptr()
     }
 
     unsafe extern "C" fn fake_property_value(
@@ -835,6 +890,7 @@ mod tests {
             get_level_count: fake_level_count,
             get_level_dimensions: fake_level_dimensions,
             get_level_downsample: fake_level_downsample,
+            get_property_names: fake_property_names,
             get_property_value: fake_property_value,
             read_region: fake_read_region,
             cache: Some((fake_cache_create, fake_set_cache, fake_cache_release)),
@@ -945,6 +1001,18 @@ mod tests {
         assert_eq!(plain.level_dimensions(1), (2_048, 2_048));
         assert_eq!(plain.property("openslide.bounds-x").as_deref(), Some("100"));
         assert_eq!(
+            plain.properties().unwrap(),
+            BTreeMap::from(
+                [
+                    ("openslide.bounds-x", "100"),
+                    ("openslide.bounds-y", "200"),
+                    ("openslide.bounds-width", "3000"),
+                    ("openslide.bounds-height", "2000"),
+                ]
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+            )
+        );
+        assert_eq!(
             plain.bounds(),
             Some(OpenSlideBounds {
                 x: 100,
@@ -979,6 +1047,10 @@ mod tests {
             .open_with_cache(Path::new("zero-levels.svs"), &cache)
             .unwrap();
         assert!(zero.levels().unwrap_err().contains("no levels"));
+        assert!(zero
+            .properties()
+            .unwrap_err()
+            .contains("lists property openslide.bounds-x without a value"));
         assert_eq!(zero.level0_bounds().unwrap(), None);
         let invalid = api
             .open_with_cache(Path::new("invalid-dimensions.svs"), &cache)
