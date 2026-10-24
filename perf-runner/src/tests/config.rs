@@ -55,10 +55,49 @@ fn uses_reproducible_defaults() {
     let config = WorkerConfig::parse(required_args()).expect("valid arguments");
 
     assert_eq!(config.repeat_index, 0);
-    assert_eq!(config.cache_bytes, 256 * 1024 * 1024);
+    assert_eq!(config.cache_bytes, DEFAULT_CACHE_BYTES);
+    assert_eq!(DEFAULT_CACHE_BYTES, 256 * 1024 * 1024);
     assert_eq!(config.workers, 1);
     assert_eq!(config.only, None);
     assert_eq!(config.required_version_prefix, None);
+}
+
+#[test]
+fn serialized_arguments_parse_back_to_the_same_configuration() {
+    let full = WorkerConfig {
+        engine: Engine::OpenSlide,
+        library_path: PathBuf::from("/tmp/libopenslide.dylib"),
+        slide_path: PathBuf::from("/tmp/slides/fixture with spaces.svs"),
+        repeat_index: 3,
+        cache_bytes: 4_096,
+        workers: 2,
+        only: Some("zoom_trace".into()),
+        required_version_prefix: Some(PINNED_OPENSLIDE_VERSION.into()),
+        comparison_library: Some(PathBuf::from("/tmp/reference/libopenslide.dylib")),
+    };
+    let minimal = WorkerConfig {
+        engine: Engine::WsiRs,
+        only: None,
+        required_version_prefix: None,
+        comparison_library: None,
+        ..full.clone()
+    };
+
+    for config in [full, minimal] {
+        let args = config.to_args();
+        assert_eq!(WorkerConfig::parse(args.clone()), Ok(config), "{args:?}");
+    }
+}
+
+#[test]
+fn serialized_arguments_omit_absent_optional_flags() {
+    let args = WorkerConfig::parse(required_args())
+        .expect("valid arguments")
+        .to_args();
+
+    for flag in ["--only", "--require-version-prefix", "--compare-library"] {
+        assert!(!args.iter().any(|arg| arg == flag), "{flag} in {args:?}");
+    }
 }
 
 #[test]

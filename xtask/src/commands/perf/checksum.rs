@@ -177,7 +177,8 @@ fn numerical_parity_matches(
     let Some((run, report)) = reports.next() else {
         return false;
     };
-    if reports.next().is_some() || report.reference_version != "4.0.1" {
+    if reports.next().is_some() || report.reference_version != wsi_rs_perf::PINNED_OPENSLIDE_VERSION
+    {
         return false;
     }
     let mut workloads = report

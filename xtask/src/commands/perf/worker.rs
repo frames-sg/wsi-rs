@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
+use wsi_rs_perf::{Engine, WorkerConfig, DEFAULT_CACHE_BYTES, PINNED_OPENSLIDE_VERSION};
 use wsi_rs_test_support::openslide::{configured_library, LIBRARY_ENV_VARS};
 
 const CACHE_BYTES_ENV: &str = "WSI_RS_PERF_CACHE_BYTES";
@@ -14,8 +15,8 @@ pub(super) const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
 /// every core, ignoring RAYON_NUM_THREADS. Later shims ignore it.
 pub(super) const LEGACY_SHIM_JP2K_THREADS_ENV: &str = "WSI_RS_SHIM_JP2K_CPU_THREADS";
 
-pub(super) const DEFAULT_CACHE_BYTES: usize = 256 * 1024 * 1024;
-pub(super) const PINNED_OPENSLIDE_VERSION: &str = "4.0.1";
+/// The performance worker's package and binary name.
+pub(super) const WORKER_BINARY: &str = "wsi-rs-perf";
 
 pub(super) fn performance_gpu_feature() -> Result<Option<String>, String> {
     match std::env::var("WSI_RS_PERF_GPU_FEATURE") {
@@ -39,34 +40,17 @@ pub(super) struct BenchOutput {
     pub(super) decode_cpu_concurrency: Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BenchLibrary {
-    WsiRs,
-    OpenSlide,
-}
-
-impl BenchLibrary {
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::WsiRs => "wsi_rs",
-            Self::OpenSlide => "openslide",
-        }
-    }
-
-    pub(super) fn binary(self) -> &'static str {
-        "wsi-rs-perf"
-    }
-
-    pub(super) fn required_version_prefix(self) -> Option<&'static str> {
-        match self {
-            Self::WsiRs => None,
-            Self::OpenSlide => Some(PINNED_OPENSLIDE_VERSION),
-        }
+/// The OpenSlide version prefix the worker must find for `engine`: the
+/// pinned release for OpenSlide, none for the wsi-rs shim.
+pub(super) fn required_version_prefix(engine: Engine) -> Option<&'static str> {
+    match engine {
+        Engine::WsiRs => None,
+        Engine::OpenSlide => Some(PINNED_OPENSLIDE_VERSION),
     }
 }
 
 pub(super) fn run_bench(
-    library: BenchLibrary,
+    library: Engine,
     invocation: &BenchInvocation,
     slide: &Path,
     repeat: u32,
@@ -85,7 +69,7 @@ pub(super) fn run_bench(
     } else {
         Command::new(&invocation.worker)
     };
-    let args = worker_args(
+    let config = worker_config(
         library,
         invocation,
         slide,
@@ -96,7 +80,7 @@ pub(super) fn run_bench(
     );
     let decode_cpu_concurrency = configure_worker_environment(&mut command, library, workers);
     let output = command
-        .args(&args)
+        .args(config.to_args())
         .output()
         .map_err(|err| format!("failed to run {}: {err}", invocation.worker.display()))?;
     if output.status.success() {
@@ -106,8 +90,7 @@ pub(super) fn run_bench(
         })
     } else {
         Err(format!(
-            "{} failed for {} repeat {repeat}: {}",
-            library.binary(),
+            "{WORKER_BINARY} failed for {} repeat {repeat}: {}",
             slide.display(),
             String::from_utf8_lossy(&output.stderr)
         ))
@@ -121,18 +104,21 @@ pub(super) fn run_pixel_comparison(
     cache_bytes: usize,
     only_workload: Option<&str>,
 ) -> Result<wsi_rs_perf::PixelComparison, String> {
+    let config = WorkerConfig {
+        comparison_library: Some(reference.library.clone()),
+        ..worker_config(
+            Engine::WsiRs,
+            candidate,
+            slide,
+            0,
+            cache_bytes,
+            1,
+            only_workload,
+        )
+    };
     let mut command = Command::new(&candidate.worker);
-    command.args(worker_args(
-        BenchLibrary::WsiRs,
-        candidate,
-        slide,
-        0,
-        cache_bytes,
-        1,
-        only_workload,
-    ));
-    command.arg("--compare-library").arg(&reference.library);
-    configure_worker_environment(&mut command, BenchLibrary::WsiRs, 1);
+    command.args(config.to_args());
+    configure_worker_environment(&mut command, Engine::WsiRs, 1);
     let output = command
         .output()
         .map_err(|error| format!("pixel comparison: {error}"))?;
@@ -147,19 +133,15 @@ pub(super) fn run_pixel_comparison(
         .map_err(|error| format!("invalid pixel comparison: {error}"))
 }
 
-fn configure_worker_environment(
-    command: &mut Command,
-    library: BenchLibrary,
-    workers: usize,
-) -> Value {
+fn configure_worker_environment(command: &mut Command, library: Engine, workers: usize) -> Value {
     match library {
-        BenchLibrary::WsiRs => {
+        Engine::WsiRs => {
             command.env(RAYON_NUM_THREADS_ENV, workers.to_string());
             // Keep a previous-release baseline on the same budget: N handles
             // with one JP2K thread each, as the 0.6 harness configured it.
             command.env(LEGACY_SHIM_JP2K_THREADS_ENV, "1");
         }
-        BenchLibrary::OpenSlide => {
+        Engine::OpenSlide => {
             command.env_remove(RAYON_NUM_THREADS_ENV);
             command.env_remove(LEGACY_SHIM_JP2K_THREADS_ENV);
         }
@@ -167,9 +149,9 @@ fn configure_worker_environment(
     decode_cpu_concurrency(library, workers)
 }
 
-pub(super) fn decode_cpu_concurrency(library: BenchLibrary, workers: usize) -> Value {
+pub(super) fn decode_cpu_concurrency(library: Engine, workers: usize) -> Value {
     match library {
-        BenchLibrary::WsiRs => json!({
+        Engine::WsiRs => json!({
             "client_handles": workers,
             "rayon_threads_process_wide": workers,
             "active_jp2k_thread_budget": workers,
@@ -177,65 +159,60 @@ pub(super) fn decode_cpu_concurrency(library: BenchLibrary, workers: usize) -> V
             "method": "RAYON_NUM_THREADS=N process-wide JP2K pool shared by N client handles",
             "legacy_per_handle_jp2k_threads": 1,
         }),
-        BenchLibrary::OpenSlide => json!({
+        Engine::OpenSlide => json!({
             "client_handles": workers,
             "decoder_threads_per_handle": 1,
             "active_decode_thread_budget": workers,
             "enforced": true,
-            "method": "N independent client handles with one decoder thread per handle in pinned OpenSlide 4.0.1",
+            "method": format!(
+                "N independent client handles with one decoder thread per handle in pinned \
+                 OpenSlide {PINNED_OPENSLIDE_VERSION}"
+            ),
         }),
     }
 }
 
-pub(super) fn worker_args(
-    library: BenchLibrary,
+/// The worker run for `library` on `slide`, requiring the pinned OpenSlide
+/// version where [`required_version_prefix`] asks for one.
+pub(super) fn worker_config(
+    library: Engine,
     invocation: &BenchInvocation,
     slide: &Path,
     repeat: u32,
     cache_bytes: usize,
     workers: usize,
     only_workload: Option<&str>,
-) -> Vec<String> {
-    let mut args = vec![
-        "--engine".to_string(),
-        library.name().to_string(),
-        "--library".to_string(),
-        invocation.library.display().to_string(),
-        "--slide".to_string(),
-        slide.display().to_string(),
-        "--repeat-index".to_string(),
-        repeat.to_string(),
-        "--cache-bytes".to_string(),
-        cache_bytes.to_string(),
-        "--workers".to_string(),
-        workers.to_string(),
-    ];
-    if let Some(workload) = only_workload {
-        args.extend(["--only".to_string(), workload.to_string()]);
+) -> WorkerConfig {
+    WorkerConfig {
+        engine: library,
+        library_path: invocation.library.clone(),
+        slide_path: slide.to_path_buf(),
+        repeat_index: repeat,
+        cache_bytes,
+        workers,
+        only: only_workload.map(str::to_string),
+        required_version_prefix: required_version_prefix(library).map(str::to_string),
+        comparison_library: None,
     }
-    if let Some(version) = library.required_version_prefix() {
-        args.extend(["--require-version-prefix".to_string(), version.to_string()]);
-    }
-    args
 }
 
-pub(super) fn prepare_bench(library: BenchLibrary) -> Result<BenchInvocation, String> {
-    build_package("wsi-rs-perf")?;
-    if matches!(library, BenchLibrary::WsiRs) && std::env::var_os(WSI_RS_LIBRARY_ENV).is_none() {
+pub(super) fn prepare_bench(library: Engine) -> Result<BenchInvocation, String> {
+    build_package(WORKER_BINARY)?;
+    if matches!(library, Engine::WsiRs) && std::env::var_os(WSI_RS_LIBRARY_ENV).is_none() {
         build_wsi_rs_shim()?;
     }
     invocation(library, &target_directory()?)
 }
 
 pub(super) fn prepare_pair() -> Result<(BenchInvocation, BenchInvocation), String> {
-    build_package("wsi-rs-perf")?;
+    build_package(WORKER_BINARY)?;
     if std::env::var_os(WSI_RS_LIBRARY_ENV).is_none() {
         build_wsi_rs_shim()?;
     }
     let target_dir = target_directory()?;
     Ok((
-        invocation(BenchLibrary::WsiRs, &target_dir)?,
-        invocation(BenchLibrary::OpenSlide, &target_dir)?,
+        invocation(Engine::WsiRs, &target_dir)?,
+        invocation(Engine::OpenSlide, &target_dir)?,
     ))
 }
 
@@ -252,19 +229,17 @@ pub(super) fn previous_invocation(
         .transpose()
 }
 
-fn invocation(library: BenchLibrary, target_dir: &Path) -> Result<BenchInvocation, String> {
-    let worker = target_dir
-        .join("release")
-        .join(format!("wsi-rs-perf{}", std::env::consts::EXE_SUFFIX));
+fn invocation(library: Engine, target_dir: &Path) -> Result<BenchInvocation, String> {
+    let worker = worker_path(target_dir);
     let library_path = match library {
-        BenchLibrary::WsiRs => {
+        Engine::WsiRs => {
             let candidate = wsi_rs_library_candidate(
                 target_dir,
                 std::env::var_os(WSI_RS_LIBRARY_ENV).as_deref(),
             );
             exact_library_path(&candidate, "wsi-rs OpenSlide shim")?
         }
-        BenchLibrary::OpenSlide => explicit_openslide_library()?,
+        Engine::OpenSlide => explicit_openslide_library()?,
     };
     if !worker.is_file() {
         return Err(format!(
@@ -276,6 +251,13 @@ fn invocation(library: BenchLibrary, target_dir: &Path) -> Result<BenchInvocatio
         worker,
         library: library_path,
     })
+}
+
+/// The release worker binary in `target_dir`.
+pub(super) fn worker_path(target_dir: &Path) -> PathBuf {
+    target_dir
+        .join("release")
+        .join(format!("{WORKER_BINARY}{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn wsi_rs_library_candidate(target_dir: &Path, override_path: Option<&OsStr>) -> PathBuf {

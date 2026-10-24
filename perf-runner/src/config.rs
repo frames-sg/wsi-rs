@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+/// The worker's decoded-tile cache budget when `--cache-bytes` is absent.
+pub const DEFAULT_CACHE_BYTES: usize = 256 * 1024 * 1024;
+/// The OpenSlide release the benchmark compares against.
+pub const PINNED_OPENSLIDE_VERSION: &str = "4.0.1";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     WsiRs,
@@ -103,12 +108,44 @@ impl WorkerConfig {
             library_path: library_path.ok_or("missing required --library")?,
             slide_path: slide_path.ok_or("missing required --slide")?,
             repeat_index: repeat_index.unwrap_or(0),
-            cache_bytes: cache_bytes.unwrap_or(256 * 1024 * 1024),
+            cache_bytes: cache_bytes.unwrap_or(DEFAULT_CACHE_BYTES),
             workers: workers.unwrap_or(1),
             only,
             required_version_prefix,
             comparison_library,
         })
+    }
+
+    /// The command-line arguments that [`WorkerConfig::parse`] reads back as
+    /// this configuration.
+    pub fn to_args(&self) -> Vec<String> {
+        let mut args = vec![
+            "--engine".to_string(),
+            self.engine.name().to_string(),
+            "--library".to_string(),
+            self.library_path.display().to_string(),
+            "--slide".to_string(),
+            self.slide_path.display().to_string(),
+            "--repeat-index".to_string(),
+            self.repeat_index.to_string(),
+            "--cache-bytes".to_string(),
+            self.cache_bytes.to_string(),
+            "--workers".to_string(),
+            self.workers.to_string(),
+        ];
+        if let Some(workload) = &self.only {
+            args.extend(["--only".to_string(), workload.clone()]);
+        }
+        if let Some(version) = &self.required_version_prefix {
+            args.extend(["--require-version-prefix".to_string(), version.clone()]);
+        }
+        if let Some(library) = &self.comparison_library {
+            args.extend([
+                "--compare-library".to_string(),
+                library.display().to_string(),
+            ]);
+        }
+        args
     }
 }
 

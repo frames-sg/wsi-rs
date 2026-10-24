@@ -115,7 +115,7 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
     let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "baseline-public",
-        CaptureSubject::Current(BenchLibrary::WsiRs),
+        CaptureSubject::Current(Engine::WsiRs),
         &plan(&slides, &matrix, &workloads),
         vec![run],
     )
@@ -180,7 +180,7 @@ fn capture_summary_marks_missing_decode_controls_as_not_equalized() {
     let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "incomplete",
-        CaptureSubject::Current(BenchLibrary::WsiRs),
+        CaptureSubject::Current(Engine::WsiRs),
         &plan(&slides, &matrix, &workloads),
         vec![json!({"workloads": []})],
     )
@@ -224,7 +224,7 @@ fn openslide_capture_summary_records_competitor_library() {
     let workloads = ["region_2k".to_string()];
     let summary = capture_summary(
         "openslide-baseline",
-        CaptureSubject::Current(BenchLibrary::OpenSlide),
+        CaptureSubject::Current(Engine::OpenSlide),
         &plan(&slides, &matrix, &workloads),
         vec![run],
     )

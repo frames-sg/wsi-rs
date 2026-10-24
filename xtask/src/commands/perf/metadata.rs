@@ -5,14 +5,15 @@ use std::process::Command;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use wsi_rs_perf::{Engine, DEFAULT_CACHE_BYTES, PINNED_OPENSLIDE_VERSION};
 use wsi_rs_test_support::corpus::corpus_cache_dir;
 
 use super::capture::WorkerMatrix;
 use super::comparison::{P95_MIN_SAMPLE_COUNT, P99_MIN_SAMPLE_COUNT, REGRESSION_RATIO};
 use super::manifest::SlideSpec;
 use super::worker::{
-    cache_bytes, default_public_fixture, performance_gpu_feature, result_dir, workspace_root,
-    BenchLibrary, DEFAULT_CACHE_BYTES,
+    cache_bytes, default_public_fixture, performance_gpu_feature, required_version_prefix,
+    result_dir, workspace_root, WORKER_BINARY,
 };
 use super::PERF_CAPTURE_SCHEMA_VERSION;
 
@@ -51,16 +52,16 @@ pub(super) struct CapturePlan<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CaptureSubject {
     /// The workspace's wsi-rs build or the pinned OpenSlide library.
-    Current(BenchLibrary),
+    Current(Engine),
     /// A previous release's wsi-rs shim, run by the workspace's worker.
     PreviousRelease,
 }
 
 impl CaptureSubject {
-    fn library(self) -> BenchLibrary {
+    fn library(self) -> Engine {
         match self {
             Self::Current(library) => library,
-            Self::PreviousRelease => BenchLibrary::WsiRs,
+            Self::PreviousRelease => Engine::WsiRs,
         }
     }
 }
@@ -124,10 +125,10 @@ fn capture_metadata(
         },
         "benchmark": {
             "library": library.name(),
-            "binary": library.binary(),
-            "worker_package": "wsi-rs-perf",
+            "binary": WORKER_BINARY,
+            "worker_package": WORKER_BINARY,
             "worker_schema_version": wsi_rs_perf::WORKER_SCHEMA_VERSION,
-            "required_openslide_version": library.required_version_prefix(),
+            "required_openslide_version": required_version_prefix(library),
             "cache_bytes": cache_bytes().unwrap_or(DEFAULT_CACHE_BYTES),
             "client_worker_matrix": worker_matrix.counts,
             "client_process_concurrency": {
@@ -148,7 +149,7 @@ fn capture_metadata(
                 "openslide": {
                     "decoder_threads_per_handle": 1,
                     "active_decode_threads": "worker_count independent handles",
-                    "version": "4.0.1",
+                    "version": PINNED_OPENSLIDE_VERSION,
                 },
             },
             "corpus_tier": corpus_tier(slides),
@@ -258,7 +259,7 @@ fn is_codec_dependency(name: &str) -> bool {
         || matches!(name, "image" | "png" | "flate2" | "weezl")
 }
 
-fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
+fn run_decode_concurrency_matches(library: Engine, run: &Value) -> bool {
     let Some(workers) = run.get("worker_count").and_then(Value::as_u64) else {
         return false;
     };
@@ -271,7 +272,7 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
         return false;
     }
     match library {
-        BenchLibrary::WsiRs => {
+        Engine::WsiRs => {
             control
                 .get("rayon_threads_process_wide")
                 .and_then(Value::as_u64)
@@ -281,7 +282,7 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
                     .and_then(Value::as_u64)
                     == Some(workers)
         }
-        BenchLibrary::OpenSlide => {
+        Engine::OpenSlide => {
             control
                 .get("decoder_threads_per_handle")
                 .and_then(Value::as_u64)

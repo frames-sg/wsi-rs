@@ -1,4 +1,5 @@
 use super::*;
+use crate::PINNED_OPENSLIDE_VERSION;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PixelComparison {
@@ -28,9 +29,9 @@ pub fn compare_pixels(config: &WorkerConfig) -> Result<PixelComparison, String> 
     let candidate_api = OpenSlideApi::load(&config.library_path)?;
     let reference_api = OpenSlideApi::load(reference_path)?;
     let reference_version = reference_api.version()?;
-    if reference_version != "4.0.1" {
+    if reference_version != PINNED_OPENSLIDE_VERSION {
         return Err(format!(
-            "pixel comparison requires OpenSlide 4.0.1, found {reference_version}"
+            "pixel comparison requires OpenSlide {PINNED_OPENSLIDE_VERSION}, found {reference_version}"
         ));
     }
     let candidate_cache = candidate_api.create_cache(config.cache_bytes)?;
