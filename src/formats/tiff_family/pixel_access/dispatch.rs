@@ -773,12 +773,14 @@ impl SlideReader for TiffPixelReader {
                     MAX_COMPRESSED_INPUT_BYTES,
                     "external TIFF JPEG associated image",
                 )
-                .map_err(|err| WsiError::InvalidSlide {
-                    path: path.clone(),
-                    message: format!(
-                        "failed to read external JPEG associated image '{}': {err}",
-                        path.display()
-                    ),
+                .map_err(|err| {
+                    WsiError::invalid_slide(
+                        path,
+                        format!(
+                            "failed to read external JPEG associated image '{}': {err}",
+                            path.display()
+                        ),
+                    )
                 })?;
                 decode_one_jpeg(JpegDecodeJob {
                     data: Cow::Borrowed(&data),

@@ -27,10 +27,7 @@ pub(super) fn preflight_czi_file_with_limits(
     let file_len = file.metadata()?.len();
     preflight_czi_reader_with_limits(&mut file, file_len, limits).map_err(|error| match error {
         WsiError::ResourceLimit { .. } => error,
-        error => WsiError::InvalidSlide {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        },
+        error => WsiError::invalid_slide(path, error.to_string()),
     })?;
     Ok(identity)
 }
@@ -64,10 +61,7 @@ pub(super) fn preflight_czi_open_subblock_bounds(
     let bytes = preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(
         |error| match error {
             WsiError::ResourceLimit { .. } => error,
-            error => WsiError::InvalidSlide {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            },
+            error => WsiError::invalid_slide(path, error.to_string()),
         },
     )?;
     Ok((identity, bytes))

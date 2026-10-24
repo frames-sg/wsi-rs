@@ -91,10 +91,7 @@ impl FileIdentity {
         if actual == self {
             return Ok(());
         }
-        Err(WsiError::InvalidSlide {
-            path: path.to_path_buf(),
-            message: message.into(),
-        })
+        Err(WsiError::invalid_slide(path, message))
     }
 
     fn from_metadata(canonical_path: PathBuf, metadata: std::fs::Metadata) -> Self {

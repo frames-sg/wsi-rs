@@ -146,13 +146,13 @@ impl ZviSlide {
                 source: Box::new(error),
             })?;
         if decompressed.len() != expected_len {
-            return Err(WsiError::InvalidSlide {
-                path: PathBuf::from(&plane.stream_path),
-                message: format!(
+            return Err(WsiError::invalid_slide(
+                Path::new(&plane.stream_path),
+                format!(
                     "ZVI inflated plane has {} bytes, expected {expected_len}",
                     decompressed.len()
                 ),
-            });
+            ));
         }
         crop_decoded_zvi_plane(plane, &decompressed, x, y, w, h)
     }

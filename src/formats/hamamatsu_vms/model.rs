@@ -55,10 +55,7 @@ impl VmsLevel {
     ) -> Result<Self, WsiError> {
         let first = jpegs
             .first()
-            .ok_or_else(|| WsiError::InvalidSlide {
-                path: PathBuf::new(),
-                message: "VMS level has no JPEG shards".into(),
-            })?
+            .ok_or_else(|| WsiError::invalid_slide(Path::new(""), "VMS level has no JPEG shards"))?
             .clone();
         Ok(Self {
             scale_denom,

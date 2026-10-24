@@ -12,15 +12,13 @@ pub(crate) fn dataset_id_from_quickhash(
     hash_label: &str,
 ) -> Result<DatasetId, WsiError> {
     if quickhash.len() < 32 {
-        return Err(WsiError::InvalidSlide {
-            path: path.to_path_buf(),
-            message: format!("{hash_label} too short"),
-        });
+        return Err(WsiError::invalid_slide(
+            path,
+            format!("{hash_label} too short"),
+        ));
     }
-    let value = u128::from_str_radix(&quickhash[..32], 16).map_err(|_| WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: format!("{hash_label} is not valid hex"),
-    })?;
+    let value = u128::from_str_radix(&quickhash[..32], 16)
+        .map_err(|_| WsiError::invalid_slide(path, format!("{hash_label} is not valid hex")))?;
     Ok(DatasetId::new(value))
 }
 

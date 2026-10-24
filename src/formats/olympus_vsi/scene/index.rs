@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -293,9 +293,11 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
 }
 
 fn checked_coord(value: i32, name: &str) -> Result<u32, WsiError> {
-    u32::try_from(value).map_err(|_| WsiError::InvalidSlide {
-        path: PathBuf::new(),
-        message: format!("negative ETS {name} coordinate {value}"),
+    u32::try_from(value).map_err(|_| {
+        WsiError::invalid_slide(
+            Path::new(""),
+            format!("negative ETS {name} coordinate {value}"),
+        )
     })
 }
 
