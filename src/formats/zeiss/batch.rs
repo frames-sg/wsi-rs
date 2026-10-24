@@ -16,7 +16,6 @@ impl ZeissReader {
         if let Some(tiles) = self.cached_batch(reqs) {
             return Ok(tiles);
         }
-        let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
         let limits = self.slide.limits;
         let logical_bytes = reqs
             .iter()
@@ -30,16 +29,8 @@ impl ZeissReader {
             });
         // Stay inside the enclosing reader's existing encoded-unit + two
         // output-buffer reservation, in addition to all configured ceilings.
-        let target = limits
-            .batch_chunk_bytes()
-            .min(limits.operation_transient_bytes())
-            .min(limits.slide_transient_bytes())
-            .min(
-                limits
-                    .encoded_unit_bytes()
-                    .saturating_add(logical_bytes.saturating_mul(2)),
-            );
-        let workers = runtime.cpu_worker_count();
+        let target = crate::formats::geometry::batch_decode_target(limits, logical_bytes);
+        let workers = crate::core::batch::cpu_worker_count();
         let mut output = Vec::with_capacity(reqs.len());
         let mut start = 0;
         while start < reqs.len() {
@@ -170,7 +161,9 @@ impl ZeissReader {
             {
                 owned.into_iter().map(decode).collect::<Vec<_>>()
             } else {
-                runtime.install_jp2k_cpu(|| owned.into_par_iter().map(decode).collect::<Vec<_>>())
+                crate::core::batch::install_codec_cpu(|| {
+                    owned.into_par_iter().map(decode).collect::<Vec<_>>()
+                })
             };
             results.extend(waiting.into_iter().map(decode));
             results.sort_unstable_by_key(|(index, _, _)| *index);
@@ -217,45 +210,13 @@ impl ZeissReader {
         let level = self
             .slide
             .dataset
-            .scenes
-            .get(req.scene.get())?
-            .series
-            .get(req.series.get())?
-            .levels
-            .get(req.level.get() as usize)?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = level.tile_layout
-        else {
-            return None;
-        };
-        if req.col < 0
-            || req.row < 0
-            || req.col as u64 >= tiles_across
-            || req.row as u64 >= tiles_down
-        {
-            return None;
-        }
-        let x = req.col.checked_mul(i64::from(tile_width))?;
-        let y = req.row.checked_mul(i64::from(tile_height))?;
-        let width = level
-            .dimensions
-            .0
-            .saturating_sub(x as u64)
-            .min(u64::from(tile_width)) as u32;
-        let height = level
-            .dimensions
-            .1
-            .saturating_sub(y as u64)
-            .min(u64::from(tile_height)) as u32;
+            .find_level(req.scene, req.series, req.level)?;
+        let tile = level.regular_tile(req).ok().flatten()?;
         Some((
-            x,
-            y,
-            width,
-            height,
+            i64::try_from(tile.x).ok()?,
+            i64::try_from(tile.y).ok()?,
+            tile.width,
+            tile.height,
             level.downsample.round().max(1.0) as i64,
         ))
     }
@@ -281,12 +242,8 @@ impl ZeissReader {
             let info = czi.subblocks().get(index).ok_or_else(|| {
                 WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
             })?;
-            if !matches!(
-                info.compression,
-                CziCompressionMode::UnCompressed
-                    | CziCompressionMode::Jpg
-                    | CziCompressionMode::JpgXr
-            ) || !matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
+            if !info.compression.is_wsi_supported()
+                || !matches!(info.pixel_type, CziPixelType::Bgr24 | CziPixelType::Bgra32)
             {
                 return Ok(None);
             }

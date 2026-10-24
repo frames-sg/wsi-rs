@@ -1,5 +1,4 @@
 use super::jpeg::VmsJpegHeader;
-use super::model::invalid_slide;
 use super::*;
 use crate::formats::ini::{parse_ini_file_with_budget, ParsedIni};
 
@@ -22,7 +21,7 @@ pub(super) fn parse_vms_ini_with_budget(
     parse_ini_file_with_budget(
         path,
         KEY_FILE_MAX_SIZE,
-        |path| invalid_slide(path, "VMS key file too large"),
+        |path| WsiError::invalid_slide(path, "VMS key file too large"),
         false,
         budget,
     )
@@ -35,9 +34,9 @@ pub(super) fn parse_u32(
 ) -> Result<u32, WsiError> {
     group
         .get(key)
-        .ok_or_else(|| invalid_slide(path, format!("missing {key}")))?
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing {key}")))?
         .parse::<u32>()
-        .map_err(|_| invalid_slide(path, format!("invalid integer for {key}")))
+        .map_err(|_| WsiError::invalid_slide(path, format!("invalid integer for {key}")))
 }
 
 pub(super) struct ImageDims {
@@ -58,30 +57,32 @@ pub(super) fn parse_image_key_suffix(path: &Path, key: &str) -> Result<ImageDims
     let trimmed = suffix
         .strip_prefix('(')
         .and_then(|value| value.strip_suffix(')'))
-        .ok_or_else(|| invalid_slide(path, format!("invalid VMS image key suffix: {suffix}")))?;
+        .ok_or_else(|| {
+            WsiError::invalid_slide(path, format!("invalid VMS image key suffix: {suffix}"))
+        })?;
     let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
     match parts.as_slice() {
         [col, row] => Ok(ImageDims {
             layer: 0,
             col: col
                 .parse()
-                .map_err(|_| invalid_slide(path, format!("invalid VMS col in {key}")))?,
+                .map_err(|_| WsiError::invalid_slide(path, format!("invalid VMS col in {key}")))?,
             row: row
                 .parse()
-                .map_err(|_| invalid_slide(path, format!("invalid VMS row in {key}")))?,
+                .map_err(|_| WsiError::invalid_slide(path, format!("invalid VMS row in {key}")))?,
         }),
         [layer, col, row] => Ok(ImageDims {
-            layer: layer
-                .parse()
-                .map_err(|_| invalid_slide(path, format!("invalid VMS layer in {key}")))?,
+            layer: layer.parse().map_err(|_| {
+                WsiError::invalid_slide(path, format!("invalid VMS layer in {key}"))
+            })?,
             col: col
                 .parse()
-                .map_err(|_| invalid_slide(path, format!("invalid VMS col in {key}")))?,
+                .map_err(|_| WsiError::invalid_slide(path, format!("invalid VMS col in {key}")))?,
             row: row
                 .parse()
-                .map_err(|_| invalid_slide(path, format!("invalid VMS row in {key}")))?,
+                .map_err(|_| WsiError::invalid_slide(path, format!("invalid VMS row in {key}")))?,
         }),
-        _ => Err(invalid_slide(
+        _ => Err(WsiError::invalid_slide(
             path,
             format!("unknown VMS image coordinate arity in {key}"),
         )),
@@ -96,10 +97,8 @@ pub(super) fn parse_vms_opt_offsets(
         return Ok(vec![Vec::new(); headers.len()]);
     };
 
-    let mut file = File::open(opt_path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: opt_path.to_path_buf(),
-    })?;
+    let mut file =
+        File::open(opt_path).map_err(|source| WsiError::io_with_path(opt_path, source))?;
     let mut per_image = Vec::with_capacity(headers.len());
     for header in headers {
         let geometry = &header.geometry;

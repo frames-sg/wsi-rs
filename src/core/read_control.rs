@@ -219,5 +219,11 @@ impl ReadControl {
     }
 }
 
+/// [`ReadControl::check_cancelled`] for a read that may have no control; a
+/// read without one is never cancelled.
+pub(crate) fn check_cancelled_opt(control: Option<&ReadControl>) -> Result<(), WsiError> {
+    control.map_or(Ok(()), ReadControl::check_cancelled)
+}
+
 #[cfg(test)]
 mod tests;

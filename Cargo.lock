@@ -1539,6 +1539,7 @@ dependencies = [
  "libloading 0.8.9",
  "tempfile",
  "wsi-rs",
+ "wsi-rs-test-support",
 ]
 
 [[package]]
@@ -1557,6 +1558,7 @@ version = "0.0.0"
 dependencies = [
  "libloading 0.8.9",
  "serde",
+ "sha2",
  "toml",
 ]
 

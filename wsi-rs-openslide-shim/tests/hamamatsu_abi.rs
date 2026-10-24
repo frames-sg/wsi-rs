@@ -29,7 +29,7 @@ fn assert_opaque_region_checksums(path: &std::ffi::CStr, cases: &[(Region, u64)]
 
 #[test]
 fn ndpi_scaled_levels_match_openslide_reduced_idct() {
-    let Some(path) = fixture_path("ndpi-001", "ndpi") else {
+    let Some(path) = fixture_path("ndpi-001") else {
         return;
     };
     // OpenSlide derives levels 1 and 5 by decoding the 2048x8 and 128x8
@@ -49,7 +49,7 @@ fn ndpi_scaled_levels_match_openslide_reduced_idct() {
 
 #[test]
 fn vms_scaled_levels_match_openslide_reduced_idct() {
-    let Some(path) = fixture_path("vms-001", "d/CMU-1-40x - 2010-01-12 13.24.05.vms") else {
+    let Some(path) = fixture_path("vms-001") else {
         return;
     };
     // Level 2 is the 2x2 grid of main JPEGs at libjpeg scale 1/4; the region

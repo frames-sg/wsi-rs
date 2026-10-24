@@ -1,40 +1,16 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use wsi_rs::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout};
 
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
-use support::corpus::{
-    apply_alias_filter, corpus_cache_dir, format_default_extension, parse_manifest,
-    public_manifest_path,
-};
+use support::corpus::{parse_manifest, public_manifest_path};
 use support::oracles::{
     is_reference_oracle_unsupported, read_probe, require_reference_tile, sample_buffer_to_rgba,
     top_left_probe, J2kOracle, OpenedSlide, Oracle, ProbeKind, ProbeRequest, ReferenceOracle,
     ReferenceTileError, TileBuffer,
 };
-use wsi_rs_test_support::corpus::validate_release_coverage;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-const SAMPLE_MANIFEST: &str = r#"
-    [[slide]]
-    name             = "aperio_svs_brightfield_he_typical"
-    alias            = "svs-001"
-    path             = ""
-    format           = "aperio"
-    codecs           = ["jpeg"]
-    must_decode      = ["base", "level1", "level2", "label", "macro"]
-    source           = "openslide-testdata"
-    license          = "CC0-1.0"
-    redistributable  = true
-    sha256           = "deadbeef"
-    citation         = "Goode A. et al. OpenSlide..."
-    phi_reviewed     = true
-    url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs"
-"#;
 
 #[test]
 fn public_prelude_exports_common_reader_types() {
@@ -138,37 +114,6 @@ fn compare_tolerance_failure_formats_failed_report() {
 }
 
 #[test]
-fn corpus_parses_minimal_manifest() {
-    let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let slide = manifest.slides.first().expect("slide");
-
-    assert_eq!(manifest.slides.len(), 1);
-    assert_eq!(slide.alias, "svs-001");
-    assert_eq!(slide.format, "aperio");
-    assert!(slide.redistributable);
-    assert_eq!(slide.codecs, vec!["jpeg"]);
-    assert_eq!(slide.must_decode.len(), 5);
-}
-
-#[test]
-fn corpus_unknown_format_extension_returns_none() {
-    assert!(format_default_extension("nonsense").is_none());
-    assert_eq!(format_default_extension("aperio"), Some("svs"));
-    assert_eq!(format_default_extension("argos"), Some("avs"));
-    assert_eq!(format_default_extension("huron"), Some("tif"));
-}
-
-#[test]
-fn corpus_cache_dir_respects_env() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let _env = EnvGuard::set("WSI_RS_PARITY_CORPUS_CACHE", "/tmp/sv-corpus-test");
-
-    let path = corpus_cache_dir();
-
-    assert_eq!(path, PathBuf::from("/tmp/sv-corpus-test"));
-}
-
-#[test]
 fn corpus_public_manifest_parses() {
     let path = public_manifest_path();
     let text = std::fs::read_to_string(&path).expect("read public manifest");
@@ -224,85 +169,29 @@ fn corpus_public_manifest_parses() {
 }
 
 #[test]
-fn corpus_must_decode_level_matches_base_and_numbered_levels() {
-    let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let entry = manifest.slides.first_mut().expect("slide");
-    entry.must_decode = vec!["base".into(), "level1".into(), "level12".into()];
+fn resolve_present_records_missing_corpus_slides() {
+    let entry = |path: &str| support::corpus::CorpusEntry {
+        alias: "support-unit-missing-fixture".into(),
+        path: path.into(),
+        format: "raw_jp2k".into(),
+        ..Default::default()
+    };
+    let mut failures = Vec::new();
 
-    assert!(entry.must_decode_level(0));
-    assert!(entry.must_decode_level(1));
-    assert!(entry.must_decode_level(12));
-    assert!(!entry.must_decode_level(2));
-    assert!(!entry.must_decode_level(10));
-}
+    let present = support::corpus::resolve_present(
+        &entry("tests/fixtures/jp2k/rgb_nomct.j2k"),
+        &mut failures,
+    );
+    assert!(present.is_some_and(|path| path.is_file()));
+    assert!(failures.is_empty());
 
-#[test]
-fn corpus_can_require_wsi_decode_without_requiring_openslide() {
-    let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let entry = manifest.slides.first_mut().expect("slide");
-
-    assert!(entry.openslide_must_decode_level(0));
-    entry.openslide_required = false;
-
-    assert!(entry.must_decode_level(0));
-    assert!(!entry.openslide_must_decode_level(0));
-}
-
-#[test]
-fn corpus_rejects_expected_failure_waivers() {
-    let manifest = format!("{SAMPLE_MANIFEST}\nexpected_failures = ['j2k-vs-reference:base']\n");
-
-    let error = parse_manifest(&manifest).expect_err("release corpus must reject waivers");
-
-    assert!(error.contains("unknown field `expected_failures`"));
-}
-
-#[test]
-fn corpus_rejects_unknown_fields_and_accepts_notes() {
-    let with_notes = format!("{SAMPLE_MANIFEST}\nnotes = 'documented provenance'\n");
-    parse_manifest(&with_notes).expect("notes are part of the corpus schema");
-
-    let with_unknown =
-        format!("{SAMPLE_MANIFEST}\nunsupported_properties = ['openslide.vendor']\n");
-    let error = parse_manifest(&with_unknown).expect_err("unknown corpus fields must fail closed");
-    assert!(error.contains("unknown field `unsupported_properties`"));
-}
-
-#[test]
-fn corpus_required_levels_include_base_reduced_and_highest() {
-    let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let entry = manifest.slides.first().expect("slide");
-
-    assert_eq!(entry.required_level_indices(5).unwrap(), vec![0, 1, 2, 4]);
-}
-
-#[test]
-fn corpus_release_coverage_reports_all_missing_evidence() {
-    let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-
-    let error = validate_release_coverage(&manifest).expect_err("one row is not release evidence");
-
-    assert!(error.contains("olympus_vsi"));
-    assert!(error.contains("lossless JP2K"));
-    assert!(error.contains("DICOM JP2K YBR_ICT"));
-    assert!(error.contains("SOF2 progressive-JPEG DICOM"));
-}
-
-#[test]
-fn corpus_alias_filter_keeps_requested_manifest_entries() {
-    let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
-    let second = manifest.slides[0].clone();
-    manifest.slides.push(support::corpus::CorpusEntry {
-        alias: "ndpi-001".into(),
-        format: "ndpi".into(),
-        name: "hamamatsu_ndpi".into(),
-        ..second
-    });
-
-    apply_alias_filter(&mut manifest, Some("ndpi-001,missing-001"));
-
-    assert_eq!(manifest.slides.len(), 1);
-    assert_eq!(manifest.slides[0].alias, "ndpi-001");
+    let missing = support::corpus::resolve_present(&entry("definitely/missing.j2k"), &mut failures);
+    assert_eq!(missing, None);
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].starts_with("support-unit-missing-fixture: corpus slide missing at "),
+        "{failures:?}"
+    );
 }
 
 #[test]
@@ -437,67 +326,6 @@ fn oracle_top_left_probe_prefers_sparse_layout_probe_when_available() {
 
 #[cfg(feature = "parity-openslide")]
 #[test]
-fn openslide_shim_missing_env_path_does_not_panic() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let _env = EnvGuard::set(
-        "OPENSLIDE_LIB_PATH",
-        "/definitely/does/not/exist/libopenslide.dylib",
-    );
-
-    let result = support::openslide_shim::try_load();
-
-    let _ = result;
-}
-
-#[cfg(feature = "parity-openslide")]
-#[test]
-fn openslide_shim_bounds_parser_reads_canvas_origin() {
-    let props = [
-        ("openslide.bounds-x", "10778"),
-        ("openslide.bounds-y", "35096"),
-        ("openslide.bounds-width", "36832"),
-        ("openslide.bounds-height", "38432"),
-    ];
-
-    let bounds = support::openslide_shim::parse_bounds_from_properties(|name| {
-        props
-            .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| (*value).to_string())
-    })
-    .expect("bounds");
-
-    assert_eq!(bounds.x, 10778);
-    assert_eq!(bounds.y, 35096);
-    assert_eq!(bounds.width, 36832);
-    assert_eq!(bounds.height, 38432);
-}
-
-#[cfg(feature = "parity-openslide")]
-#[test]
-fn openslide_shim_bounds_parser_rejects_missing_or_empty_bounds() {
-    assert!(support::openslide_shim::parse_bounds_from_properties(|_| None).is_none());
-
-    let props = [
-        ("openslide.bounds-x", "0"),
-        ("openslide.bounds-y", "0"),
-        ("openslide.bounds-width", "0"),
-        ("openslide.bounds-height", "100"),
-    ];
-
-    assert!(
-        support::openslide_shim::parse_bounds_from_properties(|name| {
-            props
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_string())
-        })
-        .is_none()
-    );
-}
-
-#[cfg(feature = "parity-openslide")]
-#[test]
 fn openslide_oracle_dimensions_use_bounds_canvas_when_smaller_than_full_canvas() {
     let full_canvas_dims = [(53130, 153470), (13283, 38368), (3321, 9592)];
     let bounds = support::openslide_shim::OpenSlideBounds {
@@ -569,27 +397,4 @@ fn openslide_oracle_bounds_canvas_policy_is_vendor_specific() {
         support::oracles::openslide_comparison_bounds(None, Some(bounds)),
         None
     );
-}
-
-struct EnvGuard {
-    key: &'static str,
-    prev: Option<std::ffi::OsString>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let prev = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, prev }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        if let Some(value) = &self.prev {
-            std::env::set_var(self.key, value);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
 }

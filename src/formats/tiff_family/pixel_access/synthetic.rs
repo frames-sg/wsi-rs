@@ -69,15 +69,15 @@ impl TiffPixelReader {
         let Some(scale) = j2k_downscale_for_factor(factor) else {
             return Ok(None);
         };
-        let target = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, target) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let base_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: base_level.into(),
-            plane: req.plane,
+            level: LevelIdx::new(base_level),
             col: 0,
             row: 0,
+            ..*req
         };
         let TileSource::NdpiFullDecode {
             ifd_id,
@@ -89,26 +89,8 @@ impl TiffPixelReader {
             return Ok(None);
         };
 
-        let jpeg = self
-            .container
-            .pread(*strip_offset, *strip_byte_count)
-            .map_err(|e| e.into_wsi_error(self.container.path()))?;
-        let options = j2k_decode_options(
-            self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &jpeg, None)
-                .color_transform,
-        );
-        let view = J2kJpegView::parse_with_options(&jpeg, options)
-            .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let decoder =
-            J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let source_dims = decoder.info().dimensions;
-        let scale_denom = scale.denominator();
-        let scaled_width = source_dims.0.div_ceil(scale_denom);
-        let scaled_height = source_dims.1.div_ceil(scale_denom);
-        let (pixels, _outcome) = decoder
-            .decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
-            .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let scaled = cpu_tile_from_rgb_pixels(scaled_width, scaled_height, pixels)?;
+        let scaled =
+            self.decode_ndpi_full_jpeg(*ifd_id, *strip_offset, *strip_byte_count, scale, None)?;
 
         if scaled.width == target.dimensions.0 as u32 && scaled.height == target.dimensions.1 as u32
         {
@@ -155,9 +137,11 @@ impl TiffPixelReader {
         else {
             return Ok(None);
         };
-        let base = &self.layout.dataset.scenes[base_tile_req.scene.get()].series
-            [base_tile_req.series.get()]
-        .levels[base_tile_req.level.get() as usize];
+        let (_, _, base) = self.layout.dataset.level(
+            base_tile_req.scene,
+            base_tile_req.series,
+            base_tile_req.level,
+        )?;
         let TileLayout::WholeLevel {
             virtual_tile_width: base_strip_w,
             virtual_tile_height: base_strip_h,
@@ -313,29 +297,29 @@ impl TiffPixelReader {
         factor: u32,
     ) -> Result<Arc<CpuTile>, WsiError> {
         if !factor.is_power_of_two() || factor < 2 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("invalid synthetic NDPI factor {factor}"),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("invalid synthetic NDPI factor {factor}"),
+            ));
         }
 
         if let Some(image) = self.try_decode_synthetic_level_with_j2k(req, base_level, factor)? {
             return Ok(Arc::new(image));
         }
 
-        let base = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [base_level as usize];
-        let target = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, base) =
+            self.layout
+                .dataset
+                .level(req.scene, req.series, LevelIdx::new(base_level))?;
+        let (_, _, target) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         let base_tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: base_level.into(),
-            plane: req.plane,
+            level: LevelIdx::new(base_level),
             col: 0,
             row: 0,
+            ..*req
         };
         if let (Ok(target_w), Ok(target_h)) = (
             u32::try_from(target.dimensions.0),
@@ -407,8 +391,10 @@ impl TiffPixelReader {
 
         let (x, y) = req.origin_px;
         let (w, h) = req.size_px;
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
         if x != 0
             || y != 0
             || u64::from(w) != level.dimensions.0
@@ -440,12 +426,8 @@ impl TiffPixelReader {
         }
 
         let base_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: base_level.into(),
-            plane: req.plane,
-            col: 0,
-            row: 0,
+            level: LevelIdx::new(base_level),
+            ..req.tile_at(0, 0)
         };
         let TileSource::NdpiFullDecode {
             ifd_id,
@@ -457,14 +439,7 @@ impl TiffPixelReader {
             return composite_region_from_source(self, cache, req, max_region_pixels);
         };
 
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane.get().into(),
-            col: 0,
-            row: 0,
-        };
+        let tile_req = req.tile_at(0, 0);
         let scaled = if let Some(image) =
             self.try_decode_synthetic_level_with_j2k(&tile_req, base_level, factor)?
         {
@@ -527,25 +502,14 @@ impl TiffPixelReader {
         let dst_y = (clipped_y0 - y0) as u32;
 
         let base_tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: base_level.into(),
-            plane: req.plane.get().into(),
-            col: 0,
-            row: 0,
+            level: LevelIdx::new(base_level),
+            ..req.tile_at(0, 0)
         };
         if matches!(
             self.tile_source_for(&base_tile_req)?,
             TileSource::NdpiFullDecode { .. }
         ) {
-            let tile_req = TileRequest {
-                scene: req.scene.get().into(),
-                series: req.series.get().into(),
-                level: req.level.get().into(),
-                plane: req.plane.get().into(),
-                col: 0,
-                row: 0,
-            };
+            let tile_req = req.tile_at(0, 0);
             if let Some(scaled) =
                 self.try_decode_synthetic_level_with_j2k(&tile_req, base_level, factor)?
             {
@@ -575,29 +539,10 @@ impl TiffPixelReader {
             }
         }
 
-        let series = self
-            .layout
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .ok_or_else(|| WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: self
-                    .layout
-                    .dataset
-                    .scenes
-                    .get(req.scene.get())
-                    .map_or(0, |scene| scene.series.len()),
-            })?;
-        let base =
-            series
-                .levels
-                .get(base_level as usize)
-                .ok_or_else(|| WsiError::LevelOutOfRange {
-                    level: base_level,
-                    count: series.levels.len() as u32,
-                })?;
+        let (_, _, base) =
+            self.layout
+                .dataset
+                .level(req.scene, req.series, LevelIdx::new(base_level))?;
         // Each coordinate was clamped to the nonnegative u64 target dimensions.
         let clipped_x0 = clipped_x0 as u128;
         let clipped_y0 = clipped_y0 as u128;
@@ -614,8 +559,8 @@ impl TiffPixelReader {
         }
 
         let base_req = RegionRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
+            scene: req.scene,
+            series: req.series,
             level: LevelIdx::new(base_level),
             plane: req.plane,
             origin_px: (
@@ -659,27 +604,10 @@ impl TiffPixelReader {
         base_level: u32,
         factor: u32,
     ) -> Result<CpuTile, WsiError> {
-        let series = self
+        let (_, _, level) = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .ok_or_else(|| WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: self
-                    .layout
-                    .dataset
-                    .scenes
-                    .get(req.scene.get())
-                    .map_or(0, |scene| scene.series.len()),
-            })?;
-        let level = series.levels.get(req.level.get() as usize).ok_or_else(|| {
-            WsiError::LevelOutOfRange {
-                level: req.level.get(),
-                count: series.levels.len() as u32,
-            }
-        })?;
+            .level(req.scene, req.series, req.level)?;
 
         let origin_x = req.col.saturating_mul(i64::from(req.tile_width));
         let origin_y = req.row.saturating_mul(i64::from(req.tile_height));
@@ -695,12 +623,9 @@ impl TiffPixelReader {
         }
         if origin_x >= 0 && origin_y >= 0 && self.synthetic_level_cache_can_hold(level.dimensions) {
             let tile_req = TileRequest {
-                scene: req.scene.get().into(),
-                series: req.series.get().into(),
-                level: req.level.get().into(),
-                plane: req.plane,
                 col: 0,
                 row: 0,
+                ..req.source_tile()
             };
             let image = self.get_or_decode_synthetic_level(&tile_req, base_level, factor)?;
             let crop_width = req.tile_width.min((level_w - origin_x) as u32);
@@ -717,7 +642,7 @@ impl TiffPixelReader {
         let clipped = RegionRequest {
             scene: req.scene,
             series: req.series,
-            level: LevelIdx::new(req.level.get()),
+            level: req.level,
             plane: req.plane,
             origin_px: (origin_x, origin_y),
             size_px: (
@@ -746,7 +671,7 @@ impl TiffPixelReader {
                 self.decode_synthetic_level(req, base_level, factor)
                     .map_err(|err| err.to_string())
             })
-            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+            .map_err(|reason| WsiError::tile_read(req, reason))
     }
 }
 

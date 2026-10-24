@@ -4,17 +4,15 @@ use std::path::{Path, PathBuf};
 
 #[allow(unused_imports)]
 pub(crate) use wsi_rs_test_support::corpus::{
-    apply_alias_filter, corpus_cache_dir, format_default_extension, parse_manifest, CorpusEntry,
+    alias_selected, apply_alias_filter, corpus_cache_dir, format_default_extension,
+    local_testdata_candidates, parse_aliases, parse_manifest, selected_aliases, CorpusEntry,
     CorpusManifest,
 };
 use wsi_rs_test_support::corpus::{load_manifest, resolve_entry_path as resolve_shared_entry};
 
 pub(crate) fn load_public() -> Result<CorpusManifest, String> {
     let mut manifest = load_public_unfiltered()?;
-    apply_alias_filter(
-        &mut manifest,
-        std::env::var("WSI_RS_PARITY_ALIASES").ok().as_deref(),
-    );
+    apply_alias_filter(&mut manifest, selected_aliases().as_ref());
     Ok(manifest)
 }
 
@@ -36,6 +34,21 @@ pub(crate) fn resolve_entry_path(entry: &CorpusEntry) -> PathBuf {
             .next()
             .unwrap_or_else(|| corpus_cache_dir().join(&entry.alias))
     })
+}
+
+/// The entry's slide, or `None` after recording it as missing in `failures`:
+/// corpus tests require every selected slide.
+pub(crate) fn resolve_present(entry: &CorpusEntry, failures: &mut Vec<String>) -> Option<PathBuf> {
+    let path = resolve_entry_path(entry);
+    if path.is_file() {
+        return Some(path);
+    }
+    failures.push(format!(
+        "{}: corpus slide missing at {}",
+        entry.alias,
+        path.display()
+    ));
+    None
 }
 
 pub(crate) fn find_slide_by_alias(alias: &str) -> Option<PathBuf> {

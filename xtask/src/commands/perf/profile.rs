@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use super::capture::worker_count;
+use wsi_rs_perf::{Engine, DEFAULT_CACHE_BYTES};
+
 use super::worker::{
-    cache_bytes, shim_library_name, target_directory, worker_args, workspace_root, BenchInvocation,
-    BenchLibrary, DEFAULT_CACHE_BYTES, RAYON_NUM_THREADS_ENV,
+    cache_bytes, shim_library_name, target_directory, worker_config, worker_path, BenchInvocation,
+    RAYON_NUM_THREADS_ENV,
 };
+use crate::commands::process::workspace_root;
 
 const PROFILE_DIR_ENV: &str = "WSI_RS_PERF_PROFILE_DIR";
 
@@ -45,21 +48,20 @@ fn profile_recipes(slide: &Path, workload: Option<&str>, label: &str) -> Profile
         .unwrap_or_else(|| PathBuf::from("bench/results/profiles"));
     let target_dir = target_directory().unwrap_or_else(|_| workspace_root().join("target"));
     let invocation = BenchInvocation {
-        worker: target_dir
-            .join("release")
-            .join(format!("wsi-rs-perf{}", std::env::consts::EXE_SUFFIX)),
+        worker: worker_path(&target_dir),
         library: target_dir.join("release").join(shim_library_name()),
     };
     let workers = worker_count().unwrap_or(1);
-    let mut bench_invocation = worker_args(
-        BenchLibrary::WsiRs,
+    let mut bench_invocation = worker_config(
+        Engine::WsiRs,
         &invocation,
         slide,
         0,
         cache_bytes().unwrap_or(DEFAULT_CACHE_BYTES),
         workers,
         workload,
-    );
+    )
+    .to_args();
     bench_invocation.splice(
         0..0,
         [

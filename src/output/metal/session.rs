@@ -64,9 +64,7 @@ impl MetalBackendSessions {
     #[cfg(target_os = "macos")]
     pub(crate) fn try_cooperative_decode(&self) -> Option<(NonZeroUsize, MutexGuard<'_, ()>)> {
         let requested = self.cooperative_cpu_workers?;
-        let workers = requested
-            .get()
-            .min(crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count());
+        let workers = requested.get().min(crate::core::batch::cpu_worker_count());
         if workers < 2 {
             return None;
         }
@@ -157,9 +155,9 @@ impl MetalBackendSessions {
             .iter()
             .map(|tile| {
                 let image = tile.resident_image_for_device(self.j2k().device())?;
+                // download_resident_batch enforces the download limit per image.
                 let (row_bytes, byte_len) =
                     tight_download_layout(tile.width, tile.height, tile.format, "Metal")?;
-                super::tile::enforce_download_limit(byte_len)?;
                 Ok(super::interop::ReadbackRows {
                     image,
                     row_bytes,

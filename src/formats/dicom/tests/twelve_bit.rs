@@ -21,28 +21,20 @@ fn u16_samples(tile: &CpuTile) -> &[u16] {
     tile.data.as_u16().expect("12-bit DICOM decodes to U16 RGB")
 }
 
-fn rgb16_pixels(values: &[[u16; 3]]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|pixel| pixel.iter().flat_map(|sample| sample.to_le_bytes()))
-        .collect()
-}
-
-fn native_rgb16(pixel_data: Vec<u8>) -> TestDicomOptions {
-    TestDicomOptions::uint16(TestPixelData::Native(pixel_data))
-}
-
 #[test]
 fn native_sixteen_bit_pyramid_levels_and_associated_images_preserve_u16_samples() {
     let dir = tempfile::tempdir().unwrap();
     let base_frames = (0..4_u16)
         .flat_map(|frame| {
-            rgb16_pixels(&[
-                [frame * 1000 + 1, frame * 1000 + 2, frame * 1000 + 3],
-                [frame * 1000 + 4, frame * 1000 + 5, frame * 1000 + 6],
-                [frame * 1000 + 7, frame * 1000 + 8, frame * 1000 + 9],
-                [frame * 1000 + 10, frame * 1000 + 11, frame * 1000 + 12],
-            ])
+            le_words(
+                [
+                    [frame * 1000 + 1, frame * 1000 + 2, frame * 1000 + 3],
+                    [frame * 1000 + 4, frame * 1000 + 5, frame * 1000 + 6],
+                    [frame * 1000 + 7, frame * 1000 + 8, frame * 1000 + 9],
+                    [frame * 1000 + 10, frame * 1000 + 11, frame * 1000 + 12],
+                ]
+                .as_flattened(),
+            )
         })
         .collect();
     write_test_dicom(
@@ -51,35 +43,41 @@ fn native_sixteen_bit_pyramid_levels_and_associated_images_preserve_u16_samples(
             total_pixel_matrix_rows: 4,
             total_pixel_matrix_columns: 4,
             number_of_frames: 4,
-            ..native_rgb16(base_frames)
+            ..TestDicomOptions::uint16(TestPixelData::Native(base_frames))
         },
     );
-    let reduced = rgb16_pixels(&[
-        [10_001, 10_002, 10_003],
-        [10_004, 10_005, 10_006],
-        [10_007, 10_008, 10_009],
-        [10_010, 10_011, 10_012],
-    ]);
+    let reduced = le_words(
+        [
+            [10_001, 10_002, 10_003],
+            [10_004, 10_005, 10_006],
+            [10_007, 10_008, 10_009],
+            [10_010, 10_011, 10_012],
+        ]
+        .as_flattened(),
+    );
     write_test_dicom(
         &dir.path().join("b-level1.dcm"),
         TestDicomOptions {
             sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
             image_type: "DERIVED\\PRIMARY\\VOLUME\\RESAMPLED",
-            ..native_rgb16(reduced.clone())
+            ..TestDicomOptions::uint16(TestPixelData::Native(reduced.clone()))
         },
     );
-    let label = rgb16_pixels(&[
-        [20_001, 20_002, 20_003],
-        [20_004, 20_005, 20_006],
-        [20_007, 20_008, 20_009],
-        [20_010, 20_011, 20_012],
-    ]);
+    let label = le_words(
+        [
+            [20_001, 20_002, 20_003],
+            [20_004, 20_005, 20_006],
+            [20_007, 20_008, 20_009],
+            [20_010, 20_011, 20_012],
+        ]
+        .as_flattened(),
+    );
     write_test_dicom(
         &dir.path().join("c-label.dcm"),
         TestDicomOptions {
             sop_instance_uid: "1.2.826.0.1.3680043.10.777.3",
             image_type: "ORIGINAL\\PRIMARY\\LABEL\\NONE",
-            ..native_rgb16(label)
+            ..TestDicomOptions::uint16(TestPixelData::Native(label))
         },
     );
 
@@ -176,10 +174,7 @@ fn native_sixteen_bit_associated_image_is_available_with_an_eight_bit_pyramid() 
         TestDicomOptions {
             sop_instance_uid: "1.2.826.0.1.3680043.10.777.2",
             image_type: "ORIGINAL\\PRIMARY\\OVERVIEW\\NONE",
-            bits_allocated: 16,
-            bits_stored: 16,
-            high_bit: 15,
-            ..TestDicomOptions::native(vec![0; 2 * 2 * 3 * 2])
+            ..TestDicomOptions::uint16(TestPixelData::Native(vec![0; 2 * 2 * 3 * 2]))
         },
     );
     write_test_dicom(
@@ -325,10 +320,9 @@ fn invalid_sixteen_bit_metadata_is_rejected_before_decode() {
         write_test_dicom(
             &path,
             TestDicomOptions {
-                bits_allocated: 16,
                 bits_stored,
                 high_bit,
-                ..TestDicomOptions::native(vec![0; 2 * 2 * 3 * 2])
+                ..TestDicomOptions::uint16(TestPixelData::Native(vec![0; 2 * 2 * 3 * 2]))
             },
         );
         assert!(open_error(&path).contains(expected));

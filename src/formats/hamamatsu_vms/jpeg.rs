@@ -1,4 +1,4 @@
-use super::model::{invalid_slide, VmsJpeg};
+use super::model::VmsJpeg;
 use super::*;
 use memchr::memchr;
 
@@ -24,7 +24,7 @@ impl VmsJpeg {
 
     pub(super) fn read_header(path: &Path) -> Result<VmsJpegHeader, WsiError> {
         read_vms_jpeg_header(path).map_err(|err| {
-            invalid_slide(
+            WsiError::invalid_slide(
                 path,
                 format!("failed to derive VMS JPEG tile geometry: {err}"),
             )
@@ -73,17 +73,12 @@ impl VmsJpeg {
         #[cfg(unix)]
         let payload_file = scan_file
             .try_clone()
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         // PositionedFile's non-Unix fallback seeks its handle. Keep that cursor
         // independent from the lazy restart scanner's cursor.
         #[cfg(not(unix))]
-        let payload_file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let payload_file =
+            File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -101,22 +96,27 @@ impl VmsJpeg {
             mcu_starts: Mutex::new(mcu_starts),
             unreliable_mcu_starts,
             decoded_tile_cache: Mutex::new(PrivateCache::new(
-                private_cache_budget.allocate(
-                    u64::from(geometry.tile_width)
-                        .saturating_mul(u64::from(geometry.tile_height))
-                        .saturating_mul(3),
-                ),
+                private_cache_budget.allocate_share(),
             )),
             comment: header.comment,
             encoded_unit_bytes,
         })
     }
 
+    /// Size of tile (`tile_col`, `tile_row`) of this JPEG, clipped to its edge.
+    pub(super) fn tile_size(&self, tile_col: u32, tile_row: u32) -> (u32, u32) {
+        (
+            self.tile_width
+                .min(self.width.saturating_sub(tile_col * self.tile_width)),
+            self.tile_height
+                .min(self.height.saturating_sub(tile_row * self.tile_height)),
+        )
+    }
+
     pub(super) fn decode_tile(
         &self,
         tile_index: usize,
         scale_denom: u32,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         let cache_key = (tile_index, scale_denom);
         if let Some(cached) = self
@@ -139,14 +139,10 @@ impl VmsJpeg {
                 )));
             }
         };
-        let tile_col = tile_index as u32 % self.tiles_across;
-        let tile_row = tile_index as u32 / self.tiles_across;
-        let width = self
-            .tile_width
-            .min(self.width.saturating_sub(tile_col * self.tile_width));
-        let height = self
-            .tile_height
-            .min(self.height.saturating_sub(tile_row * self.tile_height));
+        let (width, height) = self.tile_size(
+            tile_index as u32 % self.tiles_across,
+            tile_index as u32 / self.tiles_across,
+        );
         let data = self.tile_jpeg_bytes(tile_index, width, height)?;
         let decoder = J2kJpegDecoder::new(&data).map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let roi = J2kRect {
@@ -212,10 +208,7 @@ impl VmsJpeg {
         entropy.resize(data_len, 0);
         self.payload_file
             .read_exact_at(&mut entropy, start)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         if entropy.len() < 2 || entropy[entropy.len() - 2] != 0xFF {
             return Err(WsiError::Jpeg(format!(
                 "VMS JPEG entropy segment for {} does not end at a marker",
@@ -307,10 +300,7 @@ impl VmsJpeg {
         }
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(offset))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         let requested = target - first_good;
         let found = find_restart_offsets(
             &mut file,
@@ -338,16 +328,10 @@ impl VmsJpeg {
         }
         let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
         file.seek(SeekFrom::Start(offset - 2))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         let mut marker = [0u8; 2];
         file.read_exact(&mut marker)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         Ok(marker[0] == 0xFF && (0xD0..=0xD7).contains(&marker[1]))
     }
 }
@@ -362,7 +346,7 @@ fn checked_vms_tile_count(
     let index_bytes = tile_count
         .checked_mul(2)
         .and_then(|count| count.checked_mul(std::mem::size_of::<Option<u64>>() as u64))
-        .ok_or_else(|| invalid_slide(path, "VMS JPEG tile index size overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "VMS JPEG tile index size overflow"))?;
     if index_bytes > MAX_VMS_TILE_INDEX_BYTES {
         return Err(WsiError::ResourceLimit {
             resource: "VMS JPEG tile index",
@@ -406,16 +390,10 @@ pub(super) struct VmsJpegHeader {
 }
 
 pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let file_len = file
         .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
+        .map_err(|source| WsiError::io_with_path(path, source))?
         .len();
     let mut header = Vec::with_capacity(4096);
     let mut soi = [0u8; 2];
@@ -562,10 +540,7 @@ fn read_exact_header(
         )));
     }
     file.read_exact(buf)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     header.extend_from_slice(buf);
     Ok(())
 }
@@ -632,18 +607,14 @@ fn find_restart_offsets(
     let mut found = 0;
     let mut base = file
         .stream_position()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     loop {
         if base >= file_len {
             return Ok(found);
         }
-        let n = file.read(&mut buf).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         if n == 0 {
             return Ok(found);
         }

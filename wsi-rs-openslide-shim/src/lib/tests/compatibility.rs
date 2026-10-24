@@ -1,19 +1,9 @@
 use super::*;
 use std::ffi::CString;
 
-fn fixture_path() -> CString {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("jp2k")
-        .join("rgb_nomct.j2k");
-    CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
-}
-
 #[test]
 fn invalid_region_level_clears_output_without_poisoning_the_handle() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     // SAFETY: The handle comes from this shim and remains live until the final
     // close. Every destination points to the declared number of pixels.
     unsafe {
@@ -37,7 +27,7 @@ fn invalid_region_level_clears_output_without_poisoning_the_handle() {
 
 #[test]
 fn negative_region_dimensions_are_terminal_even_for_an_invalid_level() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     // SAFETY: The handle comes from this shim and remains live until close.
     // A negative width has no destination extent, so the sentinel is not
     // writable by the ABI call.
@@ -56,7 +46,7 @@ fn negative_region_dimensions_are_terminal_even_for_an_invalid_level() {
 
 #[test]
 fn null_region_destination_is_non_terminal_for_non_negative_dimensions() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     // SAFETY: The handle comes from this shim and remains live until close.
     // OpenSlide permits a null destination for non-negative region sizes.
     unsafe {
@@ -79,7 +69,7 @@ fn null_region_destination_is_non_terminal_for_non_negative_dimensions() {
 
 #[test]
 fn negative_region_dimensions_are_terminal_with_a_null_destination() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     // SAFETY: The handle comes from this shim and remains live until close.
     // A null destination is permitted, but negative dimensions are not.
     unsafe {
@@ -94,7 +84,7 @@ fn negative_region_dimensions_are_terminal_with_a_null_destination() {
 
 #[test]
 fn unknown_associated_image_is_a_non_terminal_miss() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     let missing = CString::new("missing").unwrap();
     // SAFETY: The handle comes from this shim and remains live until the final
     // close. OpenSlide permits querying a name that is not present.
@@ -130,7 +120,7 @@ fn unknown_associated_image_is_a_non_terminal_miss() {
 
 #[test]
 fn full_canvas_slide_does_not_invent_bounds_properties() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
     let bounds_x = CString::new("openslide.bounds-x").unwrap();
     // SAFETY: The handle comes from this shim and remains live until the final
     // close. The property name is a valid NUL-terminated string.

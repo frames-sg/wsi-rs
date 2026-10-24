@@ -2,33 +2,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Tolerance {
-    pub max_abs: u8,
-    pub mean_abs: f64,
-}
-
-impl Tolerance {
-    pub(crate) const EXACT: Self = Self {
-        max_abs: 0,
-        mean_abs: 0.0,
-    };
-
-    pub(crate) const JPEG_TIGHT: Self = Self {
-        max_abs: 1,
-        mean_abs: 0.05,
-    };
-
-    pub(crate) const JPEG_DECODER_COMPAT: Self = Self {
-        max_abs: 3,
-        mean_abs: 0.125,
-    };
-
-    pub(crate) const TOLERANT: Self = Self {
-        max_abs: 4,
-        mean_abs: 1.0,
-    };
-}
+pub(crate) use wsi_rs_test_support::corpus::Tolerance;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CompareReport {

@@ -6,7 +6,7 @@ use support::{fixture_path, fnv1a_argb};
 
 #[test]
 fn mirax_empty_regions_are_transparent_without_poisoning_the_handle() {
-    let Some(path) = fixture_path("mirax-001", "d/CMU-1.mrxs") else {
+    let Some(path) = fixture_path("mirax-001") else {
         return;
     };
     // SAFETY: The path and output buffer remain live for each call, and the
@@ -34,7 +34,7 @@ fn mirax_coarse_levels_resample_fractional_subtiles_like_openslide() {
     // level 5, down to 2.66 pixels at level 9. OpenSlide resamples each onto
     // a ceil-sized surface rather than cropping whole pixels. Both checksums
     // were characterized through the pinned OpenSlide 4.0.1 comparator.
-    let Some(path) = fixture_path("mirax-001", "d/CMU-1.mrxs") else {
+    let Some(path) = fixture_path("mirax-001") else {
         return;
     };
     let cases = [

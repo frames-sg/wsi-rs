@@ -1,28 +1,23 @@
-use std::borrow::Cow;
-
+use super::transfer_syntax::DicomTransferSyntax;
 use super::*;
+use crate::core::types::ycbcr::ycbcr_to_rgb_u16;
 use crate::decode::jpeg::{decode_batch_jpeg, decode_batch_jpeg_rgb16, JpegDecodeJob};
 use j2k::CpuDecodeParallelism;
 
+/// Checks that a frame's coding process matches its JPEG transfer syntax
+/// and its precision matches BitsStored. Frames of other syntaxes never match.
 pub(super) fn validate_jpeg_transfer_syntax_frame(
+    transfer_syntax: DicomTransferSyntax,
     transfer_syntax_uid: &str,
     bit_depth: DicomBitDepth,
     frame: &[u8],
 ) -> Result<(), WsiError> {
     let (sof, precision, lossless_predictor) = jpeg_process_header(frame)?;
-    let valid = match transfer_syntax_uid {
-        // Scanners such as 3DHISTECH store progressive frames under the
-        // baseline syntax. The decoder follows each frame's own DCT process,
-        // and the precision check below keeps the declared sample type.
-        uids::JPEG_BASELINE8_BIT
-        | uids::JPEG_EXTENDED12_BIT
-        | JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX
-        | JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX => sof != j2k_jpeg::SofKind::Lossless,
-        uids::JPEG_LOSSLESS => sof == j2k_jpeg::SofKind::Lossless,
-        uids::JPEG_LOSSLESS_SV1 => {
-            sof == j2k_jpeg::SofKind::Lossless && lossless_predictor == Some(1)
-        }
-        _ => false,
+    let valid = match transfer_syntax {
+        DicomTransferSyntax::Jpeg(process) => process.accepts(sof, lossless_predictor),
+        DicomTransferSyntax::Native { .. }
+        | DicomTransferSyntax::Jp2k { .. }
+        | DicomTransferSyntax::Rle => false,
     };
     if !valid {
         return Err(WsiError::Unsupported {
@@ -131,34 +126,25 @@ pub(super) fn decode_dicom_jp2k_u16(
             "DICOM JPEG 2000 output requires {component_count} unsigned {bits_stored}-bit component(s)"
         )));
     }
-    let decoded_len = crate::core::limits::checked_product_to_usize(
-        &[
-            u64::from(header.image_width),
-            u64::from(header.image_height),
-            component_count as u64,
-            2,
-        ],
-        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+    let source_samples = checked_sample_len(
+        header.image_width,
+        header.image_height,
+        component_count,
+        2,
         "decoded DICOM JPEG 2000 source image",
     )
     .map_err(WsiError::Jp2k)?;
-    let rgb_output_samples = crate::core::limits::checked_product_to_usize(
-        &[
-            u64::from(header.image_width),
-            u64::from(header.image_height),
-            3,
-            2,
-        ],
-        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+    let rgb_samples = checked_sample_len(
+        header.image_width,
+        header.image_height,
+        3,
+        2,
         "decoded DICOM JPEG 2000 image",
     )
-    .map_err(WsiError::Jp2k)?
-        / 2;
-    let row_bytes = usize::try_from(header.image_width)
-        .ok()
-        .and_then(|width| width.checked_mul(component_count * 2))
-        .ok_or_else(|| WsiError::Jp2k("DICOM JPEG 2000 row byte count overflow".into()))?;
-    let mut bytes = vec![0; decoded_len];
+    .map_err(WsiError::Jp2k)?;
+    // j2k rejects empty images, so the checked source size bounds each row.
+    let row_bytes = header.image_width as usize * component_count * 2;
+    let mut bytes = vec![0; source_samples * 2];
     let mut decoder =
         j2k::J2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
     decoder.set_cpu_decode_parallelism(parallelism);
@@ -173,14 +159,17 @@ pub(super) fn decode_dicom_jp2k_u16(
             },
         )
         .map_err(|error| WsiError::Jp2k(format!("j2k JP2K decode failed: {error}")))?;
-    let mut samples = Vec::with_capacity(rgb_output_samples);
-    for sample in bytes.as_chunks::<2>().0 {
-        let sample = u16::from_le_bytes(*sample);
-        if component_count == 1 {
-            samples.extend_from_slice(&[sample, sample, sample]);
-        } else {
-            samples.push(sample);
-        }
+    // j2k writes 16-bit samples little-endian.
+    let words = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|sample| u16::from_le_bytes(*sample));
+    let mut samples = Vec::with_capacity(rgb_samples);
+    if component_count == 1 {
+        samples.extend(words.flat_map(|gray| [gray, gray, gray]));
+    } else {
+        samples.extend(words);
     }
     if component_count == 3
         && jp2k_photometric_is_ycbcr(photometric_interpretation)
@@ -199,79 +188,15 @@ pub(super) fn decode_dicom_jp2k_u16(
 }
 
 fn convert_ybr_full_u16_to_rgb(samples: &mut [u16], bits_stored: u8) {
-    let midpoint = 1_i64 << (bits_stored - 1);
-    let max = (1_i64 << bits_stored) - 1;
     for pixel in samples.as_chunks_mut::<3>().0 {
-        let y = i64::from(pixel[0]);
-        let cb = i64::from(pixel[1]) - midpoint;
-        let cr = i64::from(pixel[2]) - midpoint;
-        let red = y + crate::decode::jp2k_raster::round_ratio(1_402 * cr, 1_000);
-        let green = y - crate::decode::jp2k_raster::round_ratio(34_414 * cb + 71_414 * cr, 100_000);
-        let blue = y + crate::decode::jp2k_raster::round_ratio(1_772 * cb, 1_000);
-        pixel.copy_from_slice(&[
-            red.clamp(0, max) as u16,
-            green.clamp(0, max) as u16,
-            blue.clamp(0, max) as u16,
-        ]);
+        *pixel = ycbcr_to_rgb_u16(pixel[0], pixel[1], pixel[2], bits_stored);
     }
-}
-
-pub(super) fn frame_bytes_to_rgb_tile(
-    frame_bytes: &[u8],
-    width: u32,
-    height: u32,
-    samples_per_pixel: u16,
-    planar_configuration: u16,
-    photometric_interpretation: &str,
-) -> Result<CpuTile, WsiError> {
-    let rgb = interleaved_rgb_samples(
-        Cow::Borrowed(frame_bytes),
-        width,
-        height,
-        samples_per_pixel,
-        planar_configuration,
-        photometric_interpretation,
-    )?;
-    CpuTile::new(
-        width,
-        height,
-        3,
-        ColorSpace::Rgb,
-        CpuTileLayout::Interleaved,
-        CpuTileData::u8(rgb),
-    )
-}
-
-pub(super) fn frame_words_to_rgb_tile(
-    frame_words: Vec<u16>,
-    width: u32,
-    height: u32,
-    samples_per_pixel: u16,
-    planar_configuration: u16,
-    photometric_interpretation: &str,
-) -> Result<CpuTile, WsiError> {
-    let rgb = interleaved_rgb_samples(
-        Cow::Owned(frame_words),
-        width,
-        height,
-        samples_per_pixel,
-        planar_configuration,
-        photometric_interpretation,
-    )?;
-    CpuTile::new(
-        width,
-        height,
-        3,
-        ColorSpace::Rgb,
-        CpuTileLayout::Interleaved,
-        CpuTileData::u16(rgb),
-    )
 }
 
 /// Interleaved RGB samples of a native frame: RGB as stored, planar RGB
 /// interleaved, or monochrome expanded to gray RGB.
-fn interleaved_rgb_samples<T: Copy>(
-    samples: Cow<'_, [T]>,
+pub(super) fn interleaved_rgb_samples<T: Copy>(
+    samples: Vec<T>,
     width: u32,
     height: u32,
     samples_per_pixel: u16,
@@ -279,18 +204,8 @@ fn interleaved_rgb_samples<T: Copy>(
     photometric_interpretation: &str,
 ) -> Result<Vec<T>, WsiError> {
     let bits = size_of::<T>() * 8;
-    let rgb_len = crate::core::limits::checked_product_to_usize(
-        &[
-            u64::from(width),
-            u64::from(height),
-            3,
-            size_of::<T>() as u64,
-        ],
-        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
-        "decoded DICOM RGB frame",
-    )
-    .map_err(WsiError::DisplayConversion)?
-        / size_of::<T>();
+    let rgb_len = checked_sample_len(width, height, 3, size_of::<T>(), "decoded DICOM RGB frame")
+        .map_err(WsiError::DisplayConversion)?;
     let pixel_count = rgb_len / 3;
     let expect_len = |what: &str, expected: usize| {
         if samples.len() == expected {
@@ -305,7 +220,7 @@ fn interleaved_rgb_samples<T: Copy>(
     match (samples_per_pixel, photometric_interpretation) {
         (3, "RGB") if planar_configuration == 0 => {
             expect_len("RGB", rgb_len)?;
-            Ok(samples.into_owned())
+            Ok(samples)
         }
         (3, "RGB") if planar_configuration == 1 => {
             expect_len("planar RGB", rgb_len)?;
@@ -328,6 +243,28 @@ fn interleaved_rgb_samples<T: Copy>(
             "unsupported DICOM {bits}-bit pixel format: samples_per_pixel={samples_per_pixel}, photometric={photometric_interpretation}, planar_configuration={planar_configuration}"
         ))),
     }
+}
+
+/// Sample count of a `width` x `height` image with `channels` samples per
+/// pixel, once its size at `bytes_per_sample` passes the decoded-image limit.
+fn checked_sample_len(
+    width: u32,
+    height: u32,
+    channels: usize,
+    bytes_per_sample: usize,
+    what: &str,
+) -> Result<usize, String> {
+    let bytes = crate::core::limits::checked_product_to_usize(
+        &[
+            u64::from(width),
+            u64::from(height),
+            channels as u64,
+            bytes_per_sample as u64,
+        ],
+        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+        what,
+    )?;
+    Ok(bytes / bytes_per_sample)
 }
 
 pub(super) fn decode_rle_lossless_frame(
@@ -555,6 +492,15 @@ pub(super) fn checked_dicom_tile_coordinates(
     Ok((col as u32, row as u32))
 }
 
+/// The error for raw access to a sparse-grid tile that has no stored frame.
+pub(super) fn sparse_missing_raw_tile_error(col: i64, row: i64, level: u32) -> WsiError {
+    WsiError::Unsupported {
+        reason: format!(
+            "raw compressed tile access is not available for sparse missing DICOM tile ({col}, {row}) at level {level}"
+        ),
+    }
+}
+
 pub(super) fn dicom_actual_tile_dimensions(
     width: u32,
     height: u32,
@@ -590,27 +536,6 @@ pub(super) fn crop_or_keep_sample_buffer_rgb(
         return Ok(buffer);
     }
     crop_sample_buffer_rgb(&buffer, width, height)
-}
-
-pub(super) fn raw_compression_for_transfer_syntax(
-    transfer_syntax_uid: &str,
-    photometric_interpretation: &str,
-) -> Result<Compression, WsiError> {
-    if is_jpeg_transfer_syntax(transfer_syntax_uid) {
-        return Ok(Compression::Jpeg);
-    }
-    if JP2K_TRANSFER_SYNTAXES.contains(&transfer_syntax_uid) {
-        return Ok(if jp2k_photometric_is_ycbcr(photometric_interpretation) {
-            Compression::Jp2kYcbcr
-        } else {
-            Compression::Jp2kRgb
-        });
-    }
-    Err(WsiError::Unsupported {
-        reason: format!(
-            "raw compressed DICOM tile access requires JPEG or J2K/HTJ2K transfer syntax, got {transfer_syntax_uid}"
-        ),
-    })
 }
 
 pub(super) fn jp2k_photometric_is_ycbcr(photometric_interpretation: &str) -> bool {
@@ -656,19 +581,14 @@ pub(super) fn black_sample_buffer(
     height: u32,
     bit_depth: DicomBitDepth,
 ) -> Result<CpuTile, WsiError> {
-    let bytes_per_sample = usize::from(bit_depth.bytes_per_sample());
-    let byte_len = crate::core::limits::checked_product_to_usize(
-        &[
-            u64::from(width),
-            u64::from(height),
-            3,
-            bytes_per_sample as u64,
-        ],
-        crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+    let len = checked_sample_len(
+        width,
+        height,
+        3,
+        usize::from(bit_depth.bytes_per_sample()),
         "DICOM black tile",
     )
     .map_err(WsiError::DisplayConversion)?;
-    let len = byte_len / bytes_per_sample;
     let data = match bit_depth {
         DicomBitDepth::Eight => CpuTileData::u8(vec![0; len]),
         DicomBitDepth::Uint16 { .. } => CpuTileData::u16(vec![0; len]),

@@ -30,15 +30,10 @@ impl Slide {
             .hits
             .iter()
             .map(|hit| {
-                let tile = TileRequest {
-                    scene: req.scene,
-                    series: req.series,
-                    level: req.level,
-                    plane: req.plane,
-                    col: hit.col,
-                    row: hit.row,
-                };
-                Ok((self.estimate_tile_output_bytes(&tile)?, 0))
+                Ok((
+                    self.estimate_tile_output_bytes(&req.tile_at(hit.col, hit.row))?,
+                    0,
+                ))
             })
             .collect::<Result<Vec<_>, WsiError>>()?;
         let largest = sizes.iter().map(|&(decoded, _)| decoded).max().unwrap_or(0);
@@ -66,14 +61,9 @@ impl PlannedRegionRead<'_> {
         // A handled format fast path needs only its own encoded bound. Query
         // generic tile inputs only when generic composition will execute them.
         for ((_, encoded), hit) in self.sizes.iter_mut().zip(&self.plan.hits) {
-            *encoded = slide.source.tile_encoded_upper_bound(&TileRequest {
-                scene: req.scene,
-                series: req.series,
-                level: req.level,
-                plane: req.plane,
-                col: hit.col,
-                row: hit.row,
-            })?;
+            *encoded = slide
+                .source
+                .tile_encoded_upper_bound(&req.tile_at(hit.col, hit.row))?;
         }
         let sizes = &self.sizes;
         let encoded = self.encoded;
@@ -136,7 +126,7 @@ impl PlannedRegionRead<'_> {
                     break;
                 }
                 // Singleton staging needs no worker count. Querying it starts
-                // the JP2K pool, even for cached reads of ordinary JPEG tiles.
+                // the codec pool, even for cached reads of ordinary JPEG tiles.
                 if end - start
                     >= *workers.get_or_insert_with(|| slide.decode_runtime.cpu_worker_count())
                 {

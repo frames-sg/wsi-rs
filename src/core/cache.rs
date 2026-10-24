@@ -59,8 +59,7 @@ impl CacheConfig {
         self
     }
 
-    pub(crate) fn shared_tile_budget(self, source_hint: Option<u64>) -> u64 {
-        let _ = source_hint;
+    pub(crate) fn shared_tile_budget(self) -> u64 {
         self.shared_tile_bytes.unwrap_or(DEFAULT_TILE_CACHE_SIZE)
     }
 
@@ -100,7 +99,8 @@ pub(crate) struct PrivateCacheBudget {
 }
 
 impl PrivateCacheBudget {
-    pub(crate) fn allocate(&mut self, _estimated_entry_bytes: u64) -> PrivateCacheCapacity {
+    /// Reserve one share.
+    pub(crate) fn allocate_share(&mut self) -> PrivateCacheCapacity {
         self.allocate_shares(1)
     }
 
@@ -291,17 +291,7 @@ impl CacheKey {
         col: i64,
         row: i64,
     ) -> Self {
-        Self::from_tile_request(
-            dataset_id,
-            &TileRequest {
-                scene: request.scene,
-                series: request.series,
-                level: request.level,
-                plane: request.plane,
-                col,
-                row,
-            },
-        )
+        Self::from_tile_request(dataset_id, &request.tile_at(col, row))
     }
 }
 
@@ -447,7 +437,7 @@ impl TileCache {
     }
 
     pub(crate) fn shared_with_config(config: CacheConfig) -> Self {
-        Self::new(config.shared_tile_budget(None))
+        Self::new(config.shared_tile_budget())
     }
 }
 

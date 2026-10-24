@@ -7,11 +7,11 @@ use input::{
     checked_jpeg_rgb_len, decode_jpeg_rgb16_with_color_transform,
     decode_jpeg_rgb_with_color_transform_and_patch, effective_jpeg_color_transform,
     expand_grayscale_to_rgb, j2k_downscale_for_dimensions, prepare_jpeg_input,
-    resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled,
+    resize_jpeg_rgb_nearest, try_decode_jpeg_rgb_scaled, validate_jpeg_size_override,
 };
 pub(crate) use input::{
     decode_jpeg_rgb_downscaled_with_size_override, decode_jpeg_rgb_with_color_transform,
-    jpeg_dimensions,
+    jpeg_dimensions, set_sof_dimensions,
 };
 
 use std::borrow::Cow;
@@ -21,6 +21,7 @@ use crate::core::types::{
     EncodedTilePhotometricInterpretation, RawCompressedTile,
 };
 use crate::error::WsiError;
+pub(crate) use j2k_jpeg::is_sof_marker;
 use j2k_jpeg::{
     decode_tiles_into_with_options, decode_tiles_scaled_into_with_options,
     ColorSpace as J2kColorSpace, ColorTransform as J2kColorTransform,
@@ -36,13 +37,6 @@ use rayon::prelude::*;
 /// OOM from crafted JPEG headers with extreme dimensions.
 const MAX_JPEG_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const JPEG_MAX_DIMENSION: u16 = 65500;
-
-pub(crate) const fn is_sof_marker(marker: u8) -> bool {
-    matches!(
-        marker,
-        0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
-    )
-}
 
 /// Interleaved RGB samples: `u8` for 8-bit JPEG, `u16` for 12-bit JPEG.
 pub(crate) struct DecodedJpegRgb<T = u8> {
@@ -119,6 +113,34 @@ pub(crate) struct JpegDecodeJob<'a> {
     pub requested_size: Option<(u32, u32)>,
 }
 
+impl<'a> JpegDecodeJob<'a> {
+    /// A self-contained JPEG decoded at the size its SOF declares: no
+    /// external tables, no dimension patch, no rescale.
+    pub(crate) fn standalone(data: &'a [u8]) -> Self {
+        Self::with_expected(data, 0, 0)
+    }
+
+    /// A self-contained JPEG whose SOF should match `width` x `height`: no
+    /// external tables, no dimension patch, no rescale.
+    pub(crate) fn with_expected(data: &'a [u8], width: u32, height: u32) -> Self {
+        Self {
+            data: Cow::Borrowed(data),
+            tables: None,
+            expected_width: width,
+            expected_height: height,
+            color_transform: J2kColorTransform::Auto,
+            force_dimensions: false,
+            requested_size: None,
+        }
+    }
+}
+
+/// Decode a self-contained JPEG, such as an associated image, to RGB.
+pub(crate) fn decode_standalone_jpeg(data: &[u8]) -> Result<CpuTile, WsiError> {
+    decode_one_jpeg_job(&JpegDecodeJob::standalone(data))
+}
+
+#[derive(Clone, Copy)]
 struct ScaledJpegDecode<'a> {
     data: &'a [u8],
     tables: Option<&'a [u8]>,
@@ -150,19 +172,11 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
     requested_height: Option<u32>,
     color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
-    if image_width == 0
-        || image_height == 0
-        || image_width > u16::MAX as u32
-        || image_height > u16::MAX as u32
-    {
-        return Err(WsiError::Jpeg(
-            "JPEG size override requires nonzero u16 dimensions".into(),
-        ));
-    }
+    validate_jpeg_size_override(image_width, image_height)?;
 
     match (requested_width, requested_height) {
         (Some(requested_width), Some(requested_height)) => {
-            match try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
+            decode_jpeg_rgb_resized(ScaledJpegDecode {
                 data,
                 tables,
                 expected_width: image_width,
@@ -171,20 +185,7 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
                 requested_height,
                 force_dimensions: true,
                 color_transform,
-            })? {
-                Some(decoded) => Ok(decoded),
-                None => {
-                    let decoded = decode_jpeg_rgb_with_color_transform_and_patch(
-                        data,
-                        tables,
-                        image_width,
-                        image_height,
-                        true,
-                        color_transform,
-                    )?;
-                    resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
-                }
-            }
+            })
         }
         _ => decode_jpeg_rgb_with_color_transform_and_patch(
             data,
@@ -195,6 +196,21 @@ pub(crate) fn decode_jpeg_rgb_with_size_override(
             color_transform,
         ),
     }
+}
+
+fn decode_jpeg_rgb_resized(req: ScaledJpegDecode<'_>) -> Result<DecodedJpegRgb, WsiError> {
+    if let Some(decoded) = try_decode_jpeg_rgb_scaled(req)? {
+        return Ok(decoded);
+    }
+    let decoded = decode_jpeg_rgb_with_color_transform_and_patch(
+        req.data,
+        req.tables,
+        req.expected_width,
+        req.expected_height,
+        req.force_dimensions,
+        req.color_transform,
+    )?;
+    resize_jpeg_rgb_nearest(decoded, req.requested_width, req.requested_height)
 }
 
 pub(crate) fn decode_batch_jpeg<'a>(jobs: &[JpegDecodeJob<'a>]) -> Vec<Result<CpuTile, WsiError>> {
@@ -423,7 +439,7 @@ pub(super) fn decode_one_jpeg_job(job: &JpegDecodeJob<'_>) -> Result<CpuTile, Ws
             job.color_transform,
         )
     } else if let Some((requested_width, requested_height)) = job.requested_size {
-        match try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
+        decode_jpeg_rgb_resized(ScaledJpegDecode {
             data: job.data.as_ref(),
             tables: job.tables.as_deref(),
             expected_width: job.expected_width,
@@ -432,19 +448,7 @@ pub(super) fn decode_one_jpeg_job(job: &JpegDecodeJob<'_>) -> Result<CpuTile, Ws
             requested_height,
             force_dimensions: false,
             color_transform: job.color_transform,
-        })? {
-            Some(decoded) => Ok(decoded),
-            None => {
-                let decoded = decode_jpeg_rgb_with_color_transform(
-                    job.data.as_ref(),
-                    job.tables.as_deref(),
-                    job.expected_width,
-                    job.expected_height,
-                    job.color_transform,
-                )?;
-                resize_jpeg_rgb_nearest(decoded, requested_width, requested_height)
-            }
-        }
+        })
     } else {
         decode_jpeg_rgb_with_color_transform(
             job.data.as_ref(),

@@ -8,7 +8,13 @@ publish = false
 [dependencies]
 libloading.workspace = true
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 toml = "0.8"
+
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+# Keep corpus and library hashing off the software SHA-256 path, consistently
+# with the reader. Runtime CPU detection retains the portable fallback.
+sha2 = { version = "0.10", features = ["asm"] }
 
 [lints.rust]
 unsafe_code = "allow"

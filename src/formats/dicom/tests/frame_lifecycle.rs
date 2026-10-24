@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use super::runtime::frame_index_built;
 use super::*;
 #[test]
 fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
@@ -6,28 +7,17 @@ fn dicom_parse_keeps_encapsulated_frame_index_lazy() {
     let path = dir.path().join("htj2k-rpcl.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
 
     let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
 
     let image = &slide.levels[0].parts[0];
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(image),
         "encapsulated frame index should stay lazy until first frame read"
     );
 }
@@ -40,11 +30,7 @@ fn read_admission_reserves_indexed_frame_lengths() {
     let frame = vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9];
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            pixel_data: TestPixelData::Encapsulated(frame.clone()),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, frame.clone()),
     );
     let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
     let image = slide.levels[0].parts[0].clone();
@@ -148,16 +134,10 @@ fn prepare_level_controlled_builds_the_lazy_frame_index() {
     let path = dir.path().join("prepare-level.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
     let image = slide.levels[0].parts[0].clone();
@@ -174,12 +154,7 @@ fn prepare_level_controlled_builds_the_lazy_frame_index() {
         .expect("prepare DICOM level");
 
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_some(),
+        frame_index_built(&image),
         "preparation should publish the complete frame index"
     );
 }
@@ -190,16 +165,10 @@ fn controlled_preparation_reports_fast_index_build_then_reuse() {
     let path = dir.path().join("prepare-level-diagnostics.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
     let reader = DicomReader { slide };
@@ -244,16 +213,10 @@ fn controlled_preparation_invokes_diagnostic_sink_after_releasing_index_lock() {
     let path = dir.path().join("prepare-level-reentrant-diagnostics.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
     let image = slide.levels[0].parts[0].clone();
@@ -294,16 +257,10 @@ fn controlled_indexing_reports_token_fallback_for_implicit_vr_layout() {
     let path = dir.path().join("implicit-vr-index-fallback.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: uids::IMPLICIT_VR_LITTLE_ENDIAN,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            uids::IMPLICIT_VR_LITTLE_ENDIAN,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&events);
@@ -353,16 +310,10 @@ fn concurrent_frame_index_preparation_reuses_one_complete_index() {
     let path = dir.path().join("concurrent-prepare-level.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
     let image = slide.levels[0].parts[0].clone();
@@ -391,16 +342,10 @@ fn cancelled_level_preparation_does_not_publish_an_index() {
     let path = dir.path().join("cancel-prepare-level.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = Arc::new(DicomSlide::parse(&path).expect("parse DICOM slide"));
     let image = slide.levels[0].parts[0].clone();
@@ -428,12 +373,7 @@ fn cancelled_level_preparation_does_not_publish_an_index() {
         "cancelled preparation must not report an index outcome"
     );
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "cancelled preparation must not publish a partial index"
     );
 }
@@ -444,16 +384,10 @@ fn cancellation_during_frame_index_build_does_not_publish_the_completed_candidat
     let path = dir.path().join("cancel-during-index-build.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
     let image = slide.levels[0].parts[0].clone();
@@ -476,12 +410,7 @@ fn cancellation_during_frame_index_build_does_not_publish_the_completed_candidat
 
     assert!(matches!(error, WsiError::Cancelled));
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "cancellation during the build must leave no cached index"
     );
 }
@@ -513,16 +442,10 @@ fn cancellation_during_extended_table_read_does_not_publish_an_index() {
     let path = dir.path().join("cancel-during-extended-table.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
     let image = slide.levels[0].parts[0].clone();
@@ -554,12 +477,7 @@ fn cancellation_during_extended_table_read_does_not_publish_an_index() {
 
     assert!(matches!(error, WsiError::Cancelled));
     assert!(
-        image
-            .frame_store
-            .encapsulated_frames
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_none(),
+        !frame_index_built(&image),
         "a cancelled extended-table read must not publish an index"
     );
 }
@@ -572,16 +490,10 @@ fn indexed_fragment_header_is_revalidated_before_payload_read() {
     let path = dir.path().join("fragment-header-revalidation.dcm");
     write_test_dicom(
         &path,
-        TestDicomOptions {
-            transfer_syntax: HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-            samples_per_pixel: 3,
-            photometric_interpretation: "RGB",
-            planar_configuration: Some(0),
-            pixel_spacing: Some("0.00025\\0.00025"),
-            shared_pixel_spacing: None,
-            pixel_data: TestPixelData::Encapsulated(vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9]),
-            ..TestDicomOptions::native(Vec::new())
-        },
+        TestDicomOptions::encapsulated(
+            HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
+            vec![0xFF, 0x4F, 0x00, 0xFF, 0xD9],
+        ),
     );
     let slide = DicomSlide::parse(&path).expect("parse DICOM slide");
     let image = slide.levels[0].parts[0].clone();

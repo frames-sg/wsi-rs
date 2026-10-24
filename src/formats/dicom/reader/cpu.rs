@@ -1,26 +1,21 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{CpuTile, TileRequest};
-use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
-use crate::decode::jpeg::JpegDecodeJob;
+use crate::decode::jp2k::decode_batch_jp2k;
 use crate::error::WsiError;
 
 use super::batch_plan::{
-    attach_encapsulated_frame_bytes, check_read_control, DicomBatchPlanMode, DicomBatchPlanner,
-    DicomFrameBatchKind, DicomFrameBytes, DicomResolvedBatchPlanEntry,
+    attach_encapsulated_frame_bytes, DicomBatchPlanMode, DicomBatchPlanner, DicomFrameBatchKind,
+    DicomFrameBytes, DicomResolvedBatchFrame, DicomResolvedBatchPlanEntry,
 };
-use super::DicomReader;
-use crate::formats::dicom::decode::{
-    crop_or_keep_sample_buffer_rgb, decode_dicom_jp2k_u16, decode_dicom_jpeg_batch,
-    decode_rle_lossless_frame, dicom_jpeg_color_transform, jp2k_photometric_is_ycbcr,
-    validate_jpeg_transfer_syntax_frame,
-};
+use super::{dicom_level_for_request, DicomReader};
+use crate::formats::dicom::decode::{crop_or_keep_sample_buffer_rgb, decode_dicom_jpeg_batch};
 use crate::formats::dicom::metadata::DicomBitDepth;
-use crate::formats::dicom::{is_jpeg_transfer_syntax, JP2K_TRANSFER_SYNTAXES, RLE_TRANSFER_SYNTAX};
+use crate::formats::dicom::transfer_syntax::DicomTransferSyntax;
 
 impl DicomReader {
     pub(super) fn read_tiles_cpu_with_backend_controlled(
@@ -29,7 +24,7 @@ impl DicomReader {
         backend: BackendRequest,
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         if reqs.is_empty() {
             return Ok(Vec::new());
         }
@@ -65,16 +60,13 @@ impl DicomReader {
                         }
                         first_frame_slots.insert(key, slot);
                     }
-                    if is_jpeg_transfer_syntax(&meta.image.transfer_syntax_uid) {
-                        jpeg_metas.push(meta);
-                    } else if JP2K_TRANSFER_SYNTAXES
-                        .contains(&meta.image.transfer_syntax_uid.as_str())
-                    {
-                        jp2k_metas.push(meta);
-                    } else if meta.image.transfer_syntax_uid == RLE_TRANSFER_SYNTAX {
-                        rle_metas.push(meta);
-                    } else {
-                        results[slot] = Some(self.read_tile_with_backend(req, backend)?);
+                    match meta.image.transfer_syntax {
+                        DicomTransferSyntax::Jpeg(_) => jpeg_metas.push(meta),
+                        DicomTransferSyntax::Jp2k { .. } => jp2k_metas.push(meta),
+                        DicomTransferSyntax::Rle => rle_metas.push(meta),
+                        DicomTransferSyntax::Native { .. } => {
+                            results[slot] = Some(self.read_tile_with_backend(req, backend)?);
+                        }
                     }
                 }
                 #[cfg(any(feature = "metal", feature = "cuda"))]
@@ -93,23 +85,18 @@ impl DicomReader {
 
         let jp2k_jobs =
             attach_encapsulated_frame_bytes(jp2k_metas, false, control, DicomFrameBatchKind::Cpu)?;
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let jp2k_decoded = if jp2k_jobs
             .first()
             .is_some_and(|(meta, _)| matches!(meta.image.bit_depth, DicomBitDepth::Uint16 { .. }))
         {
-            crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(|| {
+            crate::core::batch::install_codec_cpu(|| {
                 use rayon::prelude::*;
                 jp2k_jobs
                     .par_iter()
                     .map(|(meta, bytes)| {
-                        decode_dicom_jp2k_u16(
+                        meta.image.decode_jp2k_u16_frame(
                             bytes.as_slice(),
-                            meta.image.tile_width,
-                            meta.image.tile_height,
-                            meta.image.samples_per_pixel,
-                            &meta.image.photometric_interpretation,
-                            meta.image.bit_depth.bits_stored(),
                             j2k::CpuDecodeParallelism::Serial,
                         )
                     })
@@ -118,15 +105,7 @@ impl DicomReader {
         } else {
             let jp2k_decode_jobs = jp2k_jobs
                 .iter()
-                .map(|(meta, bytes)| Jp2kDecodeJob {
-                    data: Cow::Borrowed(bytes.as_slice()),
-                    expected_width: meta.image.tile_width,
-                    expected_height: meta.image.tile_height,
-                    rgb_color_space: !jp2k_photometric_is_ycbcr(
-                        meta.image.photometric_interpretation.as_str(),
-                    ),
-                    backend,
-                })
+                .map(|(meta, bytes)| meta.image.jp2k_job(bytes.as_slice(), backend))
                 .collect::<Vec<_>>();
             decode_batch_jp2k(&jp2k_decode_jobs)
         };
@@ -135,68 +114,30 @@ impl DicomReader {
             jp2k_jobs.len(),
             "DICOM JP2K batch decode",
         )?;
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         for ((meta, _), decoded) in jp2k_jobs.into_iter().zip(jp2k_decoded) {
-            let tile = decoded.map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
-            if meta.cache_decoded_frame {
-                meta.image
-                    .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
-            }
-            results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
-                tile,
-                meta.actual_width,
-                meta.actual_height,
-            )?);
+            store_decoded(meta, decoded, &mut results)?;
         }
 
         let rle_jobs =
             attach_encapsulated_frame_bytes(rle_metas, false, control, DicomFrameBatchKind::Cpu)?;
         for (meta, bytes) in rle_jobs {
-            check_read_control(control)?;
-            let tile = decode_rle_lossless_frame(
-                bytes.as_slice(),
-                meta.image.tile_width,
-                meta.image.tile_height,
-                meta.image.samples_per_pixel,
-                &meta.image.photometric_interpretation,
-                meta.image.bit_depth,
-            )
-            .map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
-            if meta.cache_decoded_frame {
-                meta.image
-                    .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
-            }
-            results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
-                tile,
-                meta.actual_width,
-                meta.actual_height,
-            )?);
+            check_cancelled_opt(control)?;
+            let decoded = meta.image.decode_rle(bytes.as_slice());
+            store_decoded(meta, decoded, &mut results)?;
         }
 
         for (slot, first_slot) in duplicate_frame_slots {
             results[slot] = results[first_slot].clone();
         }
 
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         results
             .into_iter()
             .zip(reqs.iter())
             .map(|(tile, req)| {
-                tile.ok_or_else(|| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "DICOM CPU batch result was not populated".into(),
+                tile.ok_or_else(|| {
+                    WsiError::tile_read(req, "DICOM CPU batch result was not populated")
                 })
             })
             .collect()
@@ -207,14 +148,7 @@ impl DicomReader {
         req: &TileRequest,
         backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
-        let image =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let image = dicom_level_for_request(&self.slide, req)?;
         image.read_tile(req.col, req.row, req.level.get(), backend)
     }
 }
@@ -230,51 +164,40 @@ fn decode_jpeg_frames_into(
     let jpeg_decode_jobs = jpeg_jobs
         .iter()
         .map(|(meta, bytes)| {
-            validate_jpeg_transfer_syntax_frame(
-                &meta.image.transfer_syntax_uid,
-                bit_depth,
-                bytes.as_slice(),
-            )
-            .map_err(|err| WsiError::TileRead {
-                col: meta.req.col,
-                row: meta.req.row,
-                level: meta.req.level.get(),
-                reason: err.to_string(),
-            })?;
-            Ok(JpegDecodeJob {
-                data: Cow::Borrowed(bytes.as_slice()),
-                tables: None,
-                expected_width: meta.image.tile_width,
-                expected_height: meta.image.tile_height,
-                color_transform: dicom_jpeg_color_transform(&meta.image.photometric_interpretation),
-                force_dimensions: false,
-                requested_size: None,
-            })
+            meta.image
+                .jpeg_job(bytes.as_slice())
+                .map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))
         })
         .collect::<Result<Vec<_>, WsiError>>()?;
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     let jpeg_decoded = crate::core::batch::expect_exact_count(
         decode_dicom_jpeg_batch(bit_depth, &jpeg_decode_jobs),
         jpeg_decode_jobs.len(),
         "DICOM JPEG batch decode",
     )?;
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     for ((meta, _), decoded) in jpeg_jobs.into_iter().zip(jpeg_decoded) {
-        let tile = decoded.map_err(|err| WsiError::TileRead {
-            col: meta.req.col,
-            row: meta.req.row,
-            level: meta.req.level.get(),
-            reason: err.to_string(),
-        })?;
-        if meta.cache_decoded_frame {
-            meta.image
-                .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
-        }
-        results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
-            tile,
-            meta.actual_width,
-            meta.actual_height,
-        )?);
+        store_decoded(meta, decoded, results)?;
     }
+    Ok(())
+}
+
+/// Store a decoded batch frame, cropped to its tile, in its request slot,
+/// caching the full frame when the batch allows it.
+fn store_decoded(
+    meta: DicomResolvedBatchFrame,
+    decoded: Result<CpuTile, WsiError>,
+    results: &mut [Option<CpuTile>],
+) -> Result<(), WsiError> {
+    let tile = decoded.map_err(|err| WsiError::tile_read(&meta.req, err.to_string()))?;
+    if meta.cache_decoded_frame {
+        meta.image
+            .cache_decoded_frame(meta.frame_index, Arc::new(tile.clone()));
+    }
+    results[meta.slot] = Some(crop_or_keep_sample_buffer_rgb(
+        tile,
+        meta.actual_width,
+        meta.actual_height,
+    )?);
     Ok(())
 }

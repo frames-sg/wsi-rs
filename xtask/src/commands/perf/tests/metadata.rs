@@ -8,6 +8,7 @@ fn slide(path: &str, alias: &str, format: &str) -> SlideSpec {
         format: format.into(),
         benchmark_group: format.into(),
         manifest_sha256: None,
+        pixel_tolerance: Some(wsi_rs_test_support::corpus::Tolerance::TOLERANT),
     }
 }
 
@@ -114,7 +115,7 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
     let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "baseline-public",
-        CaptureSubject::Current(BenchLibrary::WsiRs),
+        CaptureSubject::Current(Engine::WsiRs),
         &plan(&slides, &matrix, &workloads),
         vec![run],
     )
@@ -159,6 +160,10 @@ fn capture_summary_records_environment_metadata_and_raw_samples() {
     assert_eq!(summary["slide_manifest"][0]["alias"], "fixture-jp2k");
     assert_eq!(summary["slide_manifest"][0]["format"], "raw_jp2k");
     assert_eq!(
+        summary["slide_manifest"][0]["pixel_tolerance"],
+        json!({"max_abs": 4, "mean_abs": 1.0})
+    );
+    assert_eq!(
         summary["metadata"]["benchmark"]["planned_workloads"],
         json!(["single_tile_l0"])
     );
@@ -175,7 +180,7 @@ fn capture_summary_marks_missing_decode_controls_as_not_equalized() {
     let workloads = ["single_tile_l0".to_string()];
     let summary = capture_summary(
         "incomplete",
-        CaptureSubject::Current(BenchLibrary::WsiRs),
+        CaptureSubject::Current(Engine::WsiRs),
         &plan(&slides, &matrix, &workloads),
         vec![json!({"workloads": []})],
     )
@@ -219,7 +224,7 @@ fn openslide_capture_summary_records_competitor_library() {
     let workloads = ["region_2k".to_string()];
     let summary = capture_summary(
         "openslide-baseline",
-        CaptureSubject::Current(BenchLibrary::OpenSlide),
+        CaptureSubject::Current(Engine::OpenSlide),
         &plan(&slides, &matrix, &workloads),
         vec![run],
     )
@@ -278,4 +283,19 @@ fn previous_release_summary_records_the_shim_instead_of_the_workspace() {
     )
     .unwrap_err();
     assert!(error.contains("one shim library"), "{error}");
+}
+
+#[test]
+fn corpus_tier_recognizes_slides_in_the_configured_corpus_cache() {
+    let cache = Path::new("/custom/corpus-cache");
+    let fixture = slide("tests/fixtures/jp2k/rgb_nomct.j2k", "fixture", "raw_jp2k");
+    let cached = slide("/custom/corpus-cache/svs-001.svs", "svs-001", "aperio");
+    let elsewhere = slide("/slides/svs-001.svs", "svs-001", "aperio");
+
+    assert_eq!(
+        corpus_tier_in(std::slice::from_ref(&fixture), cache),
+        "public-fixture"
+    );
+    assert_eq!(corpus_tier_in(&[fixture, cached], cache), "local-parity");
+    assert_eq!(corpus_tier_in(&[elsewhere], cache), "custom");
 }

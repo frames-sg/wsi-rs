@@ -121,3 +121,58 @@ fn ifd_id_equality_and_display() {
     assert_ne!(a, c);
     assert!(a.to_string().contains("100"));
 }
+
+#[test]
+fn from_wsi_error_keeps_io_paths_and_resource_limits_typed() {
+    let path = Path::new("/tmp/slide.tif");
+
+    let io_with_path: TiffParseError = WsiError::io_with_path(
+        path,
+        std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "short read"),
+    )
+    .into();
+    let restored = io_with_path.into_wsi_error(Path::new("/tmp/other.tif"));
+    assert!(
+        matches!(&restored, WsiError::IoWithPath { path: p, .. } if p.as_path() == path),
+        "got: {restored:?}"
+    );
+
+    let io: TiffParseError =
+        WsiError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")).into();
+    assert!(
+        matches!(
+            &io,
+            TiffParseError::Io {
+                kind: std::io::ErrorKind::NotFound,
+                path: None,
+                ..
+            }
+        ),
+        "got: {io:?}"
+    );
+
+    let limit: TiffParseError = WsiError::ResourceLimit {
+        resource: "tile/frame index",
+        requested: 9,
+        limit: 8,
+    }
+    .into();
+    let restored = limit.into_wsi_error(path);
+    assert!(
+        matches!(
+            &restored,
+            WsiError::ResourceLimit {
+                resource: "tile/frame index",
+                requested: 9,
+                limit: 8,
+            }
+        ),
+        "got: {restored:?}"
+    );
+
+    let other: TiffParseError = WsiError::invalid_slide(path, "bad tile grid").into();
+    assert!(
+        matches!(&other, TiffParseError::Structure(message) if message.contains("bad tile grid")),
+        "got: {other:?}"
+    );
+}

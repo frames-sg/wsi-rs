@@ -96,21 +96,6 @@ fn download_cpu_strips_pitch_and_honors_cropped_geometry() {
 }
 
 #[test]
-fn download_limit_is_128_mib() {
-    super::super::tile::enforce_download_limit(128 * 1024 * 1024).expect("limit is inclusive");
-    let error = super::super::tile::enforce_download_limit(128 * 1024 * 1024 + 1)
-        .expect_err("oversized Metal readback must fail before allocation");
-    assert!(matches!(
-        error,
-        WsiError::ResourceLimit {
-            resource: "Metal host tile download",
-            limit: super::super::tile::MAX_DEVICE_DOWNLOAD_BYTES,
-            ..
-        }
-    ));
-}
-
-#[test]
 fn private_readback_reuses_the_queue_after_session_drop_and_crop() {
     use crate::core::execution_telemetry::{test_count, Event};
     let Some(device) = test_device() else {

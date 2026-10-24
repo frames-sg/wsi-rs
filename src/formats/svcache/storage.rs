@@ -1,6 +1,6 @@
 use super::*;
+use crate::core::file_identity::FileIdentity;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SCENES: usize = 1_024;
@@ -23,9 +23,10 @@ pub(super) fn read_svcache_with_budget(
     path: &Path,
     budget: &OpenBudget,
 ) -> Result<(File, u64, SvcacheMetadata), WsiError> {
-    let mut file = File::open(path)?;
+    let mut file = File::open(path).map_err(|e| WsiError::io_with_path(path, e))?;
     let mut magic = [0_u8; 8];
-    file.read_exact(&mut magic)?;
+    file.read_exact(&mut magic)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
     if &magic != MAGIC {
         return Err(WsiError::UnsupportedFormat(format!(
             "{} is not an .svcache file",
@@ -33,13 +34,11 @@ pub(super) fn read_svcache_with_budget(
         )));
     }
     let mut len = [0_u8; 8];
-    file.read_exact(&mut len)?;
+    file.read_exact(&mut len)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
     let metadata_len = u64::from_le_bytes(len);
     if metadata_len > MAX_METADATA_BYTES {
-        return Err(WsiError::InvalidSlide {
-            path: path.into(),
-            message: "svcache metadata is too large".into(),
-        });
+        return Err(invalid_svcache(path, "svcache metadata is too large"));
     }
     let metadata_limit = MAX_METADATA_BYTES.min(budget.limits().metadata_value_bytes());
     if metadata_len > budget.limits().metadata_value_bytes() {
@@ -64,12 +63,10 @@ pub(super) fn read_svcache_with_budget(
             limit: metadata_limit,
         })?;
     metadata_bytes.resize(metadata_len, 0);
-    file.read_exact(&mut metadata_bytes)?;
-    let metadata: SvcacheMetadata =
-        serde_json::from_slice(&metadata_bytes).map_err(|err| WsiError::InvalidSlide {
-            path: path.into(),
-            message: format!("parse svcache metadata: {err}"),
-        })?;
+    file.read_exact(&mut metadata_bytes)
+        .map_err(|e| WsiError::io_with_path(path, e))?;
+    let metadata: SvcacheMetadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|err| invalid_svcache(path, format!("parse svcache metadata: {err}")))?;
     if metadata.schema_version != SCHEMA_VERSION {
         return Err(WsiError::UnsupportedFormat(format!(
             "unsupported svcache schema {}",
@@ -84,13 +81,6 @@ pub(super) fn read_svcache_with_budget(
     Ok((file, payload_start, metadata))
 }
 
-fn invalid_svcache(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
-}
-
 fn validate_svcache_metadata(
     path: &Path,
     file_len: u64,
@@ -102,13 +92,7 @@ fn validate_svcache_metadata(
         return Err(invalid_svcache(path, "svcache metadata extends past EOF"));
     }
     validate_string(path, "source path", &metadata.source.path)?;
-    if metadata.source.sha256.len() != 64
-        || !metadata
-            .source
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_hex(&metadata.source.sha256) {
         return Err(invalid_svcache(path, "svcache source checksum is invalid"));
     }
     if metadata.scenes.len() > MAX_SCENES {
@@ -137,9 +121,9 @@ fn validate_svcache_metadata(
     }
 
     let payload_len = file_len - payload_start;
-    let retained_index_bytes = svcache_index_bytes(metadata)?;
+    let retained_index_bytes = svcache_index_bytes(path, metadata)?;
     budget.retain_index(retained_index_bytes)?;
-    let payload_range_count = svcache_payload_count(metadata)?;
+    let payload_range_count = svcache_payload_count(path, metadata)?;
     let payload_range_bytes = payload_range_count
         .saturating_mul(u64::try_from(std::mem::size_of::<(u64, u64)>()).unwrap_or(u64::MAX));
     let mut payload_ranges = Vec::new();
@@ -308,9 +292,6 @@ fn validate_level(
                 "complete svcache contains an empty dense tile slot",
             ));
         }
-        for tile in level.tiles.iter().flatten() {
-            validate_tile(path, payload_len, tile, payload_ranges, budget)?;
-        }
     } else {
         if complete && u64::try_from(level.sparse_tiles.len()).ok() != Some(tile_count) {
             return Err(invalid_svcache(
@@ -327,8 +308,10 @@ fn validate_level(
                 ));
             }
             previous = Some(entry.index);
-            validate_tile(path, payload_len, &entry.tile, payload_ranges, budget)?;
         }
+    }
+    for (_, tile) in level.populated_tiles() {
+        validate_tile(path, payload_len, tile, payload_ranges, budget)?;
     }
     Ok(())
 }
@@ -387,37 +370,39 @@ fn validate_tile(
             "svcache tile payload extends past EOF",
         ));
     }
-    if tile.sha256.len() != 64
-        || !tile
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_hex(&tile.sha256) {
         return Err(invalid_svcache(path, "svcache tile checksum is invalid"));
     }
     payload_ranges.push((tile.payload_offset, payload_end));
     Ok(())
 }
 
-fn svcache_payload_count(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+/// Whether `value` is a SHA-256 digest as the cache writes it: 64 lowercase
+/// hex digits.
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn svcache_payload_count(path: &Path, metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
     let level_tiles = metadata.scenes.iter().try_fold(0u64, |total, scene| {
         scene.series.iter().try_fold(total, |total, series| {
             series.levels.iter().try_fold(total, |total, level| {
-                let dense = u64::try_from(level.tiles.iter().flatten().count()).unwrap_or(u64::MAX);
-                let sparse = u64::try_from(level.sparse_tiles.len()).unwrap_or(u64::MAX);
+                let populated = u64::try_from(level.populated_tiles().count()).unwrap_or(u64::MAX);
                 total
-                    .checked_add(dense)
-                    .and_then(|value| value.checked_add(sparse))
-                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+                    .checked_add(populated)
+                    .ok_or_else(|| invalid_svcache(path, "svcache payload count overflow"))
             })
         })
     })?;
     level_tiles
         .checked_add(u64::try_from(metadata.associated.len()).unwrap_or(u64::MAX))
-        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache payload count overflow"))
+        .ok_or_else(|| invalid_svcache(path, "svcache payload count overflow"))
 }
 
-fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
+fn svcache_index_bytes(path: &Path, metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
     let mut bytes = u64::try_from(metadata.scenes.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(u64::try_from(std::mem::size_of::<SceneMeta>()).unwrap_or(u64::MAX));
@@ -430,7 +415,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                         u64::try_from(std::mem::size_of::<SeriesMeta>()).unwrap_or(u64::MAX),
                     ),
             )
-            .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+            .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
         for series in &scene.series {
             bytes = bytes
                 .checked_add(
@@ -440,7 +425,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                             u64::try_from(std::mem::size_of::<LevelMeta>()).unwrap_or(u64::MAX),
                         ),
                 )
-                .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+                .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
             for level in &series.levels {
                 bytes = bytes
                     .checked_add(
@@ -461,7 +446,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                                 ),
                         )
                     })
-                    .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))?;
+                    .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))?;
             }
         }
     }
@@ -473,7 +458,7 @@ fn svcache_index_bytes(metadata: &SvcacheMetadata) -> Result<u64, WsiError> {
                     u64::try_from(std::mem::size_of::<AssociatedMeta>()).unwrap_or(u64::MAX),
                 ),
         )
-        .ok_or_else(|| invalid_svcache(Path::new(""), "svcache index size overflow"))
+        .ok_or_else(|| invalid_svcache(path, "svcache index size overflow"))
 }
 
 fn validate_string(path: &Path, label: &str, value: &str) -> Result<(), WsiError> {
@@ -497,61 +482,35 @@ pub fn svcache_matches_source(cache_path: &Path, source_path: &Path) -> Result<b
 }
 
 pub(super) fn fingerprint_source(path: &Path) -> Result<SourceFingerprint, WsiError> {
-    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let before = std::fs::metadata(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if !before.is_file() {
+    let io_error = |source| WsiError::io_with_path(path, source);
+    // Checked before opening: opening a FIFO or device for reading can block.
+    if !std::fs::metadata(path).map_err(io_error)?.is_file() {
         return Err(invalid_svcache(
             path,
             "svcache source fingerprint requires a regular file",
         ));
     }
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let modified_unix_nanos = before
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
-    let len = before.len();
+    let mut file = File::open(path).map_err(io_error)?;
+    let identity = FileIdentity::from_open_file(path, &file)?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            })?;
+        let read = file.read(&mut buffer).map_err(io_error)?;
         if read == 0 {
             break;
         }
         digest.update(&buffer[..read]);
     }
-    let after = file.metadata().map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    let after_modified = after
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
-    if after.len() != len || after_modified != modified_unix_nanos {
-        return Err(invalid_svcache(
-            path,
-            "svcache source changed while computing its fingerprint",
-        ));
-    }
+    identity.ensure_same(
+        &FileIdentity::from_open_file(path, &file)?,
+        path,
+        "svcache source changed while computing its fingerprint",
+    )?;
     Ok(SourceFingerprint {
-        path: canonical_path.to_string_lossy().into_owned(),
-        len,
-        modified_unix_nanos,
-        sha256: hex_encode(&digest.finalize()),
+        path: identity.canonical_path().to_string_lossy().into_owned(),
+        len: identity.length(),
+        modified_unix_nanos: identity.modified_ns(),
+        sha256: format!("{:x}", digest.finalize()),
     })
 }
 
@@ -634,16 +593,6 @@ pub(super) fn dataset_from_metadata(path: &Path, metadata: &SvcacheMetadata) -> 
         icc_profiles: HashMap::new(),
         source_icc_profiles: Vec::new(),
     }
-}
-
-pub(super) fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 impl TryFrom<&ColorSpace> for ColorSpaceMeta {

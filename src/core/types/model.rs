@@ -30,6 +30,53 @@ impl Dataset {
         }
     }
 
+    pub(crate) fn level(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Result<(&Scene, &Series, &Level), WsiError> {
+        let scene_ref = self
+            .scenes
+            .get(scene.get())
+            .ok_or(WsiError::SceneOutOfRange {
+                index: scene.get(),
+                count: self.scenes.len(),
+            })?;
+        let series_ref = scene_ref
+            .series
+            .get(series.get())
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: series.get(),
+                count: scene_ref.series.len(),
+            })?;
+        let level_ref =
+            series_ref
+                .levels
+                .get(level.get() as usize)
+                .ok_or(WsiError::LevelOutOfRange {
+                    level: level.get(),
+                    count: u32::try_from(series_ref.levels.len()).unwrap_or(u32::MAX),
+                })?;
+        Ok((scene_ref, series_ref, level_ref))
+    }
+
+    /// The level that `scene`, `series` and `level` name, or `None` where
+    /// [`Self::level`] would fail.
+    pub(crate) fn find_level(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+    ) -> Option<&Level> {
+        self.scenes
+            .get(scene.get())?
+            .series
+            .get(series.get())?
+            .levels
+            .get(level.get() as usize)
+    }
+
     pub fn with_associated_images(
         mut self,
         associated_images: HashMap<String, AssociatedImage>,
@@ -298,6 +345,23 @@ impl AxesShape {
     pub const fn new(z: u32, c: u32, t: u32) -> Self {
         Self { z, c, t }
     }
+
+    pub(crate) fn validate_plane(self, plane: PlaneSelection) -> Result<(), WsiError> {
+        for (axis, value, extent) in [
+            ("z", plane.z, self.z),
+            ("c", plane.c, self.c),
+            ("t", plane.t, self.t),
+        ] {
+            if value >= extent {
+                return Err(WsiError::PlaneOutOfRange {
+                    axis: axis.into(),
+                    value,
+                    max: extent.saturating_sub(1),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for AxesShape {
@@ -322,6 +386,113 @@ impl Level {
             downsample,
             tile_layout,
         }
+    }
+
+    /// Tile (`req.col`, `req.row`) of this level's regular grid, or `None`
+    /// when the level has another layout. A tile outside the grid is a
+    /// `TileRead` error.
+    pub(crate) fn regular_tile(&self, req: &TileRequest) -> Result<Option<RegularTile>, WsiError> {
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = self.tile_layout
+        else {
+            return Ok(None);
+        };
+        let (col, row) = checked_grid_tile(req, tiles_across, tiles_down)?;
+        let x = col.saturating_mul(u64::from(tile_width));
+        let y = row.saturating_mul(u64::from(tile_height));
+        // Each extent is capped by its u32 tile dimension.
+        let width = self
+            .dimensions
+            .0
+            .saturating_sub(x)
+            .min(u64::from(tile_width)) as u32;
+        let height = self
+            .dimensions
+            .1
+            .saturating_sub(y)
+            .min(u64::from(tile_height)) as u32;
+        Ok(Some(RegularTile {
+            x,
+            y,
+            width,
+            height,
+            tile_width,
+            tile_height,
+        }))
+    }
+
+    /// The native tile that display request `req` names when its tile size
+    /// and position match one tile of this level's regular grid exactly.
+    pub(crate) fn native_display_tile(
+        &self,
+        req: &TileViewRequest,
+    ) -> Result<TileRequest, NativeDisplayMismatch> {
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            tiles_across,
+            tiles_down,
+        } = self.tile_layout
+        else {
+            return Err(NativeDisplayMismatch::NotRegular);
+        };
+        if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
+            return Err(NativeDisplayMismatch::TileSize {
+                native: (tile_width, tile_height),
+            });
+        }
+        let in_grid = u64::try_from(req.col).is_ok_and(|col| col < tiles_across)
+            && u64::try_from(req.row).is_ok_and(|row| row < tiles_down);
+        if !in_grid {
+            return Err(NativeDisplayMismatch::OutsideGrid);
+        }
+        Ok(req.source_tile())
+    }
+}
+
+/// Why a display request is not exactly one native tile of its level.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum NativeDisplayMismatch {
+    /// The level has no regular native grid.
+    NotRegular,
+    /// The display tile size differs from the native tile size.
+    TileSize { native: (u32, u32) },
+    /// The tile lies outside the native grid.
+    OutsideGrid,
+}
+
+/// One tile of a regular grid in level pixels; `width` and `height` are
+/// clipped to the level edge.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct RegularTile {
+    pub(crate) x: u64,
+    pub(crate) y: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) tile_width: u32,
+    pub(crate) tile_height: u32,
+}
+
+/// The column and row of `req` when they lie in a `tiles_across` by
+/// `tiles_down` grid, otherwise a `TileRead` error.
+pub(crate) fn checked_grid_tile(
+    req: &TileRequest,
+    tiles_across: u64,
+    tiles_down: u64,
+) -> Result<(u64, u64), WsiError> {
+    match (u64::try_from(req.col), u64::try_from(req.row)) {
+        (Ok(col), Ok(row)) if col < tiles_across && row < tiles_down => Ok((col, row)),
+        _ => Err(WsiError::tile_read(
+            req,
+            format!(
+                "tile ({},{}) out of range ({tiles_across}x{tiles_down})",
+                req.col, req.row
+            ),
+        )),
     }
 }
 

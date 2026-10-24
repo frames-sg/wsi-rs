@@ -110,15 +110,16 @@ fn try_prepared_jpeg_buffer(capacity: usize) -> Result<Vec<u8>, WsiError> {
     Ok(bytes)
 }
 
-fn find_sof_position(header: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    while i < header.len().saturating_sub(1) {
-        if header[i] == 0xFF && is_sof_marker(header[i + 1]) {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
+/// Offset of the first SOF marker's `0xFF` prefix. Walks marker segments up to
+/// the first scan, so `FF Cx` bytes inside an APPn, DQT or COM payload never
+/// match, and ignores a SOF too short to hold its dimensions.
+fn find_sof_position(input: &[u8]) -> Option<usize> {
+    j2k_jpeg::iter_segments(input)
+        .map_while(Result::ok)
+        .take_while(|segment| segment.marker != 0xDA)
+        .find(|segment| is_sof_marker(segment.marker))
+        .filter(|segment| segment.payload.len() >= 5)
+        .map(|segment| segment.marker_offset)
 }
 
 pub(super) fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
@@ -139,11 +140,12 @@ pub(super) fn patch_sof_dimensions(header: &mut [u8], sof_offset: usize, width: 
         x
     };
 
-    header[sof_offset + 5..sof_offset + 7].copy_from_slice(&new_y.to_be_bytes());
-    header[sof_offset + 7..sof_offset + 9].copy_from_slice(&new_x.to_be_bytes());
+    set_sof_dimensions(header, sof_offset, new_x, new_y);
 }
 
-pub(super) fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
+/// Overwrite the height and width of the SOF segment whose `0xFF` prefix is at
+/// `sof_offset`. Leaves `header` unchanged when it is too short to hold them.
+pub(crate) fn set_sof_dimensions(header: &mut [u8], sof_offset: usize, width: u16, height: u16) {
     if sof_offset + 9 > header.len() {
         return;
     }
@@ -370,15 +372,7 @@ pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
     scale: J2kDownscale,
     color_transform: J2kColorTransform,
 ) -> Result<DecodedJpegRgb, WsiError> {
-    if image_width == 0
-        || image_height == 0
-        || image_width > u32::from(u16::MAX)
-        || image_height > u32::from(u16::MAX)
-    {
-        return Err(WsiError::Jpeg(
-            "JPEG size override requires nonzero u16 dimensions".into(),
-        ));
-    }
+    validate_jpeg_size_override(image_width, image_height)?;
     let input = prepare_jpeg_input(data, None, image_width, image_height, true)?;
     let view = parse_jpeg_view(input.as_ref(), color_transform)?;
     let grayscale = view.info().color_space == j2k_jpeg::ColorSpace::Grayscale;
@@ -409,6 +403,15 @@ pub(crate) fn decode_jpeg_rgb_downscaled_with_size_override(
         height,
         pixels,
     })
+}
+
+pub(super) fn validate_jpeg_size_override(width: u32, height: u32) -> Result<(), WsiError> {
+    if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return Err(WsiError::Jpeg(
+            "JPEG size override requires nonzero u16 dimensions".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn j2k_downscale_for_dimensions(

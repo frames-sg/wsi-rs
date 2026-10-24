@@ -10,10 +10,10 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::super::{
-    compression_from_tag, compute_tiff_dataset_identity, regular_tiff_level, DatasetLayout,
-    TileSource, TileSourceKey,
+use super::super::common::{
+    averaged_downsample, compression_from_tag, regular_tiff_level, unique_associated_name,
 };
+use super::super::{compute_tiff_dataset_identity, DatasetLayout, TileSource, TileSourceKey};
 use super::metadata::{parse_ome_xml, OmeDocument, OmeImage, OmePixels, PhysicalSize, PlaneShape};
 use super::VENDOR;
 
@@ -103,7 +103,7 @@ pub(super) fn interpret(container: &TiffContainer) -> Result<DatasetLayout, Tiff
     for (base_name, image) in &associated {
         let ifd_id = image.planes[0];
         let (width, height) = ifd_dimensions(container, ifd_id)?;
-        let name = unique_name(&associated_images, base_name);
+        let name = unique_associated_name(&associated_images, base_name);
         associated_images.insert(
             name.clone(),
             AssociatedImage::new(
@@ -399,7 +399,7 @@ fn build_series(
         let downsample = if level == 0 {
             1.0
         } else {
-            (base_width as f64 / width as f64 + base_height as f64 / height as f64) / 2.0
+            averaged_downsample((base_width, base_height), (width, height))
         };
         levels.push(regular_tiff_level(
             "OME-TIFF",
@@ -484,16 +484,6 @@ fn associated_name(image: &MappedImage<'_>, image_count: usize) -> Option<&'stat
         "thumbnail" => Some("thumbnail"),
         _ => None,
     }
-}
-
-fn unique_name(existing: &HashMap<String, AssociatedImage>, base: &str) -> String {
-    if !existing.contains_key(base) {
-        return base.into();
-    }
-    (1..)
-        .map(|index| format!("{base}-{index}"))
-        .find(|candidate| !existing.contains_key(candidate))
-        .unwrap_or_else(|| unreachable!("unbounded suffix search must eventually return"))
 }
 
 fn ome_properties(

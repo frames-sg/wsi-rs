@@ -3,9 +3,17 @@ use super::*;
 pub(super) struct VmsSlide {
     pub(super) dataset: Dataset,
     pub(super) levels: Vec<VmsLevel>,
-    pub(super) associated_paths: HashMap<String, PathBuf>,
+    pub(super) associated_files: HashMap<String, VmsAssociatedFile>,
     pub(super) associated_cache: Mutex<PrivateCache<String, Arc<CpuTile>>>,
     pub(super) encoded_unit_bytes: u64,
+}
+
+/// A standalone associated JPEG, reread on each uncached read.
+pub(super) struct VmsAssociatedFile {
+    pub(super) path: PathBuf,
+    /// Identity when the slide was opened; a file that no longer matches is
+    /// refused.
+    pub(super) identity: FileIdentity,
 }
 
 pub(super) struct VmsLevel {
@@ -40,6 +48,7 @@ pub(super) struct VmsJpeg {
 
 impl VmsLevel {
     pub(super) fn new(
+        path: &Path,
         jpegs: Vec<Arc<VmsJpeg>>,
         jpegs_across: u32,
         _jpegs_down: u32,
@@ -47,10 +56,7 @@ impl VmsLevel {
     ) -> Result<Self, WsiError> {
         let first = jpegs
             .first()
-            .ok_or_else(|| WsiError::InvalidSlide {
-                path: PathBuf::new(),
-                message: "VMS level has no JPEG shards".into(),
-            })?
+            .ok_or_else(|| WsiError::invalid_slide(path, "VMS level has no JPEG shards"))?
             .clone();
         Ok(Self {
             scale_denom,
@@ -59,12 +65,5 @@ impl VmsLevel {
             base_tiles_across: first.tiles_across,
             base_tiles_down: first.tiles_down,
         })
-    }
-}
-
-pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
     }
 }

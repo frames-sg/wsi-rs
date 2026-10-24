@@ -2,7 +2,6 @@ use super::super::*;
 use crate::formats::tiff_family::container::tags;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
 
-const TAG_MAKE: u16 = 271;
 const ARGOS_METADATA_TAG: u16 = 65_000;
 
 fn tiled_ifd(width: u32, height: u32) -> Vec<SyntheticTag> {
@@ -32,7 +31,7 @@ fn probe_detects_argos_before_generic_tiff() {
 #[test]
 fn probe_detects_huron_before_generic_tiff() {
     let mut first = tiled_ifd(1024, 512);
-    first.push(SyntheticTag::ascii(TAG_MAKE, "Huron LE176"));
+    first.push(SyntheticTag::ascii(tags::MAKE, "Huron LE176"));
     first.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         "Scanner = LE176\nObjective = 20",
@@ -58,7 +57,7 @@ fn malformed_vendor_markers_fall_through_to_generic_tiff() {
     );
 
     let mut wrong_huron = tiled_ifd(1024, 512);
-    wrong_huron.push(SyntheticTag::ascii(TAG_MAKE, "Not Huron"));
+    wrong_huron.push(SyntheticTag::ascii(tags::MAKE, "Not Huron"));
     let file = build_tiff(&[wrong_huron]);
     assert_eq!(
         TiffFamilyBackend::new().probe(file.path()).unwrap().vendor,

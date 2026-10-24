@@ -1,5 +1,6 @@
 use super::*;
 use crate::formats::tiff_family::container::TiffContainer;
+use crate::formats::tiff_family::test_support::{build_bigtiff, SyntheticTag};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -243,6 +244,72 @@ fn interpret_multi_level_sorted() {
     assert!(series.levels[1].downsample > 1.0);
     // downsample ~ avg(2048/512, 1536/384) / 1 = avg(4.0, 4.0) = 4.0
     assert!((series.levels[1].downsample - 4.0).abs() < 0.01);
+}
+
+#[test]
+fn interpret_sorts_levels_whose_area_overflows_u64() {
+    // BigTIFF LONG8 sizes: the 2^32 x 2^32 level's area does not fit in u64.
+    let level = |side: u64| {
+        vec![
+            SyntheticTag::long8(tags::IMAGE_WIDTH, side),
+            SyntheticTag::long8(tags::IMAGE_LENGTH, side),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+        ]
+    };
+    let file = build_bigtiff(&[level(1 << 31), level(1 << 32)]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = GenericTiffInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels[0].dimensions, (1 << 32, 1 << 32));
+    assert_eq!(levels[1].dimensions, (1 << 31, 1 << 31));
+    assert!((levels[1].downsample - 2.0).abs() < 0.001);
+}
+
+#[test]
+fn jpeg_tables_are_read_per_level_with_level0_fallback() {
+    let level0_tables = [0xFF, 0xD8, 0x00, 0x00];
+    let level1_tables = [0xFF, 0xD8, 0x11, 0x11];
+    let level = |side: u32| {
+        vec![
+            long_tag(tags::IMAGE_WIDTH, side),
+            long_tag(tags::IMAGE_LENGTH, side),
+            long_tag(tags::TILE_WIDTH, 256),
+            long_tag(tags::TILE_LENGTH, 256),
+            short_tag(tags::COMPRESSION, 7),
+        ]
+    };
+    let with_tables = |mut ifd: Vec<_>, tables: [u8; 4]| {
+        ifd.push((tags::JPEG_TABLES, 7, 4, tables));
+        ifd
+    };
+    let file = build_synthetic_tiff(&[
+        with_tables(level(2048), level0_tables),
+        with_tables(level(1024), level1_tables),
+        level(512),
+    ]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = GenericTiffInterpreter.interpret(&container).unwrap();
+
+    for (level, expected) in [(0, level0_tables), (1, level1_tables), (2, level0_tables)] {
+        let key = TileSourceKey {
+            scene: 0,
+            series: 0,
+            level,
+            z: 0,
+            c: 0,
+            t: 0,
+        };
+        match &layout.tile_sources[&key] {
+            TileSource::TiledIfd { jpeg_tables, .. } => {
+                assert_eq!(jpeg_tables.as_deref(), Some(&expected[..]), "level {level}");
+            }
+            other => panic!("expected TiledIfd, got: {:?}", other),
+        }
+    }
 }
 
 #[test]

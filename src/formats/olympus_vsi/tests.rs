@@ -696,7 +696,14 @@ fn parser_rejects_unsupported_compression_and_invalid_chunk_records() {
 
     for (spec, expected) in cases {
         let (_temp, path) = write_ets(&build_ets(&spec));
-        let message = invalid_slide_message(expect_wsi_error(EtsScene::parse(&path), expected));
+        let error = expect_wsi_error(EtsScene::parse(&path), expected);
+        if let WsiError::InvalidSlide {
+            path: error_path, ..
+        } = &error
+        {
+            assert_eq!(error_path, &path, "{expected} error names the wrong file");
+        }
+        let message = invalid_slide_message(error);
         assert!(message.contains(expected), "unexpected error: {message}");
     }
 }
@@ -704,7 +711,8 @@ fn parser_rejects_unsupported_compression_and_invalid_chunk_records() {
 #[test]
 fn coordinate_and_type_parsers_preserve_ets_axis_semantics() {
     assert_eq!(
-        key_from_coords(&[4, 5, 6, 7, 8], false).expect("non-pyramid coordinates"),
+        key_from_coords(Path::new("slide.ets"), &[4, 5, 6, 7, 8], false)
+            .expect("non-pyramid coordinates"),
         EtsTileKey {
             level: 0,
             z: 6,
@@ -715,7 +723,8 @@ fn coordinate_and_type_parsers_preserve_ets_axis_semantics() {
         }
     );
     assert_eq!(
-        key_from_coords(&[4, 5, 6, 7, 8, 9], true).expect("pyramid coordinates"),
+        key_from_coords(Path::new("slide.ets"), &[4, 5, 6, 7, 8, 9], true)
+            .expect("pyramid coordinates"),
         EtsTileKey {
             level: 9,
             z: 6,
@@ -725,9 +734,9 @@ fn coordinate_and_type_parsers_preserve_ets_axis_semantics() {
             row: 5,
         }
     );
-    assert!(key_from_coords(&[0, 1], false).is_err());
-    assert!(key_from_coords(&[0, 1, -1], false).is_err());
-    assert!(key_from_coords(&[0, 1, 2, -1], true).is_err());
+    assert!(key_from_coords(Path::new("slide.ets"), &[0, 1], false).is_err());
+    assert!(key_from_coords(Path::new("slide.ets"), &[0, 1, -1], false).is_err());
+    assert!(key_from_coords(Path::new("slide.ets"), &[0, 1, 2, -1], true).is_err());
 
     assert_eq!(sample_type_from_ets(1).unwrap(), SampleType::Uint8);
     assert_eq!(sample_type_from_ets(2).unwrap(), SampleType::Uint8);

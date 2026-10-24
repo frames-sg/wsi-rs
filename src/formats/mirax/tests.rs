@@ -16,7 +16,7 @@ mod parser;
 #[test]
 fn record_read_does_not_move_another_readers_shared_file_position() {
     let fixture = fixtures::MiraxFixture::complete();
-    let mut file = File::open(&fixture.data_path).unwrap();
+    let file = File::open(&fixture.data_path).unwrap();
     let mut other = file.try_clone().unwrap();
     let expected = std::fs::read(&fixture.data_path).unwrap();
     let ready = std::sync::Barrier::new(2);
@@ -32,7 +32,7 @@ fn record_read_does_not_move_another_readers_shared_file_position() {
         });
         ready.wait();
         let actual = helpers::read_record_bytes_from_file_with_limit(
-            &mut file,
+            &file,
             &fixture.data_path,
             128,
             16,

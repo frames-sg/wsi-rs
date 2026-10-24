@@ -332,7 +332,7 @@ fn read_region_plane_out_of_range() {
         Err(WsiError::PlaneOutOfRange {
             axis,
             value: 5,
-            max: 1,
+            max: 0,
         }) => {
             assert_eq!(axis, "z");
         }
@@ -351,7 +351,7 @@ fn read_region_channel_and_time_planes_are_validated_independently() {
         let req = region_request(0, 0, 0, plane, 0, 0, 10, 10);
 
         match handle.read_region(&req) {
-            Err(WsiError::PlaneOutOfRange { axis, max: 1, .. }) => {
+            Err(WsiError::PlaneOutOfRange { axis, max: 0, .. }) => {
                 assert_eq!(axis, expected_axis);
             }
             other => panic!("expected PlaneOutOfRange for {expected_axis}, got {other:?}"),

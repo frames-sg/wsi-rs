@@ -24,6 +24,37 @@ fn source_fingerprint_detects_same_size_same_mtime_replacement() {
 }
 
 #[test]
+fn source_fingerprint_records_the_file_as_lowercase_sha256_hex() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("abc.bin");
+    std::fs::write(&source, b"abc").unwrap();
+    let metadata = std::fs::metadata(&source).unwrap();
+
+    let fingerprint = fingerprint_source(&source).unwrap();
+
+    assert_eq!(
+        fingerprint.sha256,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        fingerprint.path,
+        std::fs::canonicalize(&source).unwrap().to_string_lossy()
+    );
+    assert_eq!(fingerprint.len, 3);
+    assert_eq!(
+        fingerprint.modified_unix_nanos,
+        Some(
+            metadata
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    );
+}
+
+#[test]
 fn source_fingerprint_hashes_bytes_between_former_sample_windows() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("large-source.bin");

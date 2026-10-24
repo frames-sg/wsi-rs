@@ -8,13 +8,12 @@ use crate::core::registry::{
     ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
-use crate::decode::jpeg::{decode_batch_jpeg, jpeg_dimensions, JpegDecodeJob};
+use crate::decode::jpeg::{decode_standalone_jpeg, jpeg_dimensions};
 use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::{parse_ini_file_with_budget, ParsedIni};
 use crate::properties::Properties;
 use ngr::Ngr;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -22,18 +21,11 @@ const GROUP: &str = "Uncompressed Virtual Microscope Specimen";
 
 pub(crate) struct HamamatsuVmuBackend;
 
-fn invalid(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
-}
-
 fn key_file(path: &Path, budget: &OpenBudget) -> Result<ParsedIni, WsiError> {
     parse_ini_file_with_budget(
         path,
         64 << 10,
-        |p| invalid(p, "VMU key file too large"),
+        |p| WsiError::invalid_slide(p, "VMU key file too large"),
         false,
         budget,
     )
@@ -90,14 +82,14 @@ impl VmuReader {
         let group = key_file(path, budget.as_ref())?
             .groups
             .remove(GROUP)
-            .ok_or_else(|| invalid(path, "missing VMU specimen group"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "missing VMU specimen group"))?;
         if group
             .get("BitsPerPixel")
             .and_then(|s| s.parse::<u32>().ok())
             != Some(36)
             || group.get("PixelOrder").map(String::as_str) != Some("RGB")
         {
-            return Err(invalid(
+            return Err(WsiError::invalid_slide(
                 path,
                 "VMU requires BitsPerPixel=36 and PixelOrder=RGB",
             ));
@@ -113,31 +105,34 @@ impl VmuReader {
                 continue;
             }
             if col != 0 || row != 0 || image.is_some() {
-                return Err(invalid(
+                return Err(WsiError::invalid_slide(
                     path,
                     "VMU requires exactly one base image at (0,0)",
                 ));
             }
             image = Some(resolve_companion_file(path, root, value)?);
         }
-        let image = image.ok_or_else(|| invalid(path, "missing VMU ImageFile"))?;
+        let image = image.ok_or_else(|| WsiError::invalid_slide(path, "missing VMU ImageFile"))?;
         let map = resolve_companion_file(
             path,
             root,
             group
                 .get("MapFile")
-                .ok_or_else(|| invalid(path, "missing VMU MapFile"))?,
+                .ok_or_else(|| WsiError::invalid_slide(path, "missing VMU MapFile"))?,
         )?;
         let levels = [Ngr::open(&image)?, Ngr::open(&map)?];
         if levels[1].width > levels[0].width || levels[1].height > levels[0].height {
-            return Err(invalid(path, "VMU map dimensions exceed base image"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "VMU map dimensions exceed base image",
+            ));
         }
         let mut quickhash = Quickhash1::new();
         quickhash.hash_file(path)?;
         quickhash.hash_file(&map)?;
         let hash = quickhash
             .finish()
-            .ok_or_else(|| invalid(path, "VMU quickhash unavailable"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "VMU quickhash unavailable"))?;
         let id = dataset_id_from_quickhash(path, &hash, "VMU quickhash")?;
         let properties = properties(&group, &levels[0], hash);
         let mut associated_images = HashMap::new();
@@ -211,16 +206,16 @@ fn image_coordinates(path: &Path, key: &str) -> Result<(u32, u32, u32), WsiError
     let suffix = key
         .strip_prefix("ImageFile(")
         .and_then(|s| s.strip_suffix(')'))
-        .ok_or_else(|| invalid(path, "invalid VMU ImageFile coordinates"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "invalid VMU ImageFile coordinates"))?;
     let fields = suffix
         .split(',')
         .map(|s| s.trim().parse::<u32>())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| invalid(path, "invalid VMU ImageFile coordinate integer"))?;
+        .map_err(|_| WsiError::invalid_slide(path, "invalid VMU ImageFile coordinate integer"))?;
     match fields.as_slice() {
         [x, y] => Ok((0, *x, *y)),
         [z, x, y] => Ok((*z, *x, *y)),
-        _ => Err(invalid(
+        _ => Err(WsiError::invalid_slide(
             path,
             "VMU ImageFile needs two or three coordinates",
         )),
@@ -275,15 +270,12 @@ fn load_macro(
         .limits()
         .encoded_unit_bytes()
         .min(budget.limits().aggregate_metadata_bytes());
-    let length = std::fs::metadata(&macro_path)?.len();
+    let length = std::fs::metadata(&macro_path)
+        .map_err(|source| WsiError::io_with_path(&macro_path, source))?
+        .len();
     budget.retain_metadata(length)?;
-    let bytes =
-        read_file_bounded(&macro_path, limit.min(length), "VMU macro JPEG").map_err(|source| {
-            WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: macro_path,
-            }
-        })?;
+    let bytes = read_file_bounded(&macro_path, limit.min(length), "VMU macro JPEG")
+        .map_err(|source| WsiError::io_with_path(&macro_path, source))?;
     let info = AssociatedImage {
         dimensions: jpeg_dimensions(&bytes)?,
         sample_type: SampleType::Uint8,
@@ -306,29 +298,23 @@ impl SlideReader for VmuReader {
             .as_ref()
             .filter(|_| name == "macro")
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: Cow::Borrowed(bytes),
-                tables: None,
-                expected_width: 0,
-                expected_height: 0,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
-            "VMU macro JPEG decode",
-        )?
+        decode_standalone_jpeg(bytes)
     }
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
-        let bytes = self.macro_bytes.as_ref().filter(|_| name == "macro");
         let decoded = self
             .dataset
             .associated_images
             .get(name)
             .and_then(|image| image.decoded_bytes());
-        Ok(bytes.zip(decoded).map(|(bytes, decoded)| {
-            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, bytes.len() as u64)
-        }))
+        let (Some(bytes), Some(decoded)) = (
+            self.macro_bytes.as_ref().filter(|_| name == "macro"),
+            decoded,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, bytes.len() as u64),
+        ))
     }
 }
 impl ManagedSlideReader for VmuReader {

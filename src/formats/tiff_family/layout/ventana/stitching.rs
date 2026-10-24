@@ -1,6 +1,5 @@
+use super::super::common::MAX_IRREGULAR_TILES_PER_LEVEL;
 use super::*;
-
-const MAX_VENTANA_TILES_PER_LEVEL: u64 = 1_000_000;
 
 fn finite_xml_f64(
     node: &xml::XmlNode,
@@ -115,9 +114,9 @@ pub(super) fn parse_level0_xml(
             .ok_or_else(|| {
                 TiffParseError::Structure("Ventana BIF: aggregate tile grid overflow".into())
             })?;
-        if total_tile_count > MAX_VENTANA_TILES_PER_LEVEL {
+        if total_tile_count > MAX_IRREGULAR_TILES_PER_LEVEL {
             return Err(TiffParseError::Structure(format!(
-                "Ventana BIF: tile grid declares {total_tile_count} tiles, exceeding the {MAX_VENTANA_TILES_PER_LEVEL}-tile safety limit"
+                "Ventana BIF: tile grid declares {total_tile_count} tiles, exceeding the {MAX_IRREGULAR_TILES_PER_LEVEL}-tile safety limit"
             )));
         }
         let pos_x = finite_xml_f64(info, "Pos-X", 0.0)?;
@@ -306,9 +305,9 @@ fn checked_ventana_tile_grid(num_cols: i64, num_rows: i64) -> Result<u64, TiffPa
     let tile_count = num_cols
         .checked_mul(num_rows)
         .ok_or_else(|| TiffParseError::Structure("Ventana BIF: tile grid size overflow".into()))?;
-    if tile_count > MAX_VENTANA_TILES_PER_LEVEL {
+    if tile_count > MAX_IRREGULAR_TILES_PER_LEVEL {
         return Err(TiffParseError::Structure(format!(
-            "Ventana BIF: tile grid declares {tile_count} tiles, exceeding the {MAX_VENTANA_TILES_PER_LEVEL}-tile safety limit"
+            "Ventana BIF: tile grid declares {tile_count} tiles, exceeding the {MAX_IRREGULAR_TILES_PER_LEVEL}-tile safety limit"
         )));
     }
     Ok(tile_count)

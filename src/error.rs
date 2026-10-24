@@ -1,5 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use crate::core::types::TileRequest;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -81,6 +83,34 @@ pub enum WsiError {
     /// Operation is intentionally unsupported on this path.
     #[error("unsupported: {reason}")]
     Unsupported { reason: String },
+}
+
+impl WsiError {
+    /// `InvalidSlide` for the file at `path`.
+    pub(crate) fn invalid_slide(path: &Path, message: impl Into<String>) -> Self {
+        Self::InvalidSlide {
+            path: path.to_path_buf(),
+            message: message.into(),
+        }
+    }
+
+    /// `IoWithPath` for an I/O failure on the file at `path`.
+    pub(crate) fn io_with_path(path: &Path, source: std::io::Error) -> Self {
+        Self::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        }
+    }
+
+    /// `TileRead` at the column, row and level that `req` names.
+    pub(crate) fn tile_read(req: &TileRequest, reason: impl Into<String>) -> Self {
+        Self::TileRead {
+            col: req.col,
+            row: req.row,
+            level: req.level.get(),
+            reason: reason.into(),
+        }
+    }
 }
 
 #[cfg(test)]

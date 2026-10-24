@@ -43,46 +43,6 @@ const THUMBNAIL_IMAGE_TYPES: &[&[&str]] = &[
 const BASE_ONLY_DICOM_PYRAMID_MESSAGE: &str = "This DICOM WSI contains only a full-resolution base layer and no physical pyramid levels. Open the complete DICOM series/folder, or regenerate the DICOM with DERIVED/PRIMARY/VOLUME/RESAMPLED pyramid instances.";
 const BASE_ONLY_GUARD_MIN_TILE_COUNT: u64 = 4_096;
 const BASE_ONLY_GUARD_MIN_DIMENSION: u32 = 32_768;
-const SUPPORTED_TRANSFER_SYNTAXES: &[&str] = &[
-    uids::IMPLICIT_VR_LITTLE_ENDIAN,
-    uids::EXPLICIT_VR_LITTLE_ENDIAN,
-    EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX,
-    uids::JPEG_BASELINE8_BIT,
-    uids::JPEG_EXTENDED12_BIT,
-    JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX,
-    JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX,
-    uids::JPEG_LOSSLESS,
-    uids::JPEG_LOSSLESS_SV1,
-    uids::JPEG2000_LOSSLESS,
-    uids::JPEG2000,
-    HTJ2K_TRANSFER_SYNTAX,
-    HTJ2K_LOSSLESS_TRANSFER_SYNTAX,
-    HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-    uids::RLE_LOSSLESS,
-];
-const JPEG_TRANSFER_SYNTAXES: &[&str] = &[
-    uids::JPEG_BASELINE8_BIT,
-    uids::JPEG_EXTENDED12_BIT,
-    JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX,
-    JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX,
-    uids::JPEG_LOSSLESS,
-    uids::JPEG_LOSSLESS_SV1,
-];
-const RLE_TRANSFER_SYNTAX: &str = uids::RLE_LOSSLESS;
-// Retired but still decodable Huffman-coded progressive JPEG syntaxes.
-const JPEG_SPECTRAL_SELECTION_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.4.53";
-const JPEG_FULL_PROGRESSION_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.4.55";
-const EXPLICIT_VR_BIG_ENDIAN_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.2";
-const HTJ2K_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.4.203";
-const HTJ2K_LOSSLESS_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.4.201";
-const HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX: &str = "1.2.840.10008.1.2.4.202";
-const JP2K_TRANSFER_SYNTAXES: &[&str] = &[
-    uids::JPEG2000_LOSSLESS,
-    uids::JPEG2000,
-    HTJ2K_TRANSFER_SYNTAX,
-    HTJ2K_LOSSLESS_TRANSFER_SYNTAX,
-    HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX,
-];
 mod backend;
 mod decode;
 mod frame_index;
@@ -91,9 +51,9 @@ mod manifest;
 mod metadata;
 mod preflight;
 mod reader;
+mod transfer_syntax;
 
 pub(crate) use backend::DicomBackend;
-use backend::*;
 use decode::*;
 use image::*;
 use manifest::*;

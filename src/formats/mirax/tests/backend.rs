@@ -38,7 +38,7 @@ fn indexed_mirax_jpeg_tiles_fit_a_small_transient_budget() {
 fn concurrent_mirax_batches_share_one_source_miss() {
     let fixture = MiraxFixture::complete();
     let mut slide = MiraxSlide::parse(&fixture.path).unwrap();
-    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+    if crate::core::batch::cpu_worker_count() > 1 {
         slide
             .probe
             .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
@@ -512,6 +512,45 @@ fn associated_record_open_errors_retain_the_missing_path() {
         reused.read_associated("macro"),
         Err(WsiError::IoWithPath { path, .. }) if path == missing
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_data_file_is_refused_instead_of_read() {
+    let fixture = MiraxFixture::complete();
+    let parsed = MiraxSlide::parse(&fixture.path).expect("parse synthetic MIRAX");
+    // A handle reusing the parsed index opens data files on first read.
+    let reused = MiraxSlide::parse(&fixture.path).expect("reuse synthetic MIRAX index");
+    assert!(Arc::ptr_eq(&parsed.shared, &reused.shared));
+    let data_path = std::fs::canonicalize(&fixture.data_path).expect("resolve MIRAX data file");
+    crate::test_support::replace_file_with_copy(&data_path);
+
+    let reader = MiraxReader {
+        slide: Arc::new(reused),
+    };
+    for error in [
+        reader
+            .slide
+            .read_associated("macro")
+            .expect_err("a replaced data file must not be read"),
+        reader
+            .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+            .expect_err("a replaced data file must not be read"),
+    ] {
+        assert!(
+            matches!(
+                &error,
+                WsiError::InvalidSlide { path, message }
+                    if *path == data_path
+                        && message == "MIRAX data file changed after the slide was opened"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+    // The handle that parsed the index keeps reading the file it opened.
+    parsed
+        .read_associated("macro")
+        .expect("read the originally opened data file");
 }
 
 fn parse_with_limits(path: &Path, limits: crate::SlideLimits) -> Result<MiraxSlide, WsiError> {

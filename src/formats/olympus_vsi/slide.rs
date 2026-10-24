@@ -4,7 +4,6 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{BackendOpenConfig, OpenBudget};
@@ -12,7 +11,7 @@ use crate::core::types::{Dataset, Level, Scene, Series, TileLayout};
 use crate::error::WsiError;
 use crate::properties::Properties;
 
-use super::{invalid_slide, scene::EtsScene};
+use super::scene::EtsScene;
 
 const MAX_ETS_SCENES: usize = 1_024;
 
@@ -27,11 +26,11 @@ impl OlympusVsiSlide {
         config: BackendOpenConfig,
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
-        let dir =
-            companion_dir(path).ok_or_else(|| invalid_slide(path, "missing companion dir"))?;
+        let dir = companion_dir(path)
+            .ok_or_else(|| WsiError::invalid_slide(path, "missing companion dir"))?;
         let mut ets_paths = find_ets_files(&dir, &budget)?;
         if ets_paths.is_empty() {
-            return Err(invalid_slide(path, "no ETS frame files found"));
+            return Err(WsiError::invalid_slide(path, "no ETS frame files found"));
         }
 
         let scene_index_bytes = u64::try_from(ets_paths.len())
@@ -59,7 +58,7 @@ impl OlympusVsiSlide {
         }
         let quickhash = quickhash
             .finish()
-            .ok_or_else(|| invalid_slide(path, "failed to compute Olympus quickhash"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "failed to compute Olympus quickhash"))?;
         let dataset_id = dataset_id_from_quickhash(path, &quickhash, "quickhash")?;
 
         let public_scenes = scenes
@@ -111,15 +110,11 @@ impl OlympusVsiSlide {
 
 pub(super) fn find_ets_files(dir: &Path, budget: &OpenBudget) -> Result<Vec<PathBuf>, WsiError> {
     let mut paths = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: dir.to_path_buf(),
-    })? {
+    for entry in fs::read_dir(dir).map_err(|source| WsiError::io_with_path(dir, source))? {
         let entry = entry?;
-        let file_type = entry.file_type().map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: entry.path(),
-        })?;
+        let file_type = entry
+            .file_type()
+            .map_err(|source| WsiError::io_with_path(&entry.path(), source))?;
         let path = entry.path();
         if !file_type.is_dir() {
             continue;
@@ -130,7 +125,7 @@ pub(super) fn find_ets_files(dir: &Path, budget: &OpenBudget) -> Result<Vec<Path
             .unwrap_or(false);
         if frame_is_regular_file {
             if paths.len() == MAX_ETS_SCENES {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     dir,
                     format!("Olympus dataset exceeds the {MAX_ETS_SCENES}-scene limit"),
                 ));

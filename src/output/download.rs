@@ -2,6 +2,39 @@
 
 use crate::{error::WsiError, CpuTile, CpuTileData, CpuTileLayout, PixelFormat};
 
+pub(super) const MAX_DEVICE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+pub(super) fn enforce_download_limit(
+    byte_len: usize,
+    resource: &'static str,
+) -> Result<(), WsiError> {
+    let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
+    if requested > MAX_DEVICE_DOWNLOAD_BYTES {
+        return Err(WsiError::ResourceLimit {
+            resource,
+            requested,
+            limit: MAX_DEVICE_DOWNLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Rejects a device surface whose row pitch cannot hold one logical row.
+pub(super) fn check_row_pitch(
+    pitch_bytes: usize,
+    row_bytes: usize,
+    backend: &str,
+) -> Result<(), WsiError> {
+    if pitch_bytes < row_bytes {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "{backend} surface pitch {pitch_bytes} is smaller than its {row_bytes}-byte row"
+            ),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn tight_download_layout(
     width: u32,
     height: u32,
@@ -109,6 +142,40 @@ mod tests {
                     format!("{backend} host download expected 12 bytes, received {byte_len}")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn row_pitch_must_hold_a_logical_row_and_names_the_backend() {
+        for backend in ["CUDA", "Metal"] {
+            check_row_pitch(6, 6, backend).expect("a tight pitch holds the row");
+            check_row_pitch(8, 6, backend).expect("a padded pitch holds the row");
+            let error = check_row_pitch(5, 6, backend).expect_err("short pitch must fail");
+            let WsiError::Unsupported { reason } = error else {
+                panic!("short pitch must remain an unsupported-surface error");
+            };
+            assert_eq!(
+                reason,
+                format!("{backend} surface pitch 5 is smaller than its 6-byte row")
+            );
+        }
+    }
+
+    #[test]
+    fn device_download_limit_is_shared_without_losing_backend_context() {
+        for resource in ["CUDA host tile download", "Metal host tile download"] {
+            enforce_download_limit(MAX_DEVICE_DOWNLOAD_BYTES as usize, resource)
+                .expect("limit is inclusive");
+            let error = enforce_download_limit(MAX_DEVICE_DOWNLOAD_BYTES as usize + 1, resource)
+                .expect_err("oversized device readback must fail before allocation");
+            assert!(matches!(
+                error,
+                WsiError::ResourceLimit {
+                    resource: actual,
+                    limit: MAX_DEVICE_DOWNLOAD_BYTES,
+                    ..
+                } if actual == resource
+            ));
         }
     }
 }

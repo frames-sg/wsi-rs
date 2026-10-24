@@ -17,8 +17,10 @@ impl TiffPixelReader {
         let col = req.col;
         let row = req.row;
 
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
 
         let tile_idx = match &level.tile_layout {
             TileLayout::Regular {
@@ -26,25 +28,12 @@ impl TiffPixelReader {
                 tiles_down,
                 ..
             } => {
-                if col < 0 || col >= *tiles_across as i64 || row < 0 || row >= *tiles_down as i64 {
-                    return Err(WsiError::TileRead {
-                        col,
-                        row,
-                        level: req.level.get(),
-                        reason: format!(
-                            "tile ({},{}) out of range ({}x{})",
-                            col, row, tiles_across, tiles_down,
-                        ),
-                    });
-                }
-                (row as u64 * *tiles_across + col as u64) as usize
+                let (col, row) = checked_grid_tile(req, *tiles_across, *tiles_down)?;
+                (row * *tiles_across + col) as usize
             }
             TileLayout::Irregular { tiles, .. } => {
-                let entry = tiles.get(&(col, row)).ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level: req.level.get(),
-                    reason: format!("no irregular tile at ({},{})", col, row),
+                let entry = tiles.get(&(col, row)).ok_or_else(|| {
+                    WsiError::tile_read(req, format!("no irregular tile at ({},{})", col, row))
                 })?;
                 if let Some(tile_idx) = entry.tiff_tile_index {
                     tile_idx
@@ -52,40 +41,36 @@ impl TiffPixelReader {
                     let image_width =
                         self.container
                             .get_u64(ifd_id, tags::IMAGE_WIDTH)
-                            .map_err(|err| WsiError::TileRead {
-                                col,
-                                row,
-                                level: req.level.get(),
-                                reason: format!("failed to read tiled IFD image width: {err}"),
+                            .map_err(|err| {
+                                WsiError::tile_read(
+                                    req,
+                                    format!("failed to read tiled IFD image width: {err}"),
+                                )
                             })?;
                     let tile_width =
                         self.container
                             .get_u32(ifd_id, tags::TILE_WIDTH)
-                            .map_err(|err| WsiError::TileRead {
-                                col,
-                                row,
-                                level: req.level.get(),
-                                reason: format!("failed to read tiled IFD tile width: {err}"),
+                            .map_err(|err| {
+                                WsiError::tile_read(
+                                    req,
+                                    format!("failed to read tiled IFD tile width: {err}"),
+                                )
                             })?;
                     let tiles_across = image_width.div_ceil(tile_width as u64);
                     if col < 0 || row < 0 {
-                        return Err(WsiError::TileRead {
-                            col,
-                            row,
-                            level: req.level.get(),
-                            reason: "irregular tile row/col out of range for TIFF tile grid".into(),
-                        });
+                        return Err(WsiError::tile_read(
+                            req,
+                            "irregular tile row/col out of range for TIFF tile grid",
+                        ));
                     }
                     (row as u64 * tiles_across + col as u64) as usize
                 }
             }
             TileLayout::WholeLevel { .. } => {
-                return Err(WsiError::TileRead {
-                    col,
-                    row,
-                    level: req.level.get(),
-                    reason: "TiledIfd does not use WholeLevel layout".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "TiledIfd does not use WholeLevel layout",
+                ));
             }
         };
 
@@ -106,38 +91,38 @@ impl TiffPixelReader {
                 let image_width =
                     self.container
                         .get_u64(ifd_id, tags::IMAGE_WIDTH)
-                        .map_err(|err| WsiError::TileRead {
-                            col,
-                            row,
-                            level: req.level.get(),
-                            reason: format!("failed to read irregular TIFF image width: {err}"),
+                        .map_err(|err| {
+                            WsiError::tile_read(
+                                req,
+                                format!("failed to read irregular TIFF image width: {err}"),
+                            )
                         })?;
                 let image_height =
                     self.container
                         .get_u64(ifd_id, tags::IMAGE_LENGTH)
-                        .map_err(|err| WsiError::TileRead {
-                            col,
-                            row,
-                            level: req.level.get(),
-                            reason: format!("failed to read irregular TIFF image height: {err}"),
+                        .map_err(|err| {
+                            WsiError::tile_read(
+                                req,
+                                format!("failed to read irregular TIFF image height: {err}"),
+                            )
                         })?;
                 let tile_width =
                     self.container
                         .get_u32(ifd_id, tags::TILE_WIDTH)
-                        .map_err(|err| WsiError::TileRead {
-                            col,
-                            row,
-                            level: req.level.get(),
-                            reason: format!("failed to read irregular TIFF tile width: {err}"),
+                        .map_err(|err| {
+                            WsiError::tile_read(
+                                req,
+                                format!("failed to read irregular TIFF tile width: {err}"),
+                            )
                         })?;
                 let tile_height =
                     self.container
                         .get_u32(ifd_id, tags::TILE_LENGTH)
-                        .map_err(|err| WsiError::TileRead {
-                            col,
-                            row,
-                            level: req.level.get(),
-                            reason: format!("failed to read irregular TIFF tile height: {err}"),
+                        .map_err(|err| {
+                            WsiError::tile_read(
+                                req,
+                                format!("failed to read irregular TIFF tile height: {err}"),
+                            )
                         })?;
                 let tw = tile_width.min(
                     image_width
@@ -154,12 +139,10 @@ impl TiffPixelReader {
                 (tw, th)
             }
             _ => {
-                return Err(WsiError::TileRead {
-                    col,
-                    row,
-                    level: req.level.get(),
-                    reason: "unexpected tile layout for tiled IFD read".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "unexpected tile layout for tiled IFD read",
+                ));
             }
         };
 
@@ -190,12 +173,7 @@ impl TiffPixelReader {
         )
         .map_err(|err| match err {
             WsiError::TileRead { .. } => err,
-            other => WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: other.to_string(),
-            },
+            other => WsiError::tile_read(req, other.to_string()),
         })
     }
 
@@ -222,17 +200,15 @@ impl TiffPixelReader {
         let (tile_idx, width, height) = self.tiled_ifd_tile_index_and_dimensions(req, ifd_id)?;
         let (offsets, byte_counts) = self.tiled_ifd_offsets_and_byte_counts(ifd_id)?;
         if tile_idx >= offsets.len() || tile_idx >= byte_counts.len() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "tile index {} out of range (offsets={}, byte_counts={})",
                     tile_idx,
                     offsets.len(),
                     byte_counts.len()
                 ),
-            });
+            ));
         }
         Ok(TiledIfdTileSpan {
             offset: offsets[tile_idx],

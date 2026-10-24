@@ -144,7 +144,7 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
         channels: 3,
         color_space: ColorSpaceMeta::Rgb,
         codec: PayloadCodec::Zstd,
-        sha256: super::super::storage::hex_encode(&Sha256::digest([0])),
+        sha256: format!("{:x}", Sha256::digest([0])),
     };
     let codec_metadata =
         single_level_svcache_metadata(source.path(), true, 1, 1, vec![Some(codec_meta)]);
@@ -156,6 +156,93 @@ fn svcache_reader_covers_batch_associated_bounds_and_payload_failures() {
             codec: "svcache-zstd",
             ..
         })
+    ));
+}
+
+fn single_tile_cache(
+    dir: &std::path::Path,
+    source: &std::path::Path,
+    corrupt_checksum: bool,
+) -> PathBuf {
+    let mut payload = tempfile::tempfile().unwrap();
+    let tile = CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![10, 20, 30]).unwrap();
+    let mut tile_meta = write_tile_payload(&mut payload, &tile).unwrap();
+    if corrupt_checksum {
+        tile_meta.sha256 = "0".repeat(64);
+    }
+    let cache_path = dir.join("single.svcache");
+    let metadata = single_level_svcache_metadata(source, true, 1, 1, vec![Some(tile_meta)]);
+    write_svcache_file(&cache_path, &metadata, payload).unwrap();
+    cache_path
+}
+
+#[test]
+fn corrupt_cache_errors_name_the_cache_file_not_the_source_slide() {
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = single_tile_cache(dir.path(), source.path(), true);
+    let reader = SvcacheBackend.open(&cache_path).unwrap();
+
+    let error = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            WsiError::InvalidSlide { path, message }
+                if *path == cache_path && message == "svcache tile checksum mismatch"
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn payload_read_errors_name_the_cache_file() {
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = single_tile_cache(dir.path(), source.path(), false);
+    let reader = SvcacheBackend.open(&cache_path).unwrap();
+    // The tile payload ends the file, so a truncated cache cuts it short.
+    let cache_len = std::fs::metadata(&cache_path).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&cache_path)
+        .unwrap()
+        .set_len(cache_len - 1)
+        .unwrap();
+
+    let error = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            WsiError::IoWithPath { source, path }
+                if *path == cache_path && source.kind() == std::io::ErrorKind::UnexpectedEof
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn reader_reports_which_scene_series_or_level_is_out_of_range() {
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let reader = SvcacheBackend
+        .open(&single_tile_cache(dir.path(), source.path(), false))
+        .unwrap();
+
+    assert!(matches!(
+        reader.read_tile_cpu(&TileRequest::new(1, 0, 0, 0, 0)),
+        Err(WsiError::SceneOutOfRange { index: 1, count: 1 })
+    ));
+    assert!(matches!(
+        reader.read_tile_cpu(&TileRequest::new(0, 1, 0, 0, 0)),
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
+    ));
+    assert!(matches!(
+        reader.read_tile_cpu(&TileRequest::new(0, 0, 1, 0, 0)),
+        Err(WsiError::LevelOutOfRange { level: 1, count: 1 })
     ));
 }
 
@@ -172,6 +259,7 @@ fn reader_concurrent_payload_reads_preserve_checksums_and_lock_recovery() {
 
     let (file, payload_start, metadata) = read_svcache(&path).unwrap();
     let reader = std::sync::Arc::new(SvcacheReader {
+        path: path.clone(),
         file: PositionedFile::new(file),
         payload_start,
         dataset: super::super::storage::dataset_from_metadata(&path, &metadata),

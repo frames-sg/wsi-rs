@@ -1,9 +1,14 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const CORPUS_CACHE_ENV: &str = "WSI_RS_PARITY_CORPUS_CACHE";
+const PARITY_ALIASES_ENV: &str = "WSI_RS_PARITY_ALIASES";
 
 /// Formats covered by the available public release samples.
 ///
@@ -27,6 +32,36 @@ pub const REQUIRED_RELEASE_FORMATS: &[&str] = &[
     "ventana",
     "zeiss_zvi",
 ];
+
+/// Per-channel limits for an RGBA pixel comparison. Alpha is always compared
+/// exactly; these limits apply to the colour channels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tolerance {
+    pub max_abs: u8,
+    pub mean_abs: f64,
+}
+
+impl Tolerance {
+    pub const EXACT: Self = Self {
+        max_abs: 0,
+        mean_abs: 0.0,
+    };
+
+    pub const JPEG_TIGHT: Self = Self {
+        max_abs: 1,
+        mean_abs: 0.05,
+    };
+
+    pub const JPEG_DECODER_COMPAT: Self = Self {
+        max_abs: 3,
+        mean_abs: 0.125,
+    };
+
+    pub const TOLERANT: Self = Self {
+        max_abs: 4,
+        mean_abs: 1.0,
+    };
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +163,24 @@ impl CorpusEntry {
         self.must_decode.iter().filter_map(|requirement| {
             (!is_level_requirement(requirement)).then_some(requirement.as_str())
         })
+    }
+
+    /// The pixel tolerance every comparison of this entry against a reference
+    /// uses: the parity tests and the release performance gate.
+    pub fn pixel_tolerance(&self) -> Tolerance {
+        if self.lossless {
+            Tolerance::EXACT
+        } else if self
+            .codecs
+            .iter()
+            .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
+        {
+            Tolerance::TOLERANT
+        } else if self.format == "huron" && self.codecs.iter().any(|codec| codec == "jpeg") {
+            Tolerance::JPEG_DECODER_COMPAT
+        } else {
+            Tolerance::JPEG_TIGHT
+        }
     }
 
     pub fn benchmark_group(&self) -> String {
@@ -302,10 +355,14 @@ pub fn load_manifest(path: &Path) -> Result<CorpusManifest, String> {
 }
 
 pub fn corpus_cache_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os(CORPUS_CACHE_ENV) {
+    corpus_cache_dir_from(std::env::var_os(CORPUS_CACHE_ENV), std::env::var_os("HOME"))
+}
+
+fn corpus_cache_dir_from(configured: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    if let Some(path) = configured {
         return PathBuf::from(path);
     }
-    std::env::var_os("HOME").map_or_else(
+    home.map_or_else(
         || PathBuf::from(".cache/wsi-rs/parity-corpus"),
         |home| {
             PathBuf::from(home)
@@ -314,6 +371,23 @@ pub fn corpus_cache_dir() -> PathBuf {
                 .join("parity-corpus")
         },
     )
+}
+
+/// Where a local test-data path such as
+/// `downloads/openslide-testdata/Aperio/CMU-1.svs` may live, in search
+/// order: under the workspace root, its parent, then its grandparent.
+pub fn local_testdata_candidates(relative: &Path) -> Vec<PathBuf> {
+    workspace_root()
+        .ancestors()
+        .take(3)
+        .map(|root| root.join(relative))
+        .collect()
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("test-support is a workspace member")
 }
 
 pub fn resolve_entry_path(entry: &CorpusEntry, workspace_root: &Path) -> Option<PathBuf> {
@@ -328,6 +402,63 @@ pub fn resolve_entry_path(entry: &CorpusEntry, workspace_root: &Path) -> Option<
     cache_candidates(entry)
         .into_iter()
         .find_map(|candidate| resolve_candidate(entry, &candidate))
+}
+
+/// Check the file the entry's `sha256` describes: the fetched archive when
+/// the entry's URL names a zip, otherwise the resolved slide. An entry that
+/// declares no SHA-256 is an error.
+pub fn verify_entry_sha256(entry: &CorpusEntry, resolved: &Path) -> Result<(), String> {
+    if entry.sha256.is_empty() {
+        return Err(format!("{}: manifest declares no SHA-256", entry.alias));
+    }
+    let source = if url_names_zip(entry) {
+        source_archive_path(entry).ok_or_else(|| {
+            format!(
+                "{}: source archive is missing, so its declared SHA-256 cannot be verified",
+                entry.alias
+            )
+        })?
+    } else {
+        resolved.to_path_buf()
+    };
+    let actual = sha256_file(&source).map_err(|error| format!("{}: {error}", entry.alias))?;
+    if actual.eq_ignore_ascii_case(&entry.sha256) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: SHA-256 mismatch for {}: expected {}, found {actual}",
+            entry.alias,
+            source.display(),
+            entry.sha256
+        ))
+    }
+}
+
+/// The lower-case hexadecimal SHA-256 of a file's contents.
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    let file = File::open(path)
+        .map_err(|err| format!("failed to open {} for hashing: {err}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut checksum = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|err| format!("failed to hash {}: {err}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        checksum.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", checksum.finalize()))
+}
+
+fn url_names_zip(entry: &CorpusEntry) -> bool {
+    entry
+        .url
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
 }
 
 pub fn source_archive_path(entry: &CorpusEntry) -> Option<PathBuf> {
@@ -350,7 +481,7 @@ pub fn cache_candidates(entry: &CorpusEntry) -> Vec<PathBuf> {
         candidates.push(cache.join(format!("{}.{}", entry.alias, extension)));
     }
     if let Some(name) = entry.url.rsplit('/').next().filter(|name| !name.is_empty()) {
-        if name.to_ascii_lowercase().ends_with(".zip") {
+        if url_names_zip(entry) {
             let fetched_archive = cache.join(format!("{}.zip", entry.alias));
             if !candidates.contains(&fetched_archive) {
                 candidates.push(fetched_archive);
@@ -431,18 +562,41 @@ pub fn format_default_extension(format: &str) -> Option<&'static str> {
     }
 }
 
-pub fn apply_alias_filter(manifest: &mut CorpusManifest, raw_aliases: Option<&str>) {
-    let Some(raw_aliases) = raw_aliases else {
-        return;
-    };
-    let aliases = raw_aliases
+/// The corpus aliases `WSI_RS_PARITY_ALIASES` selects, or `None` when it
+/// selects the whole corpus. See [`parse_aliases`] for the grammar.
+pub fn selected_aliases() -> Option<BTreeSet<String>> {
+    parse_aliases(
+        std::env::var_os(PARITY_ALIASES_ENV)
+            .as_deref()
+            .map(|value| value.to_string_lossy())
+            .as_deref(),
+    )
+}
+
+/// Whether `WSI_RS_PARITY_ALIASES` selects `alias`. Every alias is selected
+/// when the variable selects the whole corpus.
+pub fn alias_selected(alias: &str) -> bool {
+    selected_aliases().is_none_or(|aliases| aliases.contains(alias))
+}
+
+/// Parse an alias list. Aliases are separated by commas, semicolons or
+/// whitespace. An absent value, or one with no aliases, selects the whole
+/// corpus and returns `None`.
+pub fn parse_aliases(raw: Option<&str>) -> Option<BTreeSet<String>> {
+    let aliases = raw?
         .split(|character: char| character == ',' || character == ';' || character.is_whitespace())
         .filter(|alias| !alias.is_empty())
-        .collect::<HashSet<_>>();
-    if !aliases.is_empty() {
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    (!aliases.is_empty()).then_some(aliases)
+}
+
+/// Keep only the selected aliases; `None` keeps the whole manifest.
+pub fn apply_alias_filter(manifest: &mut CorpusManifest, aliases: Option<&BTreeSet<String>>) {
+    if let Some(aliases) = aliases {
         manifest
             .slides
-            .retain(|entry| aliases.contains(entry.alias.as_str()));
+            .retain(|entry| aliases.contains(&entry.alias));
     }
 }
 
@@ -461,13 +615,256 @@ mod tests {
 
     #[test]
     fn benchmark_group_is_stable_and_deduplicated() {
-        let entry = CorpusEntry {
+        let entry = |codecs: &[&str], group: &str| CorpusEntry {
             alias: "slide".into(),
             format: "aperio".into(),
-            codecs: vec!["jpeg".into(), "j2k".into(), "jpeg".into()],
+            codecs: codecs.iter().map(|codec| (*codec).to_string()).collect(),
+            benchmark_group: group.into(),
             ..CorpusEntry::default()
         };
-        assert_eq!(entry.benchmark_group(), "aperio/j2k+jpeg");
+        assert_eq!(
+            entry(&["jpeg", "j2k", "jpeg"], "").benchmark_group(),
+            "aperio/j2k+jpeg"
+        );
+        assert_eq!(entry(&[], "").benchmark_group(), "aperio");
+        assert_eq!(entry(&["jpeg"], "explicit").benchmark_group(), "explicit");
+    }
+
+    const SAMPLE_MANIFEST: &str = r#"
+        [[slide]]
+        name             = "aperio_svs_brightfield_he_typical"
+        alias            = "svs-001"
+        path             = ""
+        format           = "aperio"
+        codecs           = ["jpeg"]
+        must_decode      = ["base", "level1", "level2", "label", "macro"]
+        source           = "openslide-testdata"
+        license          = "CC0-1.0"
+        redistributable  = true
+        sha256           = "deadbeef"
+        citation         = "Goode A. et al. OpenSlide..."
+        phi_reviewed     = true
+        url              = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs"
+    "#;
+
+    fn sample_entry() -> CorpusEntry {
+        parse_manifest(SAMPLE_MANIFEST)
+            .expect("parse")
+            .slides
+            .remove(0)
+    }
+
+    #[test]
+    fn parser_reads_a_minimal_entry() {
+        let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+        let slide = manifest.slides.first().expect("slide");
+
+        assert_eq!(manifest.slides.len(), 1);
+        assert_eq!(slide.alias, "svs-001");
+        assert_eq!(slide.format, "aperio");
+        assert!(slide.redistributable);
+        assert_eq!(slide.codecs, vec!["jpeg"]);
+        assert_eq!(slide.must_decode.len(), 5);
+    }
+
+    #[test]
+    fn parser_rejects_malformed_text_and_empty_identity() {
+        assert!(parse_manifest("not = [valid")
+            .unwrap_err()
+            .contains("manifest parse"));
+        assert!(parse_manifest("[[slide]]\nalias = ''\nformat = 'aperio'\n")
+            .unwrap_err()
+            .contains("must be non-empty"));
+        assert!(parse_manifest("")
+            .expect("empty manifest")
+            .slides
+            .is_empty());
+    }
+
+    #[test]
+    fn parser_rejects_expected_failure_waivers() {
+        let manifest =
+            format!("{SAMPLE_MANIFEST}\nexpected_failures = ['j2k-vs-reference:base']\n");
+
+        let error = parse_manifest(&manifest).expect_err("release corpus must reject waivers");
+
+        assert!(error.contains("unknown field `expected_failures`"));
+    }
+
+    #[test]
+    fn parser_rejects_unknown_fields_and_accepts_notes() {
+        let with_notes = format!("{SAMPLE_MANIFEST}\nnotes = 'documented provenance'\n");
+        parse_manifest(&with_notes).expect("notes are part of the corpus schema");
+
+        let with_unknown =
+            format!("{SAMPLE_MANIFEST}\nunsupported_properties = ['openslide.vendor']\n");
+        let error =
+            parse_manifest(&with_unknown).expect_err("unknown corpus fields must fail closed");
+        assert!(error.contains("unknown field `unsupported_properties`"));
+    }
+
+    #[test]
+    fn must_decode_level_matches_base_and_numbered_levels() {
+        let mut entry = sample_entry();
+        entry.must_decode = vec!["base".into(), "level1".into(), "level12".into()];
+
+        assert!(entry.must_decode_level(0));
+        assert!(entry.must_decode_level(1));
+        assert!(entry.must_decode_level(12));
+        assert!(!entry.must_decode_level(2));
+        assert!(!entry.must_decode_level(10));
+    }
+
+    #[test]
+    fn an_entry_can_require_wsi_decode_without_requiring_openslide() {
+        let mut entry = sample_entry();
+
+        assert!(entry.openslide_must_decode_level(0));
+        entry.openslide_required = false;
+
+        assert!(entry.must_decode_level(0));
+        assert!(!entry.openslide_must_decode_level(0));
+    }
+
+    #[test]
+    fn required_levels_include_base_reduced_and_highest() {
+        assert_eq!(
+            sample_entry().required_level_indices(5).unwrap(),
+            vec![0, 1, 2, 4]
+        );
+    }
+
+    #[test]
+    fn release_coverage_reports_all_missing_evidence() {
+        let manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+
+        let error =
+            validate_release_coverage(&manifest).expect_err("one row is not release evidence");
+
+        assert!(error.contains("olympus_vsi"));
+        assert!(error.contains("lossless JP2K"));
+        assert!(error.contains("DICOM JP2K YBR_ICT"));
+        assert!(error.contains("SOF2 progressive-JPEG DICOM"));
+    }
+
+    #[test]
+    fn alias_filter_keeps_requested_manifest_entries() {
+        let mut manifest = parse_manifest(SAMPLE_MANIFEST).expect("parse");
+        let second = manifest.slides[0].clone();
+        manifest.slides.push(CorpusEntry {
+            alias: "ndpi-001".into(),
+            format: "ndpi".into(),
+            name: "hamamatsu_ndpi".into(),
+            ..second
+        });
+
+        apply_alias_filter(
+            &mut manifest,
+            parse_aliases(Some("ndpi-001,missing-001")).as_ref(),
+        );
+
+        assert_eq!(manifest.slides.len(), 1);
+        assert_eq!(manifest.slides[0].alias, "ndpi-001");
+    }
+
+    #[test]
+    fn format_default_extensions_cover_every_fetched_format() {
+        for (format, extension) in [
+            ("aperio", Some("svs")),
+            ("argos", Some("avs")),
+            ("huron", Some("tif")),
+            ("leica", Some("scn")),
+            ("ventana", Some("bif")),
+            ("philips_tiff", Some("tif")),
+            ("tiff", Some("tif")),
+            ("ndpi", Some("ndpi")),
+            ("hamamatsu_vms", Some("zip")),
+            ("hamamatsu_vmu", Some("zip")),
+            ("mirax", Some("zip")),
+            ("dicom", Some("dcm")),
+            ("olympus_vsi", Some("vsi")),
+            ("raw_jp2k", Some("j2k")),
+            ("svcache", Some("svcache")),
+            ("zeiss_zvi", Some("zvi")),
+            ("nonsense", None),
+        ] {
+            assert_eq!(format_default_extension(format), extension, "{format}");
+        }
+    }
+
+    #[test]
+    fn corpus_cache_dir_prefers_the_configured_cache() {
+        assert_eq!(
+            corpus_cache_dir_from(
+                Some("/tmp/sv-corpus-test".into()),
+                Some("/home/user".into())
+            ),
+            PathBuf::from("/tmp/sv-corpus-test")
+        );
+        assert_eq!(
+            corpus_cache_dir_from(None, Some("/home/user".into())),
+            PathBuf::from("/home/user/.cache/wsi-rs/parity-corpus")
+        );
+        assert_eq!(
+            corpus_cache_dir_from(None, None),
+            PathBuf::from(".cache/wsi-rs/parity-corpus")
+        );
+    }
+
+    #[test]
+    fn candidate_search_finds_plain_files_and_nested_extensions() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let entry = CorpusEntry {
+            alias: "fixture".into(),
+            format: "aperio".into(),
+            url: "https://example.invalid/name.ext".into(),
+            ..CorpusEntry::default()
+        };
+        let jpeg = workspace.join("tests/fixtures/jpeg/baseline_420_16x16.jpg");
+        assert_eq!(resolve_candidate(&entry, &jpeg), Some(jpeg));
+        assert!(find_file_with_extension(&workspace.join("tests/fixtures"), "j2k").is_some());
+        assert!(find_file_with_extension(Path::new("missing-directory"), "j2k").is_none());
+        assert!(!cache_candidates(&entry).is_empty());
+    }
+
+    #[test]
+    fn pixel_tolerance_follows_lossiness_codec_and_vendor() {
+        let entry = |format: &str, codec: &str, lossless: bool| CorpusEntry {
+            alias: format!("{format}-{codec}"),
+            format: format.into(),
+            codecs: vec![codec.into()],
+            lossless,
+            ..CorpusEntry::default()
+        };
+        for (format, codec, lossless, expected) in [
+            ("raw_jp2k", "j2k", true, Tolerance::EXACT),
+            ("raw_jp2k", "htj2k", true, Tolerance::EXACT),
+            ("svcache", "zstd", true, Tolerance::EXACT),
+            ("raw_jp2k", "j2k", false, Tolerance::TOLERANT),
+            ("dicom", "htj2k", false, Tolerance::TOLERANT),
+            ("huron", "jpeg", false, Tolerance::JPEG_DECODER_COMPAT),
+            ("aperio", "jpeg", false, Tolerance::JPEG_TIGHT),
+            ("dicom", "jpeg-baseline", false, Tolerance::JPEG_TIGHT),
+            ("huron", "none", false, Tolerance::JPEG_TIGHT),
+        ] {
+            assert_eq!(
+                entry(format, codec, lossless).pixel_tolerance(),
+                expected,
+                "{format}/{codec} lossless={lossless}"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_lists_split_on_commas_semicolons_and_whitespace() {
+        let parsed = parse_aliases(Some(" svs-001,ndpi-001;mirax-001\n vms-001,,")).unwrap();
+        assert_eq!(
+            parsed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["mirax-001", "ndpi-001", "svs-001", "vms-001"]
+        );
+        for whole_corpus in [None, Some(""), Some(" "), Some(",;")] {
+            assert_eq!(parse_aliases(whole_corpus), None, "{whole_corpus:?}");
+        }
     }
 
     #[test]
@@ -551,6 +948,73 @@ mod tests {
             assert_eq!(resolve_candidate(&entry, &extracted), Some(slide));
         }
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn entry_sha256_checks_the_resolved_slide_and_requires_a_digest() {
+        let directory =
+            std::env::temp_dir().join(format!("wsi-rs-corpus-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let slide = directory.join("slide.svs");
+        std::fs::write(&slide, b"abc").unwrap();
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(sha256_file(&slide).unwrap(), abc);
+        assert!(sha256_file(&directory.join("missing"))
+            .unwrap_err()
+            .contains("failed to open"));
+
+        let entry = |sha256: &str| CorpusEntry {
+            alias: "slide".into(),
+            format: "aperio".into(),
+            sha256: sha256.into(),
+            ..CorpusEntry::default()
+        };
+        verify_entry_sha256(&entry(abc), &slide).unwrap();
+        verify_entry_sha256(&entry(&abc.to_ascii_uppercase()), &slide).unwrap();
+        let mismatch = verify_entry_sha256(&entry(&"0".repeat(64)), &slide).unwrap_err();
+        assert!(mismatch.contains("slide: SHA-256 mismatch"), "{mismatch}");
+        assert!(verify_entry_sha256(&entry(""), &slide)
+            .unwrap_err()
+            .contains("declares no SHA-256"));
+        let unreadable = verify_entry_sha256(&entry(abc), &directory.join("missing")).unwrap_err();
+        assert!(
+            unreadable.starts_with("slide: failed to open"),
+            "{unreadable}"
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn entry_sha256_of_a_zip_url_hashes_the_fetched_archive() {
+        let entry = CorpusEntry {
+            alias: "wsi-rs-no-such-archive-alias".into(),
+            format: "mirax".into(),
+            sha256: "a".repeat(64),
+            url: "https://example.invalid/wsi-rs-no-such-archive.zip".into(),
+            ..CorpusEntry::default()
+        };
+        let error = verify_entry_sha256(&entry, Path::new("Cargo.toml")).unwrap_err();
+        assert!(error.contains("source archive is missing"), "{error}");
+    }
+
+    #[test]
+    fn local_testdata_is_searched_from_the_workspace_root_outwards() {
+        let relative = Path::new("downloads/openslide-testdata/Aperio/CMU-1.svs");
+        let candidates = local_testdata_candidates(relative);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert_eq!(
+            candidates,
+            [
+                root.join(relative),
+                root.parent().unwrap().join(relative),
+                root.parent().unwrap().parent().unwrap().join(relative),
+            ]
+        );
+        assert!(local_testdata_candidates(Path::new("Cargo.toml"))[0]
+            .parent()
+            .unwrap()
+            .join("test-support")
+            .is_dir());
     }
 
     #[test]

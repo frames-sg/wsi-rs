@@ -150,7 +150,7 @@ impl PreparedJp2kBatch {
                 &metadata,
                 &mut output,
                 sessions,
-                super::metal_batch::GROUP_OUTPUT_TARGET,
+                super::DEVICE_WINDOW_TARGET_BYTES,
             )?;
             super::metal_batch::convert_outputs(&metadata, &mut output, sessions);
             output

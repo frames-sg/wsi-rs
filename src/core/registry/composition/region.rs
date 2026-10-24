@@ -5,9 +5,8 @@ use super::fractional_u8::{
 };
 use super::integral::{
     blit_integral_rgb_into_rgba, blit_integral_rgb_saturating_rgba, blit_integral_samples,
-    compose_dense_integral_rgb_argb32, has_integral_position, hit_covers_output,
-    integral_tile_rect, is_integral_hit, mark_integral_tile_opaque,
-    try_compose_dense_integral_u8_region,
+    compose_dense_integral_rgb_argb32, has_integral_position, hit_covers_output, is_integral_hit,
+    mark_integral_tile_opaque, try_compose_dense_integral_u8_region, IntegralClip,
 };
 use super::output::{
     checked_region_pixels_usize, checked_total_samples, metadata_probe_coordinate,
@@ -26,8 +25,6 @@ pub(crate) fn composite_region_from_source<T: SlideReader + ?Sized>(
     compose_resolved_region(source, cache, req, plan)
 }
 
-/// Compose small source units in bounded batches. The caller must fit every
-/// batch's source buffers within its admitted region staging reservation.
 fn plan_cache_keys<'a>(
     dataset_id: crate::core::types::DatasetId,
     req: &'a RegionRequest,
@@ -37,6 +34,9 @@ fn plan_cache_keys<'a>(
         .map(move |hit| CacheKey::from_region_tile(dataset_id, req, hit.col, hit.row))
 }
 
+/// Compose small source units in bounded batches. The caller must fit every
+/// batch's source buffers within its admitted region staging reservation.
+///
 /// An incomplete region composes on one pool worker, and its source decodes
 /// units in order there, so concurrent regions each occupy one worker rather
 /// than queueing behind each other's units.
@@ -51,13 +51,14 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     let dataset_id = source.dataset().id;
     let cached = cache
         .is_some_and(|cache| cache.contains_keys(plan_cache_keys(dataset_id, req, &plan.hits)));
-    let compose = || compose_resolved_region_streaming(source, cache, req, plan, batch_size.max(1));
+    let batch_ends = first_then_chunked_batch_ends(plan.hits.len(), batch_size);
+    let compose = || composite_region_from_plan(source, cache, req, plan, &batch_ends);
     if cached {
         // The hint changes scheduling only. Normal resolution still handles
         // eviction and decodes a late miss on this thread.
         compose()
     } else {
-        crate::core::decode_runtime::DecodeRuntime::default_arc().install_jp2k_cpu(compose)
+        crate::core::batch::install_codec_cpu(compose)
     }
 }
 
@@ -70,18 +71,7 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
     let resolver = RegionTileResolver::new(source, cache, req);
 
     if plan.hits.is_empty() {
-        let level = &plan.series.levels[req.level.get() as usize];
-        if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
-            if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
-                return zero_sample_buffer_from_template(
-                    plan.output_width,
-                    plan.output_height,
-                    template.as_ref(),
-                );
-            }
-        }
-
-        return zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series);
+        return compose_empty_region(&resolver, req, &plan);
     }
 
     let hit_tiles = resolver.resolve_hits(&plan.hits)?;
@@ -181,62 +171,38 @@ pub(in crate::core::registry) fn composite_region_from_plan<T: SlideReader + ?Si
         .finish()
 }
 
-fn compose_resolved_region_streaming<T: SlideReader + ?Sized>(
-    source: &T,
-    cache: Option<&TileCache>,
-    req: &RegionRequest,
-    plan: RegionReadPlan<'_>,
-    batch_size: usize,
-) -> Result<CpuTile, WsiError> {
-    let resolver = RegionTileResolver::new(source, cache, req);
-    if plan.hits.is_empty() {
-        let level = &plan.series.levels[req.level.get() as usize];
-        if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
-            if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
-                return zero_sample_buffer_from_template(
-                    plan.output_width,
-                    plan.output_height,
-                    template.as_ref(),
-                );
-            }
-        }
-        return zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series);
+/// Batch ends that resolve the first unit alone, since it sizes the output,
+/// and the rest `batch_size` at a time.
+fn first_then_chunked_batch_ends(hit_count: usize, batch_size: usize) -> Vec<usize> {
+    if hit_count == 0 {
+        return Vec::new();
     }
-
-    let first = resolver.resolve_one(plan.hits[0].col, plan.hits[0].row)?;
-    if plan.hits.len() == 1
-        && !composes_alpha_sources(&plan.hits, [first.as_ref()])
-        && hit_covers_output(
-            &plan.hits[0],
-            first.as_ref(),
-            plan.output_width,
-            plan.output_height,
+    let batch_size = batch_size.max(1);
+    std::iter::once(1)
+        .chain(
+            (1..hit_count)
+                .step_by(batch_size)
+                .map(|start| start.saturating_add(batch_size).min(hit_count)),
         )
-    {
-        return Ok(first.as_ref().clone());
-    }
+        .collect()
+}
 
-    let mut composer = RegionComposer::new(
-        plan.output_width,
-        plan.output_height,
-        first.as_ref(),
-        plan.preserve_alpha,
-        &plan.hits,
-    )?;
-    composer.blit(&plan.hits[0], first.as_ref())?;
-    drop(first);
-    for batch in plan.hits[1..].chunks(batch_size) {
-        if batch.len() == 1 {
-            let tile = resolver.resolve_one(batch[0].col, batch[0].row)?;
-            composer.blit(&batch[0], tile.as_ref())?;
-        } else {
-            let tiles = resolver.resolve_hits(batch)?;
-            for (hit, tile) in batch.iter().zip(&tiles) {
-                composer.blit(hit, tile.as_ref())?;
-            }
+fn compose_empty_region<T: SlideReader + ?Sized>(
+    resolver: &RegionTileResolver<'_, T>,
+    req: &RegionRequest,
+    plan: &RegionReadPlan<'_>,
+) -> Result<CpuTile, WsiError> {
+    let level = &plan.series.levels[req.level.get() as usize];
+    if let Some((probe_col, probe_row)) = metadata_probe_coordinate(&level.tile_layout) {
+        if let Ok(template) = resolver.resolve_one(probe_col, probe_row) {
+            return zero_sample_buffer_from_template(
+                plan.output_width,
+                plan.output_height,
+                template.as_ref(),
+            );
         }
     }
-    composer.finish()
+    zero_sample_buffer_from_series(plan.output_width, plan.output_height, plan.series)
 }
 
 fn compose_region_tiles(
@@ -373,7 +339,7 @@ struct RegionComposer {
     rgba_scratch: RgbaBandScratch,
     // Streaming reads can encounter their first RGBA tile after opaque RGB.
     // Retain only painted rectangles so promotion preserves transparent gaps.
-    integral_rgb_regions: Option<Vec<(usize, usize, usize, usize)>>,
+    integral_rgb_regions: Option<Vec<IntegralClip>>,
 }
 
 impl RegionComposer {
@@ -459,14 +425,14 @@ impl RegionComposer {
             bytes[pixel * 4..pixel * 4 + 3].copy_from_slice(&rgb);
             bytes[pixel * 4 + 3] = 0;
         }
-        for (x0, y0, x1, y1) in self
+        for clip in self
             .integral_rgb_regions
             .take()
             .expect("integral RGB promotion retains painted rectangles")
         {
-            for y in y0..y1 {
-                let start = (y * self.shape.width + x0) * 4;
-                let end = (y * self.shape.width + x1) * 4;
+            for y in clip.y0..clip.y1 {
+                let start = (y * self.shape.width + clip.x0) * 4;
+                let end = (y * self.shape.width + clip.x1) * 4;
                 for pixel in bytes[start..end].as_chunks_mut::<4>().0 {
                     pixel[3] = 255;
                 }
@@ -563,8 +529,8 @@ impl RegionComposer {
             self.shape,
         )?;
         if let Some(regions) = &mut self.integral_rgb_regions {
-            if let Some(rect) = integral_tile_rect(tile, hit, self.shape) {
-                regions.push(rect);
+            if let Some(clip) = IntegralClip::of_hit(tile, hit, self.shape) {
+                regions.push(clip);
             }
         }
         Ok(())

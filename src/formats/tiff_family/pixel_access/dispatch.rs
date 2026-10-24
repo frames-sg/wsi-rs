@@ -1,62 +1,26 @@
+use super::ndpi_tiles::NdpiRestartTile;
 use super::*;
 
 impl TiffPixelReader {
     /// Look up the TileSource for a given tile request.
     pub(super) fn tile_source_for(&self, req: &TileRequest) -> Result<&TileSource, WsiError> {
-        let key = TileSourceKey {
-            scene: req.scene.get(),
-            series: req.series.get(),
-            level: req.level.get(),
-            z: req.plane.get().z,
-            c: req.plane.get().c,
-            t: req.plane.get().t,
-        };
         self.layout
             .tile_sources
-            .get(&key)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "no tile source for scene={}, series={}, level={}, z={}, c={}, t={}",
-                    req.scene.get(),
-                    req.series.get(),
-                    req.level.get(),
-                    req.plane.get().z,
-                    req.plane.get().c,
-                    req.plane.get().t,
-                ),
+            .get(&TileSourceKey::from(req))
+            .ok_or_else(|| {
+                WsiError::tile_read(
+                    req,
+                    format!(
+                        "no tile source for scene={}, series={}, level={}, z={}, c={}, t={}",
+                        req.scene.get(),
+                        req.series.get(),
+                        req.level.get(),
+                        req.plane.get().z,
+                        req.plane.get().c,
+                        req.plane.get().t,
+                    ),
+                )
             })
-    }
-
-    fn display_request_matches_native_regular_grid(&self, req: &TileViewRequest) -> bool {
-        let Some(level) = self
-            .layout
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-        else {
-            return false;
-        };
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = &level.tile_layout
-        else {
-            return false;
-        };
-        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
-            return false;
-        };
-        req.tile_width == *tile_width
-            && req.tile_height == *tile_height
-            && col < *tiles_across
-            && row < *tiles_down
     }
 
     pub(super) fn read_tiles_cpu_with_backend(
@@ -129,6 +93,11 @@ impl TiffPixelReader {
             }
         }
 
+        let read_each_tile = || -> Result<Vec<CpuTile>, WsiError> {
+            reqs.iter()
+                .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
+                .collect()
+        };
         let mut decode_reqs = Vec::with_capacity(reqs.len());
         for req in reqs {
             let source = self.tile_source_for(req)?;
@@ -138,28 +107,19 @@ impl TiffPixelReader {
                 ..
             } = source
             else {
-                return reqs
-                    .iter()
-                    .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
-                    .collect();
+                return read_each_tile();
             };
             let colorspace = match compression {
                 Compression::Jp2kRgb => Jp2kColorSpace::Rgb,
                 Compression::Jp2kYcbcr => Jp2kColorSpace::YCbCr,
                 _ => {
-                    return reqs
-                        .iter()
-                        .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
-                        .collect();
+                    return read_each_tile();
                 }
             };
 
             let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
             if span.byte_count == 0 {
-                return reqs
-                    .iter()
-                    .map(|req| self.read_tile_cpu_with_backend_request(req, backend))
-                    .collect();
+                return read_each_tile();
             }
             let data = self.read_tiled_ifd_tile_span(span)?;
             decode_reqs.push(Jp2kDecodeJob {
@@ -176,12 +136,7 @@ impl TiffPixelReader {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 let first = &reqs[0];
-                WsiError::TileRead {
-                    col: first.col,
-                    row: first.row,
-                    level: first.level.get(),
-                    reason: err.to_string(),
-                }
+                WsiError::tile_read(first, err.to_string())
             })
     }
 
@@ -284,29 +239,7 @@ impl SlideReader for TiffPixelReader {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<LevelSourceKind, WsiError> {
-        let scene_ref =
-            self.layout
-                .dataset
-                .scenes
-                .get(scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: scene.get(),
-                    count: self.layout.dataset.scenes.len(),
-                })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
-        if level.get() as usize >= series_ref.levels.len() {
-            return Err(WsiError::LevelOutOfRange {
-                level: level.get(),
-                count: series_ref.levels.len() as u32,
-            });
-        }
-
+        self.layout.dataset.level(scene, series, level)?;
         let synthetic = self.layout.tile_sources.iter().any(|(key, source)| {
             key.scene == scene.get()
                 && key.series == series.get()
@@ -380,21 +313,19 @@ impl SlideReader for TiffPixelReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        };
+        let tile_req = req.source_tile();
         match self.tile_source_for(&tile_req)? {
             TileSource::TiledIfd {
                 ifd_id,
                 jpeg_tables,
                 compression: Compression::Jpeg,
             } => {
-                if !self.display_request_matches_native_regular_grid(req) {
+                let exact = self
+                    .layout
+                    .dataset
+                    .find_level(req.scene, req.series, req.level)
+                    .is_some_and(|level| level.native_display_tile(req).is_ok());
+                if !exact {
                     return Err(WsiError::Unsupported {
                         reason: "raw TIFF JPEG display passthrough requires the display grid to exactly match the native regular tile layout"
                             .into(),
@@ -445,14 +376,7 @@ impl SlideReader for TiffPixelReader {
     }
 
     fn use_display_tile_cache(&self, req: &TileViewRequest) -> bool {
-        let tile_req = TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        };
+        let tile_req = req.source_tile();
         match self.tile_source_for(&tile_req) {
             Ok(
                 TileSource::NdpiJpeg { .. }
@@ -471,26 +395,17 @@ impl SlideReader for TiffPixelReader {
         req: &RegionRequest,
     ) -> Option<Result<CpuTile, WsiError>> {
         let cache = ctx.tile_cache();
-        let series = self
+        let level = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))?;
-        let level = series.levels.get(req.level.get() as usize)?;
+            .find_level(req.scene, req.series, req.level)?;
         if !matches!(level.tile_layout, TileLayout::WholeLevel { .. }) {
             return None;
         }
-        let plane = req.plane.get();
-
-        let source = self.layout.tile_sources.get(&TileSourceKey {
-            scene: req.scene.get(),
-            series: req.series.get(),
-            level: req.level.get(),
-            z: plane.z,
-            c: plane.c,
-            t: plane.t,
-        })?;
+        let source = self
+            .layout
+            .tile_sources
+            .get(&TileSourceKey::from(&req.tile_at(0, 0)))?;
         match source {
             TileSource::NdpiJpeg { .. } => {
                 let TileLayout::WholeLevel {
@@ -541,17 +456,15 @@ impl SlideReader for TiffPixelReader {
                 *restart_interval,
                 *strip_offset,
                 *strip_byte_count,
-            ) {
-                Ok(tile) => Ok(tile),
-                Err(err) if Self::ndpi_restart_error_allows_full_decode_fallback(&err) => self
-                    .read_ndpi_full_decode_tile(
-                        req,
-                        *ifd_id,
-                        jpeg_header,
-                        *strip_offset,
-                        *strip_byte_count,
-                    ),
-                Err(err) => Err(err),
+            )? {
+                NdpiRestartTile::Decoded(tile) => Ok(tile),
+                NdpiRestartTile::NeedsFullDecode => self.read_ndpi_full_decode_tile(
+                    req,
+                    *ifd_id,
+                    jpeg_header,
+                    *strip_offset,
+                    *strip_byte_count,
+                ),
             },
             TileSource::NdpiFullDecode {
                 ifd_id,
@@ -578,8 +491,10 @@ impl SlideReader for TiffPixelReader {
             ),
             TileSource::SyntheticDownsample { base_level, factor } => {
                 validate_tile_coords(req.col, req.row, req.level.get())?;
-                let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()]
-                    .levels[req.level.get() as usize];
+                let (_, _, level) = self
+                    .layout
+                    .dataset
+                    .level(req.scene, req.series, req.level)?;
                 let TileLayout::WholeLevel {
                     virtual_tile_width,
                     virtual_tile_height,
@@ -667,14 +582,7 @@ impl SlideReader for TiffPixelReader {
     }
 
     fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
-        let source = self.tile_source_for(&TileRequest {
-            scene: req.scene.get().into(),
-            series: req.series.get().into(),
-            level: req.level.get().into(),
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        })?;
+        let source = self.tile_source_for(&req.source_tile())?;
         match source {
             TileSource::NdpiJpeg {
                 ifd_id,
@@ -799,42 +707,19 @@ impl SlideReader for TiffPixelReader {
                 strip_byte_count,
                 ..
             } => {
-                let data = self
-                    .container
-                    .pread(*strip_offset, *strip_byte_count)
-                    .map_err(|e| e.into_wsi_error(self.container.path()))?;
-
                 let info = self
                     .layout
                     .dataset
                     .associated_images
                     .get(name)
                     .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-
-                let options = j2k_decode_options(
-                    self.tiff_jpeg_decode_options_for_data(*ifd_id, false, &data, None)
-                        .color_transform,
-                );
-                let view = J2kJpegView::parse_with_options(&data, options)
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let decoder = J2kJpegDecoder::from_view(view)
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let (pixels, outcome) = decoder
-                    .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
-                    .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-                let decoded =
-                    cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
-                if decoded.width > info.dimensions.0 || decoded.height > info.dimensions.1 {
-                    crop_rgb_interleaved_u8_buffer(
-                        &decoded,
-                        0,
-                        0,
-                        info.dimensions.0,
-                        info.dimensions.1,
-                    )
-                } else {
-                    Ok(decoded)
-                }
+                self.decode_ndpi_full_jpeg(
+                    *ifd_id,
+                    *strip_offset,
+                    *strip_byte_count,
+                    J2kDownscale::None,
+                    Some(info.dimensions),
+                )
             }
             TileSource::TiledIfd {
                 ifd_id,
@@ -861,12 +746,14 @@ impl SlideReader for TiffPixelReader {
                     MAX_COMPRESSED_INPUT_BYTES,
                     "external TIFF JPEG associated image",
                 )
-                .map_err(|err| WsiError::InvalidSlide {
-                    path: path.clone(),
-                    message: format!(
-                        "failed to read external JPEG associated image '{}': {err}",
-                        path.display()
-                    ),
+                .map_err(|err| {
+                    WsiError::invalid_slide(
+                        path,
+                        format!(
+                            "failed to read external JPEG associated image '{}': {err}",
+                            path.display()
+                        ),
+                    )
                 })?;
                 decode_one_jpeg(JpegDecodeJob {
                     data: Cow::Borrowed(&data),

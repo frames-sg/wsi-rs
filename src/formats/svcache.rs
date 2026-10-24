@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -158,7 +157,76 @@ struct TileMeta {
     sha256: String,
 }
 
+fn invalid_svcache(path: &Path, message: impl Into<String>) -> WsiError {
+    WsiError::invalid_slide(path, message)
+}
+
+impl SvcacheMetadata {
+    /// The level a request names, or the out-of-range error for its first
+    /// bad index.
+    fn level(&self, scene: usize, series: usize, level: u32) -> Result<&LevelMeta, WsiError> {
+        let scene_meta = self.scenes.get(scene).ok_or(WsiError::SceneOutOfRange {
+            index: scene,
+            count: self.scenes.len(),
+        })?;
+        let series_meta = scene_meta
+            .series
+            .get(series)
+            .ok_or(WsiError::SeriesOutOfRange {
+                index: series,
+                count: scene_meta.series.len(),
+            })?;
+        series_meta
+            .levels
+            .get(level as usize)
+            .ok_or(WsiError::LevelOutOfRange {
+                level,
+                count: u32::try_from(series_meta.levels.len()).unwrap_or(u32::MAX),
+            })
+    }
+}
+
 impl LevelMeta {
+    /// Row-major index of the tile at `col`, `row`. `level` only labels the
+    /// error.
+    fn tile_index(&self, col: i64, row: i64, level: u32) -> Result<u64, WsiError> {
+        let error = |reason: &str| WsiError::TileRead {
+            col,
+            row,
+            level,
+            reason: reason.into(),
+        };
+        let (Ok(col_index), Ok(row_index)) = (u64::try_from(col), u64::try_from(row)) else {
+            return Err(error("negative .svcache tile coordinate"));
+        };
+        if col_index >= self.tiles_across || row_index >= self.tiles_down {
+            return Err(error(".svcache tile coordinate out of range"));
+        }
+        row_index
+            .checked_mul(self.tiles_across)
+            .and_then(|base| base.checked_add(col_index))
+            .ok_or_else(|| error(".svcache tile index overflow"))
+    }
+
+    /// Whether `other` cuts the same dimensions into the same tiles.
+    fn has_tile_grid_of(&self, other: &Self) -> bool {
+        self.dimensions == other.dimensions
+            && (self.tile_width, self.tile_height) == (other.tile_width, other.tile_height)
+            && (self.tiles_across, self.tiles_down) == (other.tiles_across, other.tiles_down)
+    }
+
+    /// Every stored tile with its index, dense or sparse.
+    fn populated_tiles(&self) -> impl Iterator<Item = (u64, &TileMeta)> {
+        let dense = self.tiles.iter().enumerate().filter_map(|(index, tile)| {
+            Some((u64::try_from(index).unwrap_or(u64::MAX), tile.as_ref()?))
+        });
+        let sparse = self
+            .sparse_tiles
+            .iter()
+            .map(|entry| (entry.index, &entry.tile));
+        dense.chain(sparse)
+    }
+
     fn tile_meta_for_index(&self, index: u64) -> Option<&TileMeta> {
         if !self.tiles.is_empty() {
             return usize::try_from(index)
@@ -209,6 +277,8 @@ enum ColorSpaceMeta {
 pub(crate) struct SvcacheBackend;
 
 pub(crate) struct SvcacheReader {
+    /// The cache file, which errors about its contents name.
+    path: PathBuf,
     file: PositionedFile,
     payload_start: u64,
     metadata: SvcacheMetadata,

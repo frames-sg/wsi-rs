@@ -2,6 +2,25 @@ use super::*;
 use crate::core::execution_telemetry::{record, Event};
 
 impl ZeissSlide {
+    pub(super) fn supported_candidate_subblocks(
+        &self,
+        candidate_indices: Vec<usize>,
+    ) -> Result<Option<Vec<DirectorySubBlockInfo>>, WsiError> {
+        let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
+        let all = czi.subblocks();
+        let mut selected = Vec::with_capacity(candidate_indices.len());
+        for index in candidate_indices {
+            let info = all.get(index).cloned().ok_or_else(|| {
+                WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
+            })?;
+            if !info.compression.is_wsi_supported() {
+                return Ok(None);
+            }
+            selected.push(info);
+        }
+        Ok(Some(selected))
+    }
+
     pub(super) fn scene_level_image(
         &self,
         scene: usize,
@@ -48,35 +67,15 @@ impl ZeissSlide {
             return Ok(None);
         }
 
-        let candidate_infos = {
-            let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let all = czi.subblocks();
-            let mut selected = Vec::with_capacity(candidate_indices.len());
-            for index in candidate_indices {
-                let info = all.get(index).cloned().ok_or_else(|| {
-                    WsiError::DisplayConversion(format!(
-                        "Zeiss subblock index {index} out of range"
-                    ))
-                })?;
-                if !matches!(
-                    info.compression,
-                    CziCompressionMode::UnCompressed
-                        | CziCompressionMode::Jpg
-                        | CziCompressionMode::JpgXr
-                ) {
-                    return Ok(None);
-                }
-                selected.push(info);
-            }
-            selected
+        let Some(candidate_infos) = self.supported_candidate_subblocks(candidate_indices)? else {
+            return Ok(None);
         };
 
-        if candidate_infos.is_empty() {
-            return Ok(None);
-        }
-
-        let series = &self.dataset.scenes[scene].series[0];
-        let level_ref = &series.levels[level];
+        let (_, _, level_ref) = self.dataset.level(
+            SceneId::new(scene),
+            SeriesId::new(0),
+            LevelIdx::new(u32::try_from(level).unwrap_or(u32::MAX)),
+        )?;
 
         let subblocks = candidate_infos;
 

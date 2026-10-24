@@ -29,7 +29,7 @@ openslide_required = true
 
 #[test]
 fn manifest_alias_selection_records_format_and_expected_hash() {
-    let manifest = parse_manifest(MANIFEST).expect("manifest");
+    let manifest = corpus::parse_manifest(MANIFEST).expect("manifest");
 
     let slides = resolve_manifest_slides(&manifest, &["fixture-jp2k".to_string()], true, false)
         .expect("manifest slide");
@@ -39,6 +39,10 @@ fn manifest_alias_selection_records_format_and_expected_hash() {
     assert_eq!(slides[0].format, "raw_jp2k");
     assert_eq!(slides[0].benchmark_group, "raw_jp2k/j2k");
     assert_eq!(
+        slides[0].pixel_tolerance,
+        Some(wsi_rs_test_support::corpus::Tolerance::TOLERANT)
+    );
+    assert_eq!(
         slides[0].manifest_sha256.as_deref(),
         Some("c06bf36f197a8057cbe0d496682c1eab5483c6667db8c64e236d087c747896ab")
     );
@@ -47,7 +51,7 @@ fn manifest_alias_selection_records_format_and_expected_hash() {
 
 #[test]
 fn manifest_selection_rejects_a_fixture_with_the_wrong_sha256() {
-    let manifest = parse_manifest(&MANIFEST.replace(
+    let manifest = corpus::parse_manifest(&MANIFEST.replace(
         "c06bf36f197a8057cbe0d496682c1eab5483c6667db8c64e236d087c747896ab",
         "0000000000000000000000000000000000000000000000000000000000000000",
     ))
@@ -62,7 +66,7 @@ fn manifest_selection_rejects_a_fixture_with_the_wrong_sha256() {
 
 #[test]
 fn default_manifest_selection_excludes_non_gating_rows() {
-    let manifest = parse_manifest(MANIFEST).expect("manifest");
+    let manifest = corpus::parse_manifest(MANIFEST).expect("manifest");
 
     let slides = resolve_manifest_slides(&manifest, &[], false, false).expect("gating slides");
 
@@ -77,7 +81,7 @@ fn default_manifest_selection_excludes_non_gating_rows() {
 
 #[test]
 fn paired_manifest_selection_rejects_wsi_only_aliases() {
-    let manifest = parse_manifest(MANIFEST).expect("manifest");
+    let manifest = corpus::parse_manifest(MANIFEST).expect("manifest");
 
     let error = resolve_manifest_slides(&manifest, &["wsi-only".to_string()], true, false)
         .expect_err("wsi-only row must not enter paired capture");
@@ -88,14 +92,14 @@ fn paired_manifest_selection_rejects_wsi_only_aliases() {
 #[test]
 fn public_manifest_derives_separate_aperio_codec_groups() {
     let text = std::fs::read_to_string(default_manifest_path()).expect("public manifest");
-    let manifest = parse_manifest(&text).expect("public manifest parse");
+    let manifest = corpus::parse_manifest(&text).expect("public manifest parse");
     let group = |alias: &str| {
         let entry = manifest
             .slides
             .iter()
             .find(|entry| entry.alias == alias)
             .expect("manifest alias");
-        benchmark_group(entry)
+        entry.benchmark_group()
     };
 
     assert_eq!(group("svs-001"), "aperio/jpeg");
@@ -103,31 +107,8 @@ fn public_manifest_derives_separate_aperio_codec_groups() {
 }
 
 #[test]
-fn manifest_parser_rejects_malformed_empty_and_duplicate_identity() {
-    assert!(parse_manifest("not = [valid")
-        .unwrap_err()
-        .contains("manifest parse"));
-    assert!(parse_manifest(
-        r#"[[slide]]
-alias = ""
-format = "aperio"
-"#,
-    )
-    .unwrap_err()
-    .contains("must be non-empty"));
-    assert!(parse_manifest(
-        r#"[[slide]]
-alias = "same"
-format = "aperio"
-[[slide]]
-alias = "same"
-format = "ndpi"
-"#,
-    )
-    .unwrap_err()
-    .contains("duplicate manifest alias"));
-
-    let empty = parse_manifest("").expect("empty manifest parses");
+fn an_empty_manifest_selects_no_slides() {
+    let empty = corpus::parse_manifest("").expect("empty manifest parses");
     assert!(resolve_manifest_slides(&empty, &[], false, false)
         .unwrap_err()
         .contains("selected no slides"));
@@ -135,7 +116,7 @@ format = "ndpi"
 
 #[test]
 fn explicit_paths_are_matched_deduplicated_or_rejected_by_policy() {
-    let manifest = parse_manifest(MANIFEST).expect("manifest");
+    let manifest = corpus::parse_manifest(MANIFEST).expect("manifest");
     let fixture = workspace_root().join("tests/fixtures/jp2k/rgb_nomct.j2k");
     let selector = fixture.display().to_string();
 
@@ -170,55 +151,4 @@ fn explicit_paths_are_matched_deduplicated_or_rejected_by_policy() {
             .unwrap_err()
             .contains("neither a manifest alias nor a file")
     );
-}
-
-#[test]
-fn benchmark_groups_extensions_and_candidate_search_cover_supported_shapes() {
-    let entry = |format: &str, codecs: &[&str], group: &str| ManifestSlide {
-        alias: "fixture".into(),
-        format: format.into(),
-        codecs: codecs.iter().map(|codec| (*codec).to_string()).collect(),
-        benchmark_group: group.into(),
-        path: String::new(),
-        url: "https://example.invalid/name.ext".into(),
-        sha256: String::new(),
-        must_decode: vec!["base".into()],
-        openslide_required: true,
-        ..Default::default()
-    };
-    assert_eq!(benchmark_group(&entry("aperio", &[], "")), "aperio");
-    assert_eq!(
-        benchmark_group(&entry("aperio", &["j2k", "jpeg", "j2k"], "")),
-        "aperio/j2k+jpeg"
-    );
-    assert_eq!(
-        benchmark_group(&entry("aperio", &[], "explicit")),
-        "explicit"
-    );
-
-    for (format, extension) in [
-        ("aperio", Some("svs")),
-        ("argos", Some("avs")),
-        ("huron", Some("tif")),
-        ("leica", Some("scn")),
-        ("ventana", Some("bif")),
-        ("philips_tiff", Some("tif")),
-        ("tiff", Some("tif")),
-        ("ndpi", Some("ndpi")),
-        ("hamamatsu_vms", Some("zip")),
-        ("mirax", Some("zip")),
-        ("dicom", Some("dcm")),
-        ("raw_jp2k", Some("j2k")),
-    ] {
-        assert_eq!(format_default_extension(format), extension, "{format}");
-    }
-
-    let jpeg = workspace_root().join("tests/fixtures/jpeg/baseline_420_16x16.jpg");
-    assert_eq!(
-        resolve_candidate(&entry("aperio", &[], ""), &jpeg),
-        Some(jpeg)
-    );
-    assert!(find_file_with_extension(&workspace_root().join("tests/fixtures"), "j2k").is_some());
-    assert!(find_file_with_extension(Path::new("missing-directory"), "j2k").is_none());
-    assert!(!cache_candidates(&entry("aperio", &[], "")).is_empty());
 }

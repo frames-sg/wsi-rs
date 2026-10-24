@@ -96,7 +96,9 @@ fn public_brightfield_color_sanity_svs_ndpi_dicom() {
 #[cfg(feature = "parity-openslide")]
 #[test]
 fn svs_and_ndpi_overview_color_matches_openslide() {
-    let Some(lib) = support::openslide_shim::try_load() else {
+    let Some(lib) = support::openslide_shim::try_load()
+        .unwrap_or_else(|error| panic!("[color-openslide] {error}"))
+    else {
         eprintln!("[color-openslide] libopenslide unavailable; skipping");
         return;
     };
@@ -202,22 +204,10 @@ fn resolve_case_path(case: &ColorCase) -> Option<PathBuf> {
         }
     }
 
-    for relative in case.relative_paths {
-        for root in candidate_roots() {
-            let path = root.join(relative);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-fn candidate_roots() -> Vec<PathBuf> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_parent = manifest_dir.parent().unwrap_or(manifest_dir);
-    vec![manifest_dir.to_path_buf(), workspace_parent.to_path_buf()]
+    case.relative_paths
+        .iter()
+        .flat_map(|relative| support::corpus::local_testdata_candidates(Path::new(relative)))
+        .find(|path| path.is_file())
 }
 
 fn read_overview_region(path: &Path) -> Result<RgbaRegion, String> {

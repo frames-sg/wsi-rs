@@ -6,31 +6,19 @@ use crate::core::types::*;
 use crate::decode::xml::{self, XmlNode};
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::{
-    add_tiff_resolution_properties, compression_from_tag,
-    compute_tiff_dataset_identity_with_extra_strings, single_scene_uint8_pyramid_dataset,
-    DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+use super::common::{
+    add_tiff_resolution_properties, associated_channels, averaged_downsample, checked_tile_grid,
+    compression_from_tag, ensure_supported_compression, stripped_tile_source, tiled_ifd_descriptor,
+    ResolutionStyle, SingleSceneTiffLayout, TiledIfdDescriptor as TiledIfd,
 };
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const ARGOS_METADATA_TAG: u16 = 65_000;
 const ARGOS_ROOT: &str = "Argos.Scan.Metadata";
-const MAX_ARGOS_TILES_PER_LEVEL: u64 = 1_000_000;
 
 pub(crate) struct ArgosInterpreter;
-
-#[derive(Clone)]
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
-    jpeg_tables: Option<Vec<u8>>,
-}
 
 struct ParsedMetadata {
     xml: String,
@@ -99,15 +87,14 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
         // derived from that same stack.
         let middle_stack = (metadata.z_planes as usize - 1) / 2;
         let representative = &stacks[middle_stack];
-        let base_width = representative[0].width as f64;
-        let base_height = representative[0].height as f64;
+        let base_dims = (representative[0].width, representative[0].height);
         let mut levels = Vec::with_capacity(representative.len());
         let mut level0_bounds = None;
         for (level_index, ifd) in representative.iter().enumerate() {
             let downsample = if level_index == 0 {
                 1.0
             } else {
-                ((base_width / ifd.width as f64) + (base_height / ifd.height as f64)) / 2.0
+                averaged_downsample(base_dims, (ifd.width, ifd.height))
             };
             let sparse = sparse_level(container, ifd, downsample)?;
             if level_index == 0 {
@@ -145,17 +132,13 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
             .last()
             .ok_or_else(|| TiffParseError::Structure("ARGOS pyramid has no levels".into()))?
             .ifd_id;
-        let identity = compute_tiff_dataset_identity_with_extra_strings(
-            container,
-            lowest_ifd,
-            first_ifd,
-            &[metadata.xml.as_str()],
-        )?;
         let mut properties = metadata.properties;
-        if let Some(quickhash1) = identity.quickhash1.as_deref() {
-            properties.insert("openslide.quickhash-1", quickhash1);
-        }
-        add_tiff_resolution_properties(container, representative[0].ifd_id, &mut properties);
+        add_tiff_resolution_properties(
+            container,
+            representative[0].ifd_id,
+            &mut properties,
+            ResolutionStyle::INCH_FULL_PRECISION,
+        );
         add_sparse_bounds_properties(
             &mut properties,
             level0_bounds,
@@ -163,26 +146,19 @@ impl TiffLayoutInterpreter for ArgosInterpreter {
             representative[0].height,
         );
 
-        let mut dataset = single_scene_uint8_pyramid_dataset(
-            identity.dataset_id,
-            AxesShape::new(metadata.z_planes, 1, 1),
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: lowest_ifd,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[metadata.xml.as_str()],
+            axes: AxesShape::new(metadata.z_planes, 1, 1),
             levels,
             associated_images,
             properties,
-        );
-        attach_source_icc_profile(
-            &mut dataset,
-            container,
-            tiled.iter().map(|ifd| ifd.ifd_id),
-            0,
-            0,
-        )?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            source_icc_ifds: tiled.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 
@@ -270,18 +246,7 @@ fn collect_tiled_ifds(container: &TiffContainer) -> Result<Vec<TiledIfd>, TiffPa
         }
         let compression = compression_from_tag(container.get_u32(ifd_id, tags::COMPRESSION)?);
         ensure_supported_compression("ARGOS", compression)?;
-        tiled.push(TiledIfd {
-            ifd_id,
-            width: container.get_u64(ifd_id, tags::IMAGE_WIDTH)?,
-            height: container.get_u64(ifd_id, tags::IMAGE_LENGTH)?,
-            tile_width: container.get_u32(ifd_id, tags::TILE_WIDTH)?,
-            tile_height: container.get_u32(ifd_id, tags::TILE_LENGTH)?,
-            compression,
-            jpeg_tables: container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec),
-        });
+        tiled.push(tiled_ifd_descriptor(container, ifd_id, compression)?);
     }
     if tiled.is_empty() {
         return Err(TiffParseError::Structure(
@@ -344,26 +309,15 @@ fn sparse_level(
     ifd: &TiledIfd,
     downsample: f64,
 ) -> Result<SparseLevel, TiffParseError> {
-    if ifd.width == 0 || ifd.height == 0 || ifd.tile_width == 0 || ifd.tile_height == 0 {
-        return Err(TiffParseError::Structure(format!(
-            "ARGOS image and tile dimensions must be non-zero on IFD {}",
-            ifd.ifd_id
-        )));
-    }
-    let tiles_across = ifd.width.div_ceil(u64::from(ifd.tile_width));
-    let tiles_down = ifd.height.div_ceil(u64::from(ifd.tile_height));
-    let tile_count = tiles_across
-        .checked_mul(tiles_down)
-        .ok_or_else(|| TiffParseError::Structure("ARGOS tile count overflow".into()))?;
-    if tile_count > MAX_ARGOS_TILES_PER_LEVEL {
-        return Err(TiffParseError::Structure(format!(
-            "ARGOS level declares {tile_count} tiles, exceeding the {MAX_ARGOS_TILES_PER_LEVEL}-tile limit"
-        )));
-    }
+    let (tiles_across, _, expected) = checked_tile_grid(
+        "ARGOS",
+        ifd.width,
+        ifd.height,
+        ifd.tile_width,
+        ifd.tile_height,
+    )?;
     let offsets = container.get_u64_array(ifd.ifd_id, tags::TILE_OFFSETS)?;
     let byte_counts = container.get_u64_array(ifd.ifd_id, tags::TILE_BYTE_COUNTS)?;
-    let expected = usize::try_from(tile_count)
-        .map_err(|_| TiffParseError::Structure("ARGOS tile count exceeds address space".into()))?;
     if offsets.len() != expected || byte_counts.len() != expected {
         return Err(TiffParseError::Structure(format!(
             "ARGOS IFD {} tile arrays have lengths offsets={} byte_counts={}, expected {expected}",
@@ -521,47 +475,14 @@ fn insert_stripped_associated(
         AssociatedImage::new(
             (width, height),
             SampleType::Uint8,
-            container
-                .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-                .unwrap_or(3) as u16,
+            associated_channels(container, ifd_id),
         ),
     );
     sources.insert(
         name.to_owned(),
-        TileSource::Stripped {
-            ifd_id,
-            jpeg_tables: container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec),
-            compression,
-            strip_offsets: container
-                .get_u64_array(ifd_id, tags::STRIP_OFFSETS)?
-                .to_vec(),
-            strip_byte_counts: container
-                .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)?
-                .to_vec(),
-        },
+        stripped_tile_source(container, ifd_id, compression)?,
     );
     Ok(())
-}
-
-pub(super) fn ensure_supported_compression(
-    vendor: &str,
-    compression: Compression,
-) -> Result<(), TiffParseError> {
-    match compression {
-        Compression::None
-        | Compression::Lzw
-        | Compression::Deflate
-        | Compression::Jpeg
-        | Compression::Jp2kRgb
-        | Compression::Jp2kYcbcr
-        | Compression::Zstd => Ok(()),
-        other => Err(TiffParseError::Structure(format!(
-            "{vendor} uses unsupported TIFF compression {other:?}"
-        ))),
-    }
 }
 
 #[cfg(test)]

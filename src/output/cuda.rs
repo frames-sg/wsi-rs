@@ -1,4 +1,7 @@
-use crate::output::download::{downloaded_bytes_to_cpu_tile, tight_download_layout};
+use crate::output::download::{
+    check_row_pitch, downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
+    MAX_DEVICE_DOWNLOAD_BYTES,
+};
 use crate::{error::WsiError, CpuTile, PixelFormat};
 use j2k_core::{BackendKind, DeviceSurface};
 use std::sync::{Arc, Mutex};
@@ -115,7 +118,7 @@ impl CudaDeviceTile {
         self.validate_surface_metadata()?;
         let (row_bytes, byte_len) =
             tight_download_layout(self.width, self.height, self.format, "CUDA")?;
-        enforce_download_limit(byte_len)?;
+        enforce_download_limit(byte_len, "CUDA host tile download")?;
         let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
         let surface = &self.storage.surface;
         let bytes = if surface.dimensions() == (self.width, self.height) {
@@ -158,15 +161,7 @@ impl CudaDeviceTile {
             });
         }
         let (row_bytes, _) = tight_download_layout(self.width, self.height, self.format, "CUDA")?;
-        if self.pitch_bytes < row_bytes {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "CUDA surface pitch {} is smaller than its {}-byte row",
-                    self.pitch_bytes, row_bytes
-                ),
-            });
-        }
-        Ok(())
+        check_row_pitch(self.pitch_bytes, row_bytes, "CUDA")
     }
 
     pub(crate) fn from_j2k(
@@ -239,7 +234,7 @@ fn download_cropped_surface(
         format,
         "CUDA",
     )?;
-    enforce_download_limit(physical_len)?;
+    enforce_download_limit(physical_len, "CUDA host tile download")?;
     let mut physical = try_download_buffer(
         physical_len,
         u64::try_from(physical_len).unwrap_or(u64::MAX),
@@ -264,20 +259,6 @@ fn download_cropped_surface(
         destination.copy_from_slice(&source[..logical_row_bytes]);
     }
     Ok(logical)
-}
-
-const MAX_DEVICE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
-
-fn enforce_download_limit(byte_len: usize) -> Result<(), WsiError> {
-    let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
-    if requested > MAX_DEVICE_DOWNLOAD_BYTES {
-        return Err(WsiError::ResourceLimit {
-            resource: "CUDA host tile download",
-            requested,
-            limit: MAX_DEVICE_DOWNLOAD_BYTES,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

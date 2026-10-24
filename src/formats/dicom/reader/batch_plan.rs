@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{CpuTile, TileRequest};
 use crate::error::WsiError;
 
-use crate::formats::dicom::backend::is_encapsulated_transfer_syntax;
 use crate::formats::dicom::decode::{black_sample_buffer, crop_sample_buffer_rgb};
 use crate::formats::dicom::image::DicomImage;
 use crate::formats::dicom::manifest::DicomSlide;
+use crate::formats::dicom::reader::dicom_level_for_request;
 
 #[derive(Clone)]
 pub(super) struct DicomResolvedBatchFrame {
@@ -46,10 +47,6 @@ pub(super) enum DicomFrameBatchKind {
     Device,
 }
 
-pub(super) fn check_read_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
-    control.map_or(Ok(()), crate::ReadControl::check_cancelled)
-}
-
 pub(super) struct DicomBatchPlanner<'a> {
     slide: &'a DicomSlide,
     control: Option<&'a crate::ReadControl>,
@@ -75,30 +72,12 @@ impl<'a> DicomBatchPlanner<'a> {
         req: &TileRequest,
         _is_device_decodable: impl FnOnce(&DicomImage) -> bool,
     ) -> Result<DicomResolvedBatchPlanEntry, WsiError> {
-        check_read_control(self.control)?;
-        let level =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
-        if req.col < 0
-            || req.row < 0
-            || req.col >= level.tiles_across as i64
-            || req.row >= level.tiles_down as i64
-        {
-            return Err(match self.mode {
-                DicomBatchPlanMode::Cpu => WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
-                        "tile ({},{}) out of range ({}x{})",
-                        req.col, req.row, level.tiles_across, level.tiles_down
-                    ),
-                },
+        check_cancelled_opt(self.control)?;
+        let level = dicom_level_for_request(self.slide, req)?;
+        let (col, row) = level
+            .tile_coordinates(req)
+            .map_err(|error| match self.mode {
+                DicomBatchPlanMode::Cpu => error,
                 #[cfg(any(feature = "metal", feature = "cuda"))]
                 DicomBatchPlanMode::Device { .. } => WsiError::Unsupported {
                     reason: format!(
@@ -106,11 +85,7 @@ impl<'a> DicomBatchPlanner<'a> {
                         req.col, req.row
                     ),
                 },
-            });
-        }
-
-        let col = req.col as u32;
-        let row = req.row as u32;
+            })?;
         let black_tile = || {
             #[cfg(any(feature = "metal", feature = "cuda"))]
             if matches!(
@@ -149,7 +124,7 @@ impl<'a> DicomBatchPlanner<'a> {
 
         match self.mode {
             DicomBatchPlanMode::Cpu => {
-                if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
+                if image.transfer_syntax.is_encapsulated() {
                     if let Some(cached) = image.cached_decoded_frame(frame_index) {
                         return Ok(DicomResolvedBatchPlanEntry::CachedFrame(
                             slot,
@@ -194,11 +169,11 @@ pub(super) fn attach_encapsulated_frame_bytes(
     control: Option<&crate::ReadControl>,
     batch_kind: DicomFrameBatchKind,
 ) -> Result<Vec<DicomFrameBytes>, WsiError> {
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     let mut groups: HashMap<usize, (Arc<DicomImage>, Vec<DicomResolvedBatchFrame>)> =
         HashMap::new();
     for meta in metas {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let image = meta.image.clone();
         let key = Arc::as_ptr(&image) as usize;
         groups
@@ -210,7 +185,7 @@ pub(super) fn attach_encapsulated_frame_bytes(
 
     let mut jobs = Vec::new();
     for (_, (image, mut metas)) in groups {
-        check_read_control(control)?;
+        check_cancelled_opt(control)?;
         let cache_decoded_frame = image.should_cache_decoded_frames_for_batch(metas.len());
         for meta in &mut metas {
             meta.cache_decoded_frame = cache_decoded_frame;
@@ -232,11 +207,9 @@ pub(super) fn attach_encapsulated_frame_bytes(
             let frame_index = meta.frame_index;
             let bytes = frames.get(&frame_index).cloned().ok_or_else(|| {
                 let req = &meta.req;
-                WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: match batch_kind {
+                WsiError::tile_read(
+                    req,
+                    match batch_kind {
                         DicomFrameBatchKind::Cpu => {
                             format!("DICOM batch frame {frame_index} was not extracted")
                         }
@@ -245,12 +218,12 @@ pub(super) fn attach_encapsulated_frame_bytes(
                             format!("DICOM device batch frame {frame_index} was not extracted")
                         }
                     },
-                }
+                )
             })?;
             jobs.push((meta, bytes));
         }
     }
     jobs.sort_by_key(|(meta, _)| meta.slot);
-    check_read_control(control)?;
+    check_cancelled_opt(control)?;
     Ok(jobs)
 }

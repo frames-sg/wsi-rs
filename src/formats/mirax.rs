@@ -6,9 +6,6 @@ mod slide;
 #[cfg(test)]
 mod tests;
 
-use helpers::invalid_slide;
-
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -29,7 +26,6 @@ use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::formats::ini::ParsedIni;
 use crate::properties::Properties;
-use j2k_core::BackendRequest;
 
 const MRXS_EXT: &str = "mrxs";
 const SLIDEDAT_INI: &str = "Slidedat.ini";
@@ -231,7 +227,7 @@ impl SlideReader for MiraxReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Cpu)
+        self.decode_tile(req)
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -285,13 +281,12 @@ impl SlideReader for MiraxReader {
             .associated_images
             .get(name)
             .and_then(|image| image.decoded_bytes());
-        Ok(shared
-            .associated
-            .get(name)
-            .zip(decoded)
-            .map(|(record, decoded)| {
-                SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, record.len)
-            }))
+        let (Some(record), Some(decoded)) = (shared.associated.get(name), decoded) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            SourceEncoding::new(Compression::Jpeg).with_sizes(decoded, record.len),
+        ))
     }
 }
 
@@ -301,50 +296,19 @@ impl MiraxReader {
         req: &TileRequest,
     ) -> Result<(&'a TileEntry, &'a MiraxTile), WsiError> {
         let shared = &self.slide.shared;
-        let scene =
-            shared
-                .dataset
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: shared.dataset.scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
-        validate_mirax_plane(req.plane.get(), series.axes)?;
+        let (_, series, level) = shared.dataset.level(req.scene, req.series, req.level)?;
+        series.axes.validate_plane(req.plane.get())?;
         let TileLayout::Irregular { tiles, .. } = &level.tile_layout else {
             return Err(WsiError::UnsupportedFormat(
                 "MIRAX levels must use irregular tiles".into(),
             ));
         };
-        let entry = tiles
-            .get(&(req.col, req.row))
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("no MIRAX tile at ({},{})", req.col, req.row),
-            })?;
-        let tile_index = entry.tiff_tile_index.ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "MIRAX tile is missing backing descriptor".into(),
+        let entry = tiles.get(&(req.col, req.row)).ok_or_else(|| {
+            WsiError::tile_read(req, format!("no MIRAX tile at ({},{})", req.col, req.row))
         })?;
+        let tile_index = entry
+            .tiff_tile_index
+            .ok_or_else(|| WsiError::tile_read(req, "MIRAX tile is missing backing descriptor"))?;
         let level_state =
             shared
                 .levels
@@ -353,25 +317,18 @@ impl MiraxReader {
                     level: req.level.get(),
                     count: shared.levels.len() as u32,
                 })?;
-        let tile = level_state
-            .tiles
-            .get(tile_index)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("invalid MIRAX tile descriptor index {tile_index}"),
-            })?;
+        let tile = level_state.tiles.get(tile_index).ok_or_else(|| {
+            WsiError::tile_read(
+                req,
+                format!("invalid MIRAX tile descriptor index {tile_index}"),
+            )
+        })?;
         Ok((entry, tile))
     }
 
-    fn read_tile_with_backend(
-        &self,
-        req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
+    fn decode_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         let (entry, tile) = self.tile_for_request(req)?;
-        let decoded = self.slide.decode_image_with_backend(&tile.image, backend)?;
+        let decoded = self.slide.decode_image(&tile.image)?;
         if !tile.image.resample
             && tile.src_x == 0.0
             && tile.src_y == 0.0
@@ -382,23 +339,6 @@ impl MiraxReader {
         }
         tile.extract(decoded.as_ref(), entry.dimensions)
     }
-}
-
-fn validate_mirax_plane(plane: PlaneSelection, axes: AxesShape) -> Result<(), WsiError> {
-    for (axis, value, extent) in [
-        ("z", plane.z, axes.z),
-        ("c", plane.c, axes.c),
-        ("t", plane.t, axes.t),
-    ] {
-        if value >= extent {
-            return Err(WsiError::PlaneOutOfRange {
-                axis: axis.into(),
-                value,
-                max: extent.saturating_sub(1),
-            });
-        }
-    }
-    Ok(())
 }
 
 struct MiraxSlide {
@@ -419,10 +359,9 @@ struct MiraxShared {
     dataset: Dataset,
     levels: Vec<MiraxLevel>,
     associated: HashMap<String, MiraxRecord>,
-    /// Largest decoded source image, which sizes the decoded-image cache.
-    decoded_image_bytes: u64,
-    /// Largest associated image, which sizes the associated-image cache.
-    associated_image_bytes: u64,
+    /// Each data file's identity when the slide was opened. Data files open
+    /// lazily, and one that no longer matches is refused.
+    datafile_identities: HashMap<PathBuf, crate::core::file_identity::FileIdentity>,
 }
 
 struct MiraxLevel {
@@ -540,10 +479,10 @@ fn slide_dir_from_entry(path: &Path) -> Result<PathBuf, WsiError> {
     }
     let stem = path
         .file_stem()
-        .ok_or_else(|| invalid_slide(path, "MIRAX entry has no stem"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX entry has no stem"))?;
     let dir = path.with_file_name(stem);
     if !dir.is_dir() {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("missing MIRAX directory {}", dir.display()),
         ));

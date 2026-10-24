@@ -54,12 +54,7 @@ impl TiffPixelReader {
         compression: Compression,
         subtiles_per_tile: u32,
     ) -> Result<CpuTile, WsiError> {
-        let tile_error = |reason: String| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason,
-        };
+        let tile_error = |reason: String| WsiError::tile_read(req, reason);
         let entry = self.subtile_entry(req)?;
         let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
             return Err(tile_error(
@@ -140,30 +135,21 @@ impl TiffPixelReader {
     }
 
     fn subtile_entry(&self, req: &TileRequest) -> Result<&TileEntry, WsiError> {
-        let level = self
+        let (_, _, level) = self
             .layout
             .dataset
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-            .ok_or(WsiError::LevelOutOfRange {
-                level: req.level.get(),
-                count: 0,
-            })?;
+            .level(req.scene, req.series, req.level)?;
         let TileLayout::Irregular { tiles, .. } = &level.tile_layout else {
             return Err(WsiError::UnsupportedFormat(
                 "Ventana subtile levels must use irregular tilemaps".into(),
             ));
         };
-        tiles
-            .get(&(req.col, req.row))
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("no Ventana subtile at ({},{})", req.col, req.row),
-            })
+        tiles.get(&(req.col, req.row)).ok_or_else(|| {
+            WsiError::tile_read(
+                req,
+                format!("no Ventana subtile at ({},{})", req.col, req.row),
+            )
+        })
     }
 
     fn stored_tile_geometry(&self, ifd_id: IfdId) -> Result<StoredTileGeometry, String> {

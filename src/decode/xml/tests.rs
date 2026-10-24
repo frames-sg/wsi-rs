@@ -47,6 +47,26 @@ fn deeply_nested_xml_rejected() {
 }
 
 #[test]
+fn self_closing_and_paired_elements_obey_the_same_depth_limit() {
+    for depth in [MAX_XML_DEPTH, MAX_XML_DEPTH + 1] {
+        for leaf in ["<leaf/>", "<leaf></leaf>"] {
+            let xml = format!(
+                "{}{leaf}{}",
+                "<node>".repeat(depth as usize),
+                "</node>".repeat(depth as usize)
+            );
+            let result = parse_xml(&xml);
+            if depth == MAX_XML_DEPTH {
+                result.expect("the exact nesting limit is allowed");
+            } else {
+                let error = result.expect_err("every element counts towards nesting depth");
+                assert!(error.to_string().contains("nesting depth"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
 fn duplicate_attributes_are_rejected() {
     let err = parse_xml(r#"<root value="first" value="second"/>"#).unwrap_err();
     assert!(
@@ -88,9 +108,9 @@ fn budget_counters_accept_exact_limits_and_reject_the_next_item() {
         nodes: 0,
         attributes: MAX_XML_ATTRIBUTES - 1,
     };
-    attribute_budget.add_attributes(1).unwrap();
+    attribute_budget.add_attribute().unwrap();
     assert_eq!(attribute_budget.attributes, MAX_XML_ATTRIBUTES);
-    assert!(attribute_budget.add_attributes(1).is_err());
+    assert!(attribute_budget.add_attribute().is_err());
 }
 
 #[test]

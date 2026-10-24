@@ -12,6 +12,7 @@ use crate::error::WsiError;
 pub(crate) const DEFAULT_MAX_REGION_PIXELS: u64 = 32 * 1024 * 1024;
 
 mod composition;
+mod managed;
 mod open_config;
 mod open_options;
 mod probe_cache;
@@ -25,13 +26,14 @@ pub(crate) use composition::{
     composite_region_from_source_in_batches, crop_rgb_interleaved_buffer,
     crop_rgb_interleaved_u8_buffer, read_display_tile_from_source,
 };
+pub(crate) use managed::ConservativeManagedReader;
 pub(crate) use open_config::{BackendOpenConfig, OpenBudget};
 pub use open_options::SlideOpenOptions;
 pub(crate) use probe_cache::ConfiguredProbeCache;
 pub use registry_impl::FormatRegistry;
 pub use slide::Slide;
 pub(crate) use traits::{
-    read_cpu_tiles, ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader,
+    forward_slide_reader_methods, ConfiguredDatasetReader, ConfiguredFormatProbe,
     ManagedSlideReader,
 };
 pub use traits::{

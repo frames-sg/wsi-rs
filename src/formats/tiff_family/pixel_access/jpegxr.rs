@@ -33,7 +33,7 @@ impl TiffPixelReader {
             || self.container.get_u32(ifd, tags::PREDICTOR).unwrap_or(1) != 1
             || self
                 .container
-                .get_u64_array(ifd, 338)
+                .get_u64_array(ifd, tags::EXTRA_SAMPLES)
                 .is_ok_and(|values| !values.is_empty())
         {
             return Err(invalid());

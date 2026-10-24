@@ -82,6 +82,39 @@ fn sparse_svcache_merge_preserves_existing_tiles() {
 }
 
 #[test]
+fn merge_copies_nothing_from_a_level_whose_tile_grid_changed() {
+    let mut existing_payload = tempfile::tempfile().unwrap();
+    let tile =
+        CpuTile::from_u8_interleaved(1, 1, 3, ColorSpace::Rgb, vec![1_u8, 2_u8, 3_u8]).unwrap();
+    let first = write_tile_payload(&mut existing_payload, &tile).unwrap();
+    let second = write_tile_payload(&mut existing_payload, &tile).unwrap();
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("regrid.svcache");
+    // One row of two tiles in the existing cache.
+    let metadata =
+        single_level_svcache_metadata(source.path(), false, 2, 1, vec![Some(first), Some(second)]);
+    write_svcache_file(&out_path, &metadata, existing_payload).unwrap();
+
+    for (tiles_across, tiles_down) in [(1, 2), (2, 2)] {
+        let mut scenes =
+            single_level_svcache_metadata(source.path(), false, tiles_across, tiles_down, vec![])
+                .scenes;
+        let copied = copy_existing_svcache_tiles(
+            &out_path,
+            source.path(),
+            &mut scenes,
+            &mut tempfile::tempfile().unwrap(),
+        )
+        .unwrap();
+
+        let level = &scenes[0].series[0].levels[0];
+        assert_eq!(copied, 0, "{tiles_across}x{tiles_down}");
+        assert_eq!(level.populated_tiles().count(), 0);
+    }
+}
+
+#[test]
 fn sparse_svcache_replace_does_not_copy_existing_tiles() {
     let mut existing_payload = tempfile::tempfile().unwrap();
     let tile =
@@ -268,6 +301,34 @@ fn svcache_complete_and_partial_builders_cover_merge_and_invalid_inputs() {
         let path = out_dir.path().join(format!("invalid-{name}.svcache"));
         assert!(build_svcache_tiles(source.path(), &path, &[invalid]).is_err());
     }
+
+    let out_of_range = |scene: usize, series: usize, level: u32| {
+        let selection = SvcacheTileSelection::new(
+            SceneId::new(scene),
+            SeriesId::new(series),
+            LevelIdx::new(level),
+            0,
+            0,
+        );
+        build_svcache_tiles(
+            source.path(),
+            &out_dir.path().join("out-of-range.svcache"),
+            &[selection],
+        )
+        .unwrap_err()
+    };
+    assert!(matches!(
+        out_of_range(1, 0, 0),
+        WsiError::SceneOutOfRange { index: 1, count: 1 }
+    ));
+    assert!(matches!(
+        out_of_range(0, 1, 0),
+        WsiError::SeriesOutOfRange { index: 1, count: 1 }
+    ));
+    assert!(matches!(
+        out_of_range(0, 0, 3),
+        WsiError::LevelOutOfRange { level: 3, count: 3 }
+    ));
 
     let u16_tile = CpuTile::new(
         1,

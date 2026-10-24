@@ -34,7 +34,7 @@ fn stripped(width: u32, height: u32, subfile_type: Option<u32>) -> Vec<Synthetic
         ),
     ];
     if let Some(value) = subfile_type {
-        tags.push(SyntheticTag::long(TAG_SUBFILE_TYPE, value));
+        tags.push(SyntheticTag::long(tags::SUBFILE_TYPE, value));
     }
     tags
 }
@@ -42,7 +42,7 @@ fn stripped(width: u32, height: u32, subfile_type: Option<u32>) -> Vec<Synthetic
 #[test]
 fn interpret_preserves_pyramid_order_properties_and_associated_images() {
     let mut first = tiled(1024, 512, 7);
-    first.push(SyntheticTag::ascii(TAG_MAKE, "Huron LE176"));
+    first.push(SyntheticTag::ascii(tags::MAKE, "Huron LE176"));
     first.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         "Scanner = LE176\nObjective = 20\nValue = left=right\nEmpty = ",
@@ -89,12 +89,12 @@ fn interpret_preserves_pyramid_order_properties_and_associated_images() {
 #[test]
 fn image_depth_and_compression_validation_fail_closed() {
     let mut depth = tiled(64, 32, 7);
-    depth.push(SyntheticTag::ascii(TAG_MAKE, "Huron"));
+    depth.push(SyntheticTag::ascii(tags::MAKE, "Huron"));
     depth.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         "Scanner=LE176",
     ));
-    depth.push(SyntheticTag::long(TAG_IMAGE_DEPTH, 2));
+    depth.push(SyntheticTag::long(tags::IMAGE_DEPTH, 2));
     let file = build_tiff(&[depth]);
     let container = TiffContainer::open(file.path()).unwrap();
     assert!(HuronInterpreter
@@ -104,7 +104,7 @@ fn image_depth_and_compression_validation_fail_closed() {
         .contains("ImageDepth=2"));
 
     let mut unsupported = tiled(64, 32, 99);
-    unsupported.push(SyntheticTag::ascii(TAG_MAKE, "Huron"));
+    unsupported.push(SyntheticTag::ascii(tags::MAKE, "Huron"));
     unsupported.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         "Scanner=LE176",
@@ -121,7 +121,7 @@ fn image_depth_and_compression_validation_fail_closed() {
 #[test]
 fn missing_description_and_zero_tile_dimensions_are_rejected() {
     let mut missing = tiled(64, 32, 7);
-    missing.push(SyntheticTag::ascii(TAG_MAKE, "Huron"));
+    missing.push(SyntheticTag::ascii(tags::MAKE, "Huron"));
     let file = build_tiff(&[missing]);
     let container = TiffContainer::open(file.path()).unwrap();
     assert!(HuronInterpreter
@@ -132,7 +132,7 @@ fn missing_description_and_zero_tile_dimensions_are_rejected() {
 
     let mut zero = tiled(64, 32, 7);
     zero.push(SyntheticTag::long(tags::TILE_WIDTH, 0));
-    zero.push(SyntheticTag::ascii(TAG_MAKE, "Huron"));
+    zero.push(SyntheticTag::ascii(tags::MAKE, "Huron"));
     zero.push(SyntheticTag::ascii(
         tags::IMAGE_DESCRIPTION,
         "Scanner=LE176",

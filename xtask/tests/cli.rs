@@ -408,11 +408,20 @@ EOF
                 .collect::<Vec<_>>()
                 .join(" ");
             let script = format!(
-                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n",
+                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n\
+                 [ -z \"$WSI_RS_VMU_SHIM_LIBRARY\" ] || printf 'shim %s\\n' \"$WSI_RS_VMU_SHIM_LIBRARY\" >> \"$XTASK_FAKE_LOG\"\n",
                 fs::read_to_string(&fixture.cargo).unwrap()
             );
             write_executable(&fixture.cargo, &script);
-            let output = fixture.run("conformance-test", &[suite]);
+            let target_dir = fixture.root.join("target");
+            let output = fixture
+                .command()
+                .env("CARGO_TARGET_DIR", &target_dir)
+                .env_remove("WSI_RS_VMU_SHIM_LIBRARY")
+                .env_remove("WSI_RS_PERF_GPU_FEATURE")
+                .args(["conformance-test", suite])
+                .output()
+                .unwrap();
             let log = fs::read_to_string(&fixture.log_path).unwrap();
             if features == Some("metal") && !cfg!(target_os = "macos") {
                 assert!(!output.status.success(), "{suite}");
@@ -426,7 +435,36 @@ EOF
                 "{suite}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert_eq!(log.lines().count(), selections.len() * 2, "{suite}: {log}");
+            // The VMU lane first builds the release shim, then names it to
+            // both of its test invocations.
+            let shim_lines = if suite == "vmu" {
+                let library = if cfg!(target_os = "macos") {
+                    "libwsi_rs_openslide_shim.dylib"
+                } else {
+                    "libwsi_rs_openslide_shim.so"
+                };
+                let shim = target_dir.join("release").join(library);
+                assert!(
+                    log.starts_with(&format!(
+                        "{} build --locked --release -p wsi-rs-openslide-shim --features route-telemetry\n",
+                        fixture.cargo.display()
+                    )),
+                    "{suite}: {log}"
+                );
+                assert_eq!(
+                    log.matches(&format!("shim {}\n", shim.display())).count(),
+                    2,
+                    "{suite}: {log}"
+                );
+                3
+            } else {
+                0
+            };
+            assert_eq!(
+                log.lines().count(),
+                selections.len() * 2 + shim_lines,
+                "{suite}: {log}"
+            );
             let features = features.map_or(String::new(), |value| format!(" --features {value}"));
             for (target, filter) in selections {
                 assert!(
@@ -554,6 +592,37 @@ EOF
     }
 
     #[test]
+    fn test_runners_cover_reader_features_and_shared_support_once() {
+        for (task, runner) in [("test", "test"), ("nextest", "nextest run")] {
+            let fixture = FakeRepository::new();
+            let output = fixture.run(task, &[]);
+            assert!(
+                output.status.success(),
+                "{task}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = fs::read_to_string(&fixture.log_path).unwrap();
+            let invocations = log
+                .lines()
+                .map(|line| {
+                    line.strip_prefix(&format!("{} ", fixture.cargo.display()))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut expected = vec![
+                format!("{runner} --locked --lib --tests -p wsi-rs -p wsi-rs-test-support"),
+                format!("{runner} --locked --lib --tests -p wsi-rs --features parity-openslide"),
+            ];
+            if cfg!(target_os = "macos") {
+                expected.push(format!(
+                    "{runner} --locked --lib --tests -p wsi-rs --features parity-metal"
+                ));
+            }
+            assert_eq!(invocations, expected, "{task}");
+        }
+    }
+
+    #[test]
     fn engineering_commands_execute_their_complete_orchestration_contracts() {
         let fixture = FakeRepository::new();
         let script = fs::read_to_string(&fixture.cargo).unwrap();
@@ -616,6 +685,89 @@ esac
             "llvm-cov --locked --workspace",
         ] {
             assert!(log.contains(expected), "missing `{expected}` in:\n{log}");
+        }
+    }
+
+    #[test]
+    fn release_fuzz_takes_the_ci_time_budget() {
+        let fixture = FakeRepository::new();
+        let output = fixture.run("release-fuzz", &["--seconds", "15", "--timeout", "5"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert_eq!(log.lines().count(), 9, "{log}");
+        assert!(
+            log.contains(
+                "fuzz run --sanitizer address open_wsi_bytes fuzz/corpus/open_wsi_bytes -- \
+                 -max_total_time=15 -timeout=5 -rss_limit_mb=2048\n"
+            ),
+            "{log}"
+        );
+
+        fs::write(&fixture.log_path, "").unwrap();
+        let output = fixture.run("release-fuzz", &["--minutes", "5"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("usage: cargo xtask release-fuzz"));
+        assert!(fs::read_to_string(&fixture.log_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn corpus_coverage_instruments_every_parity_corpus_run() {
+        let fixture = FakeRepository::new();
+        let script = format!(
+            "{}{}",
+            fs::read_to_string(&fixture.cargo).unwrap(),
+            r#"
+case "$*" in
+    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+esac
+"#
+        );
+        write_executable(&fixture.cargo, &script);
+        let aliases = "argos-001,huron-jpeg-001,dicom-jp2k-001,olympus-vsi-001";
+        let runs = |task: &str, runner: &str| {
+            fs::write(&fixture.log_path, "").unwrap();
+            let output = fixture
+                .command()
+                .arg(task)
+                .env("WSI_RS_PARITY_ALIASES", aliases)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{task}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::read_to_string(&fixture.log_path)
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.split_once(runner).map(|(_, run)| run.to_string()))
+                .collect::<Vec<_>>()
+        };
+
+        let parity = runs("parity-corpus-test", " test --locked ");
+        let coverage = runs(
+            "coverage",
+            " llvm-cov --no-clean --lcov --output-path target/coverage-corpus-step.lcov --locked ",
+        );
+
+        assert_eq!(parity, coverage);
+        for expected in [
+            "--test argos_huron -- public_argos_",
+            "--test argos_huron -- public_huron_",
+            "--test openslide_parity --features parity-openslide -- preflight --exact --ignored",
+            "--test real_wsi_behavior -- --ignored",
+            "--lib -- fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available --exact --ignored --test-threads=1",
+            "--lib -- fixture::opens_olympus_vsi_when_corpus_is_available --exact",
+            "--test vendor_reference -- vendor_native_pixels_match_independent_reference --exact",
+        ] {
+            assert!(
+                coverage.iter().any(|run| run.starts_with(expected)),
+                "missing `{expected}` in {coverage:#?}"
+            );
         }
     }
 

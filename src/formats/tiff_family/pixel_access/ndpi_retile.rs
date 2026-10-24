@@ -7,6 +7,30 @@ pub(super) struct NdpiDctRetileSegment {
     pub(super) image: JpegDctImage,
 }
 
+/// MCU width and height in pixels: 8 times the largest component sampling factor.
+pub(super) fn ndpi_dct_mcu_dimensions(image: &JpegDctImage) -> Result<(u32, u32), WsiError> {
+    let max_h = image
+        .components
+        .iter()
+        .map(|component| component.h_samp)
+        .max()
+        .unwrap_or(1);
+    let max_v = image
+        .components
+        .iter()
+        .map(|component| component.v_samp)
+        .max()
+        .unwrap_or(1);
+    let mcu_width = u32::from(max_h) * 8;
+    let mcu_height = u32::from(max_v) * 8;
+    if mcu_width == 0 || mcu_height == 0 {
+        return Err(WsiError::Unsupported {
+            reason: "NDPI raw JPEG retile requires nonzero MCU dimensions".into(),
+        });
+    }
+    Ok((mcu_width, mcu_height))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_ndpi_retiled_dct_image(
     req: &TileViewRequest,
@@ -39,25 +63,7 @@ pub(super) fn build_ndpi_retiled_dct_image(
             ),
         });
     }
-    let max_h = first
-        .components
-        .iter()
-        .map(|component| component.h_samp)
-        .max()
-        .unwrap_or(1);
-    let max_v = first
-        .components
-        .iter()
-        .map(|component| component.v_samp)
-        .max()
-        .unwrap_or(1);
-    let mcu_width = u32::from(max_h) * 8;
-    let mcu_height = u32::from(max_v) * 8;
-    if mcu_width == 0 || mcu_height == 0 {
-        return Err(WsiError::Unsupported {
-            reason: "NDPI raw JPEG retile requires nonzero MCU dimensions".into(),
-        });
-    }
+    let (mcu_width, mcu_height) = ndpi_dct_mcu_dimensions(first)?;
     let output_mcu_cols = content_width.div_ceil(mcu_width);
     let output_mcu_rows = content_height.div_ceil(mcu_height);
     let expected_segments_per_row = native_col_end - native_col_start + 1;
@@ -149,10 +155,10 @@ pub(super) fn build_ndpi_retiled_dct_image(
             component_index: idx,
             width: content_width
                 .saturating_mul(u32::from(component.h_samp))
-                .div_ceil(u32::from(max_h)),
+                .div_ceil(mcu_width / 8),
             height: content_height
                 .saturating_mul(u32::from(component.v_samp))
-                .div_ceil(u32::from(max_v)),
+                .div_ceil(mcu_height / 8),
             h_samp: component.h_samp,
             v_samp: component.v_samp,
             block_cols: output_mcu_cols * u32::from(component.h_samp),

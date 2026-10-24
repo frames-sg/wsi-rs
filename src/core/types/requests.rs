@@ -74,6 +74,18 @@ impl RegionRequest {
         self.plane = plane.into();
         self
     }
+
+    /// The source tile at (`col`, `row`) of this request's level and plane.
+    pub(crate) fn tile_at(&self, col: i64, row: i64) -> TileRequest {
+        TileRequest {
+            scene: self.scene,
+            series: self.series,
+            level: self.level,
+            plane: self.plane,
+            col,
+            row,
+        }
+    }
 }
 
 /// Builder for [`RegionRequest`].
@@ -294,6 +306,19 @@ impl TileViewRequest {
     pub fn with_plane(mut self, plane: impl Into<PlaneIdx>) -> Self {
         self.plane = plane.into();
         self
+    }
+
+    /// The source tile at this request's column and row, ignoring the
+    /// display tile size.
+    pub(crate) fn source_tile(&self) -> TileRequest {
+        TileRequest {
+            scene: self.scene,
+            series: self.series,
+            level: self.level,
+            plane: self.plane,
+            col: self.col,
+            row: self.row,
+        }
     }
 }
 

@@ -1,7 +1,9 @@
 use std::{env, ffi::OsString, fs, path::Path};
 
+use wsi_rs_test_support::corpus;
+
 use super::process::{
-    ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
+    cargo, ensure_clean_worktree, run_cargo, run_cargo_with_env, run_program, run_program_capture,
 };
 use super::{artifact, coverage};
 
@@ -9,6 +11,8 @@ const PUBLIC_API_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api.txt";
 const PUBLIC_API_CUDA_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-cuda.txt";
 const PUBLIC_API_METAL_SNAPSHOT_PATH: &str = "api/wsi-rs-public-api-metal.txt";
 const PINNED_NIGHTLY_TOOLCHAIN: &str = "nightly-2026-08-13";
+/// Names the shim `tests/hamamatsu_vmu.rs` loads through the OpenSlide ABI.
+const VMU_SHIM_LIBRARY_ENV: &str = "WSI_RS_VMU_SHIM_LIBRARY";
 const FUZZ_TARGETS: [&str; 9] = [
     "open_wsi_bytes",
     "open_jp2k_codestream_bytes",
@@ -31,7 +35,7 @@ pub(super) fn rc_preflight() -> Result<(), String> {
     api_check()?;
     deps()?;
     fuzz_check()?;
-    release_fuzz()?;
+    run_fuzz_campaigns(RELEASE_FUZZ_BUDGET)?;
     feature_check()?;
     validate()?;
     release_test()?;
@@ -66,49 +70,30 @@ pub(super) fn clippy() -> Result<(), String> {
 }
 
 pub(super) fn test() -> Result<(), String> {
-    run_cargo(&["test", "--locked", "--lib", "--tests"])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--lib",
-        "--tests",
-        "--features",
-        "parity-openslide",
-    ])?;
-    if cfg!(target_os = "macos") {
-        run_cargo(&[
-            "test",
-            "--locked",
-            "--lib",
-            "--tests",
-            "--features",
-            "parity-metal",
-        ])?;
-    }
-    Ok(())
+    run_test_matrix(&["test"])
 }
 
 pub(super) fn nextest() -> Result<(), String> {
-    run_cargo(&["nextest", "run", "--locked", "--lib", "--tests"])?;
-    run_cargo(&[
-        "nextest",
-        "run",
-        "--locked",
-        "--lib",
-        "--tests",
-        "--features",
-        "parity-openslide",
-    ])?;
-    if cfg!(target_os = "macos") {
-        run_cargo(&[
-            "nextest",
-            "run",
-            "--locked",
-            "--lib",
-            "--tests",
-            "--features",
-            "parity-metal",
-        ])?;
+    run_test_matrix(&["nextest", "run"])
+}
+
+fn run_test_matrix(runner: &[&str]) -> Result<(), String> {
+    for feature in [
+        None,
+        Some("parity-openslide"),
+        #[cfg(target_os = "macos")]
+        Some("parity-metal"),
+    ] {
+        let mut args = runner.to_vec();
+        args.extend(["--locked", "--lib", "--tests", "-p", "wsi-rs"]);
+        if let Some(feature) = feature {
+            args.extend(["--features", feature]);
+        } else {
+            // Shared corpus and OpenSlide tests belong to their owning crate.
+            // They have no reader feature variants and only need to run once.
+            args.extend(["-p", "wsi-rs-test-support"]);
+        }
+        run_cargo(&args)?;
     }
     Ok(())
 }
@@ -138,91 +123,140 @@ pub(super) fn feature_check() -> Result<(), String> {
     ])
 }
 
-pub(super) fn parity_corpus_test() -> Result<(), String> {
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "argos_huron",
-        "--",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "openslide_parity",
-        "--features",
-        "parity-openslide",
-        "preflight",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "j2k_parity",
-        "j2k_cpu_vs_reference_within_tolerance",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "dicom_parity",
-        "dicom_public_corpus_decodes_with_wsi_rs",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "dicom_parity",
-        "--features",
-        "parity-openslide",
-        "dicom_public_corpus_matches_openslide_within_tolerance",
-        "--",
-        "--exact",
-        "--ignored",
-    ])?;
-    run_cargo(&[
-        "test",
-        "--locked",
-        "--test",
-        "real_wsi_behavior",
-        "--",
-        "--ignored",
-    ])?;
-    for (alias, test) in [
-        (
-            "dicom-jp2k-001",
+/// Runner prefix for corpus runs under `parity-corpus-test`.
+const CARGO_TEST: &[&str] = &["test", "--locked"];
+/// Runner prefix for one instrumented corpus run under `coverage`.
+const COVERAGE_STEP: &[&str] = &[
+    "llvm-cov",
+    "--no-clean",
+    "--lcov",
+    "--output-path",
+    "target/coverage-corpus-step.lcov",
+    "--locked",
+];
+
+/// One corpus-backed ignored-test run. `parity-corpus-test` and the corpus
+/// part of `coverage` both run every selected entry of [`CORPUS_RUNS`].
+struct CorpusRun {
+    target: &'static [&'static str],
+    features: Option<&'static str>,
+    tests: CorpusTests,
+    /// The run is skipped unless one of these aliases is selected. Empty
+    /// means it runs whenever the corpus does.
+    aliases: &'static [&'static str],
+}
+
+enum CorpusTests {
+    /// The ignored test with this exact name.
+    Exact(&'static str),
+    /// Every ignored test in the target.
+    AllIgnored,
+    /// Each ignored test whose name starts with this prefix, one at a time.
+    Prefix(&'static str),
+}
+
+impl CorpusRun {
+    fn is_selected(&self) -> bool {
+        self.aliases.is_empty()
+            || self
+                .aliases
+                .iter()
+                .any(|alias| corpus::alias_selected(alias))
+    }
+}
+
+const VENDOR_REFERENCE_RUN: CorpusRun = CorpusRun {
+    target: &["--test", "vendor_reference"],
+    features: None,
+    tests: CorpusTests::Prefix("vendor_native_pixels_"),
+    aliases: &["olympus-vsi-001", "zeiss-zvi-001"],
+};
+
+const CORPUS_RUNS: &[CorpusRun] = &[
+    CorpusRun {
+        target: &["--test", "argos_huron"],
+        features: None,
+        tests: CorpusTests::Exact(
+            "public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images",
+        ),
+        aliases: &["argos-001", "argos-stacked-001"],
+    },
+    CorpusRun {
+        target: &["--test", "argos_huron"],
+        features: None,
+        tests: CorpusTests::Exact(
+            "public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images",
+        ),
+        aliases: &["huron-jpeg-001", "huron-uncompressed-001"],
+    },
+    CorpusRun {
+        target: &["--test", "openslide_parity"],
+        features: Some("parity-openslide"),
+        tests: CorpusTests::Exact("preflight"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "j2k_parity"],
+        features: None,
+        tests: CorpusTests::Exact("j2k_cpu_vs_reference_within_tolerance"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "dicom_parity"],
+        features: None,
+        tests: CorpusTests::Exact("dicom_public_corpus_decodes_with_wsi_rs"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "dicom_parity"],
+        features: Some("parity-openslide"),
+        tests: CorpusTests::Exact("dicom_public_corpus_matches_openslide_within_tolerance"),
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--test", "real_wsi_behavior"],
+        features: None,
+        tests: CorpusTests::AllIgnored,
+        aliases: &[],
+    },
+    CorpusRun {
+        target: &["--lib"],
+        features: None,
+        tests: CorpusTests::Prefix(
             "opens_public_dicom_folder_and_member_with_matching_levels_when_available",
         ),
-        (
-            "olympus-vsi-001",
-            "opens_olympus_vsi_when_corpus_is_available",
-        ),
-    ] {
-        if corpus_alias_selected(alias) {
-            run_ignored(&["--lib"], test, None, false)?;
-        }
-    }
-    if corpus_alias_selected("olympus-vsi-001") || corpus_alias_selected("zeiss-zvi-001") {
-        conformance_test(vec!["vendor".into()])?;
+        aliases: &["dicom-jp2k-001"],
+    },
+    CorpusRun {
+        target: &["--lib"],
+        features: None,
+        tests: CorpusTests::Prefix("opens_olympus_vsi_when_corpus_is_available"),
+        aliases: &["olympus-vsi-001"],
+    },
+    VENDOR_REFERENCE_RUN,
+];
+
+pub(super) fn parity_corpus_test() -> Result<(), String> {
+    run_selected_corpus(CARGO_TEST)
+}
+
+fn run_selected_corpus(runner: &[&str]) -> Result<(), String> {
+    for run in CORPUS_RUNS.iter().filter(|run| run.is_selected()) {
+        run_corpus(run, runner)?;
     }
     Ok(())
 }
 
-fn corpus_alias_selected(alias: &str) -> bool {
-    env::var("WSI_RS_PARITY_ALIASES").map_or(true, |aliases| {
-        aliases.split(',').any(|value| value.trim() == alias)
-    })
+fn run_corpus(run: &CorpusRun, runner: &[&str]) -> Result<(), String> {
+    let mut args = test_command(runner, run.target, run.features, false);
+    match run.tests {
+        CorpusTests::Prefix(prefix) => {
+            return run_ignored_with(runner, run.target, prefix, run.features, false, &[])
+        }
+        CorpusTests::Exact(name) => args.extend(["--", name, "--exact", "--ignored"]),
+        CorpusTests::AllIgnored => args.extend(["--", "--ignored"]),
+    }
+    run_cargo(&args)
 }
 
 /// Explicit lanes for fixtures and hardware excluded from quick correctness runs.
@@ -235,24 +269,27 @@ pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
             run_ignored(&["--lib"], "uncompressed_sentinel_", None, false)?;
             run_ignored(&["--test", "zeiss_czi"], "real_jpegxr_czi_", None, false)
         }
-        "vendor" => run_ignored(
-            &["--test", "vendor_reference"],
-            "vendor_native_pixels_",
-            None,
-            false,
-        ),
+        "vendor" => run_corpus(&VENDOR_REFERENCE_RUN, CARGO_TEST),
         "zvi-variants" => run_ignored(
             &["--test", "zeiss_zvi"],
             "builtin_registry_opens_zeiss_zvi_",
             None,
             false,
         ),
-        "vmu" => run_ignored(
-            &["--test", "hamamatsu_vmu"],
-            "vmu_",
-            Some("parity-openslide"),
-            false,
-        ),
+        "vmu" => {
+            let shim = super::perf::build_release_shim()?;
+            let shim = shim
+                .to_str()
+                .ok_or_else(|| format!("shim path is not UTF-8: {}", shim.display()))?;
+            run_ignored_with(
+                CARGO_TEST,
+                &["--test", "hamamatsu_vmu"],
+                "vmu_",
+                Some("parity-openslide"),
+                false,
+                &[(VMU_SHIM_LIBRARY_ENV, shim)],
+            )
+        }
         "openslide" => {
             run_ignored(
                 &["--test", "openslide_compare"],
@@ -345,26 +382,45 @@ fn run_ignored(
     features: Option<&str>,
     release: bool,
 ) -> Result<(), String> {
+    run_ignored_with(CARGO_TEST, target, filter, features, release, &[])
+}
+
+/// `runner`, a cargo subcommand with its options, followed by the test
+/// target selection.
+fn test_command<'a>(
+    runner: &[&'a str],
+    target: &[&'a str],
+    features: Option<&'a str>,
+    release: bool,
+) -> Vec<&'a str> {
+    let mut command = runner.to_vec();
+    command.extend_from_slice(target);
+    if let Some(features) = features {
+        command.extend(["--features", features]);
+    }
+    if release {
+        command.push("--release");
+    }
+    command
+}
+
+fn run_ignored_with(
+    runner: &[&str],
+    target: &[&str],
+    filter: &str,
+    features: Option<&str>,
+    release: bool,
+    envs: &[(&str, &str)],
+) -> Result<(), String> {
     if features.is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
         && !cfg!(target_os = "macos")
     {
         return Err("this lane requires a macOS Metal runtime".into());
     }
-    let mut base = vec!["test", "--locked"];
-    base.extend_from_slice(target);
-    if let Some(features) = features {
-        base.extend(["--features", features]);
-    }
-    if release {
-        base.push("--release");
-    }
+    let base = test_command(runner, target, features, release);
     let mut list = base.clone();
     list.extend(["--", "--ignored", "--list"]);
-    let output = run_program_capture(
-        env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
-        &list,
-        &[],
-    )?;
+    let output = run_program_capture(cargo(), &list, envs)?;
     let names: Vec<_> = output
         .lines()
         .filter_map(|line| line.strip_suffix(": test"))
@@ -378,7 +434,7 @@ fn run_ignored(
     for name in names {
         let mut args = base.clone();
         args.extend(["--", name, "--exact", "--ignored", "--test-threads=1"]);
-        run_cargo(&args)?;
+        run_cargo_with_env(&args, envs)?;
     }
     Ok(())
 }
@@ -487,37 +543,87 @@ pub(super) fn fuzz_check() -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn release_fuzz() -> Result<(), String> {
+/// How long each fuzz target runs, and how long one input may take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FuzzBudget {
+    seconds: u64,
+    timeout_seconds: u64,
+}
+
+/// The release preflight's campaign, and `release-fuzz`'s default.
+const RELEASE_FUZZ_BUDGET: FuzzBudget = FuzzBudget {
+    seconds: 300,
+    timeout_seconds: 10,
+};
+
+const RELEASE_FUZZ_USAGE: &str = "usage: cargo xtask release-fuzz [--seconds N] [--timeout N]";
+
+pub(super) fn release_fuzz(arguments: Vec<String>) -> Result<(), String> {
+    run_fuzz_campaigns(parse_fuzz_budget(&arguments)?)
+}
+
+fn parse_fuzz_budget(arguments: &[String]) -> Result<FuzzBudget, String> {
+    let mut budget = RELEASE_FUZZ_BUDGET;
+    let mut arguments = arguments.iter();
+    while let Some(flag) = arguments.next() {
+        let field = match flag.as_str() {
+            "--seconds" => &mut budget.seconds,
+            "--timeout" => &mut budget.timeout_seconds,
+            _ => return Err(format!("{RELEASE_FUZZ_USAGE}; unknown argument {flag:?}")),
+        };
+        *field = arguments
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                format!("{RELEASE_FUZZ_USAGE}; {flag} takes a positive number of seconds")
+            })?;
+    }
+    Ok(budget)
+}
+
+fn run_fuzz_campaigns(budget: FuzzBudget) -> Result<(), String> {
     for target in FUZZ_TARGETS {
         let corpus = format!("fuzz/corpus/{target}");
         fs::create_dir_all(&corpus)
             .map_err(|error| format!("create release fuzz corpus {corpus}: {error}"))?;
         let seed = format!("fuzz/seeds/{target}");
-        let mut owned_args = vec![
-            "run".to_string(),
-            PINNED_NIGHTLY_TOOLCHAIN.to_string(),
-            "cargo".to_string(),
-            "fuzz".to_string(),
-            "run".to_string(),
-            "--sanitizer".to_string(),
-            "address".to_string(),
-            target.to_string(),
-            corpus,
-        ];
-        if Path::new(&seed).is_dir() {
-            owned_args.push(seed);
-        }
-        owned_args.extend([
-            "--".to_string(),
-            "-max_total_time=300".to_string(),
-            "-timeout=10".to_string(),
-            "-rss_limit_mb=2048".to_string(),
-        ]);
+        let seed = Path::new(&seed).is_dir().then_some(seed);
+        let owned_args = fuzz_run_args(target, corpus, seed, budget);
         let args = owned_args.iter().map(String::as_str).collect::<Vec<_>>();
         run_program(OsString::from("rustup"), &args, &[])
             .map_err(|error| format!("release fuzz campaign failed for {target}: {error}"))?;
     }
     Ok(())
+}
+
+fn fuzz_run_args(
+    target: &str,
+    corpus: String,
+    seed: Option<String>,
+    budget: FuzzBudget,
+) -> Vec<String> {
+    let mut args = [
+        "run",
+        PINNED_NIGHTLY_TOOLCHAIN,
+        "cargo",
+        "fuzz",
+        "run",
+        "--sanitizer",
+        "address",
+        target,
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(corpus);
+    args.extend(seed);
+    args.extend([
+        "--".to_string(),
+        format!("-max_total_time={}", budget.seconds),
+        format!("-timeout={}", budget.timeout_seconds),
+        "-rss_limit_mb=2048".to_string(),
+    ]);
+    args
 }
 
 fn performance_preflight() -> Result<(), String> {
@@ -637,9 +743,7 @@ const COVERAGE_REPORT_ARGS: &[&str] = &[
 ];
 
 pub(super) fn coverage() -> Result<(), String> {
-    coverage_with_corpus(
-        std::env::var("WSI_RS_PARITY_ALIASES").is_ok_and(|aliases| !aliases.trim().is_empty()),
-    )
+    coverage_with_corpus(corpus::selected_aliases().is_some())
 }
 
 fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {
@@ -648,58 +752,7 @@ fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {
     run_cargo(COVERAGE_BASE_ARGS)?;
 
     if include_corpus {
-        let report = [
-            "--no-clean",
-            "--lcov",
-            "--output-path",
-            "target/coverage-corpus-step.lcov",
-            "--locked",
-        ];
-        let corpus_runs: &[&[&str]] = &[
-            &[
-                "--test",
-                "openslide_parity",
-                "--features",
-                "parity-openslide",
-                "--",
-                "preflight",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "j2k_parity",
-                "--",
-                "j2k_cpu_vs_reference_within_tolerance",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "dicom_parity",
-                "--",
-                "dicom_public_corpus_decodes_with_wsi_rs",
-                "--exact",
-                "--ignored",
-            ],
-            &[
-                "--test",
-                "dicom_parity",
-                "--features",
-                "parity-openslide",
-                "--",
-                "dicom_public_corpus_matches_openslide_within_tolerance",
-                "--exact",
-                "--ignored",
-            ],
-            &["--test", "real_wsi_behavior", "--", "--ignored"],
-        ];
-        for run in corpus_runs {
-            let mut args = vec!["llvm-cov"];
-            args.extend(report);
-            args.extend(*run);
-            run_cargo(&args)?;
-        }
+        run_selected_corpus(COVERAGE_STEP)?;
         run_cargo(COVERAGE_REPORT_ARGS)?;
     }
 

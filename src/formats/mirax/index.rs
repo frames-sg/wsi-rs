@@ -27,19 +27,25 @@ impl<'a> MiraxIndexBudget<'a> {
 
     fn record_page(&mut self, path: &Path, offset: u64, records: i32) -> Result<usize, WsiError> {
         if !self.visited_pages.insert(offset) {
-            return Err(invalid_slide(path, "MIRAX index page cycle detected"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "MIRAX index page cycle detected",
+            ));
         }
         self.total_pages = self
             .total_pages
             .checked_add(1)
-            .ok_or_else(|| invalid_slide(path, "MIRAX index page count overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX index page count overflow"))?;
         if self.total_pages > MAX_MIRAX_INDEX_PAGES {
-            return Err(invalid_slide(path, "MIRAX index has too many pages"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "MIRAX index has too many pages",
+            ));
         }
         let records = usize::try_from(records)
-            .map_err(|_| invalid_slide(path, "negative MIRAX page length"))?;
+            .map_err(|_| WsiError::invalid_slide(path, "negative MIRAX page length"))?;
         if records > MAX_MIRAX_RECORDS_PER_PAGE {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 "MIRAX index page record count exceeds safety limit",
             ));
@@ -47,14 +53,19 @@ impl<'a> MiraxIndexBudget<'a> {
         self.total_records = self
             .total_records
             .checked_add(records)
-            .ok_or_else(|| invalid_slide(path, "MIRAX index record count overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX index record count overflow"))?;
         if self.total_records > MAX_MIRAX_RECORDS {
-            return Err(invalid_slide(path, "MIRAX index has too many records"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "MIRAX index has too many records",
+            ));
         }
         let retained = u64::try_from(records)
-            .map_err(|_| invalid_slide(path, "MIRAX index record count is not addressable"))?
+            .map_err(|_| {
+                WsiError::invalid_slide(path, "MIRAX index record count is not addressable")
+            })?
             .checked_mul(64)
-            .ok_or_else(|| invalid_slide(path, "MIRAX index byte count overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX index byte count overflow"))?;
         self.open_budget.retain_index(retained)?;
         Ok(records)
     }
@@ -67,7 +78,7 @@ pub(super) fn parse_mirax_ini_with_budget(
     let mut parsed = parse_ini_file_with_budget(
         path,
         SLIDEDAT_MAX_SIZE.max(KEY_FILE_MAX_SIZE),
-        |path| invalid_slide(path, "MIRAX key file too large"),
+        |path| WsiError::invalid_slide(path, "MIRAX key file too large"),
         true,
         budget,
     )?;
@@ -135,19 +146,13 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
 
         index_file
             .seek(SeekFrom::Start(seek_location))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: index_path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(index_path, source))?;
         let ptr = read_u32_le(index_file, index_path)? as u64;
         index_file
             .seek(SeekFrom::Start(ptr))
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: index_path.to_path_buf(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(index_path, source))?;
         if read_u32_le(index_file, index_path)? != 0 {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("expected initial zero for MIRAX zoom level {zoom_level}"),
             ));
@@ -158,10 +163,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
         loop {
             index_file
                 .seek(SeekFrom::Start(data_page))
-                .map_err(|source| WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: index_path.to_path_buf(),
-                })?;
+                .map_err(|source| WsiError::io_with_path(index_path, source))?;
             let page_len = read_i32_le(index_file, index_path)?;
             let page_len = budget.record_page(path, data_page, page_len)?;
             let next_ptr = read_i32_le(index_file, index_path)?;
@@ -171,13 +173,16 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                 let length = read_i32_le(index_file, index_path)?;
                 let fileno = read_i32_le(index_file, index_path)?;
                 if image_index < 0 || offset < 0 || length < 0 || fileno < 0 {
-                    return Err(invalid_slide(path, "negative MIRAX hier record component"));
+                    return Err(WsiError::invalid_slide(
+                        path,
+                        "negative MIRAX hier record component",
+                    ));
                 }
                 let fileno = fileno as usize;
                 let x = image_index as u32 % images_x;
                 let y = image_index as u32 / images_x;
                 if y >= images_y {
-                    return Err(invalid_slide(
+                    return Err(WsiError::invalid_slide(
                         path,
                         format!("MIRAX image row {y} outside zoom level {zoom_level}"),
                     ));
@@ -185,7 +190,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                 if !x.is_multiple_of(params_level.image_concat)
                     || !y.is_multiple_of(params_level.image_concat)
                 {
-                    return Err(invalid_slide(
+                    return Err(WsiError::invalid_slide(
                         path,
                         format!("MIRAX image coordinates ({x},{y}) not aligned for zoom level {zoom_level}"),
                     ));
@@ -193,7 +198,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                 let datafile_path = datafile_paths
                     .get(fileno)
                     .ok_or_else(|| {
-                        invalid_slide(path, format!("invalid MIRAX data file {fileno}"))
+                        WsiError::invalid_slide(path, format!("invalid MIRAX data file {fileno}"))
                     })?
                     .clone();
                 if zoom_level == levels_len - 1 {
@@ -220,7 +225,7 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                 });
                 image_number = image_number
                     .checked_add(1)
-                    .ok_or_else(|| invalid_slide(path, "MIRAX image number overflow"))?;
+                    .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX image number overflow"))?;
 
                 for yi in 0..params_level.tiles_per_image {
                     let yy = y + yi * image_divisions;
@@ -271,14 +276,17 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
                 break;
             }
             if next_ptr < 0 {
-                return Err(invalid_slide(path, "negative MIRAX next page pointer"));
+                return Err(WsiError::invalid_slide(
+                    path,
+                    "negative MIRAX next page pointer",
+                ));
             }
             data_page = next_ptr as u64;
         }
 
         seek_location = seek_location
             .checked_add(4)
-            .ok_or_else(|| invalid_slide(path, "MIRAX hierarchy seek offset overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "MIRAX hierarchy seek offset overflow"))?;
     }
 
     Ok(())
@@ -372,20 +380,23 @@ pub(super) fn load_slide_positions(
     let positions_x = images_x / image_divisions;
     let positions_y = images_y / image_divisions;
     if positions_x == 0 || positions_y == 0 {
-        return Err(invalid_slide(path, "MIRAX position grid is empty"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "MIRAX position grid is empty",
+        ));
     }
     let npositions = checked_product_to_usize(
         &[u64::from(positions_x), u64::from(positions_y)],
         MAX_MIRAX_RECORDS as u64,
         "MIRAX position count",
     )
-    .map_err(|message| invalid_slide(path, message))?;
+    .map_err(|message| WsiError::invalid_slide(path, message))?;
     let expected_size = checked_product_to_usize(
         &[npositions as u64, SLIDE_POSITION_RECORD_SIZE as u64],
         MAX_DECODED_IMAGE_BYTES,
         "MIRAX position buffer",
     )
-    .map_err(|message| invalid_slide(path, message))?;
+    .map_err(|message| WsiError::invalid_slide(path, message))?;
     let nonhier_root = (INDEX_VERSION.len() + slide_id_len + 4) as u64;
 
     if let Some(record) = vimslide_record.or(stitching_record) {
@@ -394,7 +405,7 @@ pub(super) fn load_slide_positions(
         if stitching_record == Some(record.index) {
             let inflated = crate::core::compression::decode_zlib_bounded(&buffer, expected_size)
                 .map_err(|err| {
-                    invalid_slide(
+                    WsiError::invalid_slide(
                         path,
                         format!("failed to inflate MIRAX position buffer: {err}"),
                     )
@@ -402,7 +413,7 @@ pub(super) fn load_slide_positions(
             buffer = inflated;
         }
         if buffer.len() != expected_size {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "unexpected MIRAX position buffer size {} (expected {expected_size})",
@@ -435,14 +446,17 @@ pub(super) fn read_slide_position_buffer(
     level0_image_concat: u32,
 ) -> Result<Vec<i32>, WsiError> {
     if !buffer.len().is_multiple_of(SLIDE_POSITION_RECORD_SIZE) {
-        return Err(invalid_slide(path, "unexpected MIRAX position buffer size"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "unexpected MIRAX position buffer size",
+        ));
     }
     let mut positions = Vec::with_capacity(buffer.len() / SLIDE_POSITION_RECORD_SIZE * 2);
     let mut cursor = 0usize;
     while cursor < buffer.len() {
         let flag = buffer[cursor];
         if flag & 0xfe != 0 {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("unexpected MIRAX position flag {flag}"),
             ));
@@ -552,30 +566,24 @@ fn read_nonhier_record(
     record_index: i32,
 ) -> Result<MiraxNonHierRecord, WsiError> {
     if record_index < 0 {
-        return Err(invalid_slide(path, "negative MIRAX nonhier record"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "negative MIRAX nonhier record",
+        ));
     }
     index_file
         .seek(SeekFrom::Start(nonhier_root))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let table_base = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(table_base + 4 * record_index as u64))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let list_head = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(list_head))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     if read_u32_le(index_file, path)? != 0 {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "expected zero at beginning of MIRAX data page",
         ));
@@ -583,27 +591,33 @@ fn read_nonhier_record(
     let page_ptr = read_u32_le(index_file, path)? as u64;
     index_file
         .seek(SeekFrom::Start(page_ptr))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let page_len = read_i32_le(index_file, path)?;
     if page_len < 1 {
-        return Err(invalid_slide(path, "expected at least one MIRAX data item"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "expected at least one MIRAX data item",
+        ));
     }
     let _next = read_i32_le(index_file, path)?;
     if read_i32_le(index_file, path)? != 0 || read_i32_le(index_file, path)? != 0 {
-        return Err(invalid_slide(path, "unexpected MIRAX data page header"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "unexpected MIRAX data page header",
+        ));
     }
     let offset = read_i32_le(index_file, path)?;
     let len = read_i32_le(index_file, path)?;
     let fileno = read_i32_le(index_file, path)?;
     if offset < 0 || len < 0 || fileno < 0 {
-        return Err(invalid_slide(path, "negative MIRAX nonhier record payload"));
+        return Err(WsiError::invalid_slide(
+            path,
+            "negative MIRAX nonhier record payload",
+        ));
     }
-    let datafile = datafile_paths
-        .get(fileno as usize)
-        .ok_or_else(|| invalid_slide(path, format!("invalid MIRAX data file {fileno}")))?;
+    let datafile = datafile_paths.get(fileno as usize).ok_or_else(|| {
+        WsiError::invalid_slide(path, format!("invalid MIRAX data file {fileno}"))
+    })?;
     Ok(MiraxNonHierRecord {
         index: record_index,
         path: datafile.clone(),
@@ -619,20 +633,17 @@ pub(super) fn verify_index_header(
 ) -> Result<(), WsiError> {
     index_file
         .seek(SeekFrom::Start(0))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let version = read_exact_string(index_file, path, INDEX_VERSION.len())?;
     if version != INDEX_VERSION {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "Index.dat does not have expected version",
         ));
     }
     let found_uuid = read_exact_string(index_file, path, slide_id.len())?;
     if found_uuid != slide_id {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             "Index.dat does not have matching slide identifier",
         ));
@@ -654,13 +665,12 @@ pub(super) fn get_associated_image_nonhier_offset(
     else {
         return Ok(None);
     };
-    let group = ini
-        .groups
-        .get(&section_name)
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX section {section_name}")))?;
+    let group = ini.groups.get(&section_name).ok_or_else(|| {
+        WsiError::invalid_slide(path, format!("missing MIRAX section {section_name}"))
+    })?;
     let format = required_ini_string(path, group, target_format_key)?;
     if parse_image_format(format.as_str())? != MiraxImageFormat::Jpeg {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("unsupported MIRAX associated image format {format}"),
         ));
@@ -697,7 +707,7 @@ pub(super) fn get_nonhier_val_offset(
     let group_map = ini
         .groups
         .get(group)
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX group {group}")))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX group {group}")))?;
     for i in 0..name_count {
         let value = required_ini_string(
             path,
@@ -727,13 +737,13 @@ pub(super) fn get_nonhier_name_offset_helper(
     let group_map = ini
         .groups
         .get(group)
-        .ok_or_else(|| invalid_slide(path, format!("missing MIRAX group {group}")))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, format!("missing MIRAX group {group}")))?;
     let mut offset = 0;
     for i in 0..nonhier_count {
         let name = required_ini_string(path, group_map, &fmt_key(KEY_NONHIER_NAME, i))?;
         let count = parse_ini_i32(path, group_map, &fmt_key(KEY_NONHIER_COUNT_FMT, i))?;
         if count <= 0 {
-            return Err(invalid_slide(path, "MIRAX nonhier count is zero"));
+            return Err(WsiError::invalid_slide(path, "MIRAX nonhier count is zero"));
         }
         if name == target_name {
             return Ok(Some((offset, count, i)));

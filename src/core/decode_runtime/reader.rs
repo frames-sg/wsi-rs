@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::read_control::check_cancelled_opt;
 
 impl AdaptiveDecodeReader {
     pub(crate) fn new_managed(
@@ -14,7 +15,7 @@ impl AdaptiveDecodeReader {
         control: Option<&crate::ReadControl>,
         context: Option<&crate::core::limits::ReadExecutionContext<'_>>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         let _ = context;
         if reqs.is_empty() || self.runtime.options.acceleration == DecodeAcceleration::CpuOnly {
             return self.read_inner_cpu(reqs, control);
@@ -29,16 +30,12 @@ impl AdaptiveDecodeReader {
         }
     }
 
-    pub(super) fn check_control(control: Option<&crate::ReadControl>) -> Result<(), WsiError> {
-        control.map_or(Ok(()), crate::ReadControl::check_cancelled)
-    }
-
     pub(super) fn read_inner_cpu(
         &self,
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         let operation = || match control {
             Some(control) => self.inner.read_tiles_cpu_controlled(reqs, control),
             None => self.inner.read_tiles_cpu(reqs),
@@ -46,14 +43,15 @@ impl AdaptiveDecodeReader {
         let result = if batch_uses_jp2k(self.inner.as_ref(), reqs) {
             self.inner
                 .read_tiles_cpu_fastpath(reqs, control)
-                .unwrap_or_else(|| self.runtime.install_jp2k_cpu(operation))
+                .unwrap_or_else(|| self.runtime.install_codec_cpu(operation))
         } else if rayon::current_thread_index().is_some() {
-            // JPEG and JPEG XR batches fan out on the invoking pool too.
-            super::run_codec_work_on_worker(operation)
+            // Other batches, such as JPEG, fan out on the invoking pool too.
+            // JPEG XR decodes also dispatch through the codec pool themselves.
+            crate::core::batch::run_codec_work_on_worker(operation)
         } else {
             operation()
         };
-        Self::check_control(control)?;
+        check_cancelled_opt(control)?;
         result.and_then(|tiles| {
             crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive CPU tile batch")
         })
@@ -61,33 +59,7 @@ impl AdaptiveDecodeReader {
 }
 
 impl SlideReader for AdaptiveDecodeReader {
-    fn dataset(&self) -> &Dataset {
-        self.inner.dataset()
-    }
-
-    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        self.inner.tile_codec_kind(req)
-    }
-
-    fn level_source_kind(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-    ) -> Result<crate::core::types::LevelSourceKind, WsiError> {
-        self.inner.level_source_kind(scene, series, level)
-    }
-
-    fn prepare_level_controlled(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-        control: &crate::ReadControl,
-    ) -> Result<(), WsiError> {
-        self.inner
-            .prepare_level_controlled(scene, series, level, control)
-    }
+    crate::core::registry::forward_slide_reader_methods!(inner);
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         crate::core::batch::exactly_one(
@@ -108,42 +80,6 @@ impl SlideReader for AdaptiveDecodeReader {
         self.read_tiles_adaptive(reqs, Some(control), None)
     }
 
-    #[cfg(feature = "metal")]
-    fn read_tiles_metal(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::metal::MetalBackendSessions,
-    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        self.inner.read_tiles_metal(reqs, session)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn read_tiles_cuda(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::cuda::CudaBackendSessions,
-    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        self.inner.read_tiles_cuda(reqs, session)
-    }
-
-    fn read_raw_compressed_tile(
-        &self,
-        req: &TileRequest,
-    ) -> Result<crate::core::types::RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_tile(req)
-    }
-
-    fn read_raw_compressed_display_tile(
-        &self,
-        req: &crate::core::types::TileViewRequest,
-    ) -> Result<crate::core::types::RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_display_tile(req)
-    }
-
-    fn use_display_tile_cache(&self, req: &crate::core::types::TileViewRequest) -> bool {
-        self.inner.use_display_tile_cache(req)
-    }
-
     fn read_region_fastpath(
         &self,
         ctx: &mut crate::core::registry::SlideReadContext<'_>,
@@ -154,7 +90,7 @@ impl SlideReader for AdaptiveDecodeReader {
 
     fn read_region(&self, req: &crate::core::types::RegionRequest) -> Result<CpuTile, WsiError> {
         self.runtime
-            .install_jp2k_cpu(|| self.inner.read_region(req))
+            .install_codec_cpu(|| self.inner.read_region(req))
     }
 
     fn read_display_tile(
@@ -162,31 +98,7 @@ impl SlideReader for AdaptiveDecodeReader {
         req: &crate::core::types::TileViewRequest,
     ) -> Result<CpuTile, WsiError> {
         self.runtime
-            .install_jp2k_cpu(|| self.inner.read_display_tile(req))
-    }
-
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        self.inner.read_associated(name)
-    }
-
-    fn associated_encoding(
-        &self,
-        name: &str,
-    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
-        self.inner.associated_encoding(name)
-    }
-
-    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
-        self.inner.tile_is_present(req)
-    }
-
-    fn level_encoding(
-        &self,
-        scene: crate::core::types::SceneId,
-        series: crate::core::types::SeriesId,
-        level: crate::core::types::LevelIdx,
-    ) -> Result<Option<crate::core::types::SourceEncoding>, WsiError> {
-        self.inner.level_encoding(scene, series, level)
+            .install_codec_cpu(|| self.inner.read_display_tile(req))
     }
 }
 
@@ -273,12 +185,9 @@ pub(super) fn route_key_for_batch(
     {
         return None;
     }
-    let level = dataset_level(
-        reader.dataset(),
-        first.scene.get(),
-        first.series.get(),
-        first.level.get(),
-    )?;
+    let level = reader
+        .dataset()
+        .find_level(first.scene, first.series, first.level)?;
     let dimensions = reqs
         .iter()
         .map(|request| logical_tile_dimensions(level, request))
@@ -293,24 +202,8 @@ pub(super) fn route_key_for_batch(
         codec_kind,
         device_identity: device_identity.to_owned(),
         sample_tile_count: reqs.len(),
-        cpu_workers: DecodeRuntime::default_arc().cpu_worker_count(),
+        cpu_workers: crate::core::batch::cpu_worker_count(),
     })
-}
-
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
-pub(super) fn dataset_level(
-    dataset: &Dataset,
-    scene: usize,
-    series: usize,
-    level: u32,
-) -> Option<&Level> {
-    dataset
-        .scenes
-        .get(scene)?
-        .series
-        .get(series)?
-        .levels
-        .get(level as usize)
 }
 
 #[cfg(any(test, feature = "metal", feature = "cuda"))]

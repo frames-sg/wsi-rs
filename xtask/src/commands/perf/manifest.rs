@@ -2,20 +2,22 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use wsi_rs_test_support::corpus::{
-    self, CorpusEntry as ManifestSlide, CorpusManifest as ParityManifest,
+    self, CorpusEntry as ManifestSlide, CorpusManifest as ParityManifest, Tolerance,
 };
 
-use super::worker::workspace_root;
+use crate::commands::process::workspace_root;
 
 const MANIFEST_ENV: &str = "WSI_RS_PERF_MANIFEST";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct SlideSpec {
     pub(super) path: PathBuf,
     pub(super) alias: String,
     pub(super) format: String,
     pub(super) benchmark_group: String,
     pub(super) manifest_sha256: Option<String>,
+    /// The corpus entry's parity tolerance; `None` for a slide outside the manifest.
+    pub(super) pixel_tolerance: Option<Tolerance>,
 }
 
 impl SlideSpec {
@@ -31,6 +33,7 @@ impl SlideSpec {
             format: "custom".into(),
             benchmark_group: "custom".into(),
             manifest_sha256: None,
+            pixel_tolerance: None,
         }
     }
 }
@@ -46,11 +49,6 @@ pub(super) fn load_manifest() -> Result<ParityManifest, String> {
             1,
         )
     })
-}
-
-#[cfg(test)]
-fn parse_manifest(text: &str) -> Result<ParityManifest, String> {
-    corpus::parse_manifest(text)
 }
 
 pub(super) fn resolve_manifest_slides(
@@ -147,45 +145,19 @@ fn slide_spec(entry: &ManifestSlide, path: PathBuf) -> Result<SlideSpec, String>
         path,
         alias: entry.alias.clone(),
         format: entry.format.clone(),
-        benchmark_group: benchmark_group(entry),
+        benchmark_group: entry.benchmark_group(),
         manifest_sha256: (!entry.sha256.is_empty()).then(|| entry.sha256.clone()),
+        pixel_tolerance: Some(entry.pixel_tolerance()),
     })
 }
 
+/// Performance manifests may omit a slide's SHA-256; a declared one must match.
 fn validate_manifest_sha256(entry: &ManifestSlide, slide_path: &Path) -> Result<(), String> {
     if entry.sha256.is_empty() {
         return Ok(());
     }
-    let source_path = if entry
-        .url
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
-    {
-        corpus::source_archive_path(entry).ok_or_else(|| {
-            format!(
-                "manifest source archive for {:?} is missing; cannot verify SHA-256",
-                entry.alias
-            )
-        })?
-    } else {
-        slide_path.to_path_buf()
-    };
-    let actual = wsi_rs_perf::sha256_file(&source_path)?;
-    if actual.eq_ignore_ascii_case(&entry.sha256) {
-        Ok(())
-    } else {
-        Err(format!(
-            "manifest SHA-256 mismatch for {:?} at {}: expected {}, found {actual}",
-            entry.alias,
-            source_path.display(),
-            entry.sha256
-        ))
-    }
-}
-
-fn benchmark_group(entry: &ManifestSlide) -> String {
-    entry.benchmark_group()
+    corpus::verify_entry_sha256(entry, slide_path)
+        .map_err(|error| format!("performance manifest: {error}"))
 }
 
 fn resolve_entry_path(entry: &ManifestSlide) -> Result<PathBuf, String> {
@@ -197,26 +169,6 @@ fn resolve_entry_path(entry: &ManifestSlide) -> Result<PathBuf, String> {
             corpus::corpus_cache_dir().display()
         )
     })
-}
-
-#[cfg(test)]
-fn cache_candidates(entry: &ManifestSlide) -> Vec<PathBuf> {
-    corpus::cache_candidates(entry)
-}
-
-#[cfg(test)]
-fn resolve_candidate(entry: &ManifestSlide, candidate: &Path) -> Option<PathBuf> {
-    corpus::resolve_candidate(entry, candidate)
-}
-
-#[cfg(test)]
-fn find_file_with_extension(root: &Path, extension: &str) -> Option<PathBuf> {
-    corpus::find_file_with_extension(root, extension)
-}
-
-#[cfg(test)]
-fn format_default_extension(format: &str) -> Option<&'static str> {
-    corpus::format_default_extension(format)
 }
 
 fn default_manifest_path() -> PathBuf {

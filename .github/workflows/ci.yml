@@ -122,13 +122,7 @@ jobs:
         working-directory: wsi-rs
       - name: Run bounded fuzz campaigns
         working-directory: wsi-rs
-        run: |
-          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes open_vms_bundle_bytes open_vsi_bundle_bytes; do
-            mkdir -p "fuzz/corpus/$target"
-            inputs=("fuzz/corpus/$target")
-            if [[ -d "fuzz/seeds/$target" ]]; then inputs+=("fuzz/seeds/$target"); fi
-            cargo +nightly-2026-08-13 fuzz run "$target" "${inputs[@]}" -- -max_total_time=15 -timeout=5 -rss_limit_mb=2048
-          done
+        run: cargo xtask release-fuzz --seconds 15 --timeout 5
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
         with:

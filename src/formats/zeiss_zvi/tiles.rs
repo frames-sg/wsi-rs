@@ -146,13 +146,13 @@ impl ZviSlide {
                 source: Box::new(error),
             })?;
         if decompressed.len() != expected_len {
-            return Err(WsiError::InvalidSlide {
-                path: PathBuf::from(&plane.stream_path),
-                message: format!(
+            return Err(WsiError::invalid_slide(
+                Path::new(&plane.stream_path),
+                format!(
                     "ZVI inflated plane has {} bytes, expected {expected_len}",
                     decompressed.len()
                 ),
-            });
+            ));
         }
         crop_decoded_zvi_plane(plane, &decompressed, x, y, w, h)
     }
@@ -167,15 +167,11 @@ impl ZviSlide {
     ) -> Result<CpuTile, WsiError> {
         let jpeg = self.read_plane_payload(plane)?;
         let decoded = crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: std::borrow::Cow::Borrowed(jpeg.as_slice()),
-                tables: None,
-                expected_width: plane.width,
-                expected_height: plane.height,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
+            decode_batch_jpeg(&[JpegDecodeJob::with_expected(
+                &jpeg,
+                plane.width,
+                plane.height,
+            )]),
             "ZVI JPEG decode",
         )??;
         crop_interleaved_tile(&decoded, x, y, w, h)

@@ -4,7 +4,11 @@ use std::{collections::BTreeSet, path::Path, time::Instant};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use wsi_rs::{CacheConfig, Slide, SlideOpenOptions, TileRequest};
+use wsi_rs::{Slide, SlideOpenOptions, TileRequest};
+
+#[allow(dead_code)]
+#[path = "support/bench.rs"]
+mod bench;
 
 fn requests(path: &Path) -> (Vec<TileRequest>, Vec<TileRequest>, Vec<TileRequest>) {
     let source = czi_rs::CziFile::open(path).unwrap();
@@ -66,21 +70,8 @@ fn czi_reader_workloads() {
     let path = Path::new(&path);
     let (pan, random, batch) = requests(path);
     let mut results = Vec::new();
-    for (profile, cache) in [
-        ("default", CacheConfig::default()),
-        (
-            "disabled",
-            CacheConfig::default()
-                .with_shared_tile_bytes(0)
-                .with_display_tile_bytes(0),
-        ),
-        (
-            "small",
-            CacheConfig::default()
-                .with_shared_tile_bytes(1024 * 1024)
-                .with_display_tile_bytes(0),
-        ),
-    ] {
+    for profile in bench::CACHE_PROFILES {
+        let cache = bench::cache_profile(profile);
         for (name, reqs, batched) in [
             ("pan_l0", &pan, false),
             ("random_l0", &random, false),
@@ -113,17 +104,11 @@ fn czi_reader_workloads() {
                             .collect()
                     };
                     assert_eq!(tiles.len(), reqs.len());
-                    let mut digest = Sha256::new();
-                    let mut nonzero = false;
-                    for tile in &tiles {
-                        let bytes = tile.data().as_u8().unwrap();
-                        nonzero |= bytes.iter().any(|&b| b != 0);
-                        digest.update(tile.width().to_le_bytes());
-                        digest.update(tile.height().to_le_bytes());
-                        digest.update(bytes);
-                    }
+                    let nonzero = tiles
+                        .iter()
+                        .any(|tile| tile.data().as_u8().unwrap().iter().any(|&b| b != 0));
                     assert!(nonzero, "benchmark must sample tissue");
-                    let checksum = format!("{:x}", digest.finalize());
+                    let checksum = bench::tile_checksum(&tiles);
                     assert_eq!(expected.get_or_insert_with(|| checksum.clone()), &checksum);
                     results.push(json!({"cache": profile, "workload": name, "phase": phase, "repeat": repeat,
                         "open_us": open_us, "requests": reqs.len(), "latencies_us": latencies, "checksum": checksum}));

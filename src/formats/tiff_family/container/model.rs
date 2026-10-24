@@ -17,18 +17,24 @@ pub(crate) enum Endian {
 // ── TIFF tag constants ─────────────────────────────────────────────
 
 pub(crate) mod tags {
+    pub(crate) const SUBFILE_TYPE: u16 = 254;
     pub(crate) const IMAGE_WIDTH: u16 = 256;
     pub(crate) const IMAGE_LENGTH: u16 = 257;
     pub(crate) const BITS_PER_SAMPLE: u16 = 258;
     pub(crate) const COMPRESSION: u16 = 259;
     pub(crate) const PHOTOMETRIC: u16 = 262;
+    pub(crate) const DOCUMENT_NAME: u16 = 269;
     pub(crate) const IMAGE_DESCRIPTION: u16 = 270;
+    pub(crate) const MAKE: u16 = 271;
+    pub(crate) const MODEL: u16 = 272;
     pub(crate) const STRIP_OFFSETS: u16 = 273;
     pub(crate) const ORIENTATION: u16 = 274;
     pub(crate) const SAMPLES_PER_PIXEL: u16 = 277;
     pub(crate) const ROWS_PER_STRIP: u16 = 278;
     pub(crate) const STRIP_BYTE_COUNTS: u16 = 279;
     pub(crate) const PLANAR_CONFIGURATION: u16 = 284;
+    pub(crate) const X_POSITION: u16 = 286;
+    pub(crate) const Y_POSITION: u16 = 287;
     pub(crate) const SUB_IFDS: u16 = 330;
     pub(crate) const TILE_WIDTH: u16 = 322;
     pub(crate) const TILE_LENGTH: u16 = 323;
@@ -37,13 +43,31 @@ pub(crate) mod tags {
     pub(crate) const X_RESOLUTION: u16 = 282;
     pub(crate) const Y_RESOLUTION: u16 = 283;
     pub(crate) const RESOLUTION_UNIT: u16 = 296;
+    pub(crate) const SOFTWARE: u16 = 305;
+    pub(crate) const DATETIME: u16 = 306;
+    pub(crate) const ARTIST: u16 = 315;
+    pub(crate) const HOST_COMPUTER: u16 = 316;
     pub(crate) const PREDICTOR: u16 = 317;
+    pub(crate) const EXTRA_SAMPLES: u16 = 338;
     pub(crate) const SAMPLE_FORMAT: u16 = 339;
     pub(crate) const JPEG_TABLES: u16 = 347;
     pub(crate) const XMP: u16 = 700;
+    pub(crate) const COPYRIGHT: u16 = 33432;
     pub(crate) const ICC_PROFILE: u16 = 34675;
+    /// Huron ImageDepth (SGI extension); Huron accepts only 1.
+    pub(crate) const IMAGE_DEPTH: u16 = 32_997;
     /// Hamamatsu NDPI marker tag.
     pub(crate) const NDPI_MARKER: u16 = 65420;
+    pub(crate) const NDPI_SOURCELENS: u16 = 65421;
+    pub(crate) const NDPI_XOFFSET: u16 = 65422;
+    pub(crate) const NDPI_YOFFSET: u16 = 65423;
+    pub(crate) const NDPI_FOCAL_PLANE: u16 = 65424;
+    /// Low 32 bits of each NDPI restart-segment start.
+    pub(crate) const NDPI_MCU_STARTS: u16 = 65426;
+    pub(crate) const NDPI_REFERENCE: u16 = 65427;
+    /// High 32 bits of each NDPI restart-segment start, when present.
+    pub(crate) const NDPI_MCU_STARTS_HIGH: u16 = 65432;
+    pub(crate) const NDPI_PROPERTY_MAP: u16 = 65449;
 }
 
 // ── TiffType ───────────────────────────────────────────────────────

@@ -13,52 +13,9 @@ impl ZeissSlide {
         if req.plane.get() != PlaneSelection::default() {
             return Ok(None);
         }
-        let scene = self
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .ok_or(WsiError::SceneOutOfRange {
-                index: req.scene.get(),
-                count: self.dataset.scenes.len(),
-            })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = level.tile_layout
-        else {
+        let (_, _, level) = self.dataset.level(req.scene, req.series, req.level)?;
+        if level.regular_tile(req)?.is_none() {
             return Ok(None);
-        };
-        if req.col < 0
-            || req.row < 0
-            || req.col >= tiles_across as i64
-            || req.row >= tiles_down as i64
-        {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "tile ({},{}) out of range ({}x{})",
-                    req.col, req.row, tiles_across, tiles_down
-                ),
-            });
         }
 
         let candidate_indices = self
@@ -73,21 +30,28 @@ impl ZeissSlide {
             WsiError::DisplayConversion(format!("Zeiss subblock index {index} out of range"))
         })?;
         Ok(self
-            .subblock_is_exact_tile(info, level, tile_width, tile_height, req.col, req.row)
+            .subblock_is_exact_tile(info, level, req.col, req.row)
             .then(|| info.clone()))
     }
 
     /// Whether `info` is one classic-JPEG subblock covering tile (`col`, `row`)
-    /// of `level` exactly, so its bytes can be served as that tile.
+    /// of the regularly tiled `level` exactly, so its bytes can be served as
+    /// that tile.
     pub(super) fn subblock_is_exact_tile(
         &self,
         info: &DirectorySubBlockInfo,
         level: &Level,
-        tile_width: u32,
-        tile_height: u32,
         col: i64,
         row: i64,
     ) -> bool {
+        let TileLayout::Regular {
+            tile_width,
+            tile_height,
+            ..
+        } = level.tile_layout
+        else {
+            return false;
+        };
         if info.compression != CziCompressionMode::Jpg {
             return false;
         }
@@ -173,7 +137,6 @@ impl ZeissSlide {
         level: u32,
         col: i64,
         row: i64,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         self.read_tile_with_sources(scene, series, level, col, row, None)
     }
@@ -187,44 +150,13 @@ impl ZeissSlide {
         row: i64,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<CpuTile, WsiError> {
-        let series_ref = self
-            .dataset
-            .scenes
-            .get(scene)
-            .and_then(|scene| scene.series.get(series))
-            .ok_or(WsiError::SceneOutOfRange {
-                index: scene,
-                count: self.dataset.scenes.len(),
-            })?;
-        let level_ref = series_ref
-            .levels
-            .get(level as usize)
-            .ok_or(WsiError::LevelOutOfRange {
-                level,
-                count: series_ref.levels.len() as u32,
-            })?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } = level_ref.tile_layout
-        else {
+        let req = TileRequest::new(scene, series, level, col, row);
+        let (_, _, level_ref) = self.dataset.level(req.scene, req.series, req.level)?;
+        let Some(tile) = level_ref.regular_tile(&req)? else {
             return Err(WsiError::UnsupportedFormat(
                 "Zeiss levels must use regular tiles".into(),
             ));
         };
-        if col < 0 || row < 0 || col >= tiles_across as i64 || row >= tiles_down as i64 {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "tile ({col},{row}) out of range ({}x{})",
-                    tiles_across, tiles_down
-                ),
-            });
-        }
 
         let key = (scene, level as usize, col, row);
         if let Some(cached) = self
@@ -237,19 +169,18 @@ impl ZeissSlide {
             return Ok(cached);
         }
 
-        let buffer = if let Some(buffer) =
-            self.scene_tile_image_local(scene, level as usize, col, row, sources)?
-        {
-            record(Event::ZeissLocalTileHits, 1);
-            buffer
-        } else {
-            let level_img = self.scene_level_image(scene, level as usize)?;
-            let x = (col as u32).saturating_mul(tile_width);
-            let y = (row as u32).saturating_mul(tile_height);
-            let w = tile_width.min(level_img.width.saturating_sub(x));
-            let h = tile_height.min(level_img.height.saturating_sub(y));
-            crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
-        };
+        let buffer =
+            if let Some(buffer) = self.scene_tile_image_local(&req, level_ref, tile, sources)? {
+                record(Event::ZeissLocalTileHits, 1);
+                buffer
+            } else {
+                let level_img = self.scene_level_image(scene, level as usize)?;
+                let x = (col as u32).saturating_mul(tile.tile_width);
+                let y = (row as u32).saturating_mul(tile.tile_height);
+                let w = tile.tile_width.min(level_img.width.saturating_sub(x));
+                let h = tile.tile_height.min(level_img.height.saturating_sub(y));
+                crop_rgb_interleaved_u8_buffer(level_img.as_ref(), x, y, w, h)?
+            };
         let retained_bytes = u64::try_from(buffer.data.byte_size()).unwrap_or(u64::MAX);
         self.tile_cache
             .lock()
@@ -258,44 +189,25 @@ impl ZeissSlide {
         Ok(buffer)
     }
 
+    /// Composes regular `tile` of `req`'s level from the subblocks that cover it.
     fn scene_tile_image_local(
         &self,
-        scene: usize,
-        level: usize,
-        col: i64,
-        row: i64,
+        req: &TileRequest,
+        level_ref: &Level,
+        tile: RegularTile,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<Option<CpuTile>, WsiError> {
-        let (tile_x, tile_y, tile_w, tile_h) = {
-            let series = &self.dataset.scenes[scene].series[0];
-            let level_ref = &series.levels[level];
-            let TileLayout::Regular {
-                tile_width,
-                tile_height,
-                ..
-            } = level_ref.tile_layout
-            else {
-                return Ok(None);
-            };
-            let tile_x = (col as u64).saturating_mul(u64::from(tile_width));
-            let tile_y = (row as u64).saturating_mul(u64::from(tile_height));
-            // Each value is explicitly capped by its u32 tile dimension.
-            let tile_w = level_ref
-                .dimensions
-                .0
-                .saturating_sub(tile_x)
-                .min(u64::from(tile_width)) as u32;
-            let tile_h = level_ref
-                .dimensions
-                .1
-                .saturating_sub(tile_y)
-                .min(u64::from(tile_height)) as u32;
-            (tile_x, tile_y, tile_w, tile_h)
-        };
+        let RegularTile {
+            x: tile_x,
+            y: tile_y,
+            width: tile_w,
+            height: tile_h,
+            ..
+        } = tile;
         let candidate_indices = self
             .canvas_level_tile_subblocks
-            .get(level)
-            .and_then(|tiles| tiles.get(&(col, row)).cloned())
+            .get(req.level.get() as usize)
+            .and_then(|tiles| tiles.get(&(req.col, req.row)).cloned())
             .unwrap_or_default();
         let tile_rgb_len = crate::core::limits::checked_product_to_usize(
             &[u64::from(tile_w), u64::from(tile_h), 3],
@@ -306,36 +218,14 @@ impl ZeissSlide {
         if candidate_indices.is_empty() {
             return rgb_u8_tile(tile_w, tile_h, vec![0; tile_rgb_len]).map(Some);
         }
-        let level_ratio = self.dataset.scenes[scene].series[0].levels[level]
-            .downsample
-            .round()
-            .max(1.0) as i32;
+        let level_ratio = level_ref.downsample.round().max(1.0) as i32;
         let tile_origin_x = i32::try_from(tile_x)
             .map_err(|_| WsiError::DisplayConversion("Zeiss tile x overflow".into()))?;
         let tile_origin_y = i32::try_from(tile_y)
             .map_err(|_| WsiError::DisplayConversion("Zeiss tile y overflow".into()))?;
 
-        let candidate_infos = {
-            let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
-            let all = czi.subblocks();
-            let mut selected = Vec::new();
-            for index in candidate_indices {
-                let info = all.get(index).cloned().ok_or_else(|| {
-                    WsiError::DisplayConversion(format!(
-                        "Zeiss subblock index {index} out of range"
-                    ))
-                })?;
-                if !matches!(
-                    info.compression,
-                    CziCompressionMode::UnCompressed
-                        | CziCompressionMode::Jpg
-                        | CziCompressionMode::JpgXr
-                ) {
-                    return Ok(None);
-                }
-                selected.push(info);
-            }
-            selected
+        let Some(candidate_infos) = self.supported_candidate_subblocks(candidate_indices)? else {
+            return Ok(None);
         };
         let tile_rect = IntRect::new(
             tile_origin_x,

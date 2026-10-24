@@ -92,7 +92,7 @@ fn metal_cooperative_performance() {
     for job in &mut jobs {
         job.backend = BackendRequest::Metal;
     }
-    let pool_workers = crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count();
+    let pool_workers = crate::core::batch::cpu_worker_count();
     let mut budgets = vec![1, 2, 4, pool_workers];
     budgets.sort_unstable();
     budgets.dedup();
@@ -181,25 +181,46 @@ fn prepared_cpu_performance() {
             backend: BackendRequest::Cpu,
         })
         .collect::<Vec<_>>();
-    let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
     let mut results = Vec::new();
-    runtime.install_jp2k_cpu(|| {
+    crate::core::batch::install_codec_cpu(|| {
         for count in [1, 4, 8, 16, 64] {
             let jobs = &jobs[..count];
-            let expected = super::super::batch::decode_batch_jp2k(jobs).into_iter().collect::<Result<Vec<_>, _>>().unwrap();
-            let prepared = PreparedJp2kBatch::new(jobs, runtime.cpu_worker_count()).unwrap();
+            let expected = super::super::batch::decode_batch_jp2k(jobs)
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let prepared =
+                PreparedJp2kBatch::new(jobs, crate::core::batch::cpu_worker_count()).unwrap();
             let actual = prepared.read_cpu().unwrap();
             assert_eq!(actual.len(), expected.len());
-            for (a, b) in actual.iter().zip(&expected) { assert!(a.as_u8() == b.as_u8(), "prepared CPU output differs from established CPU bytes"); }
+            for (a, b) in actual.iter().zip(&expected) {
+                assert!(
+                    a.as_u8() == b.as_u8(),
+                    "prepared CPU output differs from established CPU bytes"
+                );
+            }
             for pair in 0..5 {
                 for candidate in [pair % 2 == 1, pair % 2 == 0] {
                     let start = std::time::Instant::now();
                     let output = if candidate {
-                        PreparedJp2kBatch::new(jobs, runtime.cpu_worker_count()).unwrap().read_cpu().unwrap()
-                    } else { super::super::batch::decode_batch_jp2k(jobs).into_iter().collect::<Result<Vec<_>, _>>().unwrap() };
+                        PreparedJp2kBatch::new(jobs, crate::core::batch::cpu_worker_count())
+                            .unwrap()
+                            .read_cpu()
+                            .unwrap()
+                    } else {
+                        super::super::batch::decode_batch_jp2k(jobs)
+                            .into_iter()
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap()
+                    };
                     let elapsed = start.elapsed();
                     assert_eq!(output.len(), expected.len());
-                    for (a, b) in output.iter().zip(&expected) { assert!(a.as_u8() == b.as_u8(), "prepared CPU output differs from established CPU bytes"); }
+                    for (a, b) in output.iter().zip(&expected) {
+                        assert!(
+                            a.as_u8() == b.as_u8(),
+                            "prepared CPU output differs from established CPU bytes"
+                        );
+                    }
                     results.push(serde_json::json!({"batch":count,"pair":pair,"candidate":candidate,"elapsed_ns":elapsed.as_nanos()}));
                 }
             }
@@ -263,46 +284,84 @@ fn pooled_cpu_scheduling_performance() {
             .unwrap()
         })
         .collect::<Vec<_>>();
-    let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
     let mut records = Vec::new();
-    runtime.install_jp2k_cpu(|| {
+    crate::core::batch::install_codec_cpu(|| {
         for count in [1, 4, 8, 16, 64] {
             let metadata = &metadata[..count];
             let run = |pooled| {
-                let mut outputs = metadata.iter().map(|job| vec![0_u8; job.output_len]).collect::<Vec<_>>();
-                let mut jobs = metadata.iter().zip(&mut outputs).map(|(job, output)| j2k::TileDecodeJob {
-                    input: job.input, out: output.as_mut_slice(), stride: job.row_bytes,
-                }).collect::<Vec<_>>();
+                let mut outputs = metadata
+                    .iter()
+                    .map(|job| vec![0_u8; job.output_len])
+                    .collect::<Vec<_>>();
+                let mut jobs = metadata
+                    .iter()
+                    .zip(&mut outputs)
+                    .map(|(job, output)| j2k::TileDecodeJob {
+                        input: job.input,
+                        out: output.as_mut_slice(),
+                        stride: job.row_bytes,
+                    })
+                    .collect::<Vec<_>>();
                 let workers = rayon::current_num_threads();
                 if pooled && workers > 1 {
                     let chunk = jobs.len().div_ceil(workers.min(4));
-                    jobs.par_chunks_mut(chunk).try_for_each(|jobs| {
-                        if individual {
-                            for job in jobs {
-                                let mut decoder = j2k::J2kDecoder::new(job.input).map_err(|error| error.to_string())?;
-                                decoder.set_cpu_decode_parallelism(j2k::CpuDecodeParallelism::Serial);
-                                decoder.decode_into(job.out, job.stride, j2k_core::PixelFormat::Rgb8).map_err(|error| error.to_string())?;
+                    jobs.par_chunks_mut(chunk)
+                        .try_for_each(|jobs| {
+                            if individual {
+                                for job in jobs {
+                                    let mut decoder = j2k::J2kDecoder::new(job.input)
+                                        .map_err(|error| error.to_string())?;
+                                    decoder.set_cpu_decode_parallelism(
+                                        j2k::CpuDecodeParallelism::Serial,
+                                    );
+                                    decoder
+                                        .decode_into(
+                                            job.out,
+                                            job.stride,
+                                            j2k_core::PixelFormat::Rgb8,
+                                        )
+                                        .map_err(|error| error.to_string())?;
+                                }
+                                Ok(())
+                            } else {
+                                j2k::decode_tiles_into(
+                                    jobs,
+                                    j2k_core::PixelFormat::Rgb8,
+                                    j2k::TileBatchOptions {
+                                        workers: std::num::NonZeroUsize::new(1),
+                                    },
+                                )
+                                .map(|_| ())
+                                .map_err(|error| error.to_string())
                             }
-                            Ok(())
-                        } else {
-                            j2k::decode_tiles_into(jobs, j2k_core::PixelFormat::Rgb8,
-                                j2k::TileBatchOptions { workers: std::num::NonZeroUsize::new(1) }).map(|_| ()).map_err(|error| error.to_string())
-                        }
-                    }).unwrap();
+                        })
+                        .unwrap();
                 } else {
-                    j2k::decode_tiles_into(&mut jobs, j2k_core::PixelFormat::Rgb8,
-                        j2k::TileBatchOptions { workers: std::num::NonZeroUsize::new(workers) }).unwrap();
+                    j2k::decode_tiles_into(
+                        &mut jobs,
+                        j2k_core::PixelFormat::Rgb8,
+                        j2k::TileBatchOptions {
+                            workers: std::num::NonZeroUsize::new(workers),
+                        },
+                    )
+                    .unwrap();
                 }
                 outputs
             };
             let expected = run(false);
-            assert!(run(true) == expected, "pooled borrowed CPU bytes differ at {count} tiles");
+            assert!(
+                run(true) == expected,
+                "pooled borrowed CPU bytes differ at {count} tiles"
+            );
             for pair in 0..5 {
                 for pooled in [pair % 2 == 1, pair % 2 == 0] {
                     let start = std::time::Instant::now();
                     let actual = run(pooled);
                     let elapsed = start.elapsed();
-                    assert!(actual == expected, "pooled borrowed CPU bytes differ at {count} tiles");
+                    assert!(
+                        actual == expected,
+                        "pooled borrowed CPU bytes differ at {count} tiles"
+                    );
                     records.push(serde_json::json!({"batch":count,"pair":pair,"pooled":pooled,"individual":individual,"elapsed_ns":elapsed.as_nanos()}));
                 }
             }

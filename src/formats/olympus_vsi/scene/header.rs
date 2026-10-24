@@ -11,8 +11,6 @@ use crate::core::registry::OpenBudget;
 use crate::core::types::SampleType;
 use crate::error::WsiError;
 
-use super::super::invalid_slide;
-
 pub(in crate::formats::olympus_vsi) const OLYMPUS_JPEG_2000: u32 = 3;
 pub(in crate::formats::olympus_vsi) const ETS_BACKGROUND_BYTES: u64 = 40;
 pub(in crate::formats::olympus_vsi) const MAX_ETS_DIMENSIONS: u32 = 16;
@@ -41,7 +39,7 @@ impl EtsHeader {
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
         if !fourcc_matches(&magic, b"SIS") {
-            return Err(invalid_slide(path, "invalid ETS SIS magic"));
+            return Err(WsiError::invalid_slide(path, "invalid ETS SIS magic"));
         }
         let _header_size = file.read_u32::<LittleEndian>()?;
         let _version = file.read_u32::<LittleEndian>()?;
@@ -56,7 +54,7 @@ impl EtsHeader {
         file.seek(SeekFrom::Start(additional_header_offset))?;
         file.read_exact(&mut magic)?;
         if !fourcc_matches(&magic, b"ETS") {
-            return Err(invalid_slide(path, "invalid ETS header magic"));
+            return Err(WsiError::invalid_slide(path, "invalid ETS header magic"));
         }
         file.seek(SeekFrom::Current(4))?;
         let pixel_type = file.read_u32::<LittleEndian>()?;
@@ -78,7 +76,7 @@ impl EtsHeader {
             tile_width,
             tile_height,
         )
-        .map_err(|message| invalid_slide(path, message))?;
+        .map_err(|message| WsiError::invalid_slide(path, message))?;
         let decoded_tile_bytes = u64::from(tile_width)
             .checked_mul(u64::from(tile_height))
             .and_then(|pixels| pixels.checked_mul(u64::from(samples_per_pixel.max(3))))
@@ -111,13 +109,13 @@ impl EtsHeader {
         let use_pyramid = file.read_u32::<LittleEndian>()? != 0;
 
         if compression != OLYMPUS_JPEG_2000 {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!("unsupported ETS compression {compression}"),
             ));
         }
         validate_ets_chunk_table(file_len, used_chunk_offset, n_dimensions, n_used_chunks)
-            .map_err(|message| invalid_slide(path, message))?;
+            .map_err(|message| WsiError::invalid_slide(path, message))?;
 
         Ok(Self {
             file_len,

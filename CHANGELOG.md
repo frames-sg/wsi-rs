@@ -38,11 +38,67 @@
   Decoded pixels are unchanged.
 - TIFF files have their SubIFDs parsed when opened. A TIFF whose SubIFDs tag
   points at an IFD that was already parsed, or outside the file, fails to open.
+- `CpuTile::to_rgba`, and so `Slide::read_region_rgba` on uncompressed YCbCr
+  TIFF tiles, converts YCbCr with the lookup tables that OpenSlide and the
+  JPEG 2000 path use instead of floating-point math. About 0.08% of YCbCr
+  values change by 1 in one channel, to match OpenSlide.
+- Region reads such as `Slide::read_region` report `PlaneOutOfRange` with the
+  last valid plane index as `max`, as MIRAX, VSI and ZVI tile reads do,
+  instead of the axis count.
 
 ### Fixed
 
 - JPEG XR tiles decode inside the codec thread pool. A caller holding slide
   admission no longer waits on global Rayon workers blocked on the same slide.
+- TIFF files whose level areas exceed 64 bits no longer panic in debug builds
+  or order pyramid levels wrongly.
+- Generic tiled TIFF files read each level's own JPEG tables, falling back to
+  the first level's, instead of using the first level's tables for every level.
+- DICOM files with an SV or UV element before Pixel Data are indexed by the
+  fast frame scanner instead of falling back to the slower parser.
+- JPEG tiles decoded with forced dimensions patch the frame header itself, not
+  `FF Cx` bytes inside an earlier APPn, DQT or COM segment.
+- MIRAX data files and the VMS macro image must still be the files the slide
+  was opened on. A read after one is replaced fails instead of reading the new
+  file, and `Slide::associated_encoding` for a replaced VMS macro fails instead
+  of reporting the new file's size.
+- `.svcache` errors about a corrupt cache name the cache file, not the source
+  slide or an empty path, and a tile payload that cannot be read reports
+  `IoWithPath` with the cache file instead of a bare `Io` error, as does
+  probing a cache file that cannot be opened. A bad scene or
+  series in an `.svcache` read or a partial build reports `SceneOutOfRange` or
+  `SeriesOutOfRange` with the real count, not `LevelOutOfRange` with a count
+  of 0.
+- Partial `.svcache` builds that merge an existing cache copy nothing from a
+  level whose dimensions or tile grid changed, instead of copying its tiles to
+  the wrong positions.
+- DICOM tile reads, raw tile reads and `Slide::tile_is_present` reject a
+  scene, series or plane the slide doesn't have with `SceneOutOfRange`,
+  `SeriesOutOfRange` or `PlaneOutOfRange`, instead of answering for the first
+  one. `Slide::tile_codec_kind` reports `TileCodecKind::Other` for them.
+- Zeiss CZI tile reads report a series the slide doesn't have as
+  `SeriesOutOfRange` with the real count, instead of `SceneOutOfRange`.
+- Opening a VMU slide whose macro image size cannot be read reports
+  `IoWithPath` with the macro file instead of a bare `Io` error.
+- XML metadata parsing applies its nesting-depth limit to self-closing
+  elements too, not only to elements with content.
+- CUDA JPEG 2000 batches size their decode windows at 4 bytes per pixel, like
+  Metal, so a window no longer admits about a third more pixels than its
+  4 MiB target.
+- TIFF associated images (Aperio, Huron, ARGOS, Leica) whose SamplesPerPixel
+  tag is 0 or above 65535 report a channel count clamped to 1–65535 instead of
+  a wrapped value such as 0.
+- A missing tile in a TIFF slide no longer allocates an unbounded blank tile;
+  blank tiles larger than the decoded-image limit fail with an error.
+- `Slide::open_with_options` with `SvcachePolicy::PreferFresh` and a custom
+  registry (`SlideOpenOptions::with_registry`) that has no `.svcache` backend
+  opens the source slide instead of redirecting to a `.svcache` file and
+  failing.
+- Hamamatsu VMS errors for a level with no JPEG shards, and Olympus VSI errors
+  for negative or missing ETS tile coordinates, name the slide file instead of
+  an empty path.
+- I/O errors while opening or reading the header of a `.svcache` file name the
+  cache file.
 
 ## [0.8.0] - 2026-10-06
 

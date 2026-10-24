@@ -185,6 +185,10 @@ pub(in super::super) enum TestMcuStartsMode {
     Relative,
     FileAbsolute,
     InvalidFileAbsolute,
+    /// Relative starts with the last strip's entry missing.
+    Truncated,
+    /// Relative starts where strip 1 repeats strip 0's start.
+    NotIncreasing,
 }
 
 pub(in super::super) fn build_ndpi_scan_data_tiff_from_blobs(
@@ -281,6 +285,10 @@ pub(in super::super) fn build_ndpi_scan_data_tiff_from_blobs_with_mcu_mode_and_o
                     .saturating_add(8);
             }
         }
+        TestMcuStartsMode::Truncated => {
+            mcu_starts.pop();
+        }
+        TestMcuStartsMode::NotIncreasing => mcu_starts[1] = mcu_starts[0],
     }
 
     let file = finish_ndpi_mcu_tiff(

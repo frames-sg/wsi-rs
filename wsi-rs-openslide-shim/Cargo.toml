@@ -21,6 +21,7 @@ wsi-rs = { path = ".." }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wsi-rs-test-support = { path = "../test-support" }
 
 [lints.rust]
 unsafe_code = "allow"

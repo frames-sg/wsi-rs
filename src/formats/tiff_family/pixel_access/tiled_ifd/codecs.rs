@@ -87,29 +87,8 @@ impl TiffPixelReader {
         ) {
             Self::empty_transparent_tile(width, height)
         } else {
-            Self::empty_rgb_tile(width, height)
+            zero_rgb_interleaved_u8_tile(width, height)
         }
-    }
-
-    pub(in super::super) fn empty_rgb_tile(width: u32, height: u32) -> Result<CpuTile, WsiError> {
-        let pixel_count = usize::try_from(width)
-            .ok()
-            .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-            .and_then(|pixels| pixels.checked_mul(3))
-            .ok_or_else(|| {
-                WsiError::UnsupportedFormat(format!(
-                    "empty RGB tile dimensions {}x{} overflow output buffer size",
-                    width, height
-                ))
-            })?;
-        Ok(CpuTile {
-            width,
-            height,
-            channels: 3,
-            color_space: ColorSpace::Rgb,
-            layout: CpuTileLayout::Interleaved,
-            data: CpuTileData::u8(vec![0u8; pixel_count]),
-        })
     }
 
     pub(in super::super) fn empty_transparent_tile(
@@ -152,7 +131,10 @@ impl TiffPixelReader {
             .get_u32(ifd_id, tags::BITS_PER_SAMPLE)
             .unwrap_or(8);
         // Tag 339 SAMPLE_FORMAT: 1=unsigned int (default), 2=signed int, 3=float
-        let sample_format = self.container.get_u32(ifd_id, 339).unwrap_or(1);
+        let sample_format = self
+            .container
+            .get_u32(ifd_id, tags::SAMPLE_FORMAT)
+            .unwrap_or(1);
         // Tag 262 PHOTOMETRIC: 0=MinIsWhite, 1=MinIsBlack, 2=RGB, 3=Palette, 6=YCbCr.
         // When the tag is absent, prefer grayscale for single-sample images and
         // RGB otherwise. Real NDPI associated thumbnails omit PHOTOMETRIC while
@@ -162,7 +144,10 @@ impl TiffPixelReader {
             .get_u32(ifd_id, tags::PHOTOMETRIC)
             .unwrap_or(if spp == 1 { 1 } else { 2 });
         // Tag 284 PLANAR_CONFIGURATION: 1=chunky (default), 2=planar
-        let planar = self.container.get_u32(ifd_id, 284).unwrap_or(1);
+        let planar = self
+            .container
+            .get_u32(ifd_id, tags::PLANAR_CONFIGURATION)
+            .unwrap_or(1);
 
         let endian = self.container.endian();
 
