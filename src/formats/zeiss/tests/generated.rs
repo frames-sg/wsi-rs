@@ -241,7 +241,12 @@ fn generated_czi_reports_index_bounds_and_corrupt_input_context() {
     ));
     assert!(matches!(
         reader.read_tile_cpu(&TileRequest::new(0usize, 1usize, 0u32, 0, 0)),
-        Err(WsiError::SceneOutOfRange { index: 0, count: 1 })
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
+    ));
+    let bad_series = TileRequest::new(0usize, 1usize, 0u32, 0, 0);
+    assert!(matches!(
+        reader.read_tiles_cpu(&[bad_series.clone(), bad_series]),
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
     ));
     assert!(matches!(
         reader.read_tile_cpu(&TileRequest::new(0usize, 0usize, 9u32, 0, 0)),

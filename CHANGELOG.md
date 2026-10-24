@@ -75,6 +75,8 @@
   scene, series or plane the slide doesn't have with `SceneOutOfRange`,
   `SeriesOutOfRange` or `PlaneOutOfRange`, instead of answering for the first
   one.
+- Zeiss CZI tile reads report a series the slide doesn't have as
+  `SeriesOutOfRange` with the real count, instead of `SceneOutOfRange`.
 - XML metadata parsing applies its nesting-depth limit to self-closing
   elements too, not only to elements with content.
 

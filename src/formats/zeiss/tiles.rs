@@ -169,22 +169,11 @@ impl ZeissSlide {
         row: i64,
         sources: Option<&super::batch::PreparedSubblocks>,
     ) -> Result<CpuTile, WsiError> {
-        let series_ref = self
-            .dataset
-            .scenes
-            .get(scene)
-            .and_then(|scene| scene.series.get(series))
-            .ok_or(WsiError::SceneOutOfRange {
-                index: scene,
-                count: self.dataset.scenes.len(),
-            })?;
-        let level_ref = series_ref
-            .levels
-            .get(level as usize)
-            .ok_or(WsiError::LevelOutOfRange {
-                level,
-                count: series_ref.levels.len() as u32,
-            })?;
+        let (_, _, level_ref) = self.dataset.level(
+            SceneId::new(scene),
+            SeriesId::new(series),
+            LevelIdx::new(level),
+        )?;
         let TileLayout::Regular {
             tile_width,
             tile_height,
