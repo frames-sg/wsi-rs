@@ -4,13 +4,16 @@ use std::{path::Path, time::Instant};
 
 use serde_json::json;
 use wsi_rs::{
-    CacheConfig, CpuTile, DecodeAcceleration, DecodeExecutionOptions, Slide, SlideOpenOptions,
-    TileLayout, TileRequest,
+    CacheConfig, CpuTile, DecodeAcceleration, Slide, SlideOpenOptions, TileLayout, TileRequest,
 };
 
 #[allow(dead_code)]
 #[path = "support/compare.rs"]
 mod compare;
+
+#[allow(dead_code)]
+#[path = "support/bench.rs"]
+mod bench;
 
 #[test]
 #[ignore = "requires WSI_RS_DECODE_PATH and WSI_RS_DECODE_OUTPUT; run in release mode"]
@@ -71,26 +74,13 @@ fn native_decode_matrix() {
                 })
                 .collect();
             let expected = reference.read_tiles(&reqs).unwrap();
-            for (cache_name, cache) in [
-                ("default", CacheConfig::default()),
-                (
-                    "disabled",
-                    CacheConfig::default()
-                        .with_shared_tile_bytes(0)
-                        .with_display_tile_bytes(0),
-                ),
-                (
-                    "small",
-                    CacheConfig::default()
-                        .with_shared_tile_bytes(1024 * 1024)
-                        .with_display_tile_bytes(0),
-                ),
-            ] {
+            for cache_name in bench::CACHE_PROFILES {
+                let cache = bench::cache_profile(cache_name);
                 for repeat in 0..repeats {
                     let slide =
                         Slide::open_with_options(path, options(cache, mode == "cpu")).unwrap();
                     for iteration in 0..7 {
-                        let execution_before = execution_counters();
+                        let execution_before = bench::execution_counters();
                         let decode = || {
                             let start = Instant::now();
                             let pending = match mode.as_str() {
@@ -144,7 +134,7 @@ fn native_decode_matrix() {
                             .iter()
                             .map(|(_, elapsed)| *elapsed)
                             .fold(0.0_f64, f64::max);
-                        let execution_after = execution_counters();
+                        let execution_after = bench::execution_counters();
                         let mut max_error = 0;
                         let mut bytes = 0;
                         for (pending, _) in pending {
@@ -179,15 +169,11 @@ fn native_decode_matrix() {
 }
 
 fn options(cache: CacheConfig, cpu_only: bool) -> SlideOpenOptions {
-    SlideOpenOptions::default()
-        .with_cache_config(cache)
-        .with_decode_execution_options(DecodeExecutionOptions::default().with_acceleration(
-            if cpu_only {
-                DecodeAcceleration::CpuOnly
-            } else {
-                DecodeAcceleration::Auto
-            },
-        ))
+    if cpu_only {
+        bench::cpu_only_options(cache)
+    } else {
+        bench::open_options(cache, DecodeAcceleration::Auto)
+    }
 }
 
 fn validate(tiles: &[CpuTile], expected: &[CpuTile], exact: bool) -> u8 {
@@ -214,17 +200,6 @@ fn validate(tiles: &[CpuTile], expected: &[CpuTile], exact: bool) -> u8 {
         max_error = max_error.max(report.max_abs);
     }
     max_error
-}
-
-fn execution_counters() -> serde_json::Value {
-    #[cfg(feature = "route-telemetry")]
-    {
-        serde_json::from_str(&wsi_rs::decode_route_telemetry_json()).unwrap()
-    }
-    #[cfg(not(feature = "route-telemetry"))]
-    {
-        serde_json::Value::Null
-    }
 }
 
 enum PendingValidation {
@@ -263,16 +238,7 @@ fn native_decode_revisits() {
         if row["phase"] != "warm_revisit" {
             continue;
         }
-        let cache = match row["cache"].as_str().unwrap() {
-            "default" => CacheConfig::default(),
-            "disabled" => CacheConfig::default()
-                .with_shared_tile_bytes(0)
-                .with_display_tile_bytes(0),
-            "small" => CacheConfig::default()
-                .with_shared_tile_bytes(1024 * 1024)
-                .with_display_tile_bytes(0),
-            _ => unreachable!(),
-        };
+        let cache = bench::cache_profile(row["cache"].as_str().unwrap());
         let requests = row["requests"]
             .as_array()
             .unwrap()
@@ -376,16 +342,7 @@ fn native_decode_fresh_readers() {
     let mut results = Vec::new();
     for row in capture["results"].as_array().unwrap() {
         assert_eq!(row["phase"], "fresh_reader");
-        let cache = match row["cache"].as_str().unwrap() {
-            "default" => CacheConfig::default(),
-            "disabled" => CacheConfig::default()
-                .with_shared_tile_bytes(0)
-                .with_display_tile_bytes(0),
-            "small" => CacheConfig::default()
-                .with_shared_tile_bytes(1024 * 1024)
-                .with_display_tile_bytes(0),
-            _ => unreachable!(),
-        };
+        let cache = bench::cache_profile(row["cache"].as_str().unwrap());
         let requests = row["requests"]
             .as_array()
             .unwrap()
