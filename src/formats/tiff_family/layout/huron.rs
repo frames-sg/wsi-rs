@@ -9,8 +9,8 @@ use crate::properties::Properties;
 
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
-    regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle,
-    SingleSceneTiffLayout,
+    ensure_supported_compression, regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor,
+    ResolutionStyle, SingleSceneTiffLayout,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -55,7 +55,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             }
             let ifd = container.ifd_by_id(ifd_id)?;
             let compression = compression_from_tag(container.get_u32(ifd_id, tags::COMPRESSION)?);
-            super::argos::ensure_supported_compression("Huron", compression)?;
+            ensure_supported_compression("Huron", compression)?;
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
                 tiled.push(tiled_ifd_descriptor(container, ifd_id, compression)?);
                 continue;

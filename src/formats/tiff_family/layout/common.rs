@@ -170,6 +170,40 @@ pub(super) fn associated_channels(container: &TiffContainer, ifd_id: IfdId) -> u
     u16::try_from(samples).unwrap_or(u16::MAX)
 }
 
+/// Rejects compressions the TIFF pixel reader cannot decode, for vendors
+/// that validate them up front.
+pub(super) fn ensure_supported_compression(
+    vendor: &str,
+    compression: Compression,
+) -> Result<(), TiffParseError> {
+    match compression {
+        Compression::None
+        | Compression::Lzw
+        | Compression::Deflate
+        | Compression::Jpeg
+        | Compression::Jp2kRgb
+        | Compression::Jp2kYcbcr
+        | Compression::Zstd => Ok(()),
+        other => Err(TiffParseError::Structure(format!(
+            "{vendor} uses unsupported TIFF compression {other:?}"
+        ))),
+    }
+}
+
+/// `base`, or the first of `base-1`, `base-2`, ... not yet in `existing`.
+pub(super) fn unique_associated_name(
+    existing: &HashMap<String, AssociatedImage>,
+    base: &str,
+) -> String {
+    if !existing.contains_key(base) {
+        return base.into();
+    }
+    (1..)
+        .map(|index| format!("{base}-{index}"))
+        .find(|candidate| !existing.contains_key(candidate))
+        .unwrap_or_else(|| unreachable!("unbounded suffix search must eventually return"))
+}
+
 pub(super) fn stripped_tile_source(
     container: &TiffContainer,
     ifd_id: IfdId,

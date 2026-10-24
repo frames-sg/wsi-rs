@@ -17,7 +17,9 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::common::{associated_channels, compression_from_tag, level_area};
+use super::common::{
+    associated_channels, compression_from_tag, level_area, unique_associated_name,
+};
 use super::{
     compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
@@ -734,22 +736,6 @@ fn attach_source_icc_profiles_for_main_images(
         attach_source_icc_profile(dataset, container, ifd_ids, scene_index, 0)?;
     }
     Ok(())
-}
-
-fn unique_associated_name(
-    associated_images: &HashMap<String, AssociatedImage>,
-    base: &str,
-) -> String {
-    if !associated_images.contains_key(base) {
-        return base.into();
-    }
-    for index in 1.. {
-        let candidate = format!("{base}-{index}");
-        if !associated_images.contains_key(&candidate) {
-            return candidate;
-        }
-    }
-    unreachable!("unbounded suffix search must eventually return")
 }
 
 fn sample_type_for_ifd(container: &TiffContainer, ifd_id: IfdId) -> SampleType {

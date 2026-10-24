@@ -10,8 +10,8 @@ use crate::properties::Properties;
 
 use super::common::{
     add_tiff_resolution_properties, associated_channels, averaged_downsample, checked_tile_grid,
-    compression_from_tag, stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle,
-    SingleSceneTiffLayout, TiledIfdDescriptor as TiledIfd,
+    compression_from_tag, ensure_supported_compression, stripped_tile_source, tiled_ifd_descriptor,
+    ResolutionStyle, SingleSceneTiffLayout, TiledIfdDescriptor as TiledIfd,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
@@ -483,24 +483,6 @@ fn insert_stripped_associated(
         stripped_tile_source(container, ifd_id, compression)?,
     );
     Ok(())
-}
-
-pub(super) fn ensure_supported_compression(
-    vendor: &str,
-    compression: Compression,
-) -> Result<(), TiffParseError> {
-    match compression {
-        Compression::None
-        | Compression::Lzw
-        | Compression::Deflate
-        | Compression::Jpeg
-        | Compression::Jp2kRgb
-        | Compression::Jp2kYcbcr
-        | Compression::Zstd => Ok(()),
-        other => Err(TiffParseError::Structure(format!(
-            "{vendor} uses unsupported TIFF compression {other:?}"
-        ))),
-    }
 }
 
 #[cfg(test)]
