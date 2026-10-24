@@ -11,7 +11,6 @@ use crate::core::hash::Quickhash1;
 use crate::core::types::{
     AssociatedImage, AxesShape, Compression, Dataset, DatasetId, Level, SampleType, Scene, Series,
 };
-use crate::error::WsiError;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
@@ -459,8 +458,7 @@ fn hash_tiff_level(
         if len == 0 {
             continue;
         }
-        hash.hash_file_part(container.path(), offset, Some(len))
-            .map_err(wsi_to_tiff_error)?;
+        hash.hash_file_part(container.path(), offset, Some(len))?;
     }
 
     Ok(true)
@@ -585,18 +583,6 @@ fn fallback_dataset_id(
         TiffParseError::Structure("fallback dataset hash unexpectedly disabled".into())
     })?;
     dataset_id_from_hex(&hex)
-}
-
-fn wsi_to_tiff_error(err: WsiError) -> TiffParseError {
-    match err {
-        WsiError::Io(source) => source.into(),
-        WsiError::IoWithPath { source, path } => TiffParseError::Io {
-            kind: source.kind(),
-            source,
-            path: Some(std::sync::Arc::new(path)),
-        },
-        other => TiffParseError::Structure(other.to_string()),
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

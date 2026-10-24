@@ -63,6 +63,32 @@ impl From<std::io::Error> for TiffParseError {
     }
 }
 
+/// Keeps I/O failures, with their path, and resource limits typed, so
+/// `into_wsi_error` turns them back into the same `WsiError`. Anything else
+/// becomes `Structure` with the error's message.
+impl From<WsiError> for TiffParseError {
+    fn from(error: WsiError) -> Self {
+        match error {
+            WsiError::Io(source) => source.into(),
+            WsiError::IoWithPath { source, path } => TiffParseError::Io {
+                kind: source.kind(),
+                source,
+                path: Some(Arc::new(path)),
+            },
+            WsiError::ResourceLimit {
+                resource,
+                requested,
+                limit,
+            } => TiffParseError::ResourceLimit {
+                resource,
+                requested,
+                limit,
+            },
+            other => TiffParseError::Structure(other.to_string()),
+        }
+    }
+}
+
 impl TiffParseError {
     /// Convert to WsiError at the module boundary. Requires the file path
     /// because TiffParseError does not always carry one.
