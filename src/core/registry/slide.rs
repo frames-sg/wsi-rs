@@ -83,6 +83,17 @@ impl Slide {
         path: impl AsRef<Path>,
         options: SlideOpenOptions,
     ) -> Result<Self, WsiError> {
+        let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
+        Self::open_with_options_and_runtime(path, options, decode_runtime)
+    }
+
+    /// Opens `path` like [`Self::open_with_options`] on the given decode
+    /// runtime; tests pass their own so calibrations stay isolated.
+    pub(crate) fn open_with_options_and_runtime(
+        path: impl AsRef<Path>,
+        options: SlideOpenOptions,
+        decode_runtime: Arc<DecodeRuntime>,
+    ) -> Result<Self, WsiError> {
         let resolved_path = crate::formats::svcache::resolve_open_path_with_policy(
             path.as_ref(),
             options.svcache_policy,
@@ -92,7 +103,6 @@ impl Slide {
             BackendOpenConfig::new(options.cache_config, options.limits),
         )?;
         validate_dataset_limits(source.dataset(), options.limits)?;
-        let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
         Ok(Self::from_managed_source_with_config_and_runtime(
             source,
             options.cache_config,
