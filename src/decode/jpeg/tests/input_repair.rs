@@ -104,6 +104,34 @@ fn jpeg_preparation_combines_dimension_and_eoi_repairs() {
 }
 
 #[test]
+fn forced_dimensions_patch_the_real_sof_not_sof_bytes_inside_app1() {
+    let image = image::RgbImage::from_pixel(16, 8, image::Rgb([200, 40, 40]));
+    let encoded = super::encode_test_jpeg(&image);
+    // An APP1 payload (an EXIF thumbnail, say) that holds SOF0-like bytes.
+    let fake_sof = [0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03];
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    jpeg.extend_from_slice(&(fake_sof.len() as u16 + 2).to_be_bytes());
+    jpeg.extend_from_slice(&fake_sof);
+    let real_sof = jpeg.len()
+        + encoded[2..]
+            .windows(2)
+            .position(|bytes| bytes[0] == 0xFF && is_sof_marker(bytes[1]))
+            .expect("encoded fixture has SOF");
+    jpeg.extend_from_slice(&encoded[2..]);
+    // Only a patch that lands on the real SOF makes this decodable.
+    jpeg[real_sof + 5..real_sof + 9].fill(0);
+
+    let prepared = prepare_jpeg_input(&jpeg, None, 16, 8, true).unwrap();
+    assert_eq!(&prepared[6..6 + fake_sof.len()], &fake_sof);
+    assert_eq!(&prepared[real_sof + 5..real_sof + 9], &[0, 8, 0, 16]);
+
+    let decoded =
+        decode_jpeg_rgb_with_size_override(&jpeg, None, 16, 8, None, None, J2kColorTransform::Auto)
+            .expect("forced dimensions decode");
+    assert_eq!((decoded.width, decoded.height), (16, 8));
+}
+
+#[test]
 fn jpeg_tile_geometry_parses_dri_after_sof() {
     let jpeg = vec![
         0xFF, 0xD8, // SOI
