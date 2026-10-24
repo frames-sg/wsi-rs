@@ -9,15 +9,14 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
 use super::common::{
-    add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
-    stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle, SingleSceneTiffLayout,
-    TiledIfdDescriptor as TiledIfd,
+    add_tiff_resolution_properties, associated_channels, averaged_downsample, checked_tile_grid,
+    compression_from_tag, stripped_tile_source, tiled_ifd_descriptor, ResolutionStyle,
+    SingleSceneTiffLayout, TiledIfdDescriptor as TiledIfd,
 };
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const ARGOS_METADATA_TAG: u16 = 65_000;
 const ARGOS_ROOT: &str = "Argos.Scan.Metadata";
-const MAX_ARGOS_TILES_PER_LEVEL: u64 = 1_000_000;
 
 pub(crate) struct ArgosInterpreter;
 
@@ -310,26 +309,15 @@ fn sparse_level(
     ifd: &TiledIfd,
     downsample: f64,
 ) -> Result<SparseLevel, TiffParseError> {
-    if ifd.width == 0 || ifd.height == 0 || ifd.tile_width == 0 || ifd.tile_height == 0 {
-        return Err(TiffParseError::Structure(format!(
-            "ARGOS image and tile dimensions must be non-zero on IFD {}",
-            ifd.ifd_id
-        )));
-    }
-    let tiles_across = ifd.width.div_ceil(u64::from(ifd.tile_width));
-    let tiles_down = ifd.height.div_ceil(u64::from(ifd.tile_height));
-    let tile_count = tiles_across
-        .checked_mul(tiles_down)
-        .ok_or_else(|| TiffParseError::Structure("ARGOS tile count overflow".into()))?;
-    if tile_count > MAX_ARGOS_TILES_PER_LEVEL {
-        return Err(TiffParseError::Structure(format!(
-            "ARGOS level declares {tile_count} tiles, exceeding the {MAX_ARGOS_TILES_PER_LEVEL}-tile limit"
-        )));
-    }
+    let (tiles_across, _, expected) = checked_tile_grid(
+        "ARGOS",
+        ifd.width,
+        ifd.height,
+        ifd.tile_width,
+        ifd.tile_height,
+    )?;
     let offsets = container.get_u64_array(ifd.ifd_id, tags::TILE_OFFSETS)?;
     let byte_counts = container.get_u64_array(ifd.ifd_id, tags::TILE_BYTE_COUNTS)?;
-    let expected = usize::try_from(tile_count)
-        .map_err(|_| TiffParseError::Structure("ARGOS tile count exceeds address space".into()))?;
     if offsets.len() != expected || byte_counts.len() != expected {
         return Err(TiffParseError::Structure(format!(
             "ARGOS IFD {} tile arrays have lengths offsets={} byte_counts={}, expected {expected}",

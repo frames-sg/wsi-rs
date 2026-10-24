@@ -94,6 +94,41 @@ pub(super) fn regular_tiff_level(
     })
 }
 
+/// Most tiles one irregular-layout level may declare; each becomes a
+/// `TileEntry` in the level's tile map.
+pub(super) const MAX_IRREGULAR_TILES_PER_LEVEL: u64 = 1_000_000;
+
+/// `(tiles_across, tiles_down, tile_count)` of a `width`x`height` image cut
+/// into `tile_width`x`tile_height` tiles. Zero sizes, an overflowing count
+/// and grids above [`MAX_IRREGULAR_TILES_PER_LEVEL`] are errors.
+pub(super) fn checked_tile_grid(
+    vendor: &str,
+    width: u64,
+    height: u64,
+    tile_width: u32,
+    tile_height: u32,
+) -> Result<(u64, u64, usize), TiffParseError> {
+    if width == 0 || height == 0 || tile_width == 0 || tile_height == 0 {
+        return Err(TiffParseError::Structure(format!(
+            "{vendor} image and tile dimensions must be non-zero (image={width}x{height}, tile={tile_width}x{tile_height})"
+        )));
+    }
+    let tiles_across = width.div_ceil(u64::from(tile_width));
+    let tiles_down = height.div_ceil(u64::from(tile_height));
+    let tile_count = tiles_across
+        .checked_mul(tiles_down)
+        .ok_or_else(|| TiffParseError::Structure(format!("{vendor} tile count overflow")))?;
+    if tile_count > MAX_IRREGULAR_TILES_PER_LEVEL {
+        return Err(TiffParseError::Structure(format!(
+            "{vendor} level declares {tile_count} tiles, exceeding the {MAX_IRREGULAR_TILES_PER_LEVEL}-tile limit"
+        )));
+    }
+    let tile_count = usize::try_from(tile_count).map_err(|_| {
+        TiffParseError::Structure(format!("{vendor} tile count exceeds address space"))
+    })?;
+    Ok((tiles_across, tiles_down, tile_count))
+}
+
 #[derive(Clone)]
 pub(super) struct TiledIfdDescriptor {
     pub(super) ifd_id: IfdId,

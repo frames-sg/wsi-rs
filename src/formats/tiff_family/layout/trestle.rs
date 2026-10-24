@@ -8,11 +8,12 @@ use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::TiffParseError;
 use crate::properties::Properties;
 
-use super::common::{averaged_downsample, compression_from_tag, SingleSceneTiffLayout};
+use super::common::{
+    averaged_downsample, checked_tile_grid, compression_from_tag, SingleSceneTiffLayout,
+};
 use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 const TRESTLE_SOFTWARE_PREFIX: &str = "MedScan";
-const MAX_TRESTLE_TILES_PER_LEVEL: u64 = 1_000_000;
 
 pub(crate) struct TrestleInterpreter;
 
@@ -73,7 +74,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
             let compression = compression_from_tag(compression_val);
             let (tiles_across, tiles_down, tile_count) =
-                checked_trestle_tile_grid(width, height, tile_width, tile_height)?;
+                checked_tile_grid("Trestle", width, height, tile_width, tile_height)?;
 
             let (overlap_x, overlap_y) = overlap_pairs.get(level_idx).copied().unwrap_or((0, 0));
             let public_tile_width = tile_width.saturating_sub(overlap_x);
@@ -233,33 +234,6 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
         }
         .finish(container)
     }
-}
-
-fn checked_trestle_tile_grid(
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-) -> Result<(u64, u64, usize), TiffParseError> {
-    if width == 0 || height == 0 || tile_width == 0 || tile_height == 0 {
-        return Err(TiffParseError::Structure(format!(
-            "Trestle image and tile dimensions must be non-zero (image={width}x{height}, tile={tile_width}x{tile_height})"
-        )));
-    }
-    let tiles_across = width.div_ceil(u64::from(tile_width));
-    let tiles_down = height.div_ceil(u64::from(tile_height));
-    let tile_count = tiles_across
-        .checked_mul(tiles_down)
-        .ok_or_else(|| TiffParseError::Structure("Trestle tile count overflow".into()))?;
-    if tile_count > MAX_TRESTLE_TILES_PER_LEVEL {
-        return Err(TiffParseError::Structure(format!(
-            "Trestle level declares {tile_count} tiles, exceeding the {MAX_TRESTLE_TILES_PER_LEVEL}-tile limit"
-        )));
-    }
-    let tile_count = usize::try_from(tile_count).map_err(|_| {
-        TiffParseError::Structure("Trestle tile count exceeds address space".into())
-    })?;
-    Ok((tiles_across, tiles_down, tile_count))
 }
 
 fn parse_trestle_description(desc: &str) -> HashMap<String, String> {

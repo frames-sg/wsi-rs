@@ -1,3 +1,4 @@
+use super::super::common::MAX_IRREGULAR_TILES_PER_LEVEL;
 use super::*;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
 
@@ -121,18 +122,18 @@ fn parse_overlap_pairs_groups_values_by_level_and_ignores_tail() {
 
 #[test]
 fn trestle_tile_grid_rejects_invalid_and_oversized_dimensions() {
-    assert!(checked_trestle_tile_grid(1024, 1024, 0, 256).is_err());
-    assert!(checked_trestle_tile_grid(0, 1024, 256, 256).is_err());
+    assert!(checked_tile_grid("Trestle", 1024, 1024, 0, 256).is_err());
+    assert!(checked_tile_grid("Trestle", 0, 1024, 256, 256).is_err());
     assert_eq!(
-        checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL, 1, 1, 1).unwrap(),
+        checked_tile_grid("Trestle", MAX_IRREGULAR_TILES_PER_LEVEL, 1, 1, 1).unwrap(),
         (
-            MAX_TRESTLE_TILES_PER_LEVEL,
+            MAX_IRREGULAR_TILES_PER_LEVEL,
             1,
-            MAX_TRESTLE_TILES_PER_LEVEL as usize
+            MAX_IRREGULAR_TILES_PER_LEVEL as usize
         )
     );
-    assert!(checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL + 1, 1, 1, 1).is_err());
-    assert!(checked_trestle_tile_grid(u64::MAX, u64::MAX, 1, 1).is_err());
+    assert!(checked_tile_grid("Trestle", MAX_IRREGULAR_TILES_PER_LEVEL + 1, 1, 1, 1).is_err());
+    assert!(checked_tile_grid("Trestle", u64::MAX, u64::MAX, 1, 1).is_err());
 }
 
 #[test]
