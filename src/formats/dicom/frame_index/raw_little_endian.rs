@@ -3,6 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::core::positioned_file;
 use crate::error::WsiError;
 
 use super::model::{
@@ -35,11 +36,19 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
         source: Arc::new(source),
         path: path.to_path_buf(),
     })?;
+    let file_len = file
+        .metadata()
+        .map_err(|source| WsiError::IoWithPath {
+            source: Arc::new(source),
+            path: path.to_path_buf(),
+        })?
+        .len();
     let expected_table_len = u64::from(number_of_frames)
         .checked_mul(8)
         .and_then(|length| u32::try_from(length).ok())
         .ok_or_else(|| invalid_slide(path, "DICOM extended offset table is too large"))?;
-    let Some(layout) = find_encapsulated_layout_le(&mut file, path, expected_table_len, control)?
+    let Some(layout) =
+        find_encapsulated_layout_le(&mut file, path, file_len, expected_table_len, control)?
     else {
         return Ok(None);
     };
@@ -51,13 +60,15 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
         layout.extended_offsets_value,
         layout.extended_lengths_value,
         expected_table_len,
+        file_len,
         control,
     )?;
     check_index_control(control)?;
     if let Some(tables) = extended_offset_tables.as_ref() {
         match build_single_fragment_index_from_extended_offsets(
-            &mut file,
+            &file,
             path,
+            file_len,
             pixel_data_offset,
             tables,
             number_of_frames,
@@ -80,13 +91,6 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
     }
 
     check_index_control(control)?;
-    let file_len = file
-        .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
-        .len();
     let (fragments, offset_table) = scan_raw_encapsulated_pixel_sequence_with_reader_controlled(
         &mut file,
         path,
@@ -106,8 +110,9 @@ pub(in super::super) fn scan_encapsulated_frames_raw_little_endian_controlled(
 }
 
 fn build_single_fragment_index_from_extended_offsets(
-    file: &mut File,
+    file: &File,
     path: &Path,
+    file_len: u64,
     pixel_data_offset: u64,
     tables: &DicomExtendedOffsetTables,
     number_of_frames: u32,
@@ -115,13 +120,6 @@ fn build_single_fragment_index_from_extended_offsets(
 ) -> Result<DicomEncapsulatedFrames, WsiError> {
     check_index_control(control)?;
     super::offset_tables::validate_extended_offset_table_shape(path, tables, number_of_frames)?;
-    let file_len = file
-        .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
-        .len();
     let offset_table_item = pixel_data_offset
         .checked_add(EXPLICIT_VR_LONG_HEADER_LEN as u64)
         .ok_or_else(|| invalid_slide(path, "DICOM Pixel Data offset overflow"))?;
@@ -258,18 +256,12 @@ fn validate_extended_item_header_sample(
 fn find_encapsulated_layout_le(
     file: &mut File,
     path: &Path,
+    file_len: u64,
     expected_table_len: u32,
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<DicomEncapsulatedLayout>, WsiError> {
     check_index_control(control)?;
     position_at_explicit_little_endian_dataset(file, path)?;
-    let file_len = file
-        .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
-        .len();
     let mut cursor = file
         .stream_position()
         .map_err(|source| WsiError::IoWithPath {
@@ -711,51 +703,21 @@ pub(in super::super) fn read_exact_at(
     })
 }
 
+/// A positioned read with cancellation checked before and after it. Callers
+/// read at most one 64 KiB header window at a time.
 fn read_exact_file_at_controlled(
     file: &File,
     path: &Path,
-    mut offset: u64,
-    mut buffer: &mut [u8],
+    offset: u64,
+    buffer: &mut [u8],
     control: Option<&crate::ReadControl>,
 ) -> Result<(), WsiError> {
-    while !buffer.is_empty() {
-        check_index_control(control)?;
-        let read = read_file_at(file, buffer, offset).map_err(|source| WsiError::IoWithPath {
+    check_index_control(control)?;
+    positioned_file::read_exact_at(file, buffer, offset).map_err(|source| {
+        WsiError::IoWithPath {
             source: Arc::new(source),
             path: path.to_path_buf(),
-        })?;
-        if read == 0 {
-            return Err(WsiError::IoWithPath {
-                source: Arc::new(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "failed to fill DICOM positional read buffer",
-                )),
-                path: path.to_path_buf(),
-            });
         }
-        offset = offset
-            .checked_add(read as u64)
-            .ok_or_else(|| invalid_slide(path, "DICOM positional read offset overflow"))?;
-        buffer = &mut buffer[read..];
-    }
+    })?;
     check_index_control(control)
-}
-
-#[cfg(unix)]
-fn read_file_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-    use std::os::unix::fs::FileExt;
-    file.read_at(buffer, offset)
-}
-
-#[cfg(windows)]
-fn read_file_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-    use std::os::windows::fs::FileExt;
-    file.seek_read(buffer, offset)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn read_file_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-    let mut file = file.try_clone()?;
-    file.seek(SeekFrom::Start(offset))?;
-    file.read(buffer)
 }

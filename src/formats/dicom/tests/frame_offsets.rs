@@ -305,7 +305,7 @@ fn extended_offset_table_values_are_bounds_checked_before_reading() {
     std::fs::write(&path, vec![0u8; 64]).unwrap();
     let mut file = File::open(&path).unwrap();
 
-    let error = read_extended_offset_tables_le(&mut file, &path, Some(56), Some(16), 16, None)
+    let error = read_extended_offset_tables_le(&mut file, &path, Some(56), Some(16), 16, 64, None)
         .expect_err("EOT values beyond EOF must fail before allocation/read");
 
     assert!(error.to_string().contains("outside the source file"));

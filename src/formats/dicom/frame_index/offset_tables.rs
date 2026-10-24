@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::error::WsiError;
 
@@ -352,6 +351,7 @@ pub(in super::super) fn read_extended_offset_tables_le(
     offsets_value: Option<u64>,
     lengths_value: Option<u64>,
     table_len: u32,
+    file_len: u64,
     control: Option<&crate::ReadControl>,
 ) -> Result<Option<DicomExtendedOffsetTables>, WsiError> {
     let (Some(offsets_value), Some(lengths_value)) = (offsets_value, lengths_value) else {
@@ -365,13 +365,6 @@ pub(in super::super) fn read_extended_offset_tables_le(
             ),
         ));
     }
-    let file_len = file
-        .metadata()
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
-        .len();
     read_extended_offset_tables_with_reader(
         file,
         path,
