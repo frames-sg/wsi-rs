@@ -7,6 +7,9 @@ use j2k::{
 };
 use j2k_metal::MetalBatchDecoder;
 
+use super::device::{
+    device_window_bytes, DeviceWindow, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
+};
 use super::metal_backend::{decode_prepared_jp2k_metal, resident_metal_jp2k_tile};
 use super::prepare::{prepare_jp2k_job, PreparedJp2kJob};
 use super::{Jp2kColorSpace, Jp2kDecodeJob};
@@ -16,19 +19,11 @@ use crate::WsiError;
 
 type TileResult = Result<MetalDeviceTile, WsiError>;
 
-// Larger concurrent native groups retained substantially more scratch and raised
-// process RSS above the 10% gate. This is an execution target, not an output limit:
-// an individually larger image still executes under the existing admission rules.
-pub(super) const GROUP_OUTPUT_TARGET: u64 = 4 * 1024 * 1024;
-// A byte target alone admits more small images and makes native workspace
-// retention depend on that count. Keep both dimensions of the window bounded.
-const MAX_WINDOW_IMAGES: usize = 16;
-
 pub(super) fn decode_jobs(
     jobs: &[Jp2kDecodeJob<'_>],
     sessions: &MetalBackendSessions,
 ) -> Vec<TileResult> {
-    decode_jobs_bounded(jobs, sessions, GROUP_OUTPUT_TARGET)
+    decode_jobs_bounded(jobs, sessions, DEVICE_WINDOW_TARGET_BYTES)
 }
 
 pub(super) fn decode_jobs_bounded(
@@ -129,14 +124,12 @@ pub(super) fn execute_prepared_bounded(
     output_target: u64,
 ) -> Result<(), WsiError> {
     let total = prepared.groups().iter().fold(0_u64, |sum, group| {
+        let (width, height) = group.info().dimensions;
         sum.saturating_add(
-            u64::from(group.info().dimensions.0)
-                .saturating_mul(u64::from(group.info().dimensions.1))
-                .saturating_mul(4)
-                .saturating_mul(group.images().len() as u64),
+            device_window_bytes(width, height).saturating_mul(group.images().len() as u64),
         )
     });
-    if total <= output_target && slots.len() <= MAX_WINDOW_IMAGES {
+    if total <= output_target && slots.len() <= DEVICE_WINDOW_MAX_IMAGES {
         let mut decoder = MetalBatchDecoder::with_backend_session_and_options(
             sessions.j2k().clone(),
             prepared.options(),
@@ -275,17 +268,13 @@ fn bounded_end(
     start: usize,
     output_target: u64,
 ) -> usize {
+    let mut window = DeviceWindow::new(output_target);
     let mut end = start;
-    let mut bytes = 0_u64;
-    while end < slots.len() && end - start < MAX_WINDOW_IMAGES {
+    while end < slots.len() {
         let job = metadata[slots[end]].as_ref().expect("validated input");
-        let next = u64::from(job.decoded_width)
-            .saturating_mul(u64::from(job.decoded_height))
-            .saturating_mul(4);
-        if end > start && bytes.saturating_add(next) > output_target {
+        if !window.admit(job.decoded_width, job.decoded_height) {
             break;
         }
-        bytes = bytes.saturating_add(next);
         end += 1;
     }
     end

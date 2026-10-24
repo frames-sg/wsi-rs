@@ -43,6 +43,10 @@ pub(crate) use cpu::{
 pub(crate) use device::decode_batch_jp2k_cuda;
 #[cfg(feature = "metal")]
 pub(crate) use device::decode_batch_jp2k_metal;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(crate) use device::{
+    device_window_bytes, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
+};
 
 #[cfg(test)]
 #[path = "jp2k/tests.rs"]

@@ -16,6 +16,22 @@ fn rgb_job(backend: J2kBackendRequest) -> Jp2kDecodeJob<'static> {
     }
 }
 
+#[cfg(any(feature = "cuda", all(feature = "metal", target_os = "macos")))]
+#[test]
+fn device_windows_count_four_bytes_per_pixel_and_at_most_sixteen_images() {
+    use super::super::device::{DeviceWindow, DEVICE_WINDOW_TARGET_BYTES};
+
+    // 512x512 RGB tiles count 1 MiB each; a 3 B/px rule would admit a fifth.
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert_eq!((0..8).take_while(|_| window.admit(512, 512)).count(), 4);
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert_eq!((0..32).take_while(|_| window.admit(1, 1)).count(), 16);
+    // An oversized first image still executes, alone.
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert!(window.admit(4096, 4096));
+    assert!(!window.admit(1, 1));
+}
+
 #[cfg(feature = "metal")]
 fn metal_sessions() -> Option<crate::output::metal::MetalBackendSessions> {
     crate::output::metal::MetalBackendSessions::system_default().ok()

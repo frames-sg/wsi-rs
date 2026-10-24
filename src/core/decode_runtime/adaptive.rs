@@ -4,7 +4,9 @@ use super::reader::route_key_for_batch;
 use super::*;
 use crate::core::read_control::check_cancelled_opt;
 use crate::core::types::{LevelIdx, SceneId, SeriesId};
-use crate::decode::jp2k::PreparedJp2kBatch;
+use crate::decode::jp2k::{
+    device_window_bytes, PreparedJp2kBatch, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
+};
 
 impl AdaptiveDecodeReader {
     pub(super) fn read_tiles_adaptive_device(
@@ -27,11 +29,9 @@ impl AdaptiveDecodeReader {
         {
             // Bound actual execution, including CPU output retained during
             // calibration. A smaller sample must not select a larger batch's route.
-            let tile_bytes = u64::from(tile_width)
-                .saturating_mul(u64::from(tile_height))
-                .saturating_mul(4)
-                .max(1);
-            let count = (4 * 1024 * 1024 / tile_bytes).clamp(1, 16) as usize;
+            let tile_bytes = device_window_bytes(tile_width, tile_height).max(1);
+            let count = (DEVICE_WINDOW_TARGET_BYTES / tile_bytes)
+                .clamp(1, DEVICE_WINDOW_MAX_IMAGES as u64) as usize;
             if reqs.len() > count {
                 let mut output = Vec::with_capacity(reqs.len());
                 for chunk in reqs.chunks(count) {
