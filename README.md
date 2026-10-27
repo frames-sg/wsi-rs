@@ -61,6 +61,18 @@ cargo add wsi-rs
 
 wsi-rs needs Rust 1.99 or newer and a 64-bit x86 or ARM target.
 
+Version 0.8.1 is a GitHub source release with an exact Git pin for the J2K
+CUDA packet-header fix. It is not on crates.io. To use this version:
+
+```toml
+[dependencies]
+wsi-rs = { git = "https://github.com/frames-sg/wsi-rs", tag = "v0.8.1" }
+```
+
+For Python access to metadata and compressed tile bytes, see the experimental
+[reader binding](wsi-rs-python/README.md). Pixel decoding and tensors use the
+separate `j2k` Python extension.
+
 ## Example
 
 ```rust,no_run
@@ -267,9 +279,14 @@ can load it instead and read slides through wsi-rs.
 
 ```sh
 cargo xtask validate      # format, lint, tests, docs
+cargo xtask bench-check   # build release performance and OpenSlide shim binaries
 cargo xtask fuzz-check    # check that every fuzz target compiles
 cargo xtask rc-preflight  # every release check
 ```
+
+Common tests run once. OpenSlide adds only oracle tests to the quick run;
+its real-slide comparisons run through `cargo xtask parity-corpus-test`.
+On macOS, the library suite and Metal surface check also run with Metal enabled.
 
 [docs/architecture.md](docs/architecture.md) explains how the code is organized
 and what the release checks need. Dependency rules are in
@@ -284,7 +301,9 @@ inputs or hardware fail the run. The commands list the selected ignored tests
 first and reject a selection that matches no tests.
 
 `cargo xtask parity-corpus-test` covers the public manifest plus DICOM folder
-opening and Olympus VSI reading. `WSI_RS_PARITY_ALIASES` limits it to the
+opening, Olympus VSI reading, and selected SVS/NDPI/DICOM color checks.
+Color checks require every selected sample; they are ignored by quick tests.
+`WSI_RS_PARITY_ALIASES` limits it to the
 manifest aliases it lists, separated by commas, semicolons or whitespace; unset
 or empty selects the whole corpus. When Olympus or ZVI is selected, it also runs
 independent native-pixel probes. Generate those probes with the existing

@@ -30,7 +30,9 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         backend: BackendRequest,
     ) -> Result<Option<Vec<CpuTile>>, WsiError> {
-        let mut jobs = Vec::with_capacity(reqs.len());
+        // Decide whether the whole batch is supported before reading payloads;
+        // otherwise a late missing tile makes the fallback read them again.
+        let mut spans = Vec::with_capacity(reqs.len());
         for req in reqs {
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
@@ -52,19 +54,20 @@ impl TiffPixelReader {
             if span.byte_count == 0 {
                 return Ok(None);
             }
+            spans.push((*ifd_id, jpeg_tables.as_deref(), *compression, span));
+        }
+
+        let mut jobs = Vec::with_capacity(spans.len());
+        for (ifd_id, jpeg_tables, compression, span) in spans {
             let data = self.read_tiled_ifd_tile_span(span)?;
 
             let job = match compression {
                 Compression::Jpeg => {
-                    let options = self.tiff_jpeg_decode_options_for_data(
-                        *ifd_id,
-                        false,
-                        &data,
-                        jpeg_tables.as_deref(),
-                    );
+                    let options =
+                        self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, jpeg_tables);
                     CodecBatchJob::Jpeg(JpegDecodeJob {
                         data: Cow::Owned(data),
-                        tables: jpeg_tables.as_deref().map(Cow::Borrowed),
+                        tables: jpeg_tables.map(Cow::Borrowed),
                         expected_width: span.width,
                         expected_height: span.height,
                         color_transform: options.color_transform,

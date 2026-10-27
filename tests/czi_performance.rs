@@ -1,6 +1,6 @@
 //! Native CZI reader benchmark, separate from the OpenSlide compatibility shim.
 //! Run in release mode with WSI_RS_CZI_JXR_PATH and WSI_RS_CZI_PERF_OUTPUT set.
-use std::{collections::BTreeSet, path::Path, time::Instant};
+use std::{path::Path, time::Instant};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -11,55 +11,33 @@ use wsi_rs::{Slide, SlideOpenOptions, TileRequest};
 mod bench;
 
 fn requests(path: &Path) -> (Vec<TileRequest>, Vec<TileRequest>, Vec<TileRequest>) {
-    let source = czi_rs::CziFile::open(path).unwrap();
     let slide = Slide::open(path).unwrap();
     let levels = &slide.dataset().scenes[0].series[0].levels;
-    let origin = (
-        source.subblocks().iter().map(|b| b.rect.x).min().unwrap(),
-        source.subblocks().iter().map(|b| b.rect.y).min().unwrap(),
-    );
-    let center = |level: usize, block: &czi_rs::DirectorySubBlockInfo| {
-        let ratio = levels[level].downsample.round() as i64;
-        (
-            ((i64::from(block.rect.x) - i64::from(origin.0)) / ratio
-                + i64::from(block.stored_size.w / 2))
-                / 256,
-            ((i64::from(block.rect.y) - i64::from(origin.1)) / ratio
-                + i64::from(block.stored_size.h / 2))
-                / 256,
-        )
-    };
-    let blocks_at = |level: usize| {
-        let ratio = levels[level].downsample.round() as i64;
-        source
-            .subblocks()
-            .iter()
-            .filter(move |b| i64::from(b.rect.w) == i64::from(b.stored_size.w) * ratio)
+    let acquired = |level: usize| {
+        let dimensions = levels[level].dimensions;
+        (0..dimensions.1.div_ceil(256))
+            .flat_map(move |row| (0..dimensions.0.div_ceil(256)).map(move |col| (col, row)))
+            .map(move |(col, row)| {
+                TileRequest::new(0usize, 0usize, level as u32, col as i64, row as i64)
+            })
+            .filter(|request| slide.tile_is_present(request).unwrap() == Some(true))
             .collect::<Vec<_>>()
     };
     let grid = |level: usize| {
-        let blocks = blocks_at(level);
-        let (x, y) = center(level, blocks[0]);
-        let dims = levels[level].dimensions;
-        (0..4)
-            .flat_map(|dy| (0..4).map(move |dx| (x + dx, y + dy)))
-            .filter(|&(col, row)| {
-                col >= 0 && row >= 0 && (col as u64) * 256 < dims.0 && (row as u64) * 256 < dims.1
+        let present = acquired(level);
+        let first = present.first().expect("native CZI acquired tile");
+        present
+            .iter()
+            .filter(|request| {
+                (first.col..first.col + 4).contains(&request.col)
+                    && (first.row..first.row + 4).contains(&request.row)
             })
-            .map(|(col, row)| TileRequest::new(0usize, 0usize, level as u32, col, row))
+            .cloned()
             .collect::<Vec<_>>()
     };
-    let blocks = blocks_at(0);
-    let mut seen = BTreeSet::new();
-    let random = (0..blocks.len())
-        .map(|i| (i * 7919) % blocks.len())
-        .filter_map(|i| {
-            let (x, y) = center(0, blocks[i]);
-            seen.insert((x, y))
-                .then(|| TileRequest::new(0usize, 0usize, 0, x, y))
-        })
-        .take(16)
-        .collect();
+    let present = acquired(0);
+    let step = present.len().div_ceil(16).max(1);
+    let random = present.into_iter().step_by(step).take(16).collect();
     (grid(0), random, grid(2.min(levels.len() - 1)))
 }
 

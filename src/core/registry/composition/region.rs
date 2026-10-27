@@ -51,8 +51,13 @@ pub(crate) fn composite_region_from_source_in_batches<T: SlideReader + ?Sized>(
     let dataset_id = source.dataset().id;
     let cached = cache
         .is_some_and(|cache| cache.contains_keys(plan_cache_keys(dataset_id, req, &plan.hits)));
-    let batch_ends = first_then_chunked_batch_ends(plan.hits.len(), batch_size);
-    let compose = || composite_region_from_plan(source, cache, req, plan, &batch_ends);
+    let compose = || match plan.hits.len() {
+        0 | 1 => compose_resolved_region(source, cache, req, plan),
+        hit_count => {
+            let batch_ends = first_then_chunked_batch_ends(hit_count, batch_size);
+            composite_region_from_plan(source, cache, req, plan, &batch_ends)
+        }
+    };
     if cached {
         // The hint changes scheduling only. Normal resolution still handles
         // eviction and decodes a late miss on this thread.
@@ -72,6 +77,16 @@ fn compose_resolved_region<T: SlideReader + ?Sized>(
 
     if plan.hits.is_empty() {
         return compose_empty_region(&resolver, req, &plan);
+    }
+    if let [hit] = plan.hits.as_slice() {
+        let tile = resolver.resolve_one(hit.col, hit.row)?;
+        return compose_region_tiles(
+            &plan.hits,
+            &[tile],
+            plan.output_width,
+            plan.output_height,
+            plan.preserve_alpha,
+        );
     }
 
     let hit_tiles = resolver.resolve_hits(&plan.hits)?;

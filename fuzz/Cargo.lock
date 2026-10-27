@@ -533,10 +533,10 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "j2k"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
- "j2k-core",
+ "j2k-core 0.13.0",
  "j2k-native",
  "j2k-types",
  "moxcms",
@@ -545,8 +545,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-codec-math"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
  "j2k-types",
 ]
@@ -554,7 +554,16 @@ dependencies = [
 [[package]]
 name = "j2k-core"
 version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e95fe1ed3855b263af459102af993bddc5d8f0689df7b38867831c7bdbd28848"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "j2k-core"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
  "libc",
  "thiserror",
@@ -563,12 +572,12 @@ dependencies = [
 
 [[package]]
 name = "j2k-jpeg"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
- "j2k-core",
+ "j2k-core 0.13.0",
  "j2k-profile",
  "memchr",
  "rayon",
@@ -577,8 +586,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-native"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -590,16 +599,16 @@ dependencies = [
 
 [[package]]
 name = "j2k-profile"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 
 [[package]]
 name = "j2k-tilecodec"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 dependencies = [
  "flate2",
- "j2k-core",
+ "j2k-core 0.13.0",
  "thiserror",
  "weezl",
  "zstd",
@@ -607,8 +616,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-types"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
+version = "0.13.0"
+source = "git+https://github.com/frames-sg/j2k?rev=f4667dc9fc1da77f978ffb899ed674ce5c0c9142#f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
 
 [[package]]
 name = "jobserver"
@@ -649,7 +658,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd5c5ff6127bb6f583d5821383c02fb5e8f67891198f904d5eafabdeeeea85d9"
 dependencies = [
- "j2k-core",
+ "j2k-core 0.12.0",
 ]
 
 [[package]]
@@ -1229,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "wsi-rs"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64",
  "byteorder",
@@ -1241,7 +1250,7 @@ dependencies = [
  "dicom-transfer-syntax-registry",
  "image",
  "j2k",
- "j2k-core",
+ "j2k-core 0.13.0",
  "j2k-jpeg",
  "j2k-tilecodec",
  "jxr",
@@ -1275,58 +1284,28 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zstd"
-version = "0.13.3"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "7.2.4"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+version = "2.1.2+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
 dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "j2k-cuda"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
-
-[[patch.unused]]
-name = "j2k-cuda-build-support"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
-
-[[patch.unused]]
-name = "j2k-cuda-j2k-engine"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
-
-[[patch.unused]]
-name = "j2k-cuda-runtime"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
-
-[[patch.unused]]
-name = "j2k-metal"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"
-
-[[patch.unused]]
-name = "j2k-metal-support"
-version = "0.12.0"
-source = "git+https://github.com/frames-sg/j2k?rev=4ca93a56f85634d9cf46c09db2c5955ec77b956b#4ca93a56f85634d9cf46c09db2c5955ec77b956b"

@@ -54,6 +54,9 @@ pub(super) fn tiff_jpeg_encoded_photometric_interpretation(
                     Ok(EncodedTilePhotometricInterpretation::YbrFull422)
                 }
             },
+            other => Err(WsiError::Unsupported {
+                reason: format!("unsupported JPEG color transform {other:?}"),
+            }),
         },
         other => Err(WsiError::Unsupported {
             reason: format!("JPEG passthrough supports 1 or 3 components, got {other}"),

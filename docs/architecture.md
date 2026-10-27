@@ -19,6 +19,7 @@ the [README](../README.md).
 | `src/decode` | Adapters to the JPEG, JPEG 2000 and JPEG XR codec crates. |
 | `src/output` | GPU tile types for Metal and CUDA, and copying GPU tiles to CPU memory. |
 | `wsi-rs-openslide-shim` | The OpenSlide-compatible C library. |
+| `wsi-rs-python` | Optional Python reader for metadata, tile geometry, and compressed payloads; tensor decoding stays in the separate `j2k` extension. |
 | `xtask` | Build, test, release and benchmark commands (`cargo xtask`). |
 | `fuzz` | Fuzz targets for every file parser. |
 | `perf-runner` | Benchmarks wsi-rs and OpenSlide through the same C API. |

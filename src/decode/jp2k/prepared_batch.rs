@@ -59,11 +59,9 @@ impl PreparedJp2kBatch {
                 })
             })
             .collect::<Result<Vec<_>, WsiError>>()?;
-        let options = BatchDecodeOptions {
-            layout: BatchLayout::Nhwc,
-            workers: std::num::NonZeroUsize::new(workers),
-            ..BatchDecodeOptions::default()
-        };
+        let mut options = BatchDecodeOptions::default();
+        options.layout = BatchLayout::Nhwc;
+        options.workers = std::num::NonZeroUsize::new(workers);
         let prepared = j2k::prepare_batch(
             jobs.iter()
                 .map(|job| EncodedImage::full(job.bytes.clone()))

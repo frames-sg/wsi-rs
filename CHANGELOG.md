@@ -4,8 +4,17 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-27
+
+This is a GitHub source release. The fixed J2K dependency is pinned to a Git
+commit; 0.8.1 is not published on crates.io.
+
 ### Added
 
+- Experimental Python reader bindings expose slide metadata, tile coverage,
+  and ordered compressed-tile batches with JPEG color hints. Reads release
+  the GIL; each DataLoader worker opens its own slide. Pixel decoding and
+  tensor output remain in the separate `j2k` extension.
 - Reads single-file OME-TIFF. Pyramid levels come from each plane's SubIFDs;
   channels, Z planes and time points follow the OME-XML `TiffData` mapping, and
   `label`, `macro` and `thumbnail` images become associated images. Multi-file
@@ -33,6 +42,11 @@
 
 ### Changed
 
+- Uses J2K 0.13.0 with its CUDA packet-header race fix backported and pinned
+  to an exact Git revision. This includes the TIFF LZW decoder and updated
+  JPEG integrity checks. Direct Zstandard use moves to 0.14.3.
+- Removes the external CZI test oracle and its dependency. CZI parsing and
+  corpus sampling use the native reader.
 - Uses JXR 0.3.1, whose faster CPU entropy decoding and direct coefficient
   storage speed up JPEG XR tiles in Zeiss CZI slides and tiled TIFF files.
   Decoded pixels are unchanged.
@@ -408,7 +422,8 @@ Speed and memory:
 
 - First public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2

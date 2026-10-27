@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "wsi-rs"
+dynamic = ["version"]
+description = "Read whole-slide metadata and compressed tiles with Rust"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+
+[project.urls]
+Repository = "https://github.com/frames-sg/wsi-rs"
+
+[tool.maturin]
+features = ["extension-module"]
+module-name = "wsi_rs"

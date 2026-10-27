@@ -55,8 +55,8 @@ fn print_help() {
 fn help_text() -> &'static str {
     "usage: cargo xtask <task>\n\n\
        tasks:\n\
-       ci           validate plus package\n\
-       validate     fmt, clippy, bench-check, nextest, doctests, and docs\n\
+       ci           validate plus release-binary builds and package\n\
+       validate     fmt, clippy, nextest, doctests, and docs\n\
        rc-preflight run local release-candidate preflight gates\n\
        fmt          check rustfmt\n\
        clippy       run clippy with warnings denied\n\
@@ -85,7 +85,7 @@ fn help_text() -> &'static str {
        perf-capture-pair <label> [aliases-or-slides...] capture wsi_rs, OpenSlide and an optional previous release in alternating order\n\
        perf-compare <before.json> <after.json> compare captures with 5% noise guard\n\
        perf-profile <slide> [workload] print samply/xctrace profiling recipes\n\
-       package      package the crate from a clean worktree with verification"
+       package      verify the clean source build or registry package for this release"
 }
 
 #[cfg(test)]

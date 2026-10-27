@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -239,6 +238,9 @@ fn validate_offsets<T: Copy + PartialOrd + Into<u64>>(
 
 /// The fragment each offset points at. Offsets count from the first
 /// fragment's Item header, so `fragments` must not be empty.
+///
+/// Callers validate `offsets` as strictly increasing and fragments are listed
+/// in file order, so one forward cursor finds every target.
 fn start_indices_from_offsets<T: Copy + Into<u64>>(
     path: &Path,
     table: &str,
@@ -246,28 +248,28 @@ fn start_indices_from_offsets<T: Copy + Into<u64>>(
     offsets: &[T],
 ) -> Result<Vec<usize>, WsiError> {
     let base_item_offset = fragments[0].item_offset;
-    let fragment_indices_by_offset: HashMap<u64, usize> = fragments
-        .iter()
-        .enumerate()
-        .map(|(index, fragment)| (fragment.item_offset, index))
-        .collect();
     let mut start_indices = Vec::with_capacity(offsets.len());
+    let mut index = 0;
     for &offset in offsets {
         let offset: u64 = offset.into();
         let target = base_item_offset.checked_add(offset).ok_or_else(|| {
             WsiError::invalid_slide(path, format!("DICOM {table} offset table offset overflow"))
         })?;
-        let index = fragment_indices_by_offset
-            .get(&target)
-            .copied()
-            .ok_or_else(|| {
-                WsiError::invalid_slide(
-                    path,
-                    format!(
-                        "DICOM {table} offset table points to missing fragment offset {offset}"
-                    ),
-                )
-            })?;
+        while fragments
+            .get(index)
+            .is_some_and(|fragment| fragment.item_offset < target)
+        {
+            index += 1;
+        }
+        if fragments
+            .get(index)
+            .is_none_or(|fragment| fragment.item_offset != target)
+        {
+            return Err(WsiError::invalid_slide(
+                path,
+                format!("DICOM {table} offset table points to missing fragment offset {offset}"),
+            ));
+        }
         start_indices.push(index);
     }
     Ok(start_indices)

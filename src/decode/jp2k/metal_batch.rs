@@ -99,14 +99,11 @@ fn decode_groups(
     output: &mut [Option<TileResult>],
     sessions: &MetalBackendSessions,
 ) -> Result<(), WsiError> {
-    let mut decoder = MetalBatchDecoder::with_backend_session_and_options(
-        sessions.j2k().clone(),
-        BatchDecodeOptions {
-            layout: BatchLayout::Nhwc,
-            workers: std::num::NonZeroUsize::new(crate::core::batch::cpu_worker_count()),
-            ..BatchDecodeOptions::default()
-        },
-    );
+    let mut options = BatchDecodeOptions::default();
+    options.layout = BatchLayout::Nhwc;
+    options.workers = std::num::NonZeroUsize::new(crate::core::batch::cpu_worker_count());
+    let mut decoder =
+        MetalBatchDecoder::with_backend_session_and_options(sessions.j2k().clone(), options);
     let prepared = decoder
         .prepare(inputs)
         .map_err(|error| WsiError::Jp2k(error.to_string()))?;

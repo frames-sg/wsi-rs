@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::core::cache::CacheConfig;
 use crate::core::limits::{ensure_within, SlideLimits};
@@ -31,6 +31,36 @@ struct OpenBudgetState {
     retained_index_bytes: u64,
 }
 
+impl OpenBudgetState {
+    fn retain_metadata(&mut self, limits: SlideLimits, bytes: u64) -> Result<(), WsiError> {
+        check_metadata_value(limits, bytes)?;
+        self.retained_metadata_bytes = ensure_within(
+            "aggregate metadata",
+            self.retained_metadata_bytes.saturating_add(bytes),
+            limits.aggregate_metadata_bytes(),
+        )?;
+        Ok(())
+    }
+
+    fn retain_index(&mut self, limits: SlideLimits, bytes: u64) -> Result<(), WsiError> {
+        self.retained_index_bytes = ensure_within(
+            "tile/frame index",
+            self.retained_index_bytes.saturating_add(bytes),
+            limits.tile_index_bytes(),
+        )?;
+        Ok(())
+    }
+}
+
+fn check_metadata_value(limits: SlideLimits, bytes: u64) -> Result<(), WsiError> {
+    ensure_within(
+        "individual metadata value",
+        bytes,
+        limits.metadata_value_bytes(),
+    )
+    .map(drop)
+}
+
 /// Per-parse accounting shared by every source file in one slide bundle.
 #[derive(Debug)]
 pub(crate) struct OpenBudget {
@@ -47,12 +77,7 @@ impl OpenBudget {
     }
 
     pub(crate) fn check_metadata_value(&self, bytes: u64) -> Result<(), WsiError> {
-        ensure_within(
-            "individual metadata value",
-            bytes,
-            self.limits.metadata_value_bytes(),
-        )
-        .map(drop)
+        check_metadata_value(self.limits, bytes)
     }
 
     pub(crate) const fn limits(&self) -> SlideLimits {
@@ -60,35 +85,27 @@ impl OpenBudget {
     }
 
     pub(crate) fn retain_metadata(&self, bytes: u64) -> Result<(), WsiError> {
-        self.check_metadata_value(bytes)?;
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.retained_metadata_bytes = ensure_within(
-            "aggregate metadata",
-            state.retained_metadata_bytes.saturating_add(bytes),
-            self.limits.aggregate_metadata_bytes(),
-        )?;
-        Ok(())
+        self.state().retain_metadata(self.limits, bytes)
     }
 
     pub(crate) fn retain_index(&self, bytes: u64) -> Result<(), WsiError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.retained_index_bytes = ensure_within(
-            "tile/frame index",
-            state.retained_index_bytes.saturating_add(bytes),
-            self.limits.tile_index_bytes(),
-        )?;
-        Ok(())
+        self.state().retain_index(self.limits, bytes)
+    }
+
+    fn state(&self) -> MutexGuard<'_, OpenBudgetState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 
-/// Charges an opened dataset's retained metadata and tile index to a fresh
-/// [`OpenBudget`], so a slide never holds more than `limits` allow.
+/// Charges an opened dataset's retained metadata and tile index to local
+/// counters, so a slide never holds more than `limits` allow.
 pub(super) fn validate_dataset_limits(
     dataset: &Dataset,
     limits: SlideLimits,
 ) -> Result<(), WsiError> {
-    let budget = OpenBudget::new(limits);
-    let retain = |bytes: usize| budget.retain_metadata(u64::try_from(bytes).unwrap_or(u64::MAX));
+    let mut budget = OpenBudgetState::default();
+    let mut retain =
+        |bytes: usize| budget.retain_metadata(limits, u64::try_from(bytes).unwrap_or(u64::MAX));
     for (key, value) in dataset.properties.iter() {
         retain(key.len())?;
         retain(value.len())?;
@@ -146,7 +163,7 @@ pub(super) fn validate_dataset_limits(
             TileLayout::WholeLevel { .. } => 1,
             TileLayout::Irregular { tiles, .. } => u64::try_from(tiles.len()).unwrap_or(u64::MAX),
         };
-        budget.retain_index(entries.saturating_mul(64))?;
+        budget.retain_index(limits, entries.saturating_mul(64))?;
     }
     Ok(())
 }

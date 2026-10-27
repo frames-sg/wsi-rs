@@ -178,14 +178,13 @@ fn bounded_metal_groups_keep_duplicate_crops_errors_and_one_color_pass() {
         let groups = test_count(Event::MetalBatchGroups);
         let colors = test_count(Event::ColorSubmissions);
         let actual = if reuse_prepared {
+            let mut options = j2k::BatchDecodeOptions::default();
+            options.layout = j2k::BatchLayout::Nhwc;
             let prepared = j2k::prepare_batch(
                 jobs.iter()
                     .map(|job| j2k::EncodedImage::full(std::sync::Arc::from(job.data.as_ref())))
                     .collect(),
-                j2k::BatchDecodeOptions {
-                    layout: j2k::BatchLayout::Nhwc,
-                    ..Default::default()
-                },
+                options,
             )
             .unwrap();
             let metadata = jobs

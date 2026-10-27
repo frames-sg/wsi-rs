@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly BASELINE_VERSION="0.6.0"
 readonly BASELINE_SHA256="c43019e3c0786c1b9380c604d66155570d78bb9af539de62978ad2c22fe42e75"
-readonly USER_AGENT="wsi-rs-semver-check/0.8.0 (+https://github.com/frames-sg/wsi-rs)"
+readonly USER_AGENT="wsi-rs-semver-check/0.8.1 (+https://github.com/frames-sg/wsi-rs)"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wsi-rs-semver.XXXXXX")"

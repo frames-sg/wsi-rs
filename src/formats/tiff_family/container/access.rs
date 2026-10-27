@@ -79,12 +79,12 @@ impl TiffContainer {
     /// For Lazy, performs a pread on first access and caches the result
     /// (including errors) permanently via OnceLock.
     pub(crate) fn resolve_tag(&self, ifd_id: IfdId, tag: u16) -> Result<&[u8], TiffParseError> {
-        let ifd = self.ifd_by_id(ifd_id)?;
-        let entry = ifd.tags.get(&tag).ok_or(TiffParseError::TagNotFound {
-            ifd_offset: ifd.offset,
-            tag,
-        })?;
+        let (_, entry) = self.tag_entry(ifd_id, tag)?;
+        self.entry_bytes(entry)
+    }
 
+    /// [`Self::resolve_tag`] for an entry that has already been looked up.
+    fn entry_bytes<'a>(&'a self, entry: &'a TagEntry) -> Result<&'a [u8], TiffParseError> {
         match &entry.value {
             TagValue::Inline(v) => Ok(v.as_bytes()),
             TagValue::Lazy {
@@ -199,7 +199,7 @@ impl TiffContainer {
                 format!("get_string expects ASCII, got {:?}", entry.tiff_type),
             ));
         }
-        let bytes = self.resolve_tag(ifd_id, tag)?;
+        let bytes = self.entry_bytes(entry)?;
         // Strip null terminator(s)
         let trimmed = match bytes.iter().position(|&b| b == 0) {
             Some(pos) => &bytes[..pos],
@@ -240,7 +240,7 @@ impl TiffContainer {
                 format!("expected count=1, got {}", entry.count),
             ));
         }
-        let bytes = self.resolve_tag(ifd_id, tag)?;
+        let bytes = self.entry_bytes(entry)?;
         Ok((ifd_offset, entry.tiff_type, bytes))
     }
 
@@ -269,7 +269,7 @@ impl TiffContainer {
             return Ok(cached.as_slice());
         }
 
-        let bytes = self.resolve_tag(ifd_id, tag)?;
+        let bytes = self.entry_bytes(entry)?;
         let count = entry.count as usize;
 
         let decoded: Vec<u64> = match entry.tiff_type {

@@ -82,4 +82,13 @@ assert_fails "OIDC-provided CARGO_REGISTRY_TOKEN is required" \
   env -u CARGO_REGISTRY_TOKEN GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v0.5.0 \
   GITHUB_SHA="$(git rev-parse HEAD)" "$publish_script" --publish
 
+printf '\npublish = false\n' >> Cargo.toml
+env -u GITHUB_REF_TYPE -u GITHUB_REF_NAME -u GITHUB_SHA \
+  "$publish_script" --verify >/dev/null
+for mode in --dry-run --publish; do
+  assert_fails "registry publication is disabled" \
+    env -u GITHUB_REF_TYPE -u GITHUB_REF_NAME -u GITHUB_SHA \
+    "$publish_script" "$mode"
+done
+
 printf 'publish script behavior tests passed\n'

@@ -31,7 +31,7 @@ use crate::core::registry::{
     SlideReader, DEFAULT_MAX_REGION_PIXELS,
 };
 use crate::core::types::*;
-use crate::decode::jp2k::{decode_batch_jp2k, Jp2kColorSpace, Jp2kDecodeJob};
+use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::{
     decode_batch_jpeg, decode_jpeg_rgb_downscaled_with_size_override,
     decode_jpeg_rgb_with_size_override, JpegDecodeJob,
