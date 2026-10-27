@@ -2,15 +2,13 @@
 
 mod support;
 
-use std::fs::File;
-use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use sha2::{Digest, Sha256};
 use wsi_rs::Slide;
+use wsi_rs_test_support::corpus::verify_entry_sha256;
 
-use support::compare::{compare_rgba, tolerance_failure, Tolerance};
-use support::corpus::{load_public, resolve_entry_path, CorpusEntry};
+use support::compare::{compare_rgba, tolerance_failure};
+use support::corpus::{load_public, resolve_present, CorpusEntry};
 use support::oracles::{
     is_reference_oracle_unsupported, read_probe, top_left_probe, J2kOracle, Oracle, ReferenceOracle,
 };
@@ -18,18 +16,9 @@ use support::oracles::{
 #[test]
 #[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
 fn preflight() {
-    let strict_corpus = strict_corpus_required();
-    let manifest = match load_public() {
-        Ok(manifest) => manifest,
-        Err(err) => {
-            if strict_corpus {
-                panic!("[preflight] public manifest unavailable in strict mode: {err}");
-            }
-            eprintln!("[preflight] public manifest unavailable: {err}; skipping");
-            return;
-        }
-    };
-    if std::env::var_os("WSI_RS_PARITY_ALIASES").is_none() {
+    let manifest = load_public()
+        .unwrap_or_else(|err| panic!("[preflight] public manifest unavailable: {err}"));
+    if support::corpus::selected_aliases().is_none() {
         if let Err(error) = wsi_rs_test_support::corpus::validate_release_coverage(&manifest) {
             panic!("[preflight] release-corpus coverage is incomplete:\n{error}");
         }
@@ -43,24 +32,11 @@ fn preflight() {
     let mut failures = Vec::new();
 
     for entry in &manifest.slides {
-        let path: PathBuf = resolve_entry_path(entry);
-        if !path.is_file() {
+        let Some(path) = resolve_present(entry, &mut failures) else {
             missing_slides += 1;
-            eprintln!(
-                "[preflight] {} not present at {}; run scripts/parity-corpus-fetch.sh; skipping",
-                entry.alias,
-                path.display()
-            );
-            if strict_corpus {
-                failures.push(format!(
-                    "{}: corpus slide missing at {}",
-                    entry.alias,
-                    path.display()
-                ));
-            }
             continue;
-        }
-        if let Err(error) = validate_entry_sha256(entry, &path) {
+        };
+        if let Err(error) = verify_entry_sha256(entry, &path) {
             failures.push(error);
             continue;
         }
@@ -107,7 +83,7 @@ fn preflight() {
                         .zip(os_slide.level_dimensions.iter())
                         .enumerate()
                     {
-                        if !dimensions_within_one_pixel(*ours, *theirs) {
+                        if !support::oracles::dimensions_within_one_pixel(*ours, *theirs) {
                             failures.push(format!(
                             "{}: OpenSlide dimension mismatch at level {level}: wsi_rs={ours:?} openslide={theirs:?}",
                             entry.alias
@@ -180,7 +156,7 @@ fn preflight() {
                 match read_probe(j2k, probe) {
                     Ok(sc_buf) => {
                         if let Some(ref baseline_buf) = baseline_buf {
-                            let tolerance = tolerance_for_entry(entry);
+                            let tolerance = entry.pixel_tolerance();
                             let report = compare_rgba(
                                 &sc_buf.pixels_rgba,
                                 &baseline_buf.pixels_rgba,
@@ -199,11 +175,10 @@ fn preflight() {
                             // comparison below adjudicates decoder-specific reference drift.
                             // Entries without that authority must pass the independent oracle.
                             if !entry.openslide_required {
-                                record_comparison_failure(
+                                failures.extend(tolerance_failure(
                                     &format!("{} level={level}: j2k vs reference", entry.alias),
                                     &report,
-                                    &mut failures,
-                                );
+                                ));
                             }
                         } else {
                             eprintln!(
@@ -244,7 +219,7 @@ fn preflight() {
                             let report = compare_rgba(
                                 &baseline_buf.pixels_rgba,
                                 &os_buf.pixels_rgba,
-                                tolerance_for_entry(entry),
+                                entry.pixel_tolerance(),
                             );
                             eprintln!(
                             "[preflight] {} level={level} reference-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
@@ -255,17 +230,16 @@ fn preflight() {
                             let report = compare_rgba(
                                 &sc_buf.pixels_rgba,
                                 &os_buf.pixels_rgba,
-                                tolerance_for_entry(entry),
+                                entry.pixel_tolerance(),
                             );
                             eprintln!(
                             "[preflight] {} level={level} j2k-vs-openslide max_abs={} mean_abs={:.4} psnr={:.2}dB",
                             entry.alias, report.max_abs, report.mean_abs, report.psnr_db
                         );
-                            record_comparison_failure(
+                            failures.extend(tolerance_failure(
                                 &format!("{} level={level}: j2k vs OpenSlide", entry.alias),
                                 &report,
-                                &mut failures,
-                            );
+                            ));
                         }
                     }
                     Err(err) => {
@@ -293,58 +267,6 @@ fn preflight() {
         "preflight failures:\n  {}",
         failures.join("\n  ")
     );
-}
-
-fn validate_entry_sha256(entry: &CorpusEntry, resolved_path: &Path) -> Result<(), String> {
-    let source_path = if entry
-        .url
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"))
-    {
-        wsi_rs_test_support::corpus::source_archive_path(entry).ok_or_else(|| {
-            format!(
-                "{}: source archive is missing, so its declared SHA-256 cannot be verified",
-                entry.alias
-            )
-        })?
-    } else {
-        resolved_path.to_path_buf()
-    };
-    let file = File::open(&source_path).map_err(|error| {
-        format!(
-            "{}: open hash source {}: {error}",
-            entry.alias,
-            source_path.display()
-        )
-    })?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let count = reader.read(&mut buffer).map_err(|error| {
-            format!(
-                "{}: read hash source {}: {error}",
-                entry.alias,
-                source_path.display()
-            )
-        })?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let actual = format!("{:x}", hasher.finalize());
-    if actual.eq_ignore_ascii_case(&entry.sha256) {
-        Ok(())
-    } else {
-        Err(format!(
-            "{}: SHA-256 mismatch for {}: expected {}, found {actual}",
-            entry.alias,
-            source_path.display(),
-            entry.sha256
-        ))
-    }
 }
 
 fn validate_wsi_contract(entry: &CorpusEntry, path: &Path, failures: &mut Vec<String>) {
@@ -424,45 +346,10 @@ fn validate_wsi_contract(entry: &CorpusEntry, path: &Path, failures: &mut Vec<St
     }
 }
 
-fn strict_corpus_required() -> bool {
-    true
-}
-
-fn record_comparison_failure(
-    label: &str,
-    report: &support::compare::CompareReport,
-    failures: &mut Vec<String>,
-) {
-    let Some(failure) = tolerance_failure(label, report) else {
-        return;
-    };
-    failures.push(failure);
-}
-
-fn tolerance_for_entry(entry: &CorpusEntry) -> Tolerance {
-    if entry.lossless {
-        Tolerance::EXACT
-    } else if entry
-        .codecs
-        .iter()
-        .any(|codec| matches!(codec.as_str(), "j2k" | "htj2k"))
-    {
-        Tolerance::TOLERANT
-    } else if entry.format == "huron" && entry.codecs.iter().any(|codec| codec == "jpeg") {
-        Tolerance::JPEG_DECODER_COMPAT
-    } else {
-        Tolerance::JPEG_TIGHT
-    }
-}
-
-#[cfg(feature = "parity-openslide")]
-fn dimensions_within_one_pixel(a: (u64, u64), b: (u64, u64)) -> bool {
-    a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1
-}
-
 #[cfg(feature = "parity-openslide")]
 fn openslide_oracle() -> support::oracles::OpenSlideOracle {
-    let lib = support::openslide_shim::try_load()
-        .expect("libopenslide is required when parity-openslide is enabled");
+    let lib = support::openslide_shim::LoadedOpenSlide::discover().unwrap_or_else(|error| {
+        panic!("libopenslide is required when parity-openslide is enabled: {error}")
+    });
     support::oracles::OpenSlideOracle { lib }
 }

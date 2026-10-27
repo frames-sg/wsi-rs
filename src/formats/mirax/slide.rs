@@ -23,18 +23,23 @@ struct MiraxShareKey {
 }
 
 impl MiraxShareKey {
-    /// `None` when a file cannot be identified. That open parses without
-    /// sharing and reports any error the parse itself meets.
+    /// `None` when Slidedat.ini or the index cannot be identified. That open
+    /// parses without sharing and reports any error the parse itself meets.
     fn new(
         slidedat: &Path,
         index: &Path,
         datafiles: &[PathBuf],
+        datafile_identities: &HashMap<PathBuf, FileIdentity>,
         limits: crate::SlideLimits,
     ) -> Option<Self> {
         let identities = [slidedat, index]
             .into_iter()
-            .chain(datafiles.iter().map(PathBuf::as_path))
             .map(|path| FileIdentity::from_path(path).ok())
+            .chain(
+                datafiles
+                    .iter()
+                    .map(|path| datafile_identities.get(path).cloned()),
+            )
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
             limits,
@@ -73,11 +78,7 @@ fn register_shared_index(key: MiraxShareKey, shared: MiraxShared) -> Arc<MiraxSh
 }
 
 impl MiraxSlide {
-    pub(super) fn decode_image_with_backend(
-        &self,
-        image: &Arc<MiraxImage>,
-        _backend: BackendRequest,
-    ) -> Result<Arc<CpuTile>, WsiError> {
+    pub(super) fn decode_image(&self, image: &Arc<MiraxImage>) -> Result<Arc<CpuTile>, WsiError> {
         self.resolve_image_claim(image, self.claim_image(image))
     }
 
@@ -118,7 +119,6 @@ impl MiraxSlide {
             &image.record,
             image.format,
             Some((image.expected_width, image.expected_height)),
-            BackendRequest::Auto,
         )?);
         let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.decoded_images
@@ -147,12 +147,8 @@ impl MiraxSlide {
             execution_telemetry::record(Event::MiraxAssociatedCacheHits, 1);
             return Ok((*buffer).clone());
         }
-        let decoded = Arc::new(self.decode_record_to_sample_buffer(
-            record,
-            MiraxImageFormat::Jpeg,
-            None,
-            BackendRequest::Auto,
-        )?);
+        let decoded =
+            Arc::new(self.decode_record_to_sample_buffer(record, MiraxImageFormat::Jpeg, None)?);
         let retained_bytes = u64::try_from(decoded.data.byte_size()).unwrap_or(u64::MAX);
         self.associated_cache
             .lock()
@@ -166,22 +162,17 @@ impl MiraxSlide {
         record: &MiraxRecord,
         format: MiraxImageFormat,
         expected_dimensions: Option<(u32, u32)>,
-        _backend: BackendRequest,
     ) -> Result<CpuTile, WsiError> {
         let bytes = self.read_record_bytes(record)?;
         match format {
             MiraxImageFormat::Jpeg => {
                 let (expected_width, expected_height) = expected_dimensions.unwrap_or((0, 0));
                 crate::core::batch::exactly_one(
-                    decode_batch_jpeg(&[JpegDecodeJob {
-                        data: Cow::Borrowed(&bytes),
-                        tables: None,
+                    decode_batch_jpeg(&[JpegDecodeJob::with_expected(
+                        &bytes,
                         expected_width,
                         expected_height,
-                        color_transform: j2k_jpeg::ColorTransform::Auto,
-                        force_dimensions: false,
-                        requested_size: None,
-                    }]),
+                    )]),
                     "MIRAX JPEG decode",
                 )?
             }
@@ -219,13 +210,10 @@ impl MiraxSlide {
             self.encoded_unit_bytes,
             "MIRAX record",
         )
-        .map_err(|message| invalid_slide(&record.path, message))?;
+        .map_err(|message| WsiError::invalid_slide(&record.path, message))?;
         let mut bytes = vec![0; len];
         file.read_exact_at(&mut bytes, record.offset)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: record.path.as_ref().clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
         Ok(bytes)
     }
 
@@ -242,10 +230,14 @@ impl MiraxSlide {
             return Ok(Arc::clone(file));
         }
 
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
+        let identity = self.shared.datafile_identities.get(path).ok_or_else(|| {
+            WsiError::invalid_slide(path, "MIRAX record names an unlisted data file")
         })?;
+        let file = FileIdentity::open_verified(
+            path,
+            identity,
+            "MIRAX data file changed after the slide was opened",
+        )?;
         let file = Arc::new(crate::core::positioned_file::PositionedFile::new(file));
         Ok(Arc::clone(
             self.open_files

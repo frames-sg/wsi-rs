@@ -1,4 +1,6 @@
-use crate::output::download::{downloaded_bytes_to_cpu_tile, tight_download_layout};
+use crate::output::download::{
+    check_row_pitch, downloaded_bytes_to_cpu_tile, enforce_download_limit, tight_download_layout,
+};
 use crate::{error::WsiError, CpuTile, PixelFormat};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
@@ -97,15 +99,8 @@ impl MetalDeviceTile {
         let image = self.validated_resident_image()?;
         let (row_bytes, byte_len) =
             tight_download_layout(self.width, self.height, self.format, "Metal")?;
-        enforce_download_limit(byte_len)?;
-        if self.pitch_bytes < row_bytes {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "Metal surface pitch {} is smaller than its {}-byte row",
-                    self.pitch_bytes, row_bytes
-                ),
-            });
-        }
+        enforce_download_limit(byte_len, "Metal host tile download")?;
+        check_row_pitch(self.pitch_bytes, row_bytes, "Metal")?;
         let bytes =
             interop::download_resident_rows(image, row_bytes, byte_len, &self.readback_queue)?;
         downloaded_bytes_to_cpu_tile(self.width, self.height, self.format, bytes, "Metal")
@@ -143,18 +138,4 @@ impl MetalDeviceTile {
             .map_err(|source| interop::support_error("metal-resident-input-device", source))?;
         Ok(image)
     }
-}
-
-pub(super) const MAX_DEVICE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
-
-pub(super) fn enforce_download_limit(byte_len: usize) -> Result<(), WsiError> {
-    let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
-    if requested > MAX_DEVICE_DOWNLOAD_BYTES {
-        return Err(WsiError::ResourceLimit {
-            resource: "Metal host tile download",
-            requested,
-            limit: MAX_DEVICE_DOWNLOAD_BYTES,
-        });
-    }
-    Ok(())
 }

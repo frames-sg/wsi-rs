@@ -151,3 +151,15 @@ pub(crate) fn required_corpus_fixture(alias: &str) -> std::path::PathBuf {
     wsi_rs_test_support::corpus::resolve_entry_path(entry, root)
         .unwrap_or_else(|| panic!("required corpus fixture {alias} is missing; run scripts/parity-corpus-fetch.sh {alias}"))
 }
+
+/// Moves the file at `path` aside and writes a byte-identical copy in its
+/// place: the same bytes, but a different file to identity checks. Returns
+/// where the original now lives; handles opened on it keep reading it.
+#[cfg(unix)]
+pub(crate) fn replace_file_with_copy(path: &std::path::Path) -> std::path::PathBuf {
+    let bytes = std::fs::read(path).expect("read the file to replace");
+    let original = path.with_extension("open-inode");
+    std::fs::rename(path, &original).expect("move the original file aside");
+    std::fs::write(path, bytes).expect("write the replacement file");
+    original
+}

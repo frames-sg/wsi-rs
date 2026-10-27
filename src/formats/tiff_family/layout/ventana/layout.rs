@@ -131,11 +131,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             ));
         }
 
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Phase 3: Find level 0 XML (EncodeInfo) for public level-0 bounds.
         let level0_tile_width = pyramid_ifds[0].tile_width as i64;
@@ -173,14 +169,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
 
         let mut tile_sources = HashMap::with_capacity(pyramid_ifds.len());
         tile_sources.insert(
-            TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: 0u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            },
+            TileSourceKey::plane0(0),
             TileSource::TiledIfd {
                 ifd_id: pyramid_ifds[0].ifd_id,
                 jpeg_tables: pyramid_ifds[0].jpeg_tables.clone(),
@@ -218,14 +207,7 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
                 tile_layout: ventana_tilemap_layout(&bif, downsample, &info.stored_level())?,
             });
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: level_idx,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(level_idx),
                 TileSource::TiledIfdSubtiles {
                     ifd_id: info.ifd_id,
                     jpeg_tables: info.jpeg_tables.clone(),
@@ -250,18 +232,19 @@ impl TiffLayoutInterpreter for VentanaInterpreter {
             .ok_or_else(|| {
                 TiffParseError::Structure("Ventana BIF: no pyramid IFDs found".into())
             })?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
-            pyramid_ifds.last().unwrap().ifd_id,
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: pyramid_ifds.last().unwrap().ifd_id,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 

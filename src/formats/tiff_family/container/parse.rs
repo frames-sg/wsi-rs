@@ -271,9 +271,7 @@ impl TiffContainer {
             let children_bytes = u64::try_from(offsets.len())
                 .unwrap_or(u64::MAX)
                 .saturating_mul(u64::try_from(std::mem::size_of::<IfdId>()).unwrap_or(u64::MAX));
-            self.open_budget
-                .retain_index(children_bytes)
-                .map_err(tiff_resource_limit)?;
+            self.open_budget.retain_index(children_bytes)?;
             let mut children = Vec::new();
             children.try_reserve_exact(offsets.len()).map_err(|_| {
                 TiffParseError::ResourceLimit {
@@ -307,9 +305,7 @@ impl TiffContainer {
         let ifd_owner_bytes =
             u64::try_from(std::mem::size_of::<IfdId>() + std::mem::size_of::<(IfdId, Ifd)>())
                 .unwrap_or(u64::MAX);
-        self.open_budget
-            .retain_index(ifd_owner_bytes)
-            .map_err(tiff_resource_limit)?;
+        self.open_budget.retain_index(ifd_owner_bytes)?;
         self.ifds
             .try_reserve(1)
             .map_err(|_| TiffParseError::ResourceLimit {
@@ -357,9 +353,7 @@ impl TiffContainer {
         let tags_index_bytes = entry_count.saturating_mul(
             u64::try_from(std::mem::size_of::<(u16, TagEntry)>()).unwrap_or(u64::MAX),
         );
-        self.open_budget
-            .retain_index(tags_index_bytes)
-            .map_err(tiff_resource_limit)?;
+        self.open_budget.retain_index(tags_index_bytes)?;
         let mut tags_map = HashMap::new();
         tags_map
             .try_reserve(usize::try_from(entry_count).unwrap_or(usize::MAX))
@@ -431,13 +425,9 @@ impl TiffContainer {
                 });
             }
             if is_tiff_index_tag(tag_id) {
-                self.open_budget
-                    .retain_index(total_bytes)
-                    .map_err(tiff_resource_limit)?;
+                self.open_budget.retain_index(total_bytes)?;
             } else {
-                self.open_budget
-                    .retain_metadata(total_bytes)
-                    .map_err(tiff_resource_limit)?;
+                self.open_budget.retain_metadata(total_bytes)?;
             }
             self.declared_tag_payload_bytes = self
                 .declared_tag_payload_bytes
@@ -528,19 +518,4 @@ fn is_tiff_index_tag(tag: u16) -> bool {
             | tags::TILE_BYTE_COUNTS
             | tags::SUB_IFDS
     )
-}
-
-fn tiff_resource_limit(error: crate::WsiError) -> TiffParseError {
-    match error {
-        crate::WsiError::ResourceLimit {
-            resource,
-            requested,
-            limit,
-        } => TiffParseError::ResourceLimit {
-            resource,
-            requested,
-            limit,
-        },
-        other => TiffParseError::Structure(other.to_string()),
-    }
 }

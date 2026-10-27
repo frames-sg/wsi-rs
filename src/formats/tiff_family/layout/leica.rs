@@ -17,9 +17,11 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
+use super::common::{
+    associated_channels, compression_from_tag, level_area, unique_associated_name,
+};
 use super::{
-    compression_from_tag, compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter,
-    TileSource, TileSourceKey,
+    compute_tiff_dataset_identity, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
 };
 
 const LEICA_NS_2010_03: &str = "http://www.leica-microsystems.com/scn/2010/03/10";
@@ -125,7 +127,7 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
             let best = image
                 .ifd_levels
                 .iter()
-                .max_by_key(|level| level.width * level.height)
+                .max_by_key(|level| level_area(level.width, level.height))
                 .ok_or_else(|| {
                     TiffParseError::Structure("Leica SCN macro image has no levels".into())
                 })?;
@@ -139,7 +141,7 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
                         u32::try_from(best.height).unwrap_or(u32::MAX),
                     ),
                     sample_type: sample_type_for_ifd(container, ifd_id),
-                    channels: associated_channel_count(container, ifd_id),
+                    channels: associated_channels(container, ifd_id),
                     icc_profile: Vec::new(),
                 },
             );
@@ -305,7 +307,7 @@ impl LeicaInterpreter {
             let representative = dims
                 .iter()
                 .copied()
-                .max_by_key(|dim| dim.width * dim.height)
+                .max_by_key(|dim| level_area(dim.width, dim.height))
                 .ok_or_else(|| {
                     TiffParseError::Structure(format!(
                         "Leica SCN image has empty resolution group {r}"
@@ -736,40 +738,16 @@ fn attach_source_icc_profiles_for_main_images(
     Ok(())
 }
 
-fn unique_associated_name(
-    associated_images: &HashMap<String, AssociatedImage>,
-    base: &str,
-) -> String {
-    if !associated_images.contains_key(base) {
-        return base.into();
-    }
-    for index in 1.. {
-        let candidate = format!("{base}-{index}");
-        if !associated_images.contains_key(&candidate) {
-            return candidate;
-        }
-    }
-    unreachable!("unbounded suffix search must eventually return")
-}
-
 fn sample_type_for_ifd(container: &TiffContainer, ifd_id: IfdId) -> SampleType {
     let bits_per_sample = container
         .get_u32(ifd_id, tags::BITS_PER_SAMPLE)
         .unwrap_or(8);
-    let sample_format = container.get_u32(ifd_id, 339).unwrap_or(1);
+    let sample_format = container.get_u32(ifd_id, tags::SAMPLE_FORMAT).unwrap_or(1);
     match (bits_per_sample, sample_format) {
         (16, _) => SampleType::Uint16,
         (32, 3) => SampleType::Float32,
         _ => SampleType::Uint8,
     }
-}
-
-fn associated_channel_count(container: &TiffContainer, ifd_id: IfdId) -> u16 {
-    container
-        .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-        .ok()
-        .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(3)
 }
 
 fn parse_channel_settings(image_node: &xml::XmlNode) -> Vec<ParsedChannel> {

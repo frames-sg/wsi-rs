@@ -1,9 +1,9 @@
-use super::storage::{dataset_from_metadata, hex_encode, read_svcache_with_budget};
+use super::storage::{dataset_from_metadata, read_svcache_with_budget};
 use super::*;
 
 impl FormatProbe for SvcacheBackend {
     fn probe(&self, path: &Path) -> Result<ProbeResult, WsiError> {
-        let mut file = File::open(path)?;
+        let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let mut magic = [0_u8; 8];
         if file.read_exact(&mut magic).is_err() {
             return Ok(ProbeResult::not_detected("svcache"));
@@ -56,6 +56,7 @@ impl ConfiguredDatasetReader for SvcacheBackend {
             associated_index.insert(assoc.name.clone(), idx);
         }
         let reader = SvcacheReader {
+            path: path.to_path_buf(),
             file: PositionedFile::new(file),
             payload_start,
             metadata,
@@ -126,74 +127,35 @@ impl SvcacheReader {
     fn tile_meta(&self, req: &TileRequest) -> Result<&TileMeta, WsiError> {
         let level = self
             .metadata
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-            .ok_or_else(|| WsiError::LevelOutOfRange {
-                level: req.level.get(),
-                count: 0,
-            })?;
-        if req.col < 0 || req.row < 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "negative .svcache tile coordinate".into(),
-            });
-        }
-        let col = req.col as u64;
-        let row = req.row as u64;
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: ".svcache tile coordinate out of range".into(),
-            });
-        }
-        let idx = row
-            .checked_mul(level.tiles_across)
-            .and_then(|base| base.checked_add(col))
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: ".svcache tile index overflow".into(),
-            })?;
+            .level(req.scene.get(), req.series.get(), req.level.get())?;
+        let idx = level.tile_index(req.col, req.row, req.level.get())?;
         level
             .tile_meta_for_index(idx)
-            .ok_or_else(|| WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: ".svcache tile not populated".into(),
-            })
+            .ok_or_else(|| WsiError::tile_read(req, ".svcache tile not populated"))
     }
 
     fn read_tile_meta(&self, tile: &TileMeta) -> Result<CpuTile, WsiError> {
-        let payload_len =
-            usize::try_from(tile.payload_len).map_err(|_| WsiError::InvalidSlide {
-                path: PathBuf::from(&self.metadata.source.path),
-                message: "svcache tile payload length is not addressable".into(),
-            })?;
+        let payload_len = usize::try_from(tile.payload_len).map_err(|_| {
+            invalid_svcache(&self.path, "svcache tile payload length is not addressable")
+        })?;
         let mut encoded = vec![0_u8; payload_len];
         {
             let offset = self
                 .payload_start
                 .checked_add(tile.payload_offset)
-                .ok_or_else(|| WsiError::InvalidSlide {
-                    path: PathBuf::from(&self.metadata.source.path),
-                    message: "svcache tile payload offset overflow".into(),
+                .ok_or_else(|| {
+                    invalid_svcache(&self.path, "svcache tile payload offset overflow")
                 })?;
-            self.file.read_exact_at(&mut encoded, offset)?;
+            self.file
+                .read_exact_at(&mut encoded, offset)
+                .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         }
-        let actual_hash = hex_encode(&Sha256::digest(&encoded));
+        let actual_hash = format!("{:x}", Sha256::digest(&encoded));
         if actual_hash != tile.sha256 {
-            return Err(WsiError::InvalidSlide {
-                path: PathBuf::from(&self.metadata.source.path),
-                message: "svcache tile checksum mismatch".into(),
-            });
+            return Err(invalid_svcache(
+                &self.path,
+                "svcache tile checksum mismatch",
+            ));
         }
         let decoded = match tile.codec {
             PayloadCodec::Zstd => {

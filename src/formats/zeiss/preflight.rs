@@ -22,18 +22,12 @@ pub(super) fn preflight_czi_file_with_limits(
     path: &Path,
     limits: crate::SlideLimits,
 ) -> Result<FileIdentity, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     let identity = FileIdentity::from_open_file(path, &file)?;
     let file_len = file.metadata()?.len();
     preflight_czi_reader_with_limits(&mut file, file_len, limits).map_err(|error| match error {
         WsiError::ResourceLimit { .. } => error,
-        error => WsiError::InvalidSlide {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        },
+        error => WsiError::invalid_slide(path, error.to_string()),
     })?;
     Ok(identity)
 }
@@ -43,10 +37,7 @@ pub(super) fn preflight_czi_subblock_with_limits(
     offset: u64,
     limits: crate::SlideLimits,
 ) -> Result<FileIdentity, WsiError> {
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     preflight_czi_open_subblock_with_limits(path, &mut file, offset, limits)
 }
 
@@ -70,10 +61,7 @@ pub(super) fn preflight_czi_open_subblock_bounds(
     let bytes = preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(
         |error| match error {
             WsiError::ResourceLimit { .. } => error,
-            error => WsiError::InvalidSlide {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            },
+            error => WsiError::invalid_slide(path, error.to_string()),
         },
     )?;
     Ok((identity, bytes))

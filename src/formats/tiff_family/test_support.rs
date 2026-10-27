@@ -106,6 +106,19 @@ impl SyntheticTag {
         }
     }
 
+    /// BigTIFF LONG8 value. Write it with `build_bigtiff`, whose 8-byte value
+    /// slot holds it inline.
+    pub(crate) fn long8(tag: u16, value: u64) -> Self {
+        Self {
+            tag,
+            tiff_type: 16,
+            count: 1,
+            inline_value: [0; 4],
+            ool_data: Some(value.to_le_bytes().to_vec()),
+            blobs: Vec::new(),
+        }
+    }
+
     /// LONG array holding the file offsets of `blobs`, which
     /// `build_tiff_tree` writes into the file. Use for tile or strip offsets.
     pub(crate) fn blob_offsets(tag: u16, blobs: Vec<Vec<u8>>) -> Self {
@@ -227,6 +240,60 @@ fn write_tree_ifd(
         }
     }
     out.extend_from_slice(&next.to_le_bytes());
+}
+
+/// Build a little-endian BigTIFF with chained top-level IFDs. Values of up to
+/// 8 bytes sit in the entry; longer ones follow all IFDs.
+pub(crate) fn build_bigtiff(ifds: &[Vec<SyntheticTag>]) -> NamedTempFile {
+    const HEADER_LEN: u64 = 16;
+    assert!(
+        ifds.iter().flatten().all(|tag| tag.blobs.is_empty()),
+        "blob offsets need build_tiff_tree"
+    );
+    let ifd_len = |tag_count: usize| 8 + 20 * tag_count as u64 + 8;
+    let data_start = HEADER_LEN + ifds.iter().map(|tags| ifd_len(tags.len())).sum::<u64>();
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&43u16.to_le_bytes());
+    buf.extend_from_slice(&8u16.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    let first_ifd = if ifds.is_empty() { 0 } else { HEADER_LEN };
+    buf.extend_from_slice(&first_ifd.to_le_bytes());
+
+    let mut data = Vec::new();
+    for (index, tags) in ifds.iter().enumerate() {
+        let mut sorted = tags.iter().collect::<Vec<_>>();
+        sorted.sort_by_key(|tag| tag.tag);
+        buf.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
+        for tag in sorted {
+            buf.extend_from_slice(&tag.tag.to_le_bytes());
+            buf.extend_from_slice(&tag.tiff_type.to_le_bytes());
+            buf.extend_from_slice(&u64::from(tag.count).to_le_bytes());
+            let value = tag.ool_data.as_deref().unwrap_or(&tag.inline_value);
+            if value.len() <= 8 {
+                let mut slot = [0; 8];
+                slot[..value.len()].copy_from_slice(value);
+                buf.extend_from_slice(&slot);
+            } else {
+                buf.extend_from_slice(&(data_start + data.len() as u64).to_le_bytes());
+                data.extend_from_slice(value);
+            }
+        }
+        let next = if index + 1 < ifds.len() {
+            buf.len() as u64 + 8
+        } else {
+            0
+        };
+        buf.extend_from_slice(&next.to_le_bytes());
+    }
+    assert_eq!(buf.len() as u64, data_start);
+    buf.extend_from_slice(&data);
+
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(&buf).unwrap();
+    file.flush().unwrap();
+    file
 }
 
 pub(crate) fn build_tiff(ifds: &[Vec<SyntheticTag>]) -> NamedTempFile {

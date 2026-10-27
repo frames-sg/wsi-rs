@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use super::*;
 
 fn command_environment(
@@ -16,15 +18,16 @@ fn worker_arguments_use_one_real_binary_for_both_engines() {
         library: PathBuf::from("/tmp/libopenslide.dylib"),
     };
 
-    let args = worker_args(
-        BenchLibrary::OpenSlide,
+    let args = worker_config(
+        Engine::OpenSlide,
         &invocation,
         Path::new("/tmp/fixture.svs"),
         2,
         4_096,
         3,
         Some("zoom_trace"),
-    );
+    )
+    .to_args();
 
     assert_eq!(args[0], "--engine");
     assert!(args
@@ -45,26 +48,44 @@ fn wsi_worker_arguments_omit_openslide_version_and_optional_workload() {
         library: PathBuf::from("/tmp/libshim.dylib"),
     };
 
-    let args = worker_args(
-        BenchLibrary::WsiRs,
+    let args = worker_config(
+        Engine::WsiRs,
         &invocation,
         Path::new("/tmp/fixture.svs"),
         0,
         DEFAULT_CACHE_BYTES,
         1,
         None,
-    );
+    )
+    .to_args();
 
     assert!(!args.iter().any(|arg| arg == "--only"));
     assert!(!args.iter().any(|arg| arg == "--require-version-prefix"));
-    assert_eq!(BenchLibrary::WsiRs.name(), "wsi_rs");
-    assert_eq!(BenchLibrary::OpenSlide.name(), "openslide");
-    assert_eq!(BenchLibrary::WsiRs.binary(), "wsi-rs-perf");
-    assert_eq!(BenchLibrary::WsiRs.required_version_prefix(), None);
+    assert_eq!(WORKER_BINARY, "wsi-rs-perf");
+    assert_eq!(required_version_prefix(Engine::WsiRs), None);
     assert_eq!(
-        BenchLibrary::OpenSlide.required_version_prefix(),
+        required_version_prefix(Engine::OpenSlide),
         Some(PINNED_OPENSLIDE_VERSION)
     );
+}
+
+#[test]
+fn worker_configuration_round_trips_through_the_worker_parser() {
+    let invocation = BenchInvocation {
+        worker: PathBuf::from("/tmp/wsi-rs-perf"),
+        library: PathBuf::from("/tmp/libopenslide.dylib"),
+    };
+    let config = worker_config(
+        Engine::OpenSlide,
+        &invocation,
+        Path::new("/tmp/fixture.svs"),
+        4,
+        8_192,
+        2,
+        Some("pan_trace_l0"),
+    );
+
+    assert_eq!(WorkerConfig::parse(config.to_args()), Ok(config));
 }
 
 #[test]
@@ -85,7 +106,7 @@ fn wsi_rs_library_override_replaces_the_checkout_shim() {
 #[test]
 fn worker_environment_equalizes_decode_cpu_concurrency() {
     let mut wsi_rs = Command::new("worker");
-    let wsi_rs_control = configure_worker_environment(&mut wsi_rs, BenchLibrary::WsiRs, 8);
+    let wsi_rs_control = configure_worker_environment(&mut wsi_rs, Engine::WsiRs, 8);
     let wsi_rs_env = command_environment(&wsi_rs);
     assert_eq!(
         wsi_rs_env.get(OsStr::new("RAYON_NUM_THREADS")),
@@ -102,8 +123,7 @@ fn worker_environment_equalizes_decode_cpu_concurrency() {
     assert_eq!(wsi_rs_control["enforced"], true);
 
     let mut openslide = Command::new("worker");
-    let openslide_control =
-        configure_worker_environment(&mut openslide, BenchLibrary::OpenSlide, 8);
+    let openslide_control = configure_worker_environment(&mut openslide, Engine::OpenSlide, 8);
     let openslide_env = command_environment(&openslide);
     assert_eq!(
         openslide_env.get(OsStr::new("RAYON_NUM_THREADS")),
@@ -140,12 +160,14 @@ fn worker_paths_and_workspace_metadata_are_resolved_fail_closed() {
     assert!(exact_library_path(Path::new("missing-library"), "fixture")
         .unwrap_err()
         .contains("is not a file"));
-    assert!(explicit_openslide_library_from(None, None)
-        .unwrap_err()
-        .contains("requires an exact"));
+    let missing = explicit_openslide_library_from(None).unwrap_err();
+    assert!(missing.contains("requires an exact"), "{missing}");
+    assert!(
+        missing.contains("WSI_RS_OPENSLIDE_LIBRARY (or OPENSLIDE_LIB_PATH)"),
+        "{missing}"
+    );
     assert_eq!(
-        explicit_openslide_library_from(Some(manifest.clone().into_os_string()), None)
-            .expect("configured OpenSlide path"),
+        explicit_openslide_library_from(Some(manifest.clone())).expect("configured OpenSlide path"),
         manifest.canonicalize().expect("canonical manifest")
     );
 }
@@ -174,7 +196,7 @@ fn worker_process_failure_reports_engine_slide_and_repeat() {
         library: workspace_root().join("Cargo.toml"),
     };
     let error = run_bench(
-        BenchLibrary::WsiRs,
+        Engine::WsiRs,
         &invocation,
         Path::new("fixture.svs"),
         7,

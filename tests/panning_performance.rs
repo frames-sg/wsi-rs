@@ -3,11 +3,13 @@
 use std::{collections::BTreeMap, path::Path, time::Instant};
 
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use wsi_rs::{
-    CacheConfig, CpuTile, DecodeAcceleration, DecodeExecutionOptions, RegionRequest, Slide,
-    SlideOpenOptions, TileCache, TileLayout,
+    CacheConfig, CpuTile, DecodeAcceleration, RegionRequest, Slide, TileCache, TileLayout,
 };
+
+#[allow(dead_code)]
+#[path = "support/bench.rs"]
+mod bench;
 
 #[test]
 #[ignore = "requires a real slide and WSI_RS_PAN_OUTPUT; run in release mode"]
@@ -20,14 +22,8 @@ fn panning_matrix() {
         "auto" => DecodeAcceleration::Auto,
         _ => panic!("WSI_RS_PAN_BACKEND must be cpu or auto"),
     };
-    let execution = DecodeExecutionOptions::default().with_acceleration(acceleration);
-    let metadata = Slide::open_with_options(
-        path,
-        SlideOpenOptions::default().with_decode_execution_options(
-            DecodeExecutionOptions::default().with_acceleration(DecodeAcceleration::CpuOnly),
-        ),
-    )
-    .unwrap();
+    let metadata =
+        Slide::open_with_options(path, bench::cpu_only_options(CacheConfig::default())).unwrap();
     let size: u32 = std::env::var("WSI_RS_PAN_SIZE")
         .unwrap_or_else(|_| "512".into())
         .parse()
@@ -91,21 +87,8 @@ fn panning_matrix() {
     assert!((1..=4).contains(&concurrency));
     let mut results = Vec::new();
     let mut expected = BTreeMap::new();
-    for (profile, cache) in [
-        ("default", CacheConfig::default()),
-        (
-            "disabled",
-            CacheConfig::default()
-                .with_shared_tile_bytes(0)
-                .with_display_tile_bytes(0),
-        ),
-        (
-            "small",
-            CacheConfig::default()
-                .with_shared_tile_bytes(1024 * 1024)
-                .with_display_tile_bytes(0),
-        ),
-    ] {
+    for profile in bench::CACHE_PROFILES {
+        let cache = bench::cache_profile(profile);
         for level in [0, 2.min(levels.len() - 1)] {
             let (width, height) = levels[level].dimensions;
             let tile_size = match levels[level].tile_layout {
@@ -156,13 +139,9 @@ fn panning_matrix() {
                     .collect();
                 for repeat in 0..repeats {
                     let start = Instant::now();
-                    let slide = Slide::open_with_options(
-                        path,
-                        SlideOpenOptions::default()
-                            .with_cache_config(cache)
-                            .with_decode_execution_options(execution),
-                    )
-                    .unwrap();
+                    let slide =
+                        Slide::open_with_options(path, bench::open_options(cache, acceleration))
+                            .unwrap();
                     let open_us = start.elapsed().as_secs_f64() * 1e6;
                     let observed_cache = std::sync::Arc::new(TileCache::new(
                         cache.shared_tile_bytes.unwrap_or(64 * 1024 * 1024),
@@ -172,7 +151,7 @@ fn panning_matrix() {
                         let cache_before = observed_cache.stats();
                         let mut latencies = Vec::new();
                         let mut tiles = Vec::new();
-                        let execution_before = execution_counters();
+                        let execution_before = bench::execution_counters();
                         let sequence_start = Instant::now();
                         if concurrency == 1 {
                             for req in &reqs {
@@ -209,23 +188,21 @@ fn panning_matrix() {
                             }
                         }
                         let elapsed_us = sequence_start.elapsed().as_secs_f64() * 1e6;
-                        let execution_after = execution_counters();
-                        let mut digest = Sha256::new();
+                        let execution_after = bench::execution_counters();
                         let mut colored_pixels = 0usize;
                         for tile in &tiles {
                             assert_eq!((tile.width(), tile.height()), (size, size));
-                            digest.update(tile.width().to_le_bytes());
-                            digest.update(tile.height().to_le_bytes());
-                            let bytes = tile.data().as_u8().unwrap();
-                            digest.update(bytes);
-                            colored_pixels += bytes
+                            colored_pixels += tile
+                                .data()
+                                .as_u8()
+                                .unwrap()
                                 .as_chunks::<3>()
                                 .0
                                 .iter()
                                 .filter(|p| p.iter().max().unwrap() - p.iter().min().unwrap() > 20)
                                 .count();
                         }
-                        let checksum = format!("{:x}", digest.finalize());
+                        let checksum = bench::tile_checksum(&tiles);
                         assert_eq!(
                             expected
                                 .entry(workload.clone())
@@ -255,17 +232,6 @@ fn panning_matrix() {
         "levels": levels.iter().map(|l| json!({"dimensions": l.dimensions, "downsample": l.downsample, "layout": format!("{:?}", l.tile_layout)})).collect::<Vec<_>>(),
         "os_cache": "uncontrolled; cold_reader means a newly opened slide, not cold filesystem",
         "results": results})).unwrap()).unwrap();
-}
-
-fn execution_counters() -> serde_json::Value {
-    #[cfg(feature = "route-telemetry")]
-    {
-        serde_json::from_str(&wsi_rs::decode_route_telemetry_json()).unwrap()
-    }
-    #[cfg(not(feature = "route-telemetry"))]
-    {
-        serde_json::Value::Null
-    }
 }
 
 /// Repeated warm traces resolve short-sequence jitter without timing verification.
@@ -301,25 +267,14 @@ fn warm_region_revisits() {
             })
             .collect::<Vec<_>>();
         assert_eq!(requests.len(), 8);
-        let slide = Slide::open_with_options(
-            path,
-            SlideOpenOptions::default().with_decode_execution_options(
-                DecodeExecutionOptions::default().with_acceleration(DecodeAcceleration::CpuOnly),
-            ),
-        )
-        .unwrap();
+        let slide = Slide::open_with_options(path, bench::cpu_only_options(CacheConfig::default()))
+            .unwrap();
         let expected = requests
             .iter()
             .map(|req| slide.read_region(req).unwrap())
             .collect::<Vec<_>>();
-        let mut digest = Sha256::new();
-        for tile in &expected {
-            digest.update(tile.width().to_le_bytes());
-            digest.update(tile.height().to_le_bytes());
-            digest.update(tile.data().as_u8().unwrap());
-        }
         assert_eq!(
-            format!("{:x}", digest.finalize()),
+            bench::tile_checksum(&expected),
             row["checksum"].as_str().unwrap()
         );
         let cycles = (64_u64 * 2048 * 2048 / u64::from(size).pow(2)).clamp(64, 4096);

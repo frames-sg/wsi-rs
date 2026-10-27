@@ -8,7 +8,7 @@ use support::{fixture_path, fnv1a_argb};
 
 #[test]
 fn aperio_reduced_level_reads_preserve_fractional_origins() {
-    let Some(path) = fixture_path("svs-001", "svs") else {
+    let Some(path) = fixture_path("svs-001") else {
         return;
     };
 
@@ -48,7 +48,7 @@ fn aperio_reduced_level_reads_preserve_fractional_origins() {
 
 #[test]
 fn aperio_associated_images_read_through_the_c_abi() {
-    let Some(path) = fixture_path("svs-001", "svs") else {
+    let Some(path) = fixture_path("svs-001") else {
         return;
     };
 

@@ -185,8 +185,8 @@ fn cached_dense_reads_match_the_composed_path() {
 #[test]
 fn banding_does_not_bypass_complete_region_limits() {
     use wsi_rs::{SlideLimits, SlideOpenOptions};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../tests/fixtures/jp2k/rgb_nomct.j2k");
+    let path = crate::rgb_nomct_fixture();
+    let path = path.to_str().expect("UTF-8 fixture path");
     for (limits, resource) in [
         (
             SlideLimits::default()
@@ -201,9 +201,8 @@ fn banding_does_not_bypass_complete_region_limits() {
             "region RGBA output",
         ),
     ] {
-        let slide =
-            Slide::open_with_options(&path, SlideOpenOptions::default().with_limits(limits))
-                .unwrap();
+        let slide = Slide::open_with_options(path, SlideOpenOptions::default().with_limits(limits))
+            .unwrap();
         let level = &slide.dataset().scenes[0].series[0].levels[0];
         let request = RegionRequest::new(0, 0, 0, (0, 0), (512, 513));
         let mut pixels = vec![u32::MAX; 512 * 513];

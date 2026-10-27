@@ -40,9 +40,7 @@ impl<'a> ReadExecutionContext<'a> {
     }
 
     pub(crate) fn try_extra(&self, bytes: u64) -> Result<Option<OptionalWork<'_>>, WsiError> {
-        if let Some(control) = self.control {
-            control.check_cancelled()?;
-        }
+        check_cancelled_opt(self.control)?;
         let mut extra = self.extra.lock().unwrap_or_else(|error| error.into_inner());
         if self
             .reservation

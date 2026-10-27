@@ -7,7 +7,6 @@ mod slide;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,19 +16,17 @@ use std::sync::{Arc, Mutex};
 use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
-use crate::core::limits::read_file_bounded;
+use crate::core::limits::read_to_end_bounded;
 use crate::core::registry::{
-    read_cpu_tiles, BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe,
-    ConfiguredProbeCache, ConservativeManagedReader, DatasetReader, FormatProbe,
-    ManagedSlideReader, OpenBudget, ProbeConfidence, ProbeResult, SlideReader,
+    BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, ConfiguredProbeCache,
+    ConservativeManagedReader, DatasetReader, FormatProbe, ManagedSlideReader, OpenBudget,
+    ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::*;
-use crate::decode::jpeg::{decode_batch_jpeg, JpegDecodeJob};
 use crate::decode::jpeg::{jpeg_dimensions, JpegTileGeometry};
 use crate::error::WsiError;
 use crate::formats::companion_path::resolve_companion_file;
 use crate::properties::Properties;
-use j2k_core::BackendRequest;
 use j2k_jpeg::{
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
     PixelFormat as J2kPixelFormat, Rect as J2kRect,

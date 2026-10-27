@@ -4,6 +4,7 @@
 //! associated images, and z-stack planes. Produces a DatasetLayout
 //! with TileSource descriptors for each plane.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
@@ -14,20 +15,12 @@ use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 use j2k_jpeg::Decoder as J2kJpegDecoder;
 
-use super::{
-    compression_from_tag, finish_single_scene_uint8_tiff_layout, DatasetLayout,
-    TiffLayoutInterpreter, TileSource, TileSourceKey,
+use super::common::{
+    add_tiff_resolution_properties, associated_channels, compression_from_tag, level_area,
+    ResolutionStyle, SingleSceneTiffLayout,
 };
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-// ── NDPI-specific tag constants ───────────────────────────────────
-
-const NDPI_SOURCELENS: u16 = 65421;
-const NDPI_XOFFSET: u16 = 65422;
-const NDPI_YOFFSET: u16 = 65423;
-const NDPI_FOCAL_PLANE: u16 = 65424;
-const NDPI_MCU_STARTS: u16 = 65426;
-const NDPI_REFERENCE: u16 = 65427;
-const NDPI_PROPERTY_MAP: u16 = 65449;
 const JPEG_HEADER_PROBE_BYTES: u64 = 4096;
 
 #[derive(Clone)]
@@ -256,12 +249,14 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                 continue;
             }
 
-            let source_lens = container.get_f64(ifd_id, NDPI_SOURCELENS).unwrap_or(0.0);
+            let source_lens = container
+                .get_f64(ifd_id, tags::NDPI_SOURCELENS)
+                .unwrap_or(0.0);
 
             if source_lens > 0.0 {
                 // Pyramid level
                 let focal_plane = container
-                    .get_f64(ifd_id, NDPI_FOCAL_PLANE)
+                    .get_f64(ifd_id, tags::NDPI_FOCAL_PLANE)
                     .map(|v| v as i64)
                     .unwrap_or(0);
 
@@ -310,10 +305,7 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
                 } else {
                     None
                 };
-                let channels = container
-                    .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-                    .unwrap_or(3)
-                    .clamp(1, u32::from(u16::MAX)) as u16;
+                let channels = associated_channels(container, ifd_id);
 
                 associated_images.insert(
                     name.to_string(),
@@ -365,18 +357,19 @@ impl TiffLayoutInterpreter for NdpiInterpreter {
             .last()
             .map(|ifd| ifd.ifd_id)
             .ok_or_else(|| TiffParseError::Structure("No pyramid IFDs in NDPI container".into()))?;
-        finish_single_scene_uint8_tiff_layout(
-            container,
+        SingleSceneTiffLayout {
             lowest_resolution_ifd,
             property_ifd,
-            AxesShape::new(z_count, 1, 1),
+            identity_extra_strings: &[],
+            axes: AxesShape::new(z_count, 1, 1),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: pyramid_ifds.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 
@@ -394,11 +387,7 @@ impl NdpiInterpreter {
         pyramid_ifds: &mut [ClassifiedIfd],
     ) -> Result<(Vec<Level>, HashMap<TileSourceKey, TileSource>, u32), TiffParseError> {
         // Sort by area descending (largest first = level 0)
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         let tiff_base_dims = (pyramid_ifds[0].width, pyramid_ifds[0].height);
         for ifd in pyramid_ifds.iter_mut().skip(1) {
@@ -408,11 +397,7 @@ impl NdpiInterpreter {
                 &ifd.jpeg_probe,
             )?;
         }
-        pyramid_ifds.sort_by(|a, b| {
-            let area_a = u128::from(a.width) * u128::from(a.height);
-            let area_b = u128::from(b.width) * u128::from(b.height);
-            area_b.cmp(&area_a)
-        });
+        pyramid_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         // Group by SOURCELENS value -- each distinct value is one pyramid level
         // Use a Vec of (source_lens_bits, Vec<&ClassifiedIfd>) to preserve sort order.
@@ -543,7 +528,7 @@ impl NdpiInterpreter {
                         TileSource::NdpiJpeg {
                             ifd_id: ifd.ifd_id,
                             jpeg_header: ifd_probe.header,
-                            mcu_starts_tag: NDPI_MCU_STARTS,
+                            mcu_starts_tag: tags::NDPI_MCU_STARTS,
                             tiles_across: plane_ta,
                             tiles_down: plane_td,
                             restart_interval: plane_ri,
@@ -649,7 +634,7 @@ impl NdpiInterpreter {
         }
 
         // SourceLens -> objective power
-        if let Ok(lens) = container.get_f64(first_ifd, NDPI_SOURCELENS) {
+        if let Ok(lens) = container.get_f64(first_ifd, tags::NDPI_SOURCELENS) {
             if lens > 0.0 {
                 properties.insert("hamamatsu.SourceLens", format!("{}", lens));
                 properties.insert("openslide.objective-power", format!("{}", lens));
@@ -657,7 +642,7 @@ impl NdpiInterpreter {
         }
 
         // NDPI property map: key=value\r\n pairs
-        if let Ok(prop_map) = container.get_string(first_ifd, NDPI_PROPERTY_MAP) {
+        if let Ok(prop_map) = container.get_string(first_ifd, tags::NDPI_PROPERTY_MAP) {
             for line in prop_map.split("\r\n") {
                 if let Some((key, val)) = line.split_once('=') {
                     if !key.is_empty() && !val.is_empty() {
@@ -668,42 +653,32 @@ impl NdpiInterpreter {
         }
 
         // NDPI offsets
-        if let Ok(xoff) = container.get_f64(first_ifd, NDPI_XOFFSET) {
+        if let Ok(xoff) = container.get_f64(first_ifd, tags::NDPI_XOFFSET) {
             properties.insert(
                 "hamamatsu.XOffsetFromSlideCentre",
                 format!("{}", xoff as i64),
             );
         }
-        if let Ok(yoff) = container.get_f64(first_ifd, NDPI_YOFFSET) {
+        if let Ok(yoff) = container.get_f64(first_ifd, tags::NDPI_YOFFSET) {
             properties.insert(
                 "hamamatsu.YOffsetFromSlideCentre",
                 format!("{}", yoff as i64),
             );
         }
-        if let Ok(reference) = container.get_string(first_ifd, NDPI_REFERENCE) {
+        if let Ok(reference) = container.get_string(first_ifd, tags::NDPI_REFERENCE) {
             properties.insert("hamamatsu.Reference", reference.to_string());
         }
 
-        // MPP from XResolution / YResolution (NDPI stores pixels/cm, unit=3).
-        let res_unit = container
-            .get_u32(first_ifd, tags::RESOLUTION_UNIT)
-            .unwrap_or(3); // NDPI default: centimeter
-        let unit_to_microns = match res_unit {
-            3 => 10_000.0, // 1 cm = 10,000 µm
-            _ => 25_400.0, // 1 inch = 25,400 µm
-        };
-        if let Ok(x_res) = container.get_f64(first_ifd, tags::X_RESOLUTION) {
-            if x_res > 0.0 {
-                let mpp_x = unit_to_microns / x_res;
-                properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-            }
-        }
-        if let Ok(y_res) = container.get_f64(first_ifd, tags::Y_RESOLUTION) {
-            if y_res > 0.0 {
-                let mpp_y = unit_to_microns / y_res;
-                properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
-            }
-        }
+        // NDPI stores pixels per centimeter and reports MPP to six decimals.
+        add_tiff_resolution_properties(
+            container,
+            first_ifd,
+            &mut properties,
+            ResolutionStyle {
+                default_unit: 3,
+                decimals: Some(6),
+            },
+        );
 
         Ok(properties)
     }

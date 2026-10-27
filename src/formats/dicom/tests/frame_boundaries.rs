@@ -89,14 +89,6 @@ fn fragment_window_copy_rejects_underflow_and_truncation() {
 }
 
 #[test]
-fn reopening_a_missing_dicom_preserves_path_context() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("missing.dcm");
-
-    assert_error_contains(reopen_dicom_object(&path), "failed to reopen DICOM object");
-}
-
-#[test]
 fn positional_reads_preserve_seek_and_read_failures() {
     let path = Path::new("positional-read.dcm");
     let mut seek_failure = SeekErrorReader;

@@ -48,17 +48,14 @@ struct ColorStats {
 }
 
 #[test]
+#[ignore = "requires selected public color corpus; run cargo xtask parity-corpus-test"]
 fn public_brightfield_color_sanity_svs_ndpi_dicom() {
     let cases = color_cases();
     let mut checked = 0usize;
-    let mut missing = Vec::new();
 
     for case in &cases {
-        let Some(path) = resolve_case_path(case) else {
-            missing.push(case.label);
-            eprintln!("[color] {}: missing sample; skipping", case.label);
-            continue;
-        };
+        let path = resolve_case_path(case)
+            .unwrap_or_else(|| panic!("[color] required sample missing: {}", case.label));
         let region = read_overview_region(&path)
             .unwrap_or_else(|err| panic!("[color] {} read failed: {err}", case.label));
         let stats = color_stats(&region.pixels_rgba);
@@ -85,21 +82,16 @@ fn public_brightfield_color_sanity_svs_ndpi_dicom() {
         checked += 1;
     }
 
-    if checked == 0 {
-        eprintln!(
-            "[color] no public color samples were available; skipped {:?}",
-            missing
-        );
-    }
+    assert!(checked > 0, "no public color samples selected");
 }
 
 #[cfg(feature = "parity-openslide")]
 #[test]
+#[ignore = "requires selected SVS/NDPI corpus and OpenSlide; run cargo xtask parity-corpus-test"]
 fn svs_and_ndpi_overview_color_matches_openslide() {
-    let Some(lib) = support::openslide_shim::try_load() else {
-        eprintln!("[color-openslide] libopenslide unavailable; skipping");
-        return;
-    };
+    let lib = support::openslide_shim::try_load()
+        .unwrap_or_else(|error| panic!("[color-openslide] {error}"))
+        .expect("OpenSlide is required for the color corpus comparison");
     let cases: Vec<_> = color_cases()
         .into_iter()
         .filter(|case| matches!(case.label, "svs" | "ndpi"))
@@ -107,10 +99,8 @@ fn svs_and_ndpi_overview_color_matches_openslide() {
     let mut checked = 0usize;
 
     for case in &cases {
-        let Some(path) = resolve_case_path(case) else {
-            eprintln!("[color-openslide] {}: missing sample; skipping", case.label);
-            continue;
-        };
+        let path = resolve_case_path(case)
+            .unwrap_or_else(|| panic!("[color-openslide] required sample missing: {}", case.label));
         let ours = read_overview_region(&path)
             .unwrap_or_else(|err| panic!("[color-openslide] {} wsi_rs read: {err}", case.label));
         let openslide = lib
@@ -130,9 +120,7 @@ fn svs_and_ndpi_overview_color_matches_openslide() {
         checked += 1;
     }
 
-    if checked == 0 {
-        eprintln!("[color-openslide] no SVS/NDPI samples were available; skipped");
-    }
+    assert!(checked > 0, "no SVS/NDPI color samples selected");
 }
 
 fn color_cases() -> Vec<ColorCase> {
@@ -185,14 +173,20 @@ fn color_cases() -> Vec<ColorCase> {
             },
         },
     ]
+    .into_iter()
+    .filter(|case| match case.alias {
+        Some(alias) => support::corpus::alias_selected(alias),
+        None => case
+            .env_path
+            .is_some_and(|name| std::env::var_os(name).is_some()),
+    })
+    .collect()
 }
 
 fn resolve_case_path(case: &ColorCase) -> Option<PathBuf> {
     if let Some(env_path) = case.env_path {
         if let Some(path) = std::env::var_os(env_path).map(PathBuf::from) {
-            if path.is_file() {
-                return Some(path);
-            }
+            return path.is_file().then_some(path);
         }
     }
 
@@ -202,22 +196,10 @@ fn resolve_case_path(case: &ColorCase) -> Option<PathBuf> {
         }
     }
 
-    for relative in case.relative_paths {
-        for root in candidate_roots() {
-            let path = root.join(relative);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-fn candidate_roots() -> Vec<PathBuf> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_parent = manifest_dir.parent().unwrap_or(manifest_dir);
-    vec![manifest_dir.to_path_buf(), workspace_parent.to_path_buf()]
+    case.relative_paths
+        .iter()
+        .flat_map(|relative| support::corpus::local_testdata_candidates(Path::new(relative)))
+        .find(|path| path.is_file())
 }
 
 fn read_overview_region(path: &Path) -> Result<RgbaRegion, String> {

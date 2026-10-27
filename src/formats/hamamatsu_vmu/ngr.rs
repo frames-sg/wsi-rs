@@ -2,7 +2,6 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use super::invalid;
 use crate::core::positioned_file::PositionedFile;
 use crate::core::types::*;
 use crate::error::WsiError;
@@ -18,14 +17,17 @@ pub(super) struct Ngr {
 
 impl Ngr {
     pub(super) fn open(path: &Path) -> Result<Self, WsiError> {
-        let file = File::open(path).map_err(|e| io_error(path, e))?;
-        let length = file.metadata().map_err(|e| io_error(path, e))?.len();
+        let file = File::open(path).map_err(|e| WsiError::io_with_path(path, e))?;
+        let length = file
+            .metadata()
+            .map_err(|e| WsiError::io_with_path(path, e))?
+            .len();
         let file = PositionedFile::new(file);
         let mut header = [0u8; 28];
         file.read_exact_at(&mut header, 0)
-            .map_err(|e| io_error(path, e))?;
+            .map_err(|e| WsiError::io_with_path(path, e))?;
         if &header[..2] != b"GN" {
-            return Err(invalid(path, "NGR magic must be GN"));
+            return Err(WsiError::invalid_slide(path, "NGR magic must be GN"));
         }
         let word = |offset| {
             u32::from_le_bytes(
@@ -38,7 +40,7 @@ impl Ngr {
             (word(4), word(8), word(12), u64::from(word(24)));
         if width == 0 || height == 0 || column_width == 0 || width % column_width != 0 || start < 28
         {
-            return Err(invalid(
+            return Err(WsiError::invalid_slide(
                 path,
                 "invalid NGR dimensions, column width, or data offset",
             ));
@@ -47,9 +49,9 @@ impl Ngr {
             .checked_mul(u64::from(height))
             .and_then(|n| n.checked_mul(6))
             .and_then(|n| n.checked_add(start))
-            .ok_or_else(|| invalid(path, "NGR data span overflow"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "NGR data span overflow"))?;
         if end > length {
-            return Err(invalid(path, "truncated NGR pixel data"));
+            return Err(WsiError::invalid_slide(path, "truncated NGR pixel data"));
         }
         Ok(Self {
             file,
@@ -88,12 +90,10 @@ impl Ngr {
             || req.col >= i64::from(self.width.div_ceil(tw))
             || req.row >= i64::from(self.height.div_ceil(th))
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "NGR tile coordinates out of range".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "NGR tile coordinates out of range",
+            ));
         }
         let x = req.col as u32 * tw;
         let y = req.row as u32 * th;
@@ -128,7 +128,7 @@ impl Ngr {
                 let data = &mut row[..count as usize * 6];
                 self.file
                     .read_exact_at(data, self.start + pixel * 6)
-                    .map_err(|e| io_error(&self.path, e))?;
+                    .map_err(|e| WsiError::io_with_path(&self.path, e))?;
                 let dest = (dy as usize * width as usize + dx as usize) * 3;
                 for (out, pair) in samples[dest..dest + count as usize * 3]
                     .iter_mut()
@@ -147,12 +147,5 @@ impl Ngr {
             CpuTileLayout::Interleaved,
             CpuTileData::u16(samples),
         )
-    }
-}
-
-fn io_error(path: &Path, source: std::io::Error) -> WsiError {
-    WsiError::IoWithPath {
-        source: std::sync::Arc::new(source),
-        path: path.to_path_buf(),
     }
 }

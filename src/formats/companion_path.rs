@@ -58,10 +58,10 @@ fn invalid_companion(
     metadata_path: &str,
     reason: impl std::fmt::Display,
 ) -> WsiError {
-    WsiError::InvalidSlide {
-        path: slide_path.to_path_buf(),
-        message: format!("invalid companion path {metadata_path:?}: {reason}"),
-    }
+    WsiError::invalid_slide(
+        slide_path,
+        format!("invalid companion path {metadata_path:?}: {reason}"),
+    )
 }
 
 #[cfg(test)]

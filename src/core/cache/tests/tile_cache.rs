@@ -84,7 +84,7 @@ fn private_cache_budget_is_byte_weighted_and_bounds_aggregate_capacity() {
     let config = CacheConfig::deterministic().with_shared_tile_bytes(8 * 1024);
     let mut budget = config.private_cache_budget(8);
     let mut caches = (0..8)
-        .map(|_| PrivateCache::<u32, u32>::new(budget.allocate(1024)))
+        .map(|_| PrivateCache::<u32, u32>::new(budget.allocate_share()))
         .collect::<Vec<_>>();
 
     assert!(
@@ -112,7 +112,7 @@ fn private_cache_budget_is_byte_weighted_and_bounds_aggregate_capacity() {
 fn deterministic_default_cache_split_is_sixty_four_thirty_two_thirty_two_mib() {
     let config = CacheConfig::deterministic();
 
-    assert_eq!(config.shared_tile_budget(Some(1)), 64 * 1024 * 1024);
+    assert_eq!(config.shared_tile_budget(), 64 * 1024 * 1024);
     assert_eq!(config.display_tile_budget(), 32 * 1024 * 1024);
     assert_eq!(config.private_cache_budget_bytes(), 32 * 1024 * 1024);
 }
@@ -124,9 +124,11 @@ fn weighted_private_shares_preserve_odd_and_maximum_budgets() {
         let mut budget = config.private_cache_budget(6);
         let source = budget.allocate_shares(3).accounted_bytes;
         assert_eq!(source, config.private_cache_budget_bytes() / 2);
-        let rest: u64 = (0..3).map(|_| budget.allocate(1).accounted_bytes).sum();
+        let rest: u64 = (0..3)
+            .map(|_| budget.allocate_share().accounted_bytes)
+            .sum();
         assert_eq!(source + rest, config.private_cache_budget_bytes());
-        assert_eq!(budget.allocate(1).accounted_bytes, 0);
+        assert_eq!(budget.allocate_share().accounted_bytes, 0);
     }
 }
 

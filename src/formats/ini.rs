@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::core::limits::read_file_bounded;
 use crate::core::registry::OpenBudget;
@@ -25,15 +24,14 @@ pub(crate) fn parse_ini_file_with_budget(
             return Err(too_large(path));
         }
         Err(source) => {
-            return Err(WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.to_path_buf(),
-            });
+            return Err(WsiError::io_with_path(path, source));
         }
     };
-    let text = String::from_utf8(bytes).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(std::io::Error::new(std::io::ErrorKind::InvalidData, source)),
-        path: path.to_path_buf(),
+    let text = String::from_utf8(bytes).map_err(|source| {
+        WsiError::io_with_path(
+            path,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+        )
     })?;
     let text = if strip_utf8_bom {
         text.strip_prefix('\u{feff}').unwrap_or(&text)

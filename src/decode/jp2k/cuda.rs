@@ -1,5 +1,6 @@
 use j2k_core::{DeviceSurface as J2kDeviceSurface, PixelFormat as J2kPixelFormat};
 
+use super::device::{DeviceWindow, DEVICE_WINDOW_TARGET_BYTES};
 use super::prepare::PreparedJp2kJob;
 use super::Jp2kColorSpace;
 use crate::error::WsiError;
@@ -24,18 +25,17 @@ pub(super) fn decode_prepared_jobs(
             output.push(decode_prepared_jp2k_cuda(&first, sessions));
             continue;
         }
-        let mut bytes = first.output_len;
+        // Use the same window as Metal while j2k 0.12 plans encoded inputs in
+        // parallel and reuses pinned uploads and output pools.
+        let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+        window.admit(first.decoded_width, first.decoded_height);
         let mut group = vec![first];
-        // Use the same 4 MiB execution target as Metal while j2k 0.12 plans
-        // encoded inputs in parallel and reuses pinned uploads and output pools.
         while let Some(Ok(next)) = jobs.peek() {
-            if group.len() == 16
-                || next.output_colorspace != Jp2kColorSpace::Rgb
-                || bytes.saturating_add(next.output_len) > 4 * 1024 * 1024
+            if next.output_colorspace != Jp2kColorSpace::Rgb
+                || !window.admit(next.decoded_width, next.decoded_height)
             {
                 break;
             }
-            bytes += next.output_len;
             group.push(*next);
             jobs.next();
         }

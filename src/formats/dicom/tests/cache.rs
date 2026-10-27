@@ -3,15 +3,14 @@ use super::*;
 use crate::SlideLimits;
 #[test]
 fn private_frame_cache_capacity_tracks_cache_config_bytes() {
-    let entry_bytes = dicom_frame_cache_entry_bytes(16, 16, 3, DicomBitDepth::Eight);
     let mut small_budget = CacheConfig::deterministic()
         .with_shared_tile_bytes(12 * 1024)
         .private_cache_budget(2);
     let mut large_budget = CacheConfig::deterministic()
         .with_shared_tile_bytes(48 * 1024)
         .private_cache_budget(2);
-    let small = PrivateCache::<u32, Arc<CpuTile>>::new(small_budget.allocate(entry_bytes));
-    let large = PrivateCache::<u32, Arc<CpuTile>>::new(large_budget.allocate(entry_bytes));
+    let small = PrivateCache::<u32, Arc<CpuTile>>::new(small_budget.allocate_share());
+    let large = PrivateCache::<u32, Arc<CpuTile>>::new(large_budget.allocate_share());
 
     assert_eq!(small.capacity_bytes(), 3 * 1024);
     assert_eq!(large.capacity_bytes(), 12 * 1024);

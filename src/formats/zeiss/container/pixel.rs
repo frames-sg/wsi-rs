@@ -98,6 +98,11 @@ pub(in crate::formats::zeiss) enum CompressionMode {
 }
 
 impl CompressionMode {
+    /// Whether WSI and embedded-image reads can decode this subblock compression.
+    pub(in crate::formats::zeiss) fn is_wsi_supported(self) -> bool {
+        matches!(self, Self::UnCompressed | Self::Jpg | Self::JpgXr)
+    }
+
     pub(in crate::formats::zeiss) fn compression(self) -> Compression {
         match self {
             Self::UnCompressed => Compression::None,

@@ -1,95 +1,93 @@
 use super::*;
 
 #[test]
-fn fixture_rgb_nomct_decodes_to_reference_rgb() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
-    let expected = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.ppm");
-    assert_fixture_decodes_to_expected(codestream, expected, Jp2kColorSpace::Rgb);
-}
-
-#[test]
-fn fixture_reversible_rct_preserves_reference_pixels_exactly() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.j2k");
-    let expected = load_fixture_rgb(include_bytes!(
-        "../../../../tests/fixtures/jp2k/rgb_rct.ppm"
-    ));
-    let decoded = decode_jp2k_to_sample_buffer(
-        codestream,
-        expected.width(),
-        expected.height(),
-        Jp2kColorSpace::Rgb,
-    )
-    .unwrap();
-    assert_eq!((decoded.width(), decoded.height()), expected.dimensions());
-    assert_eq!(decoded.as_u8(), Some(expected.as_raw().as_slice()));
-}
-
-#[test]
-fn fixture_rgb_nomct_sample_buffer_matches_rgba_decode_exactly() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
-    let header = parse_codestream_header(codestream).unwrap();
-
-    for (expected_width, expected_height) in [
-        (header.image_width, header.image_height),
-        (header.image_width, header.image_height - 1),
+fn fixtures_preserve_exact_pixels_and_independent_reference_compatibility() {
+    for (name, codestream, ppm, baseline, colorspace) in [
+        (
+            "rgb_nomct",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.ppm").as_slice(),
+            None,
+            Jp2kColorSpace::Rgb,
+        ),
+        (
+            "rgb_mct",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.ppm").as_slice(),
+            None,
+            Jp2kColorSpace::YCbCr,
+        ),
+        (
+            "rgb_rct",
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/rgb_rct.ppm").as_slice(),
+            None,
+            Jp2kColorSpace::Rgb,
+        ),
+        (
+            "ycbcr_444",
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_444.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_444.ppm").as_slice(),
+            Some(include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_444.wsi-rgb").as_slice()),
+            Jp2kColorSpace::YCbCr,
+        ),
+        (
+            "ycbcr_422",
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.ppm").as_slice(),
+            Some(include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.wsi-rgb").as_slice()),
+            Jp2kColorSpace::YCbCr,
+        ),
+        (
+            "ycbcr_420",
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.j2k").as_slice(),
+            include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.ppm").as_slice(),
+            Some(include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.wsi-rgb").as_slice()),
+            Jp2kColorSpace::YCbCr,
+        ),
     ] {
-        let rgba = decode_jp2k(
+        let reference = load_fixture_rgb(ppm);
+        let decoded = decode_jp2k_to_sample_buffer(
             codestream,
-            expected_width,
-            expected_height,
-            Jp2kColorSpace::Rgb,
+            reference.width(),
+            reference.height(),
+            colorspace,
         )
         .unwrap();
-        let sample = decode_jp2k_to_sample_buffer(
-            codestream,
-            expected_width,
-            expected_height,
-            Jp2kColorSpace::Rgb,
-        )
-        .unwrap();
-
-        assert_eq!(sample.width, expected_width);
-        assert_eq!(sample.height, expected_height);
-
-        let sample_rgb = sample.data.as_u8().unwrap();
-        let expected_rgb: Vec<u8> = rgba
-            .pixels()
-            .flat_map(|pixel| {
-                assert_eq!(pixel.0[3], 255);
-                [pixel.0[0], pixel.0[1], pixel.0[2]]
-            })
-            .collect();
-
-        assert_eq!(sample_rgb, expected_rgb.as_slice());
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            reference.dimensions(),
+            "{name}"
+        );
+        assert_eq!(
+            decoded.as_u8().unwrap(),
+            baseline.unwrap_or(reference.as_raw()),
+            "{name}: decoded bytes changed"
+        );
+        // Retain the independent decoder check for YCbCr rounding differences.
+        assert_sample_buffer_matches_rgb_fixture(&decoded, &reference);
     }
 }
 
 #[test]
-fn fixture_rgb_mct_decodes_with_ycbcr_hint() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.j2k");
-    let expected = include_bytes!("../../../../tests/fixtures/jp2k/rgb_mct.ppm");
-    assert_fixture_decodes_to_expected(codestream, expected, Jp2kColorSpace::YCbCr);
-}
-
-#[test]
-fn fixture_ycbcr_444_decodes_to_reference_rgb() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_444.j2k");
-    let expected = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_444.ppm");
-    assert_fixture_decodes_to_expected(codestream, expected, Jp2kColorSpace::YCbCr);
-}
-
-#[test]
-fn fixture_ycbcr_422_decodes_to_reference_rgb() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.j2k");
-    let expected = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_422.ppm");
-    assert_fixture_decodes_to_expected(codestream, expected, Jp2kColorSpace::YCbCr);
-}
-
-#[test]
-fn fixture_ycbcr_420_decodes_to_reference_rgb() {
-    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.j2k");
-    let expected = include_bytes!("../../../../tests/fixtures/jp2k/ycbcr_420.ppm");
-    assert_fixture_decodes_to_expected(codestream, expected, Jp2kColorSpace::YCbCr);
+fn cropped_sample_buffer_preserves_reference_pixels_exactly() {
+    let codestream = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
+    let reference = load_fixture_rgb(include_bytes!(
+        "../../../../tests/fixtures/jp2k/rgb_nomct.ppm"
+    ));
+    let height = reference.height() - 1;
+    let decoded =
+        decode_jp2k_to_sample_buffer(codestream, reference.width(), height, Jp2kColorSpace::Rgb)
+            .unwrap();
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (reference.width(), height)
+    );
+    let expected_len = reference.width() as usize * height as usize * 3;
+    assert_eq!(
+        decoded.as_u8().unwrap(),
+        &reference.as_raw()[..expected_len]
+    );
 }
 
 #[test]

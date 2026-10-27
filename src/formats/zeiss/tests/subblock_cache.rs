@@ -47,7 +47,7 @@ fn czi_large_source_groups_fit_decoded_staging() {
 fn concurrent_czi_batches_share_one_source_miss() {
     let fixture = jpeg_fixture();
     let mut slide = ZeissSlide::parse(fixture.path()).unwrap();
-    if crate::core::decode_runtime::DecodeRuntime::default_arc().cpu_worker_count() > 1 {
+    if crate::core::batch::cpu_worker_count() > 1 {
         slide
             .probe
             .set_miss_barrier(Arc::new(std::sync::Barrier::new(2)));
@@ -154,12 +154,8 @@ fn neighboring_tiles_decode_a_shared_compressed_subblock_once() {
     )
     .unwrap();
     for col in [0, 1] {
-        let actual = slide
-            .read_tile(0, 0, 0, col, 0, BackendRequest::Cpu)
-            .unwrap();
-        let expected = reference
-            .read_tile(0, 0, 0, col, 0, BackendRequest::Cpu)
-            .unwrap();
+        let actual = slide.read_tile(0, 0, 0, col, 0).unwrap();
+        let expected = reference.read_tile(0, 0, 0, col, 0).unwrap();
         assert_eq!(actual.data.as_u8(), expected.data.as_u8());
         assert_eq!((actual.width, actual.height), (256, 8));
     }
@@ -177,9 +173,7 @@ fn disabled_and_undersized_caches_keep_decoding_without_retention() {
         )
         .unwrap();
         for col in [0, 1, 0] {
-            let tile = slide
-                .read_tile(0, 0, 0, col, 0, BackendRequest::Cpu)
-                .unwrap();
+            let tile = slide.read_tile(0, 0, 0, col, 0).unwrap();
             assert_eq!((tile.width, tile.height), (256, 8));
         }
         assert_eq!(slide.probe.decodes(), 3);
@@ -203,9 +197,7 @@ fn subblock_eviction_respects_the_aggregate_private_budget() {
     let config = CacheConfig::default().with_shared_tile_bytes(52_224);
     let slide = ZeissSlide::parse_with_cache_config(fixture.path(), config).unwrap();
     for col in [0, 2, 1] {
-        slide
-            .read_tile(0, 0, 0, col, 0, BackendRequest::Cpu)
-            .unwrap();
+        slide.read_tile(0, 0, 0, col, 0).unwrap();
         let cache = slide.subblock_cache.lock().unwrap();
         assert_eq!(cache.len(), 1);
         assert!(cache.current_bytes() <= cache.capacity_bytes());
@@ -317,13 +309,11 @@ fn jpegxr_neighbors_and_mixed_overlap_match_reference_pixels() {
 fn cached_subblocks_do_not_hide_source_replacement() {
     let fixture = jpeg_fixture();
     let slide = ZeissSlide::parse(fixture.path()).unwrap();
-    slide.read_tile(0, 0, 0, 0, 0, BackendRequest::Cpu).unwrap();
+    slide.read_tile(0, 0, 0, 0, 0).unwrap();
     let directory = tempfile::tempdir().unwrap();
     std::fs::rename(fixture.path(), directory.path().join("original.czi")).unwrap();
     std::fs::copy(directory.path().join("original.czi"), fixture.path()).unwrap();
-    let error = slide
-        .read_tile(0, 0, 0, 1, 0, BackendRequest::Cpu)
-        .unwrap_err();
+    let error = slide.read_tile(0, 0, 0, 1, 0).unwrap_err();
     assert!(error.to_string().contains("source identity"));
     assert_eq!(slide.probe.decodes(), 1);
 }

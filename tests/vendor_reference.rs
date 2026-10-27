@@ -6,6 +6,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::Deserialize;
 use support::compare::{compare_rgba, tolerance_failure, Tolerance};
+use support::corpus::alias_selected;
 use wsi_rs::{CpuTileData, PlaneSelection, Slide};
 
 #[derive(Deserialize)]
@@ -92,15 +93,10 @@ fn vendor_native_pixels_match_independent_reference() {
             other => panic!("unsupported reference sample type {other}"),
         }
     }
-    let selected = |alias: &str| {
-        std::env::var("WSI_RS_PARITY_ALIASES").map_or(true, |aliases| {
-            aliases.split(',').any(|value| value.trim() == alias)
-        })
-    };
-    if selected("olympus-vsi-001") {
+    if alias_selected("olympus-vsi-001") {
         assert!(compared_rgb, "missing independent Olympus RGB probes");
     }
-    if selected("zeiss-zvi-001") {
+    if alias_selected("zeiss-zvi-001") {
         assert_eq!(
             compared_zvi_channels,
             BTreeSet::from([0, 1, 2]),

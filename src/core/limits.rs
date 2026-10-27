@@ -7,6 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
+use crate::core::read_control::check_cancelled_opt;
 use crate::{ReadControl, WsiError};
 
 pub(crate) const MAX_COMPRESSED_INPUT_BYTES: u64 = 128 * 1024 * 1024;
@@ -159,26 +160,29 @@ impl ReadWork {
             .checked_mul(2)
             .and_then(|decoded| self.encoded.checked_add(decoded))
             .unwrap_or(u64::MAX);
-        if requested > limit {
-            return Err(WsiError::ResourceLimit {
-                resource: "per-operation transient work",
-                requested,
-                limit,
-            });
-        }
-        Ok(requested)
+        ensure_within("per-operation transient work", requested, limit)
     }
 
     pub(crate) fn encoded_only_bytes(self, limit: u64) -> Result<u64, WsiError> {
-        if self.encoded > limit {
-            return Err(WsiError::ResourceLimit {
-                resource: "per-operation transient work",
-                requested: self.encoded,
-                limit,
-            });
-        }
-        Ok(self.encoded)
+        ensure_within("per-operation transient work", self.encoded, limit)
     }
+}
+
+/// Returns `requested` when it fits `limit`, and otherwise the
+/// [`WsiError::ResourceLimit`] naming `resource`.
+pub(crate) fn ensure_within(
+    resource: &'static str,
+    requested: u64,
+    limit: u64,
+) -> Result<u64, WsiError> {
+    if requested > limit {
+        return Err(WsiError::ResourceLimit {
+            resource,
+            requested,
+            limit,
+        });
+    }
+    Ok(requested)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,16 +241,8 @@ impl SlideAdmission {
         bytes: u64,
         control: Option<&ReadControl>,
     ) -> Result<TransientReservation, WsiError> {
-        if bytes > self.limit {
-            return Err(WsiError::ResourceLimit {
-                resource: "per-slide in-flight transient work",
-                requested: bytes,
-                limit: self.limit,
-            });
-        }
-        if let Some(control) = control {
-            control.check_cancelled()?;
-        }
+        ensure_within("per-slide in-flight transient work", bytes, self.limit)?;
+        check_cancelled_opt(control)?;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let ticket = state.next_ticket;
         state.next_ticket = state.next_ticket.wrapping_add(1);

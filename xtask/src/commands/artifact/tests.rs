@@ -325,7 +325,7 @@ EXPORT void openslide_cache_release(void *cache) { (void)cache; }
         }
     }
     fs::write(&source, definitions).unwrap();
-    run(
+    run_quiet(
         "cc",
         &[
             OsString::from("-shared"),
@@ -355,7 +355,7 @@ fn artifact_process_helpers_report_success_exit_and_spawn_failures() {
     )
     .is_err());
 
-    run("rustc", &[OsString::from("--version")]).unwrap();
-    assert!(run("rustc", &[OsString::from("--definitely-invalid")]).is_err());
-    assert!(run("wsi-rs-command-that-does-not-exist", &[]).is_err());
+    run_quiet("rustc", &[OsString::from("--version")]).unwrap();
+    assert!(run_quiet("rustc", &[OsString::from("--definitely-invalid")]).is_err());
+    assert!(run_quiet("wsi-rs-command-that-does-not-exist", &[]).is_err());
 }

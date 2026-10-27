@@ -129,6 +129,45 @@ fn interpret_ignores_associated_only_icc_for_main_series() {
 }
 
 #[test]
+fn interpret_clamps_associated_samples_per_pixel_instead_of_wrapping() {
+    let associated = |samples_per_pixel| {
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 400),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 300),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::long(tags::STRIP_OFFSETS, 100),
+            SyntheticTag::long(tags::STRIP_BYTE_COUNTS, 5000),
+            SyntheticTag::long(tags::SAMPLES_PER_PIXEL, samples_per_pixel),
+        ]
+    };
+    let file = build_aperio_tiff(&[
+        vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, 4096),
+            SyntheticTag::long(tags::IMAGE_LENGTH, 3072),
+            SyntheticTag::long(tags::TILE_WIDTH, 256),
+            SyntheticTag::long(tags::TILE_LENGTH, 256),
+            SyntheticTag::short(tags::COMPRESSION, 7),
+            SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Aperio Image Library v1.0"),
+        ],
+        associated(65_536),
+        {
+            let mut label = associated(0);
+            label.push(SyntheticTag::long(tags::SUBFILE_TYPE, 1));
+            label
+        },
+    ]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    assert_eq!(
+        layout.dataset.associated_images["thumbnail"].channels,
+        u16::MAX
+    );
+    assert_eq!(layout.dataset.associated_images["label"].channels, 1);
+}
+
+#[test]
 fn interpret_multi_level_sorted_by_area() {
     let file = build_aperio_tiff(&[
         // IFD 0: large (level 0 after sorting)
@@ -196,6 +235,35 @@ fn interpret_multi_level_reverse_order() {
     // Largest first regardless of IFD chain order
     assert_eq!(series.levels[0].dimensions, (4096, 3072));
     assert_eq!(series.levels[1].dimensions, (512, 384));
+}
+
+#[test]
+fn interpret_sorts_levels_whose_area_overflows_u64() {
+    use crate::formats::tiff_family::test_support::{self, build_bigtiff};
+
+    // BigTIFF LONG8 sizes: the 2^32 x 2^32 level's area does not fit in u64.
+    let level = |side: u64| {
+        vec![
+            test_support::SyntheticTag::long8(tags::IMAGE_WIDTH, side),
+            test_support::SyntheticTag::long8(tags::IMAGE_LENGTH, side),
+            test_support::SyntheticTag::long(tags::TILE_WIDTH, 256),
+            test_support::SyntheticTag::long(tags::TILE_LENGTH, 256),
+            test_support::SyntheticTag::short(tags::COMPRESSION, 7),
+        ]
+    };
+    let mut small = level(1 << 31);
+    small.push(test_support::SyntheticTag::ascii(
+        tags::IMAGE_DESCRIPTION,
+        "Aperio Image Library v1.0",
+    ));
+    let file = build_bigtiff(&[small, level(1 << 32)]);
+
+    let container = TiffContainer::open(file.path()).unwrap();
+    let layout = AperioInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels[0].dimensions, (1 << 32, 1 << 32));
+    assert_eq!(levels[1].dimensions, (1 << 31, 1 << 31));
 }
 
 #[test]

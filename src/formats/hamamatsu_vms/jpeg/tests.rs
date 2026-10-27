@@ -306,8 +306,8 @@ fn vms_jpeg_reports_invalid_scale_index_and_corrupt_entropy() {
     write_restart_jpeg(&path, 128, 16);
 
     let jpeg = VmsJpeg::parse(&path, Vec::new()).expect("parse restart JPEG");
-    assert!(jpeg.decode_tile(0, 3, BackendRequest::Auto).is_err());
-    assert!(jpeg.decode_tile(4, 1, BackendRequest::Auto).is_err());
+    assert!(jpeg.decode_tile(0, 3).is_err());
+    assert!(jpeg.decode_tile(4, 1).is_err());
     assert!(!jpeg.valid_recorded_restart_offset(0).unwrap());
     assert!(jpeg
         .valid_recorded_restart_offset(jpeg.header.len() as u64)
@@ -318,11 +318,11 @@ fn vms_jpeg_reports_invalid_scale_index_and_corrupt_entropy() {
 
     let mut corrupt = VmsJpeg::parse(&path, Vec::new()).expect("parse corruptible JPEG");
     corrupt.header[0] = 0;
-    assert!(corrupt.decode_tile(0, 1, BackendRequest::Auto).is_err());
+    assert!(corrupt.decode_tile(0, 1).is_err());
 
     let truncated = VmsJpeg::parse(&path, Vec::new()).expect("parse truncatable JPEG");
     fs::write(&path, &truncated.header).expect("truncate JPEG after parse");
-    assert!(truncated.decode_tile(0, 1, BackendRequest::Auto).is_err());
+    assert!(truncated.decode_tile(0, 1).is_err());
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn poisoned_vms_jpeg_mutexes_recover_without_changing_pixels() {
     poison(&jpeg.decoded_tile_cache);
     poison(&jpeg.file);
     let tile = jpeg
-        .decode_tile(3, 1, BackendRequest::Auto)
+        .decode_tile(3, 1)
         .expect("decode with recovered poisoned mutexes");
     assert_eq!((tile.width(), tile.height()), (64, 8));
 }
@@ -376,7 +376,7 @@ fn tile_read_reports_file_read_and_entropy_marker_failures() {
         .expect("write-only JPEG");
     read_failure.payload_file = crate::core::positioned_file::PositionedFile::new(write_only);
     assert!(matches!(
-        read_failure.decode_tile(0, 1, BackendRequest::Auto),
+        read_failure.decode_tile(0, 1),
         Err(WsiError::IoWithPath { .. })
     ));
 
@@ -388,7 +388,7 @@ fn tile_read_reports_file_read_and_entropy_marker_failures() {
     writer.write_all(&[0]).unwrap();
     writer.flush().unwrap();
     assert!(marker_failure
-        .decode_tile(0, 1, BackendRequest::Auto)
+        .decode_tile(0, 1)
         .unwrap_err()
         .to_string()
         .contains("does not end at a marker"));
@@ -571,7 +571,7 @@ fn decoder_reports_entropy_that_disagrees_with_the_declared_tile_width() {
     jpeg.tile_width = 65;
 
     let error = jpeg
-        .decode_tile(0, 1, BackendRequest::Auto)
+        .decode_tile(0, 1)
         .expect_err("declared tile width must agree with its entropy stream");
     assert!(matches!(error, WsiError::Jpeg(_)));
 }

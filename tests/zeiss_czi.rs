@@ -22,27 +22,24 @@ fn builtin_registry_rejects_truncated_czi() {
 #[ignore = "requires WSI_RS_CZI_JXR_PATH pointing to the public Zeiss-5-JXR.czi corpus"]
 fn real_jpegxr_czi_reads_tiles_regions_and_associated_images() {
     let path = std::env::var_os("WSI_RS_CZI_JXR_PATH").expect("WSI_RS_CZI_JXR_PATH");
-    let source = czi_rs::CziFile::open(&path).expect("inspect CZI corpus tile positions");
-    let origin_x = source.subblocks().iter().map(|b| b.rect.x).min().unwrap();
-    let origin_y = source.subblocks().iter().map(|b| b.rect.y).min().unwrap();
     let slide = Slide::open(path).expect("open real JPEG XR CZI");
     assert_eq!(slide.dataset().properties.vendor(), Some("zeiss"));
     let levels = &slide.dataset().scenes[0].series[0].levels;
     assert!(levels.len() > 1);
     let mut nonzero = 0;
     for (index, level) in levels.iter().enumerate() {
-        // The canvas center lies between the two tissue scenes in this sample.
-        // Choose the center of an encoded subblock at each native resolution.
-        let ratio = level.downsample.round() as i64;
-        let block = source
-            .subblocks()
-            .iter()
-            .find(|b| i64::from(b.rect.w) == i64::from(b.stored_size.w) * ratio)
-            .expect("native CZI pyramid subblock");
-        let x = ((i64::from(block.rect.x) - i64::from(origin_x)) / ratio
-            + i64::from(block.stored_size.w / 2)) as u64;
-        let y = ((i64::from(block.rect.y) - i64::from(origin_y)) / ratio
-            + i64::from(block.stored_size.h / 2)) as u64;
+        // Sample the first acquired region; the canvas center lies between scenes.
+        let region = |field: &str| -> f64 {
+            slide
+                .dataset()
+                .properties
+                .get(&format!("openslide.region[0].{field}"))
+                .expect("native CZI acquired-region metadata")
+                .parse()
+                .unwrap()
+        };
+        let x = ((region("x") + region("width") / 2.0) / level.downsample) as u64;
+        let y = ((region("y") + region("height") / 2.0) / level.downsample) as u64;
         let request = wsi_rs::TileRequest::new(
             0usize,
             0usize,

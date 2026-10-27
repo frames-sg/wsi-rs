@@ -42,6 +42,10 @@ pub(super) struct SlideDeclaration {
     pub(super) benchmark_group: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) manifest_sha256: Option<String>,
+    /// The corpus entry's parity tolerance at capture time. Captures written
+    /// before it was recorded, and slides outside the manifest, have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) pixel_tolerance: Option<wsi_rs_test_support::corpus::Tolerance>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

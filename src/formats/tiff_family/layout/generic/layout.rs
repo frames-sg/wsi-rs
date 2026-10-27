@@ -35,7 +35,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
-        let mut tiled_ifds: Vec<TiledIfd> = Vec::new();
+        let mut tiled_ifds: Vec<TiledIfdDescriptor> = Vec::new();
         let mut stripped_ifds: Vec<StrippedIfd> = Vec::new();
 
         // Phase 1: Walk all top-level IFDs and classify.
@@ -56,18 +56,12 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
 
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
                 // Tiled IFD: pyramid level.
-                let tile_width = container.get_u32(ifd_id, tags::TILE_WIDTH)?;
-                let tile_height = container.get_u32(ifd_id, tags::TILE_LENGTH)?;
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
-
-                tiled_ifds.push(TiledIfd {
+                tiled_ifds.push(tiled_ifd_descriptor(
+                    container,
                     ifd_id,
-                    width,
-                    height,
-                    tile_width,
-                    tile_height,
-                    compression: compression_from_tag(compression_val),
-                });
+                    compression_from_tag(compression_val),
+                )?);
             } else {
                 // Stripped IFD: associated image.
                 let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
@@ -102,11 +96,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
         }
 
         // Phase 2: Sort tiled IFDs by area descending (largest = level 0).
-        tiled_ifds.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
-            area_b.cmp(&area_a)
-        });
+        tiled_ifds.sort_by_key(|ifd| Reverse(level_area(ifd.width, ifd.height)));
 
         let (base_w, base_h) = if let Some(first) = tiled_ifds.first() {
             (first.width, first.height)
@@ -115,13 +105,11 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             (stripped.width, stripped.height)
         };
 
-        // Phase 3: JPEG tables from tag 347 on first tiled IFD if present.
-        let jpeg_tables: Option<Vec<u8>> = tiled_ifds.first().and_then(|first| {
-            container
-                .get_bytes(first.ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(|bytes| bytes.to_vec())
-        });
+        // Phase 3: JPEG tables (tag 347) are read per level; a level without
+        // its own tables falls back to level 0's.
+        let base_jpeg_tables = tiled_ifds
+            .first()
+            .and_then(|first| first.jpeg_tables.clone());
 
         // Phase 4: Build levels and tile sources.
         let mut levels = Vec::with_capacity(tiled_ifds.len());
@@ -131,9 +119,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             let downsample = if level_idx == 0 {
                 1.0
             } else {
-                let dw = base_w as f64 / tifd.width as f64;
-                let dh = base_h as f64 / tifd.height as f64;
-                (dw + dh) / 2.0
+                averaged_downsample((base_w, base_h), (tifd.width, tifd.height))
             };
 
             levels.push(regular_tiff_level(
@@ -145,19 +131,15 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 downsample,
             )?);
 
-            let key = TileSourceKey {
-                scene: 0usize,
-                series: 0usize,
-                level: level_idx as u32,
-                z: 0,
-                c: 0,
-                t: 0,
-            };
+            let key = TileSourceKey::plane0(level_idx as u32);
             tile_sources.insert(
                 key,
                 TileSource::TiledIfd {
                     ifd_id: tifd.ifd_id,
-                    jpeg_tables: jpeg_tables.clone(),
+                    jpeg_tables: tifd
+                        .jpeg_tables
+                        .clone()
+                        .or_else(|| base_jpeg_tables.clone()),
                     compression: tifd.compression,
                 },
             );
@@ -174,14 +156,7 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 1.0,
             )?);
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0,
-                    series: 0,
-                    level: 0,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(0),
                 TileSource::StrippedLevel {
                     ifd_id: stripped.ifd_id,
                     compression: stripped.compression,
@@ -241,27 +216,16 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 properties.insert("openslide.comment", desc.to_string());
             }
 
-            // Extract MPP from TIFF XResolution / YResolution tags.
-            // ResolutionUnit: 2 = inch (default), 3 = centimeter.
-            let res_unit = container
-                .get_u32(first_id, tags::RESOLUTION_UNIT)
-                .unwrap_or(2); // default: inch
-            let unit_to_microns = match res_unit {
-                3 => 10_000.0, // 1 cm = 10,000 µm
-                _ => 25_400.0, // 1 inch = 25,400 µm
-            };
-            if let Ok(x_res) = container.get_f64(first_id, tags::X_RESOLUTION) {
-                if x_res > 0.0 {
-                    let mpp_x = unit_to_microns / x_res;
-                    properties.insert("openslide.mpp-x", format!("{mpp_x:.6}"));
-                }
-            }
-            if let Ok(y_res) = container.get_f64(first_id, tags::Y_RESOLUTION) {
-                if y_res > 0.0 {
-                    let mpp_y = unit_to_microns / y_res;
-                    properties.insert("openslide.mpp-y", format!("{mpp_y:.6}"));
-                }
-            }
+            // Generic TIFF reports MPP to six decimals, inches by default.
+            add_tiff_resolution_properties(
+                container,
+                first_id,
+                &mut properties,
+                ResolutionStyle {
+                    default_unit: 2,
+                    decimals: Some(6),
+                },
+            );
         }
 
         // Phase 7: Dataset identity from TIFF quickhash-compatible content hashing.
@@ -279,28 +243,20 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 tiled_ifds.iter().map(|ifd| ifd.ifd_id).collect(),
             )
         };
-        finish_single_scene_uint8_tiff_layout(
-            container,
+        SingleSceneTiffLayout {
             lowest_resolution_ifd,
             property_ifd,
-            AxesShape::default(),
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
             source_icc_ifds,
-        )
+        }
+        .finish(container)
     }
-}
-
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
 }
 
 struct StrippedIfd {

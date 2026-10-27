@@ -6,7 +6,7 @@ use support::{fixture_path, fnv1a_argb};
 
 #[test]
 fn ventana_level_zero_tissue_matches_openslide_tilemap_semantics() {
-    let Some(path) = fixture_path("ventana-001", "bif") else {
+    let Some(path) = fixture_path("ventana-001") else {
         return;
     };
     let slide = wsi_rs::Slide::open(path.as_c_str().to_str().expect("UTF-8 fixture path"))
@@ -43,7 +43,7 @@ fn ventana_level_zero_tissue_matches_openslide_tilemap_semantics() {
 
 #[test]
 fn ventana_reduced_levels_paint_level0_subtiles_like_openslide() {
-    let Some(path) = fixture_path("ventana-001", "bif") else {
+    let Some(path) = fixture_path("ventana-001") else {
         return;
     };
     // Reduced BIF levels are the level-0 tilemap at 1/downsample scale, one

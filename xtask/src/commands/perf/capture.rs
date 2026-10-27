@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
-use std::process::Command;
 
 use serde_json::Value;
+use wsi_rs_perf::Engine;
 
 use super::checksum::{
     validate_capture_checksums, validate_declared_capture_plan, validate_worker_run_typed,
@@ -12,8 +12,9 @@ use super::process_metrics::annotate_run_resource_usage_typed;
 use super::schema::CaptureRun;
 use super::worker::{
     cache_bytes, prepare_bench, prepare_pair, previous_invocation, result_dir, run_bench,
-    run_pixel_comparison, BenchInvocation, BenchLibrary,
+    run_pixel_comparison, BenchInvocation, WORKER_BINARY,
 };
+use crate::commands::process;
 
 const DEFAULT_REPEAT_COUNT: u32 = 5;
 const SLIDES_ENV: &str = "WSI_RS_PERF_SLIDES";
@@ -56,26 +57,26 @@ pub(super) enum CaptureEngine {
 impl CaptureEngine {
     pub(super) fn name(self) -> &'static str {
         match self {
-            Self::WsiRs => BenchLibrary::WsiRs.name(),
-            Self::OpenSlide => BenchLibrary::OpenSlide.name(),
+            Self::WsiRs => Engine::WsiRs.name(),
+            Self::OpenSlide => Engine::OpenSlide.name(),
             Self::PreviousRelease => PREVIOUS_RELEASE_ENGINE,
         }
     }
 
-    fn library(self) -> BenchLibrary {
+    fn library(self) -> Engine {
         match self {
-            Self::WsiRs | Self::PreviousRelease => BenchLibrary::WsiRs,
-            Self::OpenSlide => BenchLibrary::OpenSlide,
+            Self::WsiRs | Self::PreviousRelease => Engine::WsiRs,
+            Self::OpenSlide => Engine::OpenSlide,
         }
     }
 }
 
 pub(in crate::commands) fn capture(args: Vec<String>) -> Result<(), String> {
-    capture_single(args, BenchLibrary::WsiRs)
+    capture_single(args, Engine::WsiRs)
 }
 
 pub(in crate::commands) fn capture_openslide(args: Vec<String>) -> Result<(), String> {
-    capture_single(args, BenchLibrary::OpenSlide)
+    capture_single(args, Engine::OpenSlide)
 }
 
 pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String> {
@@ -155,13 +156,13 @@ pub(in crate::commands) fn capture_pair(args: Vec<String>) -> Result<(), String>
     };
     write_capture(
         &format!("{label}-wsi_rs"),
-        CaptureSubject::Current(BenchLibrary::WsiRs),
+        CaptureSubject::Current(Engine::WsiRs),
         &plan,
         wsi_rs_runs,
     )?;
     write_capture(
         &format!("{label}-openslide"),
-        CaptureSubject::Current(BenchLibrary::OpenSlide),
+        CaptureSubject::Current(Engine::OpenSlide),
         &plan,
         openslide_runs,
     )?;
@@ -186,7 +187,7 @@ pub(super) fn alternate_order<T: Clone>(engines: &[T], repeat: u64) -> Vec<T> {
     order
 }
 
-fn capture_single(args: Vec<String>, library: BenchLibrary) -> Result<(), String> {
+fn capture_single(args: Vec<String>, library: Engine) -> Result<(), String> {
     let (label, selectors) = capture_arguments(&args, capture_task_name(library))?;
     let slides = resolve_single_engine_slides(&selectors, library)?;
     let repeats = repeat_count()?;
@@ -247,7 +248,7 @@ fn capture_settings() -> Result<CaptureSettings, String> {
 }
 
 fn capture_run(
-    library: BenchLibrary,
+    library: Engine,
     invocation: &BenchInvocation,
     settings: &CaptureSettings,
     run_spec: RunSpec<'_>,
@@ -264,8 +265,7 @@ fn capture_run(
     let worker: wsi_rs_perf::WorkerResult = serde_json::from_slice(&output.process.stdout)
         .map_err(|err| {
             format!(
-                "invalid {} JSON for {}: {err}",
-                library.binary(),
+                "invalid {WORKER_BINARY} JSON for {}: {err}",
                 run_spec.slide.path.display()
             )
         })?;
@@ -384,20 +384,20 @@ fn capture_arguments<'a>(
 
 fn resolve_single_engine_slides(
     selectors: &[String],
-    library: BenchLibrary,
+    library: Engine,
 ) -> Result<Vec<SlideSpec>, String> {
     resolve_manifest_slides(
         &load_manifest()?,
         selectors,
-        matches!(library, BenchLibrary::OpenSlide),
+        matches!(library, Engine::OpenSlide),
         true,
     )
 }
 
-fn capture_task_name(library: BenchLibrary) -> &'static str {
+fn capture_task_name(library: Engine) -> &'static str {
     match library {
-        BenchLibrary::WsiRs => "perf-capture",
-        BenchLibrary::OpenSlide => "perf-capture-openslide",
+        Engine::WsiRs => "perf-capture",
+        Engine::OpenSlide => "perf-capture-openslide",
     }
 }
 
@@ -456,27 +456,19 @@ fn parse_worker_matrix(raw: &str) -> Result<Vec<usize>, String> {
 
 fn physical_core_count() -> (usize, String) {
     if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("sysctl")
-            .args(["-n", "hw.physicalcpu"])
-            .output()
+        if let Some(count) = process::capture("sysctl", ["-n", "hw.physicalcpu"])
+            .ok()
+            .and_then(|stdout| parse_positive_usize(&stdout))
         {
-            if output.status.success() {
-                if let Some(count) = parse_positive_usize(&String::from_utf8_lossy(&output.stdout))
-                {
-                    return (count, "macos:sysctl -n hw.physicalcpu".into());
-                }
-            }
+            return (count, "macos:sysctl -n hw.physicalcpu".into());
         }
     }
     if cfg!(target_os = "linux") {
-        if let Ok(output) = Command::new("lscpu").arg("-p=CORE,SOCKET").output() {
-            if output.status.success() {
-                if let Some(count) =
-                    parse_linux_physical_cores(&String::from_utf8_lossy(&output.stdout))
-                {
-                    return (count, "linux:lscpu -p=CORE,SOCKET".into());
-                }
-            }
+        if let Some(count) = process::capture("lscpu", ["-p=CORE,SOCKET"])
+            .ok()
+            .and_then(|stdout| parse_linux_physical_cores(&stdout))
+        {
+            return (count, "linux:lscpu -p=CORE,SOCKET".into());
         }
     }
     let count = std::thread::available_parallelism()

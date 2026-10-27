@@ -70,17 +70,11 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        let file = File::open(path).map_err(|source| WsiError::IoWithPath {
-            source: std::sync::Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
         let max_input = MAX_COMPRESSED_INPUT_BYTES.min(config.limits.encoded_unit_bytes());
         let declared_len = file
             .metadata()
-            .map_err(|source| WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: path.to_path_buf(),
-            })?
+            .map_err(|source| WsiError::io_with_path(path, source))?
             .len();
         if declared_len > max_input {
             return Err(WsiError::ResourceLimit {
@@ -89,12 +83,8 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
                 limit: max_input,
             });
         }
-        let data = read_to_end_bounded(file, max_input, "raw JP2K input").map_err(|source| {
-            WsiError::IoWithPath {
-                source: std::sync::Arc::new(source),
-                path: path.to_path_buf(),
-            }
-        })?;
+        let data = read_to_end_bounded(file, max_input, "raw JP2K input")
+            .map_err(|source| WsiError::io_with_path(path, source))?;
         let view = j2k::J2kView::parse(&data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
         if let Some(layout) = &view.info().tile_layout {
             // Every tile needs at least one 12-byte SOT segment and a 2-byte
@@ -226,15 +216,13 @@ impl RawJp2kReader {
             || req.series.get() != 0
             || req.level.get() as usize >= self.level_count()
         {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
+            return Err(WsiError::tile_read(
+                req,
+                format!(
                     "raw JP2K source has one scene, one series, and {} levels",
                     self.level_count()
                 ),
-            });
+            ));
         }
         if req.plane.get() != PlaneSelection::default() {
             return Err(WsiError::Unsupported {
@@ -242,12 +230,10 @@ impl RawJp2kReader {
             });
         }
         if req.col != 0 || req.row != 0 {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "raw JP2K source has exactly one tile at (0, 0)".into(),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                "raw JP2K source has exactly one tile at (0, 0)",
+            ));
         }
         Ok(())
     }
@@ -269,6 +255,21 @@ impl RawJp2kReader {
         }
         Ok(())
     }
+
+    /// One decode job for the stored full-resolution codestream.
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn jp2k_job(
+        &self,
+        backend: j2k_core::BackendRequest,
+    ) -> crate::decode::jp2k::Jp2kDecodeJob<'_> {
+        crate::decode::jp2k::Jp2kDecodeJob {
+            data: Cow::Borrowed(self.data.as_slice()),
+            expected_width: self.width,
+            expected_height: self.height,
+            rgb_color_space: true,
+            backend,
+        }
+    }
 }
 
 impl SlideReader for RawJp2kReader {
@@ -282,11 +283,11 @@ impl SlideReader for RawJp2kReader {
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.validate_request(req)?;
-        let reduction = u8::try_from(req.level.get()).map_err(|_| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: "raw JP2K reduction level exceeds the codestream ladder".into(),
+        let reduction = u8::try_from(req.level.get()).map_err(|_| {
+            WsiError::tile_read(
+                req,
+                "raw JP2K reduction level exceeds the codestream ladder",
+            )
         })?;
         if reduction == 0 {
             decode_jp2k_to_sample_buffer(&self.data, self.width, self.height, Jp2kColorSpace::Rgb)
@@ -306,20 +307,11 @@ impl SlideReader for RawJp2kReader {
         }
         let jobs = reqs
             .iter()
-            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
-                data: Cow::Borrowed(self.data.as_slice()),
-                expected_width: self.width,
-                expected_height: self.height,
-                rgb_color_space: true,
-                backend: j2k_core::BackendRequest::Metal,
-            })
+            .map(|_| self.jp2k_job(j2k_core::BackendRequest::Metal))
             .collect::<Vec<_>>();
         crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K Metal batch")
-            })
+            .collect()
     }
 
     #[cfg(feature = "cuda")]
@@ -333,20 +325,11 @@ impl SlideReader for RawJp2kReader {
         }
         let jobs = reqs
             .iter()
-            .map(|_| crate::decode::jp2k::Jp2kDecodeJob {
-                data: Cow::Borrowed(self.data.as_slice()),
-                expected_width: self.width,
-                expected_height: self.height,
-                rgb_color_space: true,
-                backend: j2k_core::BackendRequest::Cuda,
-            })
+            .map(|_| self.jp2k_job(j2k_core::BackendRequest::Cuda))
             .collect::<Vec<_>>();
         crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "raw JP2K CUDA batch")
-            })
+            .collect()
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -377,17 +360,9 @@ impl ManagedSlideReader for RawJp2kReader {
             let jobs = reqs
                 .iter()
                 .map(|req| {
-                    if let Some(control) = control {
-                        control.check_cancelled()?;
-                    }
+                    crate::core::read_control::check_cancelled_opt(control)?;
                     self.validate_request(req)?;
-                    Ok(crate::decode::jp2k::Jp2kDecodeJob {
-                        data: Cow::Borrowed(self.data.as_slice()),
-                        expected_width: self.width,
-                        expected_height: self.height,
-                        rgb_color_space: true,
-                        backend: j2k_core::BackendRequest::Cpu,
-                    })
+                    Ok(self.jp2k_job(j2k_core::BackendRequest::Cpu))
                 })
                 .collect::<Result<Vec<_>, WsiError>>()?;
             crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)

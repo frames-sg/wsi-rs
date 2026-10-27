@@ -29,14 +29,11 @@ impl XmlBudget {
         Ok(())
     }
 
-    fn add_attributes(&mut self, count: usize) -> Result<(), WsiError> {
-        if count > MAX_XML_ATTRIBUTES_PER_NODE {
-            return Err(WsiError::Xml(format!(
-                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
-            )));
-        }
-        // Per-node and aggregate budgets bound this addition to at most 500,256.
-        self.attributes += count;
+    /// Counts one attribute; `node_from_start` enforces the per-node cap.
+    fn add_attribute(&mut self) -> Result<(), WsiError> {
+        // The aggregate budget stops the count at 500,001, so this cannot
+        // overflow.
+        self.attributes += 1;
         if self.attributes > MAX_XML_ATTRIBUTES {
             return Err(WsiError::Xml(format!(
                 "XML attribute count exceeds maximum of {MAX_XML_ATTRIBUTES}"
@@ -97,7 +94,7 @@ pub(crate) fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
                 return Ok(node);
             }
             Ok(Event::Empty(e)) => {
-                return make_empty_node(&e, &mut budget);
+                return node_from_start(&e, 0, &mut budget);
             }
             Ok(Event::Eof) => {
                 return Err(WsiError::Xml("empty document".into()));
@@ -111,10 +108,16 @@ pub(crate) fn parse_xml(xml: &str) -> Result<XmlNode, WsiError> {
     }
 }
 
-fn make_empty_node(
+fn node_from_start(
     e: &quick_xml::events::BytesStart,
+    depth: u32,
     budget: &mut XmlBudget,
 ) -> Result<XmlNode, WsiError> {
+    if depth > MAX_XML_DEPTH {
+        return Err(WsiError::Xml(format!(
+            "XML nesting depth exceeds maximum of {MAX_XML_DEPTH}"
+        )));
+    }
     budget.add_node()?;
     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut attributes = BTreeMap::new();
@@ -126,7 +129,7 @@ fn make_empty_node(
                 "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
             )));
         }
-        budget.add_attributes(1)?;
+        budget.add_attribute()?;
         let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let val = attr
@@ -149,44 +152,17 @@ fn parse_node_recursive(
     depth: u32,
     budget: &mut XmlBudget,
 ) -> Result<XmlNode, WsiError> {
-    if depth > MAX_XML_DEPTH {
-        return Err(WsiError::Xml(format!(
-            "XML nesting depth exceeds maximum of {}",
-            MAX_XML_DEPTH
-        )));
-    }
-    budget.add_node()?;
-    let tag = String::from_utf8_lossy(start.name().as_ref()).into_owned();
-    let mut attributes = BTreeMap::new();
-    let mut attribute_count = 0usize;
-    for attr in start.attributes() {
-        attribute_count += 1;
-        if attribute_count > MAX_XML_ATTRIBUTES_PER_NODE {
-            return Err(WsiError::Xml(format!(
-                "XML element attribute count exceeds maximum of {MAX_XML_ATTRIBUTES_PER_NODE}"
-            )));
-        }
-        budget.add_attributes(1)?;
-        let attr = attr.map_err(|err| WsiError::Xml(err.to_string()))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let val = attr
-            .normalized_value(XmlVersion::Implicit1_0)
-            .map_err(|err| WsiError::Xml(err.to_string()))?
-            .into_owned();
-        attributes.insert(key, val);
-    }
-    let mut children = Vec::new();
-    let mut text = None;
+    let mut node = node_from_start(start, depth, budget)?;
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 let child = parse_node_recursive(&e, reader, depth + 1, budget)?;
-                children.push(child);
+                node.children.push(child);
             }
             Ok(Event::Empty(e)) => {
-                children.push(make_empty_node(&e, budget)?);
+                node.children.push(node_from_start(&e, depth + 1, budget)?);
             }
             Ok(Event::Text(e)) => {
                 let t = e
@@ -194,12 +170,12 @@ fn parse_node_recursive(
                     .expect("Reader::from_str yields valid text encoding")
                     .into_owned();
                 if !t.trim().is_empty() {
-                    text = Some(t);
+                    node.text = Some(t);
                 }
             }
             Ok(Event::End(_)) => break,
             Ok(Event::Eof) => {
-                return Err(WsiError::Xml(format!("unexpected EOF in <{}>", tag)));
+                return Err(WsiError::Xml(format!("unexpected EOF in <{}>", node.tag)));
             }
             Err(e) => {
                 return Err(WsiError::Xml(e.to_string()));
@@ -209,12 +185,7 @@ fn parse_node_recursive(
         buf.clear();
     }
 
-    Ok(XmlNode {
-        tag,
-        attributes,
-        text,
-        children,
-    })
+    Ok(node)
 }
 
 #[cfg(test)]

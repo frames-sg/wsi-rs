@@ -26,7 +26,7 @@ pub(crate) fn run() -> Result<(), String> {
         "deps" => checks::deps(),
         "api-check" => checks::api_check(),
         "fuzz-check" => checks::fuzz_check(),
-        "release-fuzz" => checks::release_fuzz(),
+        "release-fuzz" => checks::release_fuzz(env::args().skip(2).collect()),
         "release-test" => checks::release_test(),
         "artifact-smoke" => artifact::smoke(env::args().skip(2).collect()),
         "coverage" => checks::coverage(),
@@ -55,8 +55,8 @@ fn print_help() {
 fn help_text() -> &'static str {
     "usage: cargo xtask <task>\n\n\
        tasks:\n\
-       ci           validate plus package\n\
-       validate     fmt, clippy, bench-check, nextest, doctests, and docs\n\
+       ci           validate plus release-binary builds and package\n\
+       validate     fmt, clippy, nextest, doctests, and docs\n\
        rc-preflight run local release-candidate preflight gates\n\
        fmt          check rustfmt\n\
        clippy       run clippy with warnings denied\n\
@@ -75,7 +75,7 @@ fn help_text() -> &'static str {
        deps         run deny and unused-deps\n\
        api-check    run public API and semver stability checks\n\
        fuzz-check   type-check cargo-fuzz targets\n\
-       release-fuzz run every fuzz target for five minutes under AddressSanitizer\n\
+       release-fuzz [--seconds N] [--timeout N] run every fuzz target under AddressSanitizer (default 300 s each, 10 s per input)\n\
        release-test run release-mode library and integration tests\n\
        artifact-smoke <library> <include-dir> <arch> <metadata> validate a release C artifact\n\
        coverage     generate lcov.info and enforce workspace/component floors\n\
@@ -85,7 +85,7 @@ fn help_text() -> &'static str {
        perf-capture-pair <label> [aliases-or-slides...] capture wsi_rs, OpenSlide and an optional previous release in alternating order\n\
        perf-compare <before.json> <after.json> compare captures with 5% noise guard\n\
        perf-profile <slide> [workload] print samply/xctrace profiling recipes\n\
-       package      package the crate from a clean worktree with verification"
+       package      verify the clean source build or registry package for this release"
 }
 
 #[cfg(test)]

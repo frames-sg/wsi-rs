@@ -334,12 +334,21 @@ fn raw_compressed_tile_rejects_ndpi_restart_segments_that_cross_rows() {
 
 #[test]
 fn empty_rgb_tile_rejects_overflowing_dimensions() {
-    let err = match TiffPixelReader::empty_rgb_tile(u32::MAX, u32::MAX) {
+    let err = match zero_rgb_interleaved_u8_tile(u32::MAX, u32::MAX) {
         Ok(_) => panic!("overflowing empty RGB tile should be rejected"),
         Err(err) => err,
     };
     assert!(
-        err.to_string().contains("overflow output buffer size"),
+        err.to_string().contains("length overflow"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn empty_rgb_tile_rejects_dimensions_above_the_decoded_image_cap() {
+    let err = zero_rgb_interleaved_u8_tile(8192, 8192).unwrap_err();
+    assert!(
+        err.to_string().contains("byte safety limit"),
         "unexpected error: {err}"
     );
 }

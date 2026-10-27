@@ -41,6 +41,6 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# First-party J2K pinned to a main-branch commit in Cargo.toml [patch.crates-io];
-# remove together with that patch once the release is on crates.io.
+
+# Exact revisions are pinned in Cargo.toml and reviewed in supply-chain/audits.toml.
 allow-git = ["https://github.com/frames-sg/j2k"]

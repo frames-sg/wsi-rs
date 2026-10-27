@@ -1,6 +1,6 @@
 [package]
 name = "wsi-rs-openslide-shim"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "OpenSlide-compatible C ABI shim backed by wsi-rs"
@@ -21,6 +21,7 @@ wsi-rs = { path = ".." }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wsi-rs-test-support = { path = "../test-support" }
 
 [lints.rust]
 unsafe_code = "allow"

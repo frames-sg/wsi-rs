@@ -17,7 +17,7 @@ impl FormatRegistry {
     pub fn builtin() -> Self {
         let mut registry = Self::new();
         let svcache = Arc::new(SvcacheBackend);
-        registry.register_cache_configured(svcache.clone(), svcache);
+        registry.register_svcache(svcache.clone(), svcache);
         registry.register_native_backends();
         registry
     }

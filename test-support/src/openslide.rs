@@ -1,9 +1,27 @@
-use std::ffi::{CStr, CString};
+use std::collections::BTreeMap;
+use std::ffi::{CStr, CString, OsString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use libloading::{Library, Symbol};
+
+/// Environment variables that name an exact OpenSlide library, highest
+/// precedence first.
+pub const LIBRARY_ENV_VARS: [&str; 2] = ["WSI_RS_OPENSLIDE_LIBRARY", "OPENSLIDE_LIB_PATH"];
+
+/// The OpenSlide library the environment names, if any: the first of
+/// [`LIBRARY_ENV_VARS`] that is set.
+pub fn configured_library() -> Option<PathBuf> {
+    configured_library_from(std::env::var_os)
+}
+
+fn configured_library_from(var: impl Fn(&'static str) -> Option<OsString>) -> Option<PathBuf> {
+    LIBRARY_ENV_VARS
+        .into_iter()
+        .find_map(var)
+        .map(PathBuf::from)
+}
 
 #[repr(C)]
 struct OpenSlideHandle {
@@ -22,6 +40,7 @@ type GetVersion = unsafe extern "C" fn() -> *const c_char;
 type GetLevelCount = unsafe extern "C" fn(*mut OpenSlideHandle) -> c_int;
 type GetLevelDimensions = unsafe extern "C" fn(*mut OpenSlideHandle, c_int, *mut i64, *mut i64);
 type GetLevelDownsample = unsafe extern "C" fn(*mut OpenSlideHandle, c_int) -> f64;
+type GetPropertyNames = unsafe extern "C" fn(*mut OpenSlideHandle) -> *const *const c_char;
 type GetPropertyValue = unsafe extern "C" fn(*mut OpenSlideHandle, *const c_char) -> *const c_char;
 type ReadRegion = unsafe extern "C" fn(*mut OpenSlideHandle, *mut u32, i64, i64, c_int, i64, i64);
 type CacheCreate = unsafe extern "C" fn(usize) -> *mut OpenSlideCacheHandle;
@@ -40,6 +59,7 @@ struct Api {
     get_level_count: GetLevelCount,
     get_level_dimensions: GetLevelDimensions,
     get_level_downsample: GetLevelDownsample,
+    get_property_names: GetPropertyNames,
     get_property_value: GetPropertyValue,
     read_region: ReadRegion,
     cache: Option<(CacheCreate, SetCache, CacheRelease)>,
@@ -77,6 +97,7 @@ impl OpenSlideApi {
                 get_level_count: load_symbol(&library, b"openslide_get_level_count\0")?,
                 get_level_dimensions: load_symbol(&library, b"openslide_get_level_dimensions\0")?,
                 get_level_downsample: load_symbol(&library, b"openslide_get_level_downsample\0")?,
+                get_property_names: load_symbol(&library, b"openslide_get_property_names\0")?,
                 get_property_value: load_symbol(&library, b"openslide_get_property_value\0")?,
                 read_region: load_symbol(&library, b"openslide_read_region\0")?,
                 cache,
@@ -87,9 +108,24 @@ impl OpenSlideApi {
         Ok(Self(Arc::new(api)))
     }
 
+    /// Load the library [`configured_library`] names, or else the first
+    /// default install location that loads. A configured library that fails
+    /// to load is an error; the defaults are not tried.
     pub fn discover() -> Result<Self, String> {
+        Self::discover_with(configured_library())
+    }
+
+    fn discover_with(configured: Option<PathBuf>) -> Result<Self, String> {
+        if let Some(path) = configured {
+            return Self::load(&path).map_err(|error| {
+                format!(
+                    "configured OpenSlide library ({}): {error}",
+                    LIBRARY_ENV_VARS.join(" or ")
+                )
+            });
+        }
         let mut errors = Vec::new();
-        for path in library_candidates() {
+        for path in default_library_candidates() {
             match Self::load(&path) {
                 Ok(api) => return Ok(api),
                 Err(error) => errors.push(error),
@@ -99,6 +135,19 @@ impl OpenSlideApi {
             "failed to load libopenslide; tried: {}",
             errors.join(" | ")
         ))
+    }
+
+    /// Fail unless the library reports a version starting with `expected`,
+    /// such as `"4.0.1"`.
+    pub fn ensure_version(&self, expected: &str) -> Result<(), String> {
+        let version = self.version()?;
+        if version.starts_with(expected) {
+            Ok(())
+        } else {
+            Err(format!(
+                "OpenSlide library reports version {version}, expected {expected}"
+            ))
+        }
     }
 
     pub fn version(&self) -> Result<String, String> {
@@ -158,8 +207,18 @@ impl OpenSlideApi {
     }
 }
 
-pub fn try_load() -> Option<OpenSlideApi> {
-    OpenSlideApi::discover().ok()
+/// The OpenSlide oracle when one is available. `Ok(None)` means no library is
+/// configured and none of the default locations loads; a configured library
+/// that fails to load is an error.
+pub fn try_load() -> Result<Option<OpenSlideApi>, String> {
+    try_load_with(configured_library())
+}
+
+fn try_load_with(configured: Option<PathBuf>) -> Result<Option<OpenSlideApi>, String> {
+    match configured {
+        Some(path) => OpenSlideApi::discover_with(Some(path)).map(Some),
+        None => Ok(OpenSlideApi::discover_with(None).ok()),
+    }
 }
 
 #[derive(Clone)]
@@ -258,6 +317,27 @@ impl OpenSlide {
         self.property_value(&name).ok().flatten()
     }
 
+    /// Every property the library reports, read through the loaded library
+    /// rather than a separately installed command-line tool.
+    pub fn properties(&self) -> Result<BTreeMap<String, String>, String> {
+        // SAFETY: `raw` is live and the returned array is null terminated.
+        let names = unsafe { (self.api.get_property_names)(self.raw) };
+        self.check_error()?;
+        // SAFETY: OpenSlide returns a library-owned, null-terminated array of
+        // C strings that stays valid while the handle is open.
+        let names = unsafe { c_string_array(names) };
+        names
+            .into_iter()
+            .map(|name| {
+                let key = CString::new(name.as_str()).map_err(|error| error.to_string())?;
+                let value = self
+                    .property_value(&key)?
+                    .ok_or_else(|| format!("OpenSlide lists property {name} without a value"))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
     pub fn level0_bounds(&self) -> Result<Option<OpenSlideBounds>, String> {
         let x = self.property_value(c"openslide.bounds-x")?;
         let y = self.property_value(c"openslide.bounds-y")?;
@@ -352,24 +432,9 @@ impl OpenSlide {
         };
         // SAFETY: `raw` is live and the returned array is null terminated.
         let names = unsafe { names(self.raw) };
-        if names.is_null() {
-            return Vec::new();
-        }
-        let mut output = Vec::new();
-        for index in 0.. {
-            // SAFETY: OpenSlide guarantees a null-terminated pointer array.
-            let name = unsafe { *names.add(index) };
-            if name.is_null() {
-                break;
-            }
-            // SAFETY: Each non-null entry is a library-owned C string.
-            output.push(
-                unsafe { CStr::from_ptr(name) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-        output
+        // SAFETY: OpenSlide returns a library-owned, null-terminated array of
+        // C strings that stays valid while the handle is open.
+        unsafe { c_string_array(names) }
     }
 
     pub fn associated_dimensions(&self, name: &str) -> Result<(u32, u32), String> {
@@ -481,6 +546,32 @@ fn open_handle(
     Ok(slide)
 }
 
+/// Copy a null-terminated array of C strings; a null array is empty.
+///
+/// # Safety
+/// A non-null `array` must point to C string pointers ending in null, each
+/// valid for the duration of the copy.
+unsafe fn c_string_array(array: *const *const c_char) -> Vec<String> {
+    if array.is_null() {
+        return Vec::new();
+    }
+    let mut output = Vec::new();
+    for index in 0.. {
+        // SAFETY: The caller guarantees a null-terminated pointer array.
+        let entry = unsafe { *array.add(index) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: Each non-null entry is a live NUL-terminated C string.
+        output.push(
+            unsafe { CStr::from_ptr(entry) }
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    output
+}
+
 fn argb_to_rgba(argb: Vec<u32>) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(argb.len() * 4);
     for pixel in argb {
@@ -500,34 +591,31 @@ fn argb_to_rgba(argb: Vec<u32>) -> Vec<u8> {
     rgba
 }
 
-fn library_candidates() -> Vec<PathBuf> {
-    let mut candidates = ["OPENSLIDE_LIB_PATH", "WSI_RS_OPENSLIDE_LIBRARY"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    candidates.extend(
-        [
-            "/opt/homebrew/lib/libopenslide.1.dylib",
-            "/opt/homebrew/lib/libopenslide.dylib",
-            "/usr/local/lib/libopenslide.1.dylib",
-            "/usr/local/lib/libopenslide.dylib",
-            "/usr/lib/x86_64-linux-gnu/libopenslide.so.0",
-            "/usr/lib/x86_64-linux-gnu/libopenslide.so",
-            "/usr/lib/libopenslide.so.0",
-            "/usr/lib/libopenslide.so",
-            "libopenslide.1.dylib",
-            "libopenslide.dylib",
-            "libopenslide.so.1",
-            "libopenslide.so.0",
-            "libopenslide.so",
-            "libopenslide.dll",
-            r"C:\Program Files\OpenSlide\bin\libopenslide.dll",
-        ]
-        .into_iter()
-        .map(PathBuf::from),
-    );
-    candidates
+/// Install locations tried when no library is configured. OpenSlide 4 ships
+/// `libopenslide-1.dll` on Windows; 3.x used `libopenslide.dll`.
+fn default_library_candidates() -> Vec<PathBuf> {
+    [
+        "/opt/homebrew/lib/libopenslide.1.dylib",
+        "/opt/homebrew/lib/libopenslide.dylib",
+        "/usr/local/lib/libopenslide.1.dylib",
+        "/usr/local/lib/libopenslide.dylib",
+        "/usr/lib/x86_64-linux-gnu/libopenslide.so.0",
+        "/usr/lib/x86_64-linux-gnu/libopenslide.so",
+        "/usr/lib/libopenslide.so.0",
+        "/usr/lib/libopenslide.so",
+        "libopenslide.1.dylib",
+        "libopenslide.dylib",
+        "libopenslide.so.1",
+        "libopenslide.so.0",
+        "libopenslide.so",
+        "libopenslide-1.dll",
+        r"C:\Program Files\OpenSlide\bin\libopenslide-1.dll",
+        "libopenslide.dll",
+        r"C:\Program Files\OpenSlide\bin\libopenslide.dll",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 /// # Safety
@@ -604,6 +692,7 @@ mod tests {
     struct FakeSlide {
         mode: FakeMode,
         error: Option<CString>,
+        property_names: [*const c_char; 5],
     }
 
     unsafe extern "C" fn fake_open(path: *const c_char) -> *mut OpenSlideHandle {
@@ -628,7 +717,19 @@ mod tests {
         let error = path
             .contains("open-error")
             .then(|| CString::new("fake open failure").unwrap());
-        Box::into_raw(Box::new(FakeSlide { mode, error })).cast()
+        let property_names = [
+            c"openslide.bounds-x".as_ptr(),
+            c"openslide.bounds-y".as_ptr(),
+            c"openslide.bounds-width".as_ptr(),
+            c"openslide.bounds-height".as_ptr(),
+            ptr::null(),
+        ];
+        Box::into_raw(Box::new(FakeSlide {
+            mode,
+            error,
+            property_names,
+        }))
+        .cast()
     }
 
     unsafe extern "C" fn fake_close(slide: *mut OpenSlideHandle) {
@@ -686,6 +787,12 @@ mod tests {
 
     unsafe extern "C" fn fake_level_downsample(_slide: *mut OpenSlideHandle, level: c_int) -> f64 {
         f64::from(1 << level)
+    }
+
+    unsafe extern "C" fn fake_property_names(slide: *mut OpenSlideHandle) -> *const *const c_char {
+        // SAFETY: Every handle comes from `fake_open` and remains live.
+        let slide = unsafe { &*slide.cast::<FakeSlide>() };
+        slide.property_names.as_ptr()
     }
 
     unsafe extern "C" fn fake_property_value(
@@ -783,6 +890,7 @@ mod tests {
             get_level_count: fake_level_count,
             get_level_dimensions: fake_level_dimensions,
             get_level_downsample: fake_level_downsample,
+            get_property_names: fake_property_names,
             get_property_value: fake_property_value,
             read_region: fake_read_region,
             cache: Some((fake_cache_create, fake_set_cache, fake_cache_release)),
@@ -794,14 +902,43 @@ mod tests {
         result.err().expect("operation should fail")
     }
 
+    fn bounds(values: &[(&str, &str)]) -> Option<OpenSlideBounds> {
+        parse_bounds_from_properties(|name| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        })
+    }
+
+    #[test]
+    fn bounds_parser_reads_canvas_origin() {
+        assert_eq!(
+            bounds(&[
+                ("openslide.bounds-x", "10778"),
+                ("openslide.bounds-y", "35096"),
+                ("openslide.bounds-width", "36832"),
+                ("openslide.bounds-height", "38432"),
+            ]),
+            Some(OpenSlideBounds {
+                x: 10778,
+                y: 35096,
+                width: 36832,
+                height: 38432,
+            })
+        );
+    }
+
     #[test]
     fn bounds_parser_rejects_partial_and_empty_bounds() {
         assert!(parse_bounds_from_properties(|_| None).is_none());
-        let values = [("openslide.bounds-x", "1"), ("openslide.bounds-y", "2")];
-        assert!(parse_bounds_from_properties(|name| values
-            .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| (*value).to_string()))
+        assert!(bounds(&[("openslide.bounds-x", "1"), ("openslide.bounds-y", "2")]).is_none());
+        assert!(bounds(&[
+            ("openslide.bounds-x", "0"),
+            ("openslide.bounds-y", "0"),
+            ("openslide.bounds-width", "0"),
+            ("openslide.bounds-height", "100"),
+        ])
         .is_none());
     }
 
@@ -864,6 +1001,18 @@ mod tests {
         assert_eq!(plain.level_dimensions(1), (2_048, 2_048));
         assert_eq!(plain.property("openslide.bounds-x").as_deref(), Some("100"));
         assert_eq!(
+            plain.properties().unwrap(),
+            BTreeMap::from(
+                [
+                    ("openslide.bounds-x", "100"),
+                    ("openslide.bounds-y", "200"),
+                    ("openslide.bounds-width", "3000"),
+                    ("openslide.bounds-height", "2000"),
+                ]
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+            )
+        );
+        assert_eq!(
             plain.bounds(),
             Some(OpenSlideBounds {
                 x: 100,
@@ -878,7 +1027,7 @@ mod tests {
         assert!(plain.associated_names().is_empty());
         assert!(plain.associated_dimensions("label").is_err());
         assert!(plain.associated_dimensions("bad\0name").is_err());
-        assert!(!library_candidates().is_empty());
+        assert!(!default_library_candidates().is_empty());
     }
 
     #[test]
@@ -898,6 +1047,10 @@ mod tests {
             .open_with_cache(Path::new("zero-levels.svs"), &cache)
             .unwrap();
         assert!(zero.levels().unwrap_err().contains("no levels"));
+        assert!(zero
+            .properties()
+            .unwrap_err()
+            .contains("lists property openslide.bounds-x without a value"));
         assert_eq!(zero.level0_bounds().unwrap(), None);
         let invalid = api
             .open_with_cache(Path::new("invalid-dimensions.svs"), &cache)
@@ -922,6 +1075,67 @@ mod tests {
                 .contains("libraries differ")
         );
         assert!(error(fake_api(null_version).version()).contains("returned NULL"));
+    }
+
+    #[test]
+    fn configured_library_prefers_the_wsi_rs_variable() {
+        let env = |values: &[(&str, &str)]| {
+            let values = values
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), OsString::from(value)))
+                .collect::<Vec<_>>();
+            configured_library_from(move |name| {
+                values
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        assert_eq!(env(&[]), None);
+        assert_eq!(
+            env(&[("OPENSLIDE_LIB_PATH", "/fallback/libopenslide.so")]),
+            Some(PathBuf::from("/fallback/libopenslide.so"))
+        );
+        assert_eq!(
+            env(&[
+                ("OPENSLIDE_LIB_PATH", "/fallback/libopenslide.so"),
+                ("WSI_RS_OPENSLIDE_LIBRARY", "/exact/libopenslide.so"),
+            ]),
+            Some(PathBuf::from("/exact/libopenslide.so"))
+        );
+    }
+
+    #[test]
+    fn a_configured_library_that_fails_to_load_is_an_error_not_a_fallback() {
+        let missing = PathBuf::from("/definitely/missing/libopenslide.so");
+        let error = error(try_load_with(Some(missing.clone())));
+        assert!(error.contains("configured OpenSlide library"), "{error}");
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        assert!(
+            !error.contains("failed to load libopenslide") && !error.contains("/opt/homebrew"),
+            "defaults must not be tried: {error}"
+        );
+    }
+
+    #[test]
+    fn windows_defaults_try_the_openslide_4_name_first() {
+        let candidates = default_library_candidates();
+        let position = |name: &str| {
+            candidates
+                .iter()
+                .position(|path| path.as_os_str() == name)
+                .unwrap_or_else(|| panic!("missing candidate {name}"))
+        };
+        assert!(position("libopenslide-1.dll") < position("libopenslide.dll"));
+    }
+
+    #[test]
+    fn version_check_compares_the_reported_prefix() {
+        let api = fake_api(fake_version);
+        api.ensure_version("4.0.1").unwrap();
+        api.ensure_version("4.0").unwrap();
+        assert!(error(api.ensure_version("4.0.2")).contains("reports version 4.0.1-fake"));
+        assert!(error(fake_api(null_version).ensure_version("4.0.1")).contains("returned NULL"));
     }
 
     #[test]

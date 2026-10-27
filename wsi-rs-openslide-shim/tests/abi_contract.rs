@@ -1,29 +1,11 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::ptr;
 
 use wsi_rs_openslide_shim::*;
 
-fn fixture_path() -> CString {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("jp2k")
-        .join("rgb_nomct.j2k");
-    CString::new(path.to_string_lossy().as_bytes()).expect("fixture path has no NUL")
-}
+mod support;
 
-/// # Safety
-///
-/// `ptr` must be non-null and point to a live NUL-terminated C string for the
-/// duration of the copy.
-unsafe fn c_string(ptr: *const std::os::raw::c_char) -> String {
-    // SAFETY: Test callers only pass non-null pointers returned by the shim;
-    // each points to a static or handle-owned NUL-terminated C string.
-    unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned()
-}
+use support::{c_string, rgb_nomct_fixture};
 
 #[test]
 fn null_inputs_are_safe_error_values() {
@@ -87,7 +69,7 @@ fn version_reports_openslide_4_0_1_and_shim_package_version() {
 
 #[test]
 fn opens_supported_slide_and_exposes_core_metadata() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
 
     // SAFETY: `path` is a live NUL-terminated fixture path, and every returned
     // OpenSlide handle/string pointer is checked before use.
@@ -147,7 +129,7 @@ fn opens_supported_slide_and_exposes_core_metadata() {
 
 #[test]
 fn read_region_keeps_pixels_outside_the_slide_transparent() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
 
     // SAFETY: `path` and `argb` remain live for every ABI call, and the handle
     // returned by this shim is closed exactly once.
@@ -169,7 +151,7 @@ fn read_region_keeps_pixels_outside_the_slide_transparent() {
 
 #[test]
 fn invalid_read_level_zeroes_dest_without_making_handle_terminal() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
 
     // SAFETY: `path` is a live NUL-terminated fixture path, `argb`/dimension
     // buffers are valid for writes, and the handle is closed exactly once.
@@ -195,7 +177,7 @@ fn invalid_read_level_zeroes_dest_without_making_handle_terminal() {
 
 #[test]
 fn associated_icc_and_cache_apis_have_v4_safe_defaults() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
 
     // SAFETY: `path` is a live NUL-terminated fixture path, the cache pointer
     // is released exactly once, and the handle is closed exactly once.
@@ -220,7 +202,7 @@ fn associated_icc_and_cache_apis_have_v4_safe_defaults() {
 
 #[test]
 fn one_handle_supports_concurrent_region_reads() {
-    let path = fixture_path();
+    let path = rgb_nomct_fixture();
 
     // SAFETY: The handle remains open until every scoped thread joins.
     // OpenSlide requires all calls except close to be thread-safe, and each

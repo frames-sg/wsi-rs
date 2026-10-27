@@ -216,4 +216,110 @@ fn fuzz_gate_covers_every_declared_fuzz_binary() {
         );
     }
     assert_eq!(manifest.matches("[[bin]]").count(), FUZZ_TARGETS.len());
+
+    // CI runs the same target list through xtask instead of naming targets.
+    let workflow = repo_file(".github/workflows/ci.yml");
+    assert!(workflow.contains("run: cargo xtask release-fuzz --seconds 15 --timeout 5\n"));
+    for target in FUZZ_TARGETS {
+        assert!(
+            !workflow.contains(target),
+            "ci.yml names fuzz target {target}; run it through `cargo xtask release-fuzz`"
+        );
+    }
+    assert!(
+        !workflow.contains("fuzz run"),
+        "ci.yml runs cargo-fuzz directly"
+    );
+}
+
+#[test]
+fn release_fuzz_budget_defaults_to_the_release_campaign() {
+    let budget = |arguments: &[&str]| {
+        parse_fuzz_budget(
+            &arguments
+                .iter()
+                .map(|argument| (*argument).to_string())
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(budget(&[]).unwrap(), RELEASE_FUZZ_BUDGET);
+    assert_eq!(
+        RELEASE_FUZZ_BUDGET,
+        FuzzBudget {
+            seconds: 300,
+            timeout_seconds: 10
+        }
+    );
+    assert_eq!(
+        budget(&["--seconds", "15", "--timeout", "5"]).unwrap(),
+        FuzzBudget {
+            seconds: 15,
+            timeout_seconds: 5
+        }
+    );
+    assert_eq!(budget(&["--timeout", "7"]).unwrap().seconds, 300);
+    for invalid in [
+        &["--seconds"][..],
+        &["--seconds", "0"],
+        &["--timeout", "soon"],
+        &["--minutes", "5"],
+    ] {
+        assert!(
+            budget(invalid).unwrap_err().starts_with(RELEASE_FUZZ_USAGE),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn fuzz_campaigns_pass_the_budget_to_libfuzzer() {
+    let budget = FuzzBudget {
+        seconds: 15,
+        timeout_seconds: 5,
+    };
+    assert_eq!(
+        fuzz_run_args(
+            "open_wsi_bytes",
+            "fuzz/corpus/open_wsi_bytes".into(),
+            Some("fuzz/seeds/open_wsi_bytes".into()),
+            budget,
+        ),
+        [
+            "run",
+            PINNED_NIGHTLY_TOOLCHAIN,
+            "cargo",
+            "fuzz",
+            "run",
+            "--sanitizer",
+            "address",
+            "open_wsi_bytes",
+            "fuzz/corpus/open_wsi_bytes",
+            "fuzz/seeds/open_wsi_bytes",
+            "--",
+            "-max_total_time=15",
+            "-timeout=5",
+            "-rss_limit_mb=2048",
+        ]
+    );
+    assert!(
+        !fuzz_run_args("parse_xml_bytes", "corpus".into(), None, budget)
+            .iter()
+            .any(|argument| argument.contains("seeds"))
+    );
+}
+
+#[test]
+fn corpus_runs_name_tests_that_exist_in_their_targets() {
+    for run in CORPUS_RUNS {
+        let ["--test", target] = run.target else {
+            continue;
+        };
+        let source = repo_file(&format!("tests/{target}.rs"));
+        let name = match run.tests {
+            CorpusTests::Exact(name) => format!("fn {name}()"),
+            CorpusTests::Prefix(prefix) => format!("fn {prefix}"),
+            CorpusTests::AllIgnored => "#[ignore".to_string(),
+        };
+        assert!(source.contains(&name), "tests/{target}.rs has no `{name}`");
+    }
 }

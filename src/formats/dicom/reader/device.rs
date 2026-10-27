@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use j2k_core::BackendRequest;
 
 use crate::core::types::TileRequest;
-use crate::decode::jp2k::Jp2kDecodeJob;
+use crate::decode::jp2k::{map_tile_results, Jp2kDecodeJob};
 use crate::error::WsiError;
 
 use super::batch_plan::{
@@ -12,7 +12,7 @@ use super::batch_plan::{
 };
 use super::DicomReader;
 use crate::formats::dicom::decode::jp2k_photometric_is_ycbcr;
-use crate::formats::dicom::JP2K_TRANSFER_SYNTAXES;
+use crate::formats::dicom::transfer_syntax::DicomTransferSyntax;
 
 impl DicomReader {
     pub(super) fn strict_jp2k_frames(
@@ -33,7 +33,7 @@ impl DicomReader {
         let mut frames = Vec::with_capacity(reqs.len());
         for (slot, request) in reqs.iter().enumerate() {
             let resolved = planner.resolve(slot, request, |image| {
-                JP2K_TRANSFER_SYNTAXES.contains(&image.transfer_syntax_uid.as_str())
+                matches!(image.transfer_syntax, DicomTransferSyntax::Jp2k { .. })
             })?;
             match resolved {
                 DicomResolvedBatchPlanEntry::Frame(frame) => frames.push(frame),
@@ -92,18 +92,7 @@ impl DicomReader {
         sessions: &crate::output::metal::MetalBackendSessions,
         grouped: bool,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        let jobs = frames
-            .iter()
-            .map(|(frame, bytes)| Jp2kDecodeJob {
-                data: Cow::Borrowed(bytes.as_slice()),
-                expected_width: frame.actual_width,
-                expected_height: frame.actual_height,
-                rgb_color_space: !jp2k_photometric_is_ycbcr(
-                    &frame.image.photometric_interpretation,
-                ),
-                backend: BackendRequest::Metal,
-            })
-            .collect::<Vec<_>>();
+        let jobs = jp2k_jobs(frames, BackendRequest::Metal);
         let results = if grouped {
             crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
         } else {
@@ -116,21 +105,7 @@ impl DicomReader {
                 })
                 .collect()
         };
-        results
-            .into_iter()
-            .zip(reqs)
-            .map(|(result, request)| {
-                result.map_err(|error| WsiError::TileRead {
-                    col: request.col,
-                    row: request.row,
-                    level: request.level.get(),
-                    reason: error.to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "DICOM Metal tile batch")
-            })
+        map_tile_results(results, reqs)
     }
 
     #[cfg(feature = "cuda")]
@@ -140,32 +115,28 @@ impl DicomReader {
         sessions: &crate::output::cuda::CudaBackendSessions,
     ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
         let frames = self.strict_jp2k_frames(reqs, None)?;
-        let jobs = frames
-            .iter()
-            .map(|(frame, bytes)| Jp2kDecodeJob {
-                data: Cow::Borrowed(bytes.as_slice()),
-                expected_width: frame.actual_width,
-                expected_height: frame.actual_height,
-                rgb_color_space: !jp2k_photometric_is_ycbcr(
-                    &frame.image.photometric_interpretation,
-                ),
-                backend: BackendRequest::Cuda,
-            })
-            .collect::<Vec<_>>();
-        crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
-            .into_iter()
-            .zip(reqs)
-            .map(|(result, request)| {
-                result.map_err(|error| WsiError::TileRead {
-                    col: request.col,
-                    row: request.row,
-                    level: request.level.get(),
-                    reason: error.to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|tiles| {
-                crate::core::batch::expect_exact_count(tiles, reqs.len(), "DICOM CUDA tile batch")
-            })
+        let jobs = jp2k_jobs(&frames, BackendRequest::Cuda);
+        map_tile_results(
+            crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions),
+            reqs,
+        )
     }
+}
+
+/// JP2K decode jobs for strict device frames. Jobs carry each tile's actual,
+/// edge-clipped extent, so decoded edge frames are cropped to the logical tile.
+pub(super) fn jp2k_jobs(
+    frames: &[DicomFrameBytes],
+    backend: BackendRequest,
+) -> Vec<Jp2kDecodeJob<'_>> {
+    frames
+        .iter()
+        .map(|(frame, bytes)| Jp2kDecodeJob {
+            data: Cow::Borrowed(bytes.as_slice()),
+            expected_width: frame.actual_width,
+            expected_height: frame.actual_height,
+            rgb_color_space: !jp2k_photometric_is_ycbcr(&frame.image.photometric_interpretation),
+            backend,
+        })
+        .collect()
 }

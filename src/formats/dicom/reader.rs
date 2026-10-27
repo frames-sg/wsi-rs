@@ -4,17 +4,12 @@ use j2k_core::BackendRequest;
 
 use crate::core::registry::SlideReader;
 use crate::core::types::{
-    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, SeriesId, SourceEncoding,
+    CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, Series, SeriesId, SourceEncoding,
     TileCodecKind, TileRequest,
 };
 use crate::error::WsiError;
 
-use super::backend::is_encapsulated_transfer_syntax;
-use super::manifest::DicomSlide;
-use super::{
-    HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX, HTJ2K_LOSSLESS_TRANSFER_SYNTAX, HTJ2K_TRANSFER_SYNTAX,
-    JP2K_TRANSFER_SYNTAXES,
-};
+use super::manifest::{DicomLevel, DicomSlide};
 
 mod batch_plan;
 mod cpu;
@@ -26,17 +21,41 @@ pub(super) struct DicomReader {
     pub(super) slide: Arc<DicomSlide>,
 }
 
+pub(super) fn dicom_level_for_request<'a>(
+    slide: &'a DicomSlide,
+    req: &TileRequest,
+) -> Result<&'a DicomLevel, WsiError> {
+    let (series, level) = dicom_level_at(slide, req.scene, req.series, req.level)?;
+    series.axes.validate_plane(req.plane.get())?;
+    Ok(level)
+}
+
+/// The DICOM level that `scene`, `series` and `level` name, with its series.
+fn dicom_level_at(
+    slide: &DicomSlide,
+    scene: SceneId,
+    series: SeriesId,
+    level: LevelIdx,
+) -> Result<(&Series, &DicomLevel), WsiError> {
+    let (_, series_ref, _) = slide.dataset.level(scene, series, level)?;
+    let dicom_level = slide
+        .levels
+        .get(level.get() as usize)
+        .ok_or(WsiError::LevelOutOfRange {
+            level: level.get(),
+            count: series_ref.levels.len() as u32,
+        })?;
+    Ok((series_ref, dicom_level))
+}
+
 impl SlideReader for DicomReader {
     fn dataset(&self) -> &Dataset {
         &self.slide.dataset
     }
 
     fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        self.slide
-            .levels
-            .get(req.level.get() as usize)
-            .map(|level| level.tile_codec_kind(req))
-            .unwrap_or(TileCodecKind::Other)
+        dicom_level_for_request(&self.slide, req)
+            .map_or(TileCodecKind::Other, |level| level.tile_codec_kind(req))
     }
 
     fn prepare_level_controlled(
@@ -47,33 +66,10 @@ impl SlideReader for DicomReader {
         control: &crate::ReadControl,
     ) -> Result<(), WsiError> {
         control.check_cancelled()?;
-        let scene_ref =
-            self.slide
-                .dataset
-                .scenes
-                .get(scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: scene.get(),
-                    count: self.slide.dataset.scenes.len(),
-                })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
-        let dicom_level =
-            self.slide
-                .levels
-                .get(level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: level.get(),
-                    count: series_ref.levels.len() as u32,
-                })?;
+        let (_, dicom_level) = dicom_level_at(&self.slide, scene, series, level)?;
         for image in &dicom_level.parts {
             control.check_cancelled()?;
-            if is_encapsulated_transfer_syntax(&image.transfer_syntax_uid) {
+            if image.transfer_syntax.is_encapsulated() {
                 image.ensure_encapsulated_frames_controlled(Some(control))?;
             }
         }
@@ -118,14 +114,7 @@ impl SlideReader for DicomReader {
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        let image =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
+        let image = dicom_level_for_request(&self.slide, req)?;
         image.read_raw_compressed_tile(req.col, req.row, req.level.get())
     }
 
@@ -139,26 +128,13 @@ impl SlideReader for DicomReader {
     }
 
     fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
-        let level =
-            self.slide
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: self.slide.levels.len() as u32,
-                })?;
-        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
-            return Ok(Some(false));
-        };
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return Ok(Some(false));
-        }
-        Ok(Some(level.image_for_tile(col, row).is_some()))
+        let level = dicom_level_for_request(&self.slide, req)?;
+        Ok(Some(level.tile_is_present(req)))
     }
 
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         match self.slide.associated.get(name) {
-            Some(image) => image.source_encoding(),
+            Some(image) => image.source_encoding().map(Some),
             None => Ok(None),
         }
     }
@@ -171,34 +147,22 @@ impl SlideReader for DicomReader {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<Option<SourceEncoding>, WsiError> {
-        if scene.get() != 0 || series.get() != 0 {
-            return Ok(None);
-        }
-        let Some(level) = self.slide.levels.get(level.get() as usize) else {
+        let Ok((_, level)) = dicom_level_at(&self.slide, scene, series, level) else {
             return Ok(None);
         };
         let mut total: Option<SourceEncoding> = None;
         for part in &level.parts {
-            let Some(encoding) = part.source_encoding()? else {
-                return Ok(None);
-            };
+            let encoding = part.source_encoding()?;
             total = match total {
                 None => Some(encoding),
                 Some(total)
                     if (total.compression, total.lossy)
                         == (encoding.compression, encoding.lossy) =>
                 {
-                    let sizes = total
-                        .decoded_bytes
-                        .zip(encoding.decoded_bytes)
-                        .and_then(|(a, b)| a.checked_add(b))
-                        .zip(
-                            total
-                                .encoded_bytes
-                                .zip(encoding.encoded_bytes)
-                                .and_then(|(a, b)| a.checked_add(b)),
-                        );
-                    let Some((decoded, encoded)) = sizes else {
+                    let (Some(decoded), Some(encoded)) = (
+                        add_sizes(total.decoded_bytes, encoding.decoded_bytes),
+                        add_sizes(total.encoded_bytes, encoding.encoded_bytes),
+                    ) else {
                         return Ok(None);
                     };
                     Some(total.with_sizes(decoded, encoded))
@@ -210,19 +174,7 @@ impl SlideReader for DicomReader {
     }
 }
 
-pub(super) fn dicom_tile_codec_kind(transfer_syntax_uid: &str) -> TileCodecKind {
-    if super::is_jpeg_transfer_syntax(transfer_syntax_uid) {
-        TileCodecKind::Jpeg
-    } else if matches!(
-        transfer_syntax_uid,
-        HTJ2K_TRANSFER_SYNTAX
-            | HTJ2K_LOSSLESS_TRANSFER_SYNTAX
-            | HTJ2K_LOSSLESS_RPCL_TRANSFER_SYNTAX
-    ) {
-        TileCodecKind::Htj2k
-    } else if JP2K_TRANSFER_SYNTAXES.contains(&transfer_syntax_uid) {
-        TileCodecKind::Jp2k
-    } else {
-        TileCodecKind::Other
-    }
+/// Sum of two sizes, unknown when either is unknown or the sum overflows.
+fn add_sizes(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    a?.checked_add(b?)
 }

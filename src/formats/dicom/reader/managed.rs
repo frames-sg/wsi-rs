@@ -53,18 +53,7 @@ impl ManagedSlideReader for DicomReader {
         Some((|| {
             // Strict planning deliberately bypasses decoded-frame cache entries.
             let frames = self.strict_jp2k_frames(reqs, control)?;
-            let jobs = frames
-                .iter()
-                .map(|(frame, bytes)| crate::decode::jp2k::Jp2kDecodeJob {
-                    data: std::borrow::Cow::Borrowed(bytes.as_slice()),
-                    expected_width: frame.actual_width,
-                    expected_height: frame.actual_height,
-                    rgb_color_space: !crate::formats::dicom::decode::jp2k_photometric_is_ycbcr(
-                        &frame.image.photometric_interpretation,
-                    ),
-                    backend: BackendRequest::Cpu,
-                })
-                .collect::<Vec<_>>();
+            let jobs = super::device::jp2k_jobs(&frames, BackendRequest::Cpu);
             crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
         })())
     }
@@ -146,15 +135,12 @@ impl DicomReader {
     }
 
     fn frame_for_request(&self, req: &TileRequest) -> FrameLookup {
-        let Some(level) = self.slide.levels.get(req.level.get() as usize) else {
+        let Ok(level) = dicom_level_for_request(&self.slide, req) else {
             return FrameLookup::Unknown;
         };
-        let (Ok(col), Ok(row)) = (u32::try_from(req.col), u32::try_from(req.row)) else {
+        let Ok((col, row)) = level.tile_coordinates(req) else {
             return FrameLookup::Unknown;
         };
-        if col >= level.tiles_across || row >= level.tiles_down {
-            return FrameLookup::Unknown;
-        }
         level
             .image_for_tile(col, row)
             .and_then(|image| image.frame_index(col, row).map(|index| (image, index)))

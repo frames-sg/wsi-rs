@@ -1,3 +1,4 @@
+use super::super::common::MAX_IRREGULAR_TILES_PER_LEVEL;
 use super::*;
 use crate::formats::tiff_family::test_support::{build_tiff, SyntheticTag};
 
@@ -15,13 +16,13 @@ fn tiled_ifd(width: u32, height: u32, tile_width: u32, tile_height: u32) -> Vec<
 fn interpret_builds_overlap_adjusted_levels_and_properties() {
     let mut first = tiled_ifd(512, 512, 256, 256);
     first.extend([
-        SyntheticTag::ascii(TAG_SOFTWARE, "MedScan 2.0"),
+        SyntheticTag::ascii(tags::SOFTWARE, "MedScan 2.0"),
         SyntheticTag::ascii(
             tags::IMAGE_DESCRIPTION,
             "Background Color=E6E6E6;White Balance=C0AAA1;Objective Power=10;OverlapsXY=16 8 4 2",
         ),
-        SyntheticTag::ascii(super::super::TAG_DATETIME, "2026:01:02 03:04:05"),
-        SyntheticTag::ascii(super::super::TAG_HOST_COMPUTER, "scanner-host"),
+        SyntheticTag::ascii(tags::DATETIME, "2026:01:02 03:04:05"),
+        SyntheticTag::ascii(tags::HOST_COMPUTER, "scanner-host"),
     ]);
     let file = build_tiff(&[first, tiled_ifd(256, 256, 128, 128)]);
     let container = TiffContainer::open(file.path()).unwrap();
@@ -54,7 +55,7 @@ fn interpret_builds_overlap_adjusted_levels_and_properties() {
 fn interpret_rejects_overlap_that_consumes_a_tile() {
     let mut tags = tiled_ifd(512, 512, 256, 256);
     tags.extend([
-        SyntheticTag::ascii(TAG_SOFTWARE, "MedScan"),
+        SyntheticTag::ascii(tags::SOFTWARE, "MedScan"),
         SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "OverlapsXY=256 0"),
     ]);
     let file = build_tiff(&[tags]);
@@ -70,7 +71,7 @@ fn detect_requires_vendor_description_and_all_tiled_ifds() {
 
     let file = build_tiff(&[
         vec![
-            SyntheticTag::ascii(TAG_SOFTWARE, "MedScan"),
+            SyntheticTag::ascii(tags::SOFTWARE, "MedScan"),
             SyntheticTag::ascii(tags::IMAGE_DESCRIPTION, "Objective Power=20"),
             SyntheticTag::long(tags::IMAGE_WIDTH, 64),
             SyntheticTag::long(tags::IMAGE_LENGTH, 64),
@@ -121,18 +122,18 @@ fn parse_overlap_pairs_groups_values_by_level_and_ignores_tail() {
 
 #[test]
 fn trestle_tile_grid_rejects_invalid_and_oversized_dimensions() {
-    assert!(checked_trestle_tile_grid(1024, 1024, 0, 256).is_err());
-    assert!(checked_trestle_tile_grid(0, 1024, 256, 256).is_err());
+    assert!(checked_tile_grid("Trestle", 1024, 1024, 0, 256).is_err());
+    assert!(checked_tile_grid("Trestle", 0, 1024, 256, 256).is_err());
     assert_eq!(
-        checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL, 1, 1, 1).unwrap(),
+        checked_tile_grid("Trestle", MAX_IRREGULAR_TILES_PER_LEVEL, 1, 1, 1).unwrap(),
         (
-            MAX_TRESTLE_TILES_PER_LEVEL,
+            MAX_IRREGULAR_TILES_PER_LEVEL,
             1,
-            MAX_TRESTLE_TILES_PER_LEVEL as usize
+            MAX_IRREGULAR_TILES_PER_LEVEL as usize
         )
     );
-    assert!(checked_trestle_tile_grid(MAX_TRESTLE_TILES_PER_LEVEL + 1, 1, 1, 1).is_err());
-    assert!(checked_trestle_tile_grid(u64::MAX, u64::MAX, 1, 1).is_err());
+    assert!(checked_tile_grid("Trestle", MAX_IRREGULAR_TILES_PER_LEVEL + 1, 1, 1, 1).is_err());
+    assert!(checked_tile_grid("Trestle", u64::MAX, u64::MAX, 1, 1).is_err());
 }
 
 #[test]

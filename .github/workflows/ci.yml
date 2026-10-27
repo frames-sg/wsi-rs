@@ -41,6 +41,33 @@ jobs:
           tool: cargo-nextest@0.9.136
       - run: cargo xtask validate
         working-directory: wsi-rs
+      - name: Build release performance and shim binaries once per platform
+        if: matrix.rust == 'stable'
+        run: cargo xtask bench-check
+        working-directory: wsi-rs
+
+  python-bindings:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.99.0"
+      - name: Build and test the reader wheel
+        run: |
+          python -m pip install maturin==1.15.0
+          python -m maturin build --locked --manifest-path wsi-rs-python/Cargo.toml --out target/python-wheels
+          python -m pip install --no-deps --no-index --find-links target/python-wheels wsi-rs
+          python -m unittest discover -s wsi-rs-python/tests -v
 
   feature-check:
     runs-on: ubuntu-latest
@@ -122,13 +149,7 @@ jobs:
         working-directory: wsi-rs
       - name: Run bounded fuzz campaigns
         working-directory: wsi-rs
-        run: |
-          for target in open_wsi_bytes open_jp2k_codestream_bytes open_svcache_bytes parse_xml_bytes open_dicom_bytes open_zvi_bytes open_mirax_bundle_bytes open_vms_bundle_bytes open_vsi_bundle_bytes; do
-            mkdir -p "fuzz/corpus/$target"
-            inputs=("fuzz/corpus/$target")
-            if [[ -d "fuzz/seeds/$target" ]]; then inputs+=("fuzz/seeds/$target"); fi
-            cargo +nightly-2026-08-13 fuzz run "$target" "${inputs[@]}" -- -max_total_time=15 -timeout=5 -rss_limit_mb=2048
-          done
+        run: cargo xtask release-fuzz --seconds 15 --timeout 5
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
         with:

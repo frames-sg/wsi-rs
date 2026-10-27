@@ -4,13 +4,9 @@ use super::*;
 impl MiraxReader {
     pub(super) fn read_cpu_batch(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
         if reqs.len() <= 1 {
-            return reqs
-                .iter()
-                .map(|req| self.read_tile_with_backend(req, BackendRequest::Cpu))
-                .collect();
+            return reqs.iter().map(|req| self.decode_tile(req)).collect();
         }
-        let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
-        let workers = runtime.cpu_worker_count();
+        let workers = crate::core::batch::cpu_worker_count();
         let limits = self.slide.limits;
         let logical_bytes = reqs.iter().try_fold(0_u64, |sum, req| {
             let (entry, _) = self.tile_for_request(req)?;
@@ -22,15 +18,7 @@ impl MiraxReader {
                 ),
             )
         })?;
-        let target = limits
-            .batch_chunk_bytes()
-            .min(limits.operation_transient_bytes())
-            .min(limits.slide_transient_bytes())
-            .min(
-                limits
-                    .encoded_unit_bytes()
-                    .saturating_add(logical_bytes.saturating_mul(2)),
-            );
+        let target = crate::formats::geometry::batch_decode_target(limits, logical_bytes);
         let mut output = Vec::with_capacity(reqs.len());
         let mut start = 0;
         while start < reqs.len() {
@@ -102,7 +90,7 @@ impl MiraxReader {
             };
             let mut results = (0..owned.len()).map(|_| None).collect::<Vec<_>>();
             let pool = (owned.len() > 1)
-                .then(crate::core::decode_runtime::process_jp2k_cpu_pool)
+                .then(crate::core::batch::process_codec_cpu_pool)
                 .flatten();
             if let Some(pool) = pool {
                 crate::core::execution_telemetry::record(

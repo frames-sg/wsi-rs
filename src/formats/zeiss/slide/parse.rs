@@ -63,27 +63,20 @@ fn open_and_validate_czi(
     limits: crate::SlideLimits,
 ) -> Result<ValidatedCzi, WsiError> {
     let source_identity = preflight_czi_file_with_limits(path, limits)?;
-    let mut preflight_file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
-    if FileIdentity::from_open_file(path, &preflight_file)? != source_identity {
-        return Err(invalid_slide(
-            path,
-            "CZI source identity changed before subblock preflight",
-        ));
-    }
+    let mut preflight_file = FileIdentity::open_verified(
+        path,
+        &source_identity,
+        "CZI source identity changed before subblock preflight",
+    )?;
     let mut czi = CziContainer::open(path)
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
-    if FileIdentity::from_path(path)? != source_identity {
-        return Err(invalid_slide(
-            path,
-            "CZI source identity changed between preflight and parser open",
-        ));
-    }
+    source_identity.ensure_matches(
+        path,
+        "CZI source identity changed between preflight and parser open",
+    )?;
 
     if czi.subblocks().len() > MAX_CZI_SUBBLOCKS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI subblock count {} exceeds the {MAX_CZI_SUBBLOCKS}-entry safety limit",
@@ -92,7 +85,7 @@ fn open_and_validate_czi(
         ));
     }
     if czi.attachments().len() > MAX_CZI_ATTACHMENTS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI attachment count {} exceeds the {MAX_CZI_ATTACHMENTS}-entry safety limit",
@@ -110,17 +103,14 @@ fn open_and_validate_czi(
             MAX_DECODED_IMAGE_BYTES.min(limits.decoded_output_bytes()),
             "CZI decoded subblock",
         )
-        .map_err(|message| invalid_slide(path, message))?;
+        .map_err(|message| WsiError::invalid_slide(path, message))?;
     }
     let file_len = std::fs::metadata(path)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?
+        .map_err(|source| WsiError::io_with_path(path, source))?
         .len();
     for attachment in czi.attachments() {
         if attachment.data_size > crate::core::limits::MAX_COMPRESSED_INPUT_BYTES {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "CZI attachment {} declares {} bytes, exceeding the {}-byte safety limit",
@@ -134,9 +124,9 @@ fn open_and_validate_czi(
             .file_position
             .checked_add(32 + 256)
             .and_then(|offset| offset.checked_add(attachment.data_size))
-            .ok_or_else(|| invalid_slide(path, "CZI attachment range overflows"))?;
+            .ok_or_else(|| WsiError::invalid_slide(path, "CZI attachment range overflows"))?;
         if payload_end > file_len {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "CZI attachment {} ends at {payload_end}, beyond file length {file_len}",
@@ -154,7 +144,10 @@ fn open_and_validate_czi(
             limits,
         )?;
         if subblock.file_part != 0 {
-            return Err(invalid_slide(path, "multipart CZI is unsupported"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "multipart CZI is unsupported",
+            ));
         }
     }
     let header = czi.file_header().clone();
@@ -162,7 +155,7 @@ fn open_and_validate_czi(
         .metadata_xml()
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
     if xml.len() as u64 > MAX_CZI_METADATA_BYTES {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI metadata has {} bytes, exceeding the {MAX_CZI_METADATA_BYTES}-byte safety limit",
@@ -216,12 +209,12 @@ fn build_dataset_parts(
 ) -> Result<CziDatasetParts, WsiError> {
     let scene_indices = scene_indices(&input.statistics, &input.summary)?;
     if scene_indices.is_empty() {
-        return Err(invalid_slide(path, "Zeiss slide has no scenes"));
+        return Err(WsiError::invalid_slide(path, "Zeiss slide has no scenes"));
     }
 
     let level_ratios = common_level_ratios(&input.subblocks, &scene_indices, &input.statistics)?;
     if level_ratios.len() > MAX_CZI_LEVELS {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI level count {} exceeds the {MAX_CZI_LEVELS}-level safety limit",
@@ -237,7 +230,7 @@ fn build_dataset_parts(
         || canvas_dimensions.0 > u64::from(u32::MAX)
         || canvas_dimensions.1 > u64::from(u32::MAX)
     {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!(
                 "CZI canvas dimensions {}x{} are outside the supported nonzero u32 range",
@@ -416,61 +409,13 @@ fn assemble_slide(
         source_icc_profiles: Vec::new(),
     };
 
-    let (tile_entry_bytes, level_entry_bytes) = dataset
-        .scenes
-        .first()
-        .and_then(|scene| scene.series.first())
-        .map(|series| {
-            let level_entry_bytes = series
-                .levels
-                .iter()
-                .map(|level| {
-                    level
-                        .dimensions
-                        .0
-                        .saturating_mul(level.dimensions.1)
-                        .saturating_mul(3)
-                })
-                .max()
-                .unwrap_or(1);
-            let tile_entry_bytes = series
-                .levels
-                .iter()
-                .filter_map(|level| match level.tile_layout {
-                    TileLayout::Regular {
-                        tile_width,
-                        tile_height,
-                        ..
-                    } => Some(
-                        u64::from(tile_width)
-                            .saturating_mul(u64::from(tile_height))
-                            .saturating_mul(3),
-                    ),
-                    TileLayout::Irregular { .. } | TileLayout::WholeLevel { .. } => None,
-                })
-                .max()
-                .unwrap_or(1);
-            (tile_entry_bytes, level_entry_bytes)
-        })
-        .unwrap_or((1, 1));
-    let associated_entry_bytes = dataset
-        .associated_images
-        .values()
-        .map(|image| {
-            u64::from(image.dimensions.0)
-                .saturating_mul(u64::from(image.dimensions.1))
-                .saturating_mul(u64::from(image.channels))
-        })
-        .max()
-        .unwrap_or(1);
-
     // Full-resolution Zeiss blocks can be ~14.5 MiB. Reserve half of the same
     // aggregate budget for source reuse, rather than raising the memory cap.
     let mut private_cache_budget = cache_config.private_cache_budget(6);
     let subblock_cache = PrivateCache::new(private_cache_budget.allocate_shares(3));
-    let level_cache = PrivateCache::new(private_cache_budget.allocate(level_entry_bytes));
-    let tile_cache = PrivateCache::new(private_cache_budget.allocate(tile_entry_bytes));
-    let associated_cache = PrivateCache::new(private_cache_budget.allocate(associated_entry_bytes));
+    let level_cache = PrivateCache::new(private_cache_budget.allocate_share());
+    let tile_cache = PrivateCache::new(private_cache_budget.allocate_share());
+    let associated_cache = PrivateCache::new(private_cache_budget.allocate_share());
 
     ZeissSlide {
         probe: Default::default(),

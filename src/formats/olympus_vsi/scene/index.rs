@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -10,7 +10,6 @@ use crate::core::registry::OpenBudget;
 use crate::core::types::AxesShape;
 use crate::error::WsiError;
 
-use super::super::invalid_slide;
 use super::header::{EtsHeader, MAX_ETS_DIMENSIONS, MAX_ETS_TILES};
 use super::{EtsLevel, EtsTile, EtsTileKey};
 
@@ -85,14 +84,15 @@ impl EtsIndex {
             let byte_count = file.read_u32::<LittleEndian>()?;
             file.seek_relative(4)?;
 
-            let key = key_from_coords(&coords, use_pyramid)?;
-            checked_ets_level_count(key.level).map_err(|message| invalid_slide(path, message))?;
+            let key = key_from_coords(path, &coords, use_pyramid)?;
+            checked_ets_level_count(key.level)
+                .map_err(|message| WsiError::invalid_slide(path, message))?;
             for (name, value) in [("z", key.z), ("c", key.c), ("t", key.t)] {
                 checked_ets_axis_len(value, name)
-                    .map_err(|message| invalid_slide(path, message))?;
+                    .map_err(|message| WsiError::invalid_slide(path, message))?;
             }
             if byte_count == 0 {
-                return Err(invalid_slide(path, "ETS tile payload is empty"));
+                return Err(WsiError::invalid_slide(path, "ETS tile payload is empty"));
             }
             if u64::from(byte_count) > budget.limits().encoded_unit_bytes() {
                 return Err(WsiError::ResourceLimit {
@@ -103,9 +103,9 @@ impl EtsIndex {
             }
             let tile_end = offset
                 .checked_add(u64::from(byte_count))
-                .ok_or_else(|| invalid_slide(path, "ETS tile payload range overflows"))?;
+                .ok_or_else(|| WsiError::invalid_slide(path, "ETS tile payload range overflows"))?;
             if tile_end > file_len {
-                return Err(invalid_slide(
+                return Err(WsiError::invalid_slide(
                     path,
                     format!(
                         "ETS tile payload range {offset}..{tile_end} exceeds file length {file_len}"
@@ -117,7 +117,10 @@ impl EtsIndex {
             max_c = max_c.max(key.c);
             max_t = max_t.max(key.t);
             if tiles.insert(key, EtsTile { offset, byte_count }).is_some() {
-                return Err(invalid_slide(path, "duplicate ETS tile coordinates"));
+                return Err(WsiError::invalid_slide(
+                    path,
+                    "duplicate ETS tile coordinates",
+                ));
             }
         }
 
@@ -139,8 +142,8 @@ impl EtsIndex {
     ) -> Result<Vec<EtsLevel>, WsiError> {
         let max_level = self.max_level;
         let tiles = &self.tiles;
-        let level_count =
-            checked_ets_level_count(max_level).map_err(|message| invalid_slide(path, message))?;
+        let level_count = checked_ets_level_count(max_level)
+            .map_err(|message| WsiError::invalid_slide(path, message))?;
         let level_index_bytes = u64::try_from(level_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(8);
@@ -183,7 +186,7 @@ impl EtsIndex {
                 })
             })
             .collect::<Result<Vec<_>, String>>()
-            .map_err(|message| invalid_slide(path, message))?;
+            .map_err(|message| WsiError::invalid_slide(path, message))?;
 
         Ok(levels)
     }
@@ -191,9 +194,12 @@ impl EtsIndex {
     pub(super) fn axes(&self, path: &Path) -> Result<AxesShape, WsiError> {
         let (max_z, max_c, max_t) = (self.max_z, self.max_c, self.max_t);
         let axes = AxesShape {
-            z: checked_ets_axis_len(max_z, "z").map_err(|message| invalid_slide(path, message))?,
-            c: checked_ets_axis_len(max_c, "c").map_err(|message| invalid_slide(path, message))?,
-            t: checked_ets_axis_len(max_t, "t").map_err(|message| invalid_slide(path, message))?,
+            z: checked_ets_axis_len(max_z, "z")
+                .map_err(|message| WsiError::invalid_slide(path, message))?,
+            c: checked_ets_axis_len(max_c, "c")
+                .map_err(|message| WsiError::invalid_slide(path, message))?,
+            t: checked_ets_axis_len(max_t, "t")
+                .map_err(|message| WsiError::invalid_slide(path, message))?,
         };
 
         Ok(axes)
@@ -238,12 +244,13 @@ pub(in crate::formats::olympus_vsi) fn checked_ets_extent(
 }
 
 pub(in crate::formats::olympus_vsi) fn key_from_coords(
+    path: &Path,
     coords: &[i32],
     use_pyramid: bool,
 ) -> Result<EtsTileKey, WsiError> {
     if coords.len() < 3 {
-        return Err(invalid_slide(
-            Path::new(""),
+        return Err(WsiError::invalid_slide(
+            path,
             "ETS coordinate dimensionality is too small",
         ));
     }
@@ -253,7 +260,7 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
         coords.len()
     };
     let level = if use_pyramid {
-        checked_coord(coords[coords.len() - 1], "resolution")?
+        checked_coord(path, coords[coords.len() - 1], "resolution")?
     } else {
         0
     };
@@ -261,19 +268,19 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
     let z = extra
         .first()
         .copied()
-        .map(|value| checked_coord(value, "z"))
+        .map(|value| checked_coord(path, value, "z"))
         .transpose()?
         .unwrap_or(0);
     let c = extra
         .get(1)
         .copied()
-        .map(|value| checked_coord(value, "c"))
+        .map(|value| checked_coord(path, value, "c"))
         .transpose()?
         .unwrap_or(0);
     let t = extra
         .get(2)
         .copied()
-        .map(|value| checked_coord(value, "t"))
+        .map(|value| checked_coord(path, value, "t"))
         .transpose()?
         .unwrap_or(0);
     Ok(EtsTileKey {
@@ -281,15 +288,14 @@ pub(in crate::formats::olympus_vsi) fn key_from_coords(
         z,
         c,
         t,
-        col: checked_coord(coords[0], "x")?,
-        row: checked_coord(coords[1], "y")?,
+        col: checked_coord(path, coords[0], "x")?,
+        row: checked_coord(path, coords[1], "y")?,
     })
 }
 
-fn checked_coord(value: i32, name: &str) -> Result<u32, WsiError> {
-    u32::try_from(value).map_err(|_| WsiError::InvalidSlide {
-        path: PathBuf::new(),
-        message: format!("negative ETS {name} coordinate {value}"),
+fn checked_coord(path: &Path, value: i32, name: &str) -> Result<u32, WsiError> {
+    u32::try_from(value).map_err(|_| {
+        WsiError::invalid_slide(path, format!("negative ETS {name} coordinate {value}"))
     })
 }
 

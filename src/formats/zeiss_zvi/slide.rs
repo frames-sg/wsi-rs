@@ -46,7 +46,8 @@ impl ZviSlide {
         config: BackendOpenConfig,
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
-        let mut compound = cfb::open(path).map_err(|source| invalid_slide(path, source))?;
+        let mut compound =
+            cfb::open(path).map_err(|source| WsiError::invalid_slide(path, source.to_string()))?;
         let stream_paths = compound_stream_paths_with_budget(&compound, &budget)?;
         let global_tags = read_tags_if_present(&mut compound, "/Image/Tags/Contents", &budget)?;
         let global_width = tag_u32(&global_tags, 515);
@@ -72,7 +73,7 @@ impl ZviSlide {
             }
         }
         if item_streams.len() > MAX_ZVI_PLANES {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 format!(
                     "ZVI plane count {} exceeds the {MAX_ZVI_PLANES}-plane safety limit",
@@ -82,7 +83,10 @@ impl ZviSlide {
         }
         item_streams.sort_by_key(|(idx, _)| *idx);
         if item_streams.is_empty() {
-            return Err(invalid_slide(path, "ZVI has no image item streams"));
+            return Err(WsiError::invalid_slide(
+                path,
+                "ZVI has no image item streams",
+            ));
         }
 
         let plane_index_bytes = u64::try_from(item_streams.len())
@@ -126,7 +130,7 @@ impl ZviSlide {
         }
 
         if planes.is_empty() {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 "ZVI image item streams were not readable",
             ));
@@ -137,7 +141,7 @@ impl ZviSlide {
         } else if planes.iter().all(|plane| plane.bytes_per_sample == 1) {
             SampleType::Uint8
         } else {
-            return Err(invalid_slide(
+            return Err(WsiError::invalid_slide(
                 path,
                 "mixed ZVI sample byte depths are not supported",
             ));
@@ -181,7 +185,7 @@ impl ZviSlide {
         let tile_layout;
         if mosaic {
             let mpp = mpp_x.zip(mpp_y).ok_or_else(|| {
-                invalid_slide(path, "ZVI mosaic is missing global pixel scaling tags")
+                WsiError::invalid_slide(path, "ZVI mosaic is missing global pixel scaling tags")
             })?;
             apply_mosaic_positions(&mut planes, mpp);
             let grid = build_mosaic_grid(&mut planes, plane_width, plane_height);
@@ -294,43 +298,9 @@ impl ZviSlide {
     }
 
     fn read_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        let scene = self
-            .dataset
-            .scenes
-            .get(req.scene.get())
-            .ok_or(WsiError::SceneOutOfRange {
-                index: req.scene.get(),
-                count: self.dataset.scenes.len(),
-            })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
+        let (_, series, level) = self.dataset.level(req.scene, req.series, req.level)?;
         let plane = req.plane.get();
-        for (axis, value, extent) in [
-            ("z", plane.z, series.axes.z),
-            ("c", plane.c, series.axes.c),
-            ("t", plane.t, series.axes.t),
-        ] {
-            if value >= extent {
-                return Err(WsiError::PlaneOutOfRange {
-                    axis: axis.into(),
-                    value,
-                    max: extent.saturating_sub(1),
-                });
-            }
-        }
+        series.axes.validate_plane(plane)?;
 
         match &level.tile_layout {
             TileLayout::WholeLevel {
@@ -343,21 +313,11 @@ impl ZviSlide {
                     .plane_by_whole
                     .get(&(req.plane.get().z, req.plane.get().c, req.plane.get().t))
                     .copied()
-                    .ok_or_else(|| WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI plane has no image payload".into(),
-                    })?;
+                    .ok_or_else(|| WsiError::tile_read(req, "ZVI plane has no image payload"))?;
                 let x = req.col.saturating_mul(i64::from(*virtual_tile_width));
                 let y = req.row.saturating_mul(i64::from(*virtual_tile_height));
                 if x < 0 || y < 0 || x >= *width as i64 || y >= *height as i64 {
-                    return Err(WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI tile out of bounds".into(),
-                    });
+                    return Err(WsiError::tile_read(req, "ZVI tile out of bounds"));
                 }
                 let w = (*virtual_tile_width).min((*width as i64 - x) as u32);
                 let h = (*virtual_tile_height).min((*height as i64 - y) as u32);
@@ -374,21 +334,14 @@ impl ZviSlide {
                         req.row,
                     ))
                     .copied()
-                    .ok_or_else(|| WsiError::TileRead {
-                        col: req.col,
-                        row: req.row,
-                        level: req.level.get(),
-                        reason: "ZVI mosaic tile not found".into(),
-                    })?;
+                    .ok_or_else(|| WsiError::tile_read(req, "ZVI mosaic tile not found"))?;
                 let plane = &self.planes[plane_index];
                 self.read_plane_window(plane_index, 0, 0, plane.width, plane.height)
             }
-            TileLayout::Regular { .. } => Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "ZVI does not use regular native tiles".into(),
-            }),
+            TileLayout::Regular { .. } => Err(WsiError::tile_read(
+                req,
+                "ZVI does not use regular native tiles",
+            )),
         }
     }
 }
@@ -468,7 +421,7 @@ fn validated_payload_length_with_limits(
 ) -> Result<u64, WsiError> {
     let payload_length = stream_length
         .checked_sub(header.payload_offset)
-        .ok_or_else(|| invalid_slide(path, "ZVI payload offset exceeds stream length"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "ZVI payload offset exceeds stream length"))?;
     let encoded_limit =
         crate::core::limits::MAX_COMPRESSED_INPUT_BYTES.min(limits.encoded_unit_bytes());
     if payload_length > encoded_limit {
@@ -481,7 +434,7 @@ fn validated_payload_length_with_limits(
     let decoded_length = u64::from(header.width)
         .checked_mul(u64::from(header.height))
         .and_then(|value| value.checked_mul(u64::from(header.bytes_per_sample)))
-        .ok_or_else(|| invalid_slide(path, "ZVI decoded payload length overflow"))?;
+        .ok_or_else(|| WsiError::invalid_slide(path, "ZVI decoded payload length overflow"))?;
     let decoded_limit =
         crate::core::limits::MAX_DECODED_IMAGE_BYTES.min(limits.decoded_output_bytes());
     if decoded_length > decoded_limit {
@@ -492,19 +445,12 @@ fn validated_payload_length_with_limits(
         });
     }
     if header.compression == ZviCompression::Raw && payload_length != decoded_length {
-        return Err(invalid_slide(
+        return Err(WsiError::invalid_slide(
             path,
             format!("ZVI raw payload has {payload_length} bytes, expected {decoded_length}"),
         ));
     }
     Ok(payload_length)
-}
-
-fn invalid_slide(path: &Path, message: impl ToString) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.to_string(),
-    }
 }
 
 #[cfg(test)]

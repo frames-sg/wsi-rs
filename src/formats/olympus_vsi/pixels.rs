@@ -1,7 +1,6 @@
 //! ETS payload reads, codec dispatch and sparse background tiles.
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use j2k_core::BackendRequest;
 
@@ -65,10 +64,7 @@ impl EtsScene {
         let mut bytes = vec![0; encoded_len];
         self.file
             .read_exact_at(&mut bytes, tile.offset)
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: self.path.clone(),
-            })?;
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
         Ok(bytes)
     }
 

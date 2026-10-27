@@ -1,10 +1,9 @@
 mod openslide_test_support;
 mod support;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use openslide_test_support::OpenSlide;
 use support::compare::{compare_rgba, Tolerance};
@@ -101,56 +100,21 @@ fn aperio_jpeg_rgb_regression_path() -> Option<PathBuf> {
 }
 
 fn resolve_compare_path(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        return std::fs::canonicalize(&path).unwrap_or(path);
-    }
-
-    if path.is_file() {
-        return std::fs::canonicalize(&path).unwrap_or(path);
-    }
-
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let rooted = workspace_root.join(&path);
-    std::fs::canonicalize(&rooted).unwrap_or(rooted)
-}
-
-#[test]
-fn normalize_property_value_strips_outer_single_quotes() {
-    assert_eq!(normalize_property_value("'hamamatsu'"), "hamamatsu");
-    assert_eq!(normalize_property_value("hamamatsu"), "hamamatsu");
-    assert_eq!(
-        normalize_property_value("'Aperio Image Library\\nJPEG/RGB'"),
-        "Aperio Image Library\\nJPEG/RGB"
-    );
-}
-
-#[test]
-fn parse_openslide_properties_keeps_multiline_values_together() {
-    let props = parse_openslide_properties(
-        "openslide.vendor: 'aperio'\n\
-         openslide.comment: 'Aperio Image Library v12.0.11\n\
-         123952x83886 JPEG/RGB Q=30|Time = 17:53:49'\n\
-         openslide.level-count: '4'\n",
-    );
-
-    assert_eq!(
-        props.get("openslide.vendor").map(String::as_str),
-        Some("aperio")
-    );
-    assert_eq!(
-        props.get("openslide.comment").map(String::as_str),
-        Some("Aperio Image Library v12.0.11\n123952x83886 JPEG/RGB Q=30|Time = 17:53:49")
-    );
-    assert_eq!(
-        props.get("openslide.level-count").map(String::as_str),
-        Some("4")
-    );
+    let resolved = if path.is_absolute() || path.is_file() {
+        path
+    } else {
+        support::corpus::local_testdata_candidates(&path)
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+            .unwrap_or(path)
+    };
+    std::fs::canonicalize(&resolved).unwrap_or(resolved)
 }
 
 #[test]
 fn pixel_compare_mode_uses_jpeg_tolerance_for_public_generic_tiff() {
     let path = Path::new("downloads/openslide-testdata/Generic-TIFF/CMU-1.tiff");
-    let props = HashMap::from([("openslide.vendor".to_string(), "generic-tiff".to_string())]);
+    let props = BTreeMap::from([("openslide.vendor".to_string(), "generic-tiff".to_string())]);
 
     assert_eq!(
         pixel_compare_mode(path, &props),
@@ -161,7 +125,7 @@ fn pixel_compare_mode_uses_jpeg_tolerance_for_public_generic_tiff() {
 #[test]
 fn pixel_compare_mode_keeps_jp2k_separate_from_jpeg_tiff_rules() {
     let path = Path::new("downloads/openslide-testdata/Aperio/JP2K-33003-1.svs");
-    let props = HashMap::from([(
+    let props = BTreeMap::from([(
         "openslide.comment".to_string(),
         "Aperio Image Library v12.0.11 JPEG2000/RGB".to_string(),
     )]);
@@ -175,7 +139,7 @@ fn pixel_compare_mode_keeps_jp2k_separate_from_jpeg_tiff_rules() {
 #[test]
 fn pixel_compare_mode_uses_jpeg_tolerance_for_mirax() {
     let path = Path::new("downloads/openslide-testdata/Mirax/Mirax2.2-1.mrxs");
-    let props = HashMap::from([("openslide.vendor".to_string(), "mirax".to_string())]);
+    let props = BTreeMap::from([("openslide.vendor".to_string(), "mirax".to_string())]);
 
     assert_eq!(
         pixel_compare_mode(path, &props),
@@ -186,7 +150,7 @@ fn pixel_compare_mode_uses_jpeg_tolerance_for_mirax() {
 #[test]
 fn pixel_compare_mode_keeps_exact_for_unclassified_tiff() {
     let path = Path::new("custom-slide.tiff");
-    let props = HashMap::new();
+    let props = BTreeMap::new();
 
     assert_eq!(pixel_compare_mode(path, &props), PixelCompareMode::Exact);
 }
@@ -194,7 +158,9 @@ fn pixel_compare_mode_keeps_exact_for_unclassified_tiff() {
 fn compare_slide(path: &Path) {
     let handle = Slide::open(path).expect("open slide with wsi_rs");
     let openslide = OpenSlide::open(path).expect("open slide with OpenSlide");
-    let openslide_props = openslide_properties(path);
+    let openslide_props = openslide
+        .properties()
+        .unwrap_or_else(|err| panic!("read OpenSlide properties for {}: {err}", path.display()));
     let ours = handle.dataset();
     let series = &ours.scenes[0].series[0];
 
@@ -303,7 +269,7 @@ fn compare_level0_regions(
     path: &Path,
     handle: &Slide,
     openslide: &OpenSlide,
-    openslide_props: &HashMap<String, String>,
+    openslide_props: &BTreeMap<String, String>,
 ) {
     let level0 = &handle.dataset().scenes[0].series[0].levels[0];
     let mode = pixel_compare_mode(path, openslide_props);
@@ -352,85 +318,7 @@ fn compare_level0_regions(
     }
 }
 
-fn openslide_properties(path: &Path) -> HashMap<String, String> {
-    let output = Command::new("openslide-show-properties")
-        .arg(path)
-        .output()
-        .expect("run openslide-show-properties");
-    assert!(
-        output.status.success(),
-        "openslide-show-properties failed for {}: {}",
-        path.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8(output.stdout).expect("decode openslide stdout");
-    parse_openslide_properties(&stdout)
-}
-
-fn parse_openslide_properties(stdout: &str) -> HashMap<String, String> {
-    let mut props = HashMap::new();
-    let mut current_name: Option<String> = None;
-    let mut current_value = String::new();
-
-    let flush_current = |props: &mut HashMap<String, String>,
-                         current_name: &mut Option<String>,
-                         current_value: &mut String| {
-        let Some(name) = current_name.take() else {
-            current_value.clear();
-            return;
-        };
-        let value = normalize_property_value(current_value.trim());
-        if !value.is_empty() {
-            props.insert(name, value.to_string());
-        }
-        current_value.clear();
-    };
-
-    for line in stdout.lines() {
-        if let Some((name, value)) = parse_property_line(line) {
-            let name = name.trim();
-            if !name.is_empty() {
-                flush_current(&mut props, &mut current_name, &mut current_value);
-                current_name = Some(name.to_string());
-                current_value.push_str(value.trim());
-                continue;
-            }
-        }
-
-        if current_name.is_some() {
-            if !current_value.is_empty() {
-                current_value.push('\n');
-            }
-            current_value.push_str(line.trim());
-        }
-    }
-
-    flush_current(&mut props, &mut current_name, &mut current_value);
-    props
-}
-
-fn parse_property_line(line: &str) -> Option<(&str, &str)> {
-    let (name, value) = line.split_once(':')?;
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '[' | ']'))
-    {
-        return None;
-    }
-    Some((name, value))
-}
-
-fn normalize_property_value(value: &str) -> &str {
-    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    }
-}
-
-fn pixel_compare_mode(path: &Path, openslide_props: &HashMap<String, String>) -> PixelCompareMode {
+fn pixel_compare_mode(path: &Path, openslide_props: &BTreeMap<String, String>) -> PixelCompareMode {
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -473,7 +361,7 @@ fn pixel_compare_mode(path: &Path, openslide_props: &HashMap<String, String>) ->
     PixelCompareMode::Exact
 }
 
-fn is_jp2k_slide(openslide_props: &HashMap<String, String>) -> bool {
+fn is_jp2k_slide(openslide_props: &BTreeMap<String, String>) -> bool {
     let descriptor = openslide_props
         .get("openslide.comment")
         .or_else(|| openslide_props.get("tiff.ImageDescription"));
@@ -563,7 +451,7 @@ fn assert_rgba_exact(path: &Path, region: RegionCase, ours: &[u8], theirs: &[u8]
 
 fn compare_exact_property(
     path: &Path,
-    openslide_props: &HashMap<String, String>,
+    openslide_props: &BTreeMap<String, String>,
     ours: Option<&str>,
     key: &str,
 ) {
@@ -581,7 +469,7 @@ fn compare_exact_property(
 
 fn compare_float_property(
     path: &Path,
-    openslide_props: &HashMap<String, String>,
+    openslide_props: &BTreeMap<String, String>,
     ours: Option<&str>,
     key: &str,
 ) {

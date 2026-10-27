@@ -1,5 +1,5 @@
 use super::fixtures::*;
-use super::runtime::{empty_dataset, test_dicom_image_with_transfer_syntax, tile_request};
+use super::runtime::{dataset_for_levels, test_dicom_image_with_transfer_syntax, tile_request};
 use super::*;
 
 fn encode_test_htj2k_rgb(width: u32, height: u32) -> Vec<u8> {
@@ -104,10 +104,11 @@ fn strict_device_rejects_sparse_missing_dicom_tile() {
         )],
     )
     .expect("sparse level should build");
+    let dataset = dataset_for_levels(&levels);
     let reader = DicomReader {
         slide: Arc::new(DicomSlide {
             encoded_unit_bytes: crate::SlideLimits::default().encoded_unit_bytes(),
-            dataset: empty_dataset(),
+            dataset,
             levels,
             associated: HashMap::new(),
         }),

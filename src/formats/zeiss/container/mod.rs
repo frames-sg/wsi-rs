@@ -9,7 +9,6 @@ mod pixel;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::error::WsiError;
 
@@ -38,16 +37,10 @@ pub(super) struct CziContainer {
 impl CziContainer {
     pub(super) fn open(path: impl AsRef<Path>) -> Result<Self, WsiError> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(&path).map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.clone(),
-        })?;
+        let file = File::open(&path).map_err(|source| WsiError::io_with_path(&path, source))?;
         let file_len = file
             .metadata()
-            .map_err(|source| WsiError::IoWithPath {
-                source: Arc::new(source),
-                path: path.clone(),
-            })?
+            .map_err(|source| WsiError::io_with_path(&path, source))?
             .len();
         let mut reader = BufReader::new(file);
         let parsed = parser::parse_file(&mut reader, file_len)?;

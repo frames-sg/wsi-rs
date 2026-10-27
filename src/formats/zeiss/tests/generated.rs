@@ -230,6 +230,50 @@ fn generated_czi_internal_reader_region_display_and_associated_reads_are_determi
 }
 
 #[test]
+fn raw_display_tiles_must_name_one_native_tile() {
+    let jpeg = jpeg_rgb(8, 8, &[200, 80, 20].repeat(8 * 8));
+    let mut compressed = SubblockSpec::bgr24(0, 0, 8, 8, jpeg.clone());
+    compressed.compression = 1;
+    let fixture = write_fixture(&[compressed], &[], &metadata_xml(8, 8));
+    let reader = ZeissReader {
+        slide: Arc::new(ZeissSlide::parse(fixture.path()).expect("parse JPEG-compressed CZI")),
+    };
+    let crate::TileLayout::Regular {
+        tile_width,
+        tile_height,
+        ..
+    } = reader.slide.dataset.scenes[0].series[0].levels[0].tile_layout
+    else {
+        panic!("CZI levels use regular tiles");
+    };
+    let view = |col, row, width, height| {
+        TileViewRequest::new(0usize, 0usize, 0u32, col, row, width, height)
+    };
+
+    let raw = reader
+        .read_raw_compressed_display_tile(&view(0, 0, tile_width, tile_height))
+        .expect("raw display tile on the native grid");
+    assert_eq!(raw.data(), jpeg);
+    let error = reader
+        .read_raw_compressed_display_tile(&view(0, 0, tile_width + 1, tile_height))
+        .expect_err("display tile size differs from the native size");
+    assert!(
+        matches!(
+            &error,
+            WsiError::Unsupported { reason } if *reason == format!(
+                "Zeiss raw JPEG display tile size {}x{tile_height} does not match native tile size {tile_width}x{tile_height}",
+                tile_width + 1
+            )
+        ),
+        "{error:?}"
+    );
+    assert!(matches!(
+        reader.read_raw_compressed_display_tile(&view(1, 0, tile_width, tile_height)),
+        Err(WsiError::TileRead { col: 1, row: 0, .. })
+    ));
+}
+
+#[test]
 fn generated_czi_reports_index_bounds_and_corrupt_input_context() {
     let fixture = main_fixture();
     let reader = ZeissBackend
@@ -241,7 +285,12 @@ fn generated_czi_reports_index_bounds_and_corrupt_input_context() {
     ));
     assert!(matches!(
         reader.read_tile_cpu(&TileRequest::new(0usize, 1usize, 0u32, 0, 0)),
-        Err(WsiError::SceneOutOfRange { index: 0, count: 1 })
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
+    ));
+    let bad_series = TileRequest::new(0usize, 1usize, 0u32, 0, 0);
+    assert!(matches!(
+        reader.read_tiles_cpu(&[bad_series.clone(), bad_series]),
+        Err(WsiError::SeriesOutOfRange { index: 1, count: 1 })
     ));
     assert!(matches!(
         reader.read_tile_cpu(&TileRequest::new(0usize, 0usize, 9u32, 0, 0)),

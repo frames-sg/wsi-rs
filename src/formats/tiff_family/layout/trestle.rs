@@ -6,20 +6,14 @@ use crate::core::types::*;
 use crate::decode::jpeg::jpeg_dimensions;
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::TiffParseError;
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
 use crate::properties::Properties;
 
-use super::{
-    compression_from_tag, compute_tiff_dataset_id_and_record_quickhash,
-    single_scene_uint8_pyramid_dataset, DatasetLayout, TiffLayoutInterpreter, TileSource,
-    TileSourceKey,
+use super::common::{
+    averaged_downsample, checked_tile_grid, compression_from_tag, SingleSceneTiffLayout,
 };
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
-const TAG_SOFTWARE: u16 = 305;
-const TAG_X_POSITION: u16 = 286;
-const TAG_Y_POSITION: u16 = 287;
 const TRESTLE_SOFTWARE_PREFIX: &str = "MedScan";
-const MAX_TRESTLE_TILES_PER_LEVEL: u64 = 1_000_000;
 
 pub(crate) struct TrestleInterpreter;
 
@@ -33,7 +27,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             return false;
         };
 
-        let Ok(software) = container.get_string(first_ifd, TAG_SOFTWARE) else {
+        let Ok(software) = container.get_string(first_ifd, tags::SOFTWARE) else {
             return false;
         };
         if !software.starts_with(TRESTLE_SOFTWARE_PREFIX) {
@@ -80,7 +74,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             let compression_val = container.get_u32(ifd_id, tags::COMPRESSION).unwrap_or(1);
             let compression = compression_from_tag(compression_val);
             let (tiles_across, tiles_down, tile_count) =
-                checked_trestle_tile_grid(width, height, tile_width, tile_height)?;
+                checked_tile_grid("Trestle", width, height, tile_width, tile_height)?;
 
             let (overlap_x, overlap_y) = overlap_pairs.get(level_idx).copied().unwrap_or((0, 0));
             let public_tile_width = tile_width.saturating_sub(overlap_x);
@@ -103,10 +97,8 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
                 height
             };
 
-            let downsample = if let Some((base_w, base_h)) = base_dims {
-                let dw = base_w as f64 / public_width as f64;
-                let dh = base_h as f64 / public_height as f64;
-                (dw + dh) / 2.0
+            let downsample = if let Some(base) = base_dims {
+                averaged_downsample(base, (public_width, public_height))
             } else {
                 base_dims = Some((public_width, public_height));
                 1.0
@@ -138,14 +130,7 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             });
 
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0usize,
-                    series: 0usize,
-                    level: level_idx as u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(level_idx as u32),
                 TileSource::TiledIfd {
                     ifd_id,
                     jpeg_tables: container
@@ -188,16 +173,16 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
         let mut properties = Properties::new();
         properties.insert("openslide.vendor", "trestle");
         properties.insert("openslide.comment", desc.clone());
-        if let Ok(software) = container.get_string(first_ifd, TAG_SOFTWARE) {
+        if let Ok(software) = container.get_string(first_ifd, tags::SOFTWARE) {
             properties.insert("tiff.Software", software.to_string());
         }
-        if let Ok(datetime) = container.get_string(first_ifd, super::TAG_DATETIME) {
+        if let Ok(datetime) = container.get_string(first_ifd, tags::DATETIME) {
             properties.insert("tiff.DateTime", datetime.to_string());
         }
-        if let Ok(host) = container.get_string(first_ifd, super::TAG_HOST_COMPUTER) {
+        if let Ok(host) = container.get_string(first_ifd, tags::HOST_COMPUTER) {
             properties.insert("tiff.HostComputer", host.to_string());
         }
-        if let Ok(copyright) = container.get_string(first_ifd, super::TAG_COPYRIGHT) {
+        if let Ok(copyright) = container.get_string(first_ifd, tags::COPYRIGHT) {
             properties.insert("tiff.Copyright", copyright.to_string());
         }
         properties.insert("tiff.ImageDescription", desc);
@@ -210,10 +195,10 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             properties.insert("tiff.YResolution", y_res.to_string());
             properties.insert("openslide.mpp-y", y_res.to_string());
         }
-        if let Ok(x_pos) = container.get_f64(first_ifd, TAG_X_POSITION) {
+        if let Ok(x_pos) = container.get_f64(first_ifd, tags::X_POSITION) {
             properties.insert("tiff.XPosition", x_pos.to_string());
         }
-        if let Ok(y_pos) = container.get_f64(first_ifd, TAG_Y_POSITION) {
+        if let Ok(y_pos) = container.get_f64(first_ifd, tags::Y_POSITION) {
             properties.insert("tiff.YPosition", y_pos.to_string());
         }
         if let Ok(unit) = container.get_u32(first_ifd, tags::RESOLUTION_UNIT) {
@@ -235,55 +220,20 @@ impl TiffLayoutInterpreter for TrestleInterpreter {
             }
         }
 
-        let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
-            container,
-            lowest_ifd,
-            first_ifd,
-            &mut properties,
-        )?;
-
-        let mut dataset = single_scene_uint8_pyramid_dataset(
-            dataset_id,
-            AxesShape::default(),
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: lowest_ifd,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
-        );
-        attach_source_icc_profile(&mut dataset, container, top_ifds.iter().copied(), 0, 0)?;
-
-        Ok(DatasetLayout {
-            dataset,
             tile_sources,
             associated_sources,
-        })
+            source_icc_ifds: top_ifds.iter().copied(),
+        }
+        .finish(container)
     }
-}
-
-fn checked_trestle_tile_grid(
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-) -> Result<(u64, u64, usize), TiffParseError> {
-    if width == 0 || height == 0 || tile_width == 0 || tile_height == 0 {
-        return Err(TiffParseError::Structure(format!(
-            "Trestle image and tile dimensions must be non-zero (image={width}x{height}, tile={tile_width}x{tile_height})"
-        )));
-    }
-    let tiles_across = width.div_ceil(u64::from(tile_width));
-    let tiles_down = height.div_ceil(u64::from(tile_height));
-    let tile_count = tiles_across
-        .checked_mul(tiles_down)
-        .ok_or_else(|| TiffParseError::Structure("Trestle tile count overflow".into()))?;
-    if tile_count > MAX_TRESTLE_TILES_PER_LEVEL {
-        return Err(TiffParseError::Structure(format!(
-            "Trestle level declares {tile_count} tiles, exceeding the {MAX_TRESTLE_TILES_PER_LEVEL}-tile limit"
-        )));
-    }
-    let tile_count = usize::try_from(tile_count).map_err(|_| {
-        TiffParseError::Structure("Trestle tile count exceeds address space".into())
-    })?;
-    Ok((tiles_across, tiles_down, tile_count))
 }
 
 fn parse_trestle_description(desc: &str) -> HashMap<String, String> {

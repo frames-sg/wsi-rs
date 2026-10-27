@@ -15,6 +15,18 @@ Regenerate with:
 
 Requires `opj_compress` and `opj_decompress` on `PATH`.
 
+## Exact output regressions
+
+RGB fixtures are compared byte-for-byte with their independent PPM references.
+The three `ycbcr_*.wsi-rgb` files pin the existing wsi-rs decoder's 16×12
+interleaved RGB8 output as of 2026-10-25. These are regression baselines,
+not independent decoder references. Their color conversion differs from the
+existing PPM references by at most one channel value. Tests require exact
+equality with these baselines and retain the independent PPM tolerance check.
+The original codestreams and PPM references are unchanged. Updating these
+baselines requires an intentional change to the output contract; they are
+never regenerated during tests.
+
 ## Reduced-resolution references
 
 `{stem}.r1.ppm` and `{stem}.r2.ppm` are OpenJPEG 2.5.4 `opj_decompress -r 1`

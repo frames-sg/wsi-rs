@@ -31,7 +31,7 @@ use crate::core::registry::{
     SlideReader, DEFAULT_MAX_REGION_PIXELS,
 };
 use crate::core::types::*;
-use crate::decode::jp2k::{decode_batch_jp2k, Jp2kColorSpace, Jp2kDecodeJob};
+use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::decode::jpeg::{
     decode_batch_jpeg, decode_jpeg_rgb_downscaled_with_size_override,
     decode_jpeg_rgb_with_size_override, JpegDecodeJob,
@@ -67,6 +67,39 @@ use image_ops::*;
 use jpeg_frame::*;
 use ndpi_retile::*;
 pub(crate) use reader::TiffPixelReader;
+
+impl TiffPixelReader {
+    fn ndpi_whole_level_geometry(
+        &self,
+        scene: SceneId,
+        series: SeriesId,
+        level: LevelIdx,
+        col: i64,
+        row: i64,
+        invalid_layout_reason: &'static str,
+    ) -> Result<(u64, u64, u32, u32), WsiError> {
+        let (_, _, level_ref) = self.layout.dataset.level(scene, series, level)?;
+        let TileLayout::WholeLevel {
+            virtual_tile_width,
+            virtual_tile_height,
+            ..
+        } = level_ref.tile_layout
+        else {
+            return Err(WsiError::TileRead {
+                col,
+                row,
+                level: level.get(),
+                reason: invalid_layout_reason.into(),
+            });
+        };
+        Ok((
+            level_ref.dimensions.0,
+            level_ref.dimensions.1,
+            virtual_tile_width,
+            virtual_tile_height,
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests;

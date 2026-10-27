@@ -58,6 +58,42 @@ fn raw_encapsulated_scan_handles_extended_offset_table_layout() {
 }
 
 #[test]
+fn raw_encapsulated_scan_skips_64_bit_vr_elements_before_pixel_data() {
+    // SV and UV use the long explicit-VR header (reserved bytes + u32 length).
+    for vr in [b"SV", b"UV"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raw-64-bit-vr.dcm");
+        let frame = [0xFF, 0x4F, 0x01, 0x02];
+        let mut bytes = vec![0; 132];
+        bytes[128..132].copy_from_slice(b"DICM");
+        push_explicit_vr_long_element(
+            &mut bytes,
+            [0x11, 0x00, 0x10, 0x10],
+            vr,
+            &(-2i64).to_le_bytes(),
+        );
+
+        bytes.extend_from_slice(&PIXEL_DATA_TAG_LE);
+        bytes.extend_from_slice(b"OB");
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&UNDEFINED_LENGTH_LE);
+        bytes.extend_from_slice(&DICOM_ITEM_TAG_LE);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let item_offset = push_pixel_fragment(&mut bytes, &frame);
+        bytes.extend_from_slice(&DICOM_SEQUENCE_DELIMITER_TAG_LE);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let vr = String::from_utf8_lossy(vr);
+        let frames = scan_encapsulated_frames_raw_little_endian(&path, 1)
+            .unwrap_or_else(|err| panic!("raw scan skips the {vr} element: {err}"))
+            .expect("Pixel Data is found");
+        assert_eq!(frames.frame_ranges, vec![0..1], "{vr}");
+        assert_eq!(frames.fragments[0].item_offset, item_offset, "{vr}");
+    }
+}
+
+#[test]
 fn controlled_indexing_reports_basic_offset_table_mapping() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("raw-bot-diagnostics.dcm");
@@ -269,7 +305,7 @@ fn extended_offset_table_values_are_bounds_checked_before_reading() {
     std::fs::write(&path, vec![0u8; 64]).unwrap();
     let mut file = File::open(&path).unwrap();
 
-    let error = read_extended_offset_tables_le(&mut file, &path, Some(56), Some(16), 16, None)
+    let error = read_extended_offset_tables_le(&mut file, &path, Some(56), Some(16), 16, 64, None)
         .expect_err("EOT values beyond EOF must fail before allocation/read");
 
     assert!(error.to_string().contains("outside the source file"));

@@ -1,7 +1,6 @@
-use super::storage::{hex_encode, is_fresh_svcache};
+use super::storage::is_fresh_svcache;
 use super::*;
 use std::io::ErrorKind;
-use std::sync::Arc;
 
 pub fn default_svcache_path(source_path: &Path) -> PathBuf {
     let name = source_path
@@ -14,7 +13,7 @@ pub fn default_svcache_path(source_path: &Path) -> PathBuf {
 pub fn cache_dir_svcache_path(source_path: &Path) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(source_path.to_string_lossy().as_bytes());
-    let hash = hex_encode(&hasher.finalize());
+    let hash = format!("{:x}", hasher.finalize());
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -57,10 +56,7 @@ pub(crate) fn resolve_open_path_with_policy(
             Ok(_) => continue,
             Err(source) if source.kind() == ErrorKind::NotFound => continue,
             Err(source) => {
-                return Err(WsiError::IoWithPath {
-                    source: Arc::new(source),
-                    path: candidate,
-                });
+                return Err(WsiError::io_with_path(&candidate, source));
             }
         }
     }

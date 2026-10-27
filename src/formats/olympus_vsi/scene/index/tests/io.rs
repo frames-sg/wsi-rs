@@ -67,7 +67,8 @@ fn ets_index_batches_reads_and_padding_skips_without_changing_tiles() {
     let index = EtsIndex::read(&mut input, Path::new("frame_t.ets"), &budget, &header).unwrap();
     assert_eq!(index.tiles.len(), 1024);
     for col in 0..1024 {
-        let tile = index.tiles[&key_from_coords(&[col, 0, 0, 0], true).unwrap()];
+        let tile =
+            index.tiles[&key_from_coords(Path::new("slide.ets"), &[col, 0, 0, 0], true).unwrap()];
         assert_eq!(tile.offset, 1024 * 36);
         assert_eq!(tile.byte_count, 1);
     }

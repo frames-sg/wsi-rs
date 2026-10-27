@@ -53,7 +53,13 @@ impl SlideReader for ZeissReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.read_tile_with_backend(req, BackendRequest::Cpu)
+        self.slide.read_tile(
+            req.scene.get(),
+            req.series.get(),
+            req.level.get(),
+            req.col,
+            req.row,
+        )
     }
 
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
@@ -79,78 +85,16 @@ impl SlideReader for ZeissReader {
         &self,
         req: &TileViewRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        let scene =
-            self.slide
-                .dataset
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: self.slide.dataset.scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: series.levels.len() as u32,
-                })?;
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            ..
-        } = level.tile_layout
-        else {
-            return Err(WsiError::Unsupported {
-                reason: "Zeiss raw JPEG display access requires a regular native tile grid".into(),
-            });
-        };
-        if (req.tile_width, req.tile_height) != (tile_width, tile_height) {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "Zeiss raw JPEG display tile size {}x{} does not match native tile size {}x{}",
-                    req.tile_width, req.tile_height, tile_width, tile_height
-                ),
-            });
-        }
-
-        self.slide.read_raw_jpeg_tile(&TileRequest {
-            scene: req.scene,
-            series: req.series,
-            level: req.level,
-            plane: req.plane,
-            col: req.col,
-            row: req.row,
-        })
+        let tile = crate::formats::geometry::native_regular_display_tile(
+            &self.slide.dataset,
+            req,
+            "Zeiss raw JPEG display",
+        )?;
+        self.slide.read_raw_jpeg_tile(&tile)
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         self.slide.read_associated(name)
-    }
-}
-
-impl ZeissReader {
-    fn read_tile_with_backend(
-        &self,
-        req: &TileRequest,
-        backend: BackendRequest,
-    ) -> Result<CpuTile, WsiError> {
-        self.slide.read_tile(
-            req.scene.get(),
-            req.series.get(),
-            req.level.get(),
-            req.col,
-            req.row,
-            backend,
-        )
     }
 }
 
@@ -177,13 +121,7 @@ impl ZeissSlide {
     pub(super) fn validate_wsi_pixels(&self) -> Result<(), WsiError> {
         let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         if czi.subblocks().iter().any(|info| {
-            info.pixel_type != CziPixelType::Bgr24
-                || !matches!(
-                    info.compression,
-                    CziCompressionMode::UnCompressed
-                        | CziCompressionMode::Jpg
-                        | CziCompressionMode::JpgXr
-                )
+            info.pixel_type != CziPixelType::Bgr24 || !info.compression.is_wsi_supported()
         }) {
             return Err(WsiError::UnsupportedFormat("CZI WSI reads currently require Bgr24 with uncompressed, JPEG, or JPEG XR subblocks".into()));
         }
@@ -228,30 +166,20 @@ impl ZeissSlide {
         else {
             return false;
         };
-        let Some(level) = self
-            .dataset
-            .scenes
-            .first()
-            .and_then(|scene| scene.series.first())
-            .and_then(|series| series.levels.get(level_idx))
-        else {
-            return false;
-        };
-        let TileLayout::Regular {
-            tile_width,
-            tile_height,
-            ..
-        } = level.tile_layout
-        else {
+        let Some(level) = u32::try_from(level_idx).ok().and_then(|level_idx| {
+            self.dataset
+                .find_level(SceneId::new(0), SeriesId::new(0), LevelIdx::new(level_idx))
+        }) else {
             return false;
         };
         let czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
         tiles
             .iter()
             .all(|(&(col, row), indices)| match indices.as_slice() {
-                [index] => czi.subblocks().get(*index).is_some_and(|info| {
-                    self.subblock_is_exact_tile(info, level, tile_width, tile_height, col, row)
-                }),
+                [index] => czi
+                    .subblocks()
+                    .get(*index)
+                    .is_some_and(|info| self.subblock_is_exact_tile(info, level, col, row)),
                 _ => false,
             })
     }
@@ -291,12 +219,10 @@ impl ZeissSlide {
             .associated_sources
             .get(name)
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))?;
-        if FileIdentity::from_path(&self.source_path)? != self.source_identity {
-            return Err(WsiError::InvalidSlide {
-                path: self.source_path.clone(),
-                message: "CZI source identity changed before associated-image read".into(),
-            });
-        }
+        self.source_identity.ensure_matches(
+            &self.source_path,
+            "CZI source identity changed before associated-image read",
+        )?;
         let buffer = {
             let mut czi = self.czi.lock().unwrap_or_else(|e| e.into_inner());
             let (_, buffer) = decode_associated_attachment(&mut czi, attachment, self.limits)?

@@ -1,5 +1,4 @@
 use super::*;
-use j2k_core::BackendRequest;
 
 // ── Probe traits ───────────────────────────────────────────────────
 
@@ -76,15 +75,6 @@ pub(crate) trait ConfiguredDatasetReader: DatasetReader {
 
 // ── Read interface ─────────────────────────────────────────────────
 
-pub(crate) fn read_cpu_tiles(
-    reqs: &[TileRequest],
-    mut read_tile: impl FnMut(&TileRequest, BackendRequest) -> Result<CpuTile, WsiError>,
-) -> Result<Vec<CpuTile>, WsiError> {
-    reqs.iter()
-        .map(|req| read_tile(req, BackendRequest::Cpu))
-        .collect()
-}
-
 pub struct SlideReadContext<'a> {
     tile_cache: Option<&'a TileCache>,
     max_region_pixels: u64,
@@ -136,27 +126,7 @@ pub trait SlideReader: Send + Sync {
         series: SeriesId,
         level: LevelIdx,
     ) -> Result<LevelSourceKind, WsiError> {
-        let dataset = self.dataset();
-        let scene_ref = dataset
-            .scenes
-            .get(scene.get())
-            .ok_or(WsiError::SceneOutOfRange {
-                index: scene.get(),
-                count: dataset.scenes.len(),
-            })?;
-        let series_ref = scene_ref
-            .series
-            .get(series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: series.get(),
-                count: scene_ref.series.len(),
-            })?;
-        if level.get() as usize >= series_ref.levels.len() {
-            return Err(WsiError::LevelOutOfRange {
-                level: level.get(),
-                count: series_ref.levels.len() as u32,
-            });
-        }
+        self.dataset().level(scene, series, level)?;
         Ok(LevelSourceKind::Physical)
     }
     /// Prepares format-specific state for a level without decoding pixels.
@@ -360,177 +330,108 @@ pub(crate) trait ManagedSlideReader: SlideReader {
     fn region_fastpath_encoded_upper_bound(&self, req: &RegionRequest) -> Result<u64, WsiError>;
 }
 
-pub(crate) struct ConservativeManagedReader {
-    inner: Box<dyn SlideReader>,
-    encoded_unit_bytes: u64,
-    region_fastpath_in_pool: bool,
-}
-
-impl ConservativeManagedReader {
-    /// Wraps a custom reader, whose region fast path runs inside the process
-    /// decode pool as its only worker context.
-    pub(crate) fn new(inner: Box<dyn SlideReader>, encoded_unit_bytes: u64) -> Self {
-        Self {
-            inner,
-            encoded_unit_bytes,
-            region_fastpath_in_pool: true,
+/// Expands to the [`SlideReader`] methods a wrapper forwards unchanged to
+/// `self.$inner`. Wrapping readers invoke it inside their `impl SlideReader`
+/// and write only the methods whose behaviour differs, so a new pure
+/// forwarder is added here once rather than to every wrapper.
+macro_rules! forward_slide_reader_methods {
+    ($inner:ident) => {
+        fn dataset(&self) -> &$crate::core::types::Dataset {
+            self.$inner.dataset()
         }
-    }
 
-    /// Wraps a built-in reader. Built-ins enter the pool only for actual decode
-    /// work, so a declined or cached fast path never pays a pool round trip.
-    pub(crate) fn builtin(inner: Box<dyn SlideReader>, encoded_unit_bytes: u64) -> Self {
-        Self {
-            region_fastpath_in_pool: false,
-            ..Self::new(inner, encoded_unit_bytes)
+        fn tile_codec_kind(
+            &self,
+            req: &$crate::core::types::TileRequest,
+        ) -> $crate::core::types::TileCodecKind {
+            self.$inner.tile_codec_kind(req)
         }
-    }
-}
 
-impl SlideReader for ConservativeManagedReader {
-    fn dataset(&self) -> &Dataset {
-        self.inner.dataset()
-    }
-
-    fn tile_codec_kind(&self, req: &TileRequest) -> TileCodecKind {
-        self.inner.tile_codec_kind(req)
-    }
-
-    fn level_source_kind(
-        &self,
-        scene: SceneId,
-        series: SeriesId,
-        level: LevelIdx,
-    ) -> Result<LevelSourceKind, WsiError> {
-        self.inner.level_source_kind(scene, series, level)
-    }
-
-    fn prepare_level_controlled(
-        &self,
-        scene: SceneId,
-        series: SeriesId,
-        level: LevelIdx,
-        control: &crate::ReadControl,
-    ) -> Result<(), WsiError> {
-        self.inner
-            .prepare_level_controlled(scene, series, level, control)
-    }
-
-    fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.inner.read_tile_cpu(req)
-    }
-
-    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.inner.read_tiles_cpu(reqs)
-    }
-
-    fn read_tiles_cpu_controlled(
-        &self,
-        reqs: &[TileRequest],
-        control: &crate::ReadControl,
-    ) -> Result<Vec<CpuTile>, WsiError> {
-        self.inner.read_tiles_cpu_controlled(reqs, control)
-    }
-
-    #[cfg(feature = "metal")]
-    fn read_tiles_metal(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::metal::MetalBackendSessions,
-    ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        self.inner.read_tiles_metal(reqs, session)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn read_tiles_cuda(
-        &self,
-        reqs: &[TileRequest],
-        session: &crate::output::cuda::CudaBackendSessions,
-    ) -> Result<Vec<crate::output::cuda::CudaDeviceTile>, WsiError> {
-        self.inner.read_tiles_cuda(reqs, session)
-    }
-
-    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_tile(req)
-    }
-
-    fn read_raw_compressed_display_tile(
-        &self,
-        req: &TileViewRequest,
-    ) -> Result<RawCompressedTile, WsiError> {
-        self.inner.read_raw_compressed_display_tile(req)
-    }
-
-    fn use_display_tile_cache(&self, req: &TileViewRequest) -> bool {
-        self.inner.use_display_tile_cache(req)
-    }
-
-    fn read_region_fastpath(
-        &self,
-        ctx: &mut SlideReadContext<'_>,
-        req: &RegionRequest,
-    ) -> Option<Result<CpuTile, WsiError>> {
-        // Preserve the worker context of custom readers; built-ins decide
-        // whether their fast path needs CPU work before entering the pool.
-        if !self.region_fastpath_in_pool {
-            return self.inner.read_region_fastpath(ctx, req);
+        fn level_source_kind(
+            &self,
+            scene: $crate::core::types::SceneId,
+            series: $crate::core::types::SeriesId,
+            level: $crate::core::types::LevelIdx,
+        ) -> Result<$crate::core::types::LevelSourceKind, $crate::error::WsiError> {
+            self.$inner.level_source_kind(scene, series, level)
         }
-        crate::core::decode_runtime::DecodeRuntime::default_arc()
-            .install_jp2k_cpu(|| self.inner.read_region_fastpath(ctx, req))
-    }
 
-    fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
-        self.inner.read_region(req)
-    }
+        fn prepare_level_controlled(
+            &self,
+            scene: $crate::core::types::SceneId,
+            series: $crate::core::types::SeriesId,
+            level: $crate::core::types::LevelIdx,
+            control: &$crate::ReadControl,
+        ) -> Result<(), $crate::error::WsiError> {
+            self.$inner
+                .prepare_level_controlled(scene, series, level, control)
+        }
 
-    fn read_display_tile(&self, req: &TileViewRequest) -> Result<CpuTile, WsiError> {
-        self.inner.read_display_tile(req)
-    }
+        #[cfg(feature = "metal")]
+        fn read_tiles_metal(
+            &self,
+            reqs: &[$crate::core::types::TileRequest],
+            session: &$crate::output::metal::MetalBackendSessions,
+        ) -> Result<Vec<$crate::output::metal::MetalDeviceTile>, $crate::error::WsiError> {
+            self.$inner.read_tiles_metal(reqs, session)
+        }
 
-    fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
-        self.inner.read_associated(name)
-    }
+        #[cfg(feature = "cuda")]
+        fn read_tiles_cuda(
+            &self,
+            reqs: &[$crate::core::types::TileRequest],
+            session: &$crate::output::cuda::CudaBackendSessions,
+        ) -> Result<Vec<$crate::output::cuda::CudaDeviceTile>, $crate::error::WsiError> {
+            self.$inner.read_tiles_cuda(reqs, session)
+        }
 
-    fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
-        self.inner.associated_encoding(name)
-    }
+        fn read_raw_compressed_tile(
+            &self,
+            req: &$crate::core::types::TileRequest,
+        ) -> Result<$crate::core::types::RawCompressedTile, $crate::error::WsiError> {
+            self.$inner.read_raw_compressed_tile(req)
+        }
 
-    fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
-        self.inner.tile_is_present(req)
-    }
+        fn read_raw_compressed_display_tile(
+            &self,
+            req: &$crate::core::types::TileViewRequest,
+        ) -> Result<$crate::core::types::RawCompressedTile, $crate::error::WsiError> {
+            self.$inner.read_raw_compressed_display_tile(req)
+        }
 
-    fn level_encoding(
-        &self,
-        scene: SceneId,
-        series: SeriesId,
-        level: LevelIdx,
-    ) -> Result<Option<SourceEncoding>, WsiError> {
-        self.inner.level_encoding(scene, series, level)
-    }
+        fn use_display_tile_cache(&self, req: &$crate::core::types::TileViewRequest) -> bool {
+            self.$inner.use_display_tile_cache(req)
+        }
+
+        fn read_associated(
+            &self,
+            name: &str,
+        ) -> Result<$crate::core::types::CpuTile, $crate::error::WsiError> {
+            self.$inner.read_associated(name)
+        }
+
+        fn associated_encoding(
+            &self,
+            name: &str,
+        ) -> Result<Option<$crate::core::types::SourceEncoding>, $crate::error::WsiError> {
+            self.$inner.associated_encoding(name)
+        }
+
+        fn tile_is_present(
+            &self,
+            req: &$crate::core::types::TileRequest,
+        ) -> Result<Option<bool>, $crate::error::WsiError> {
+            self.$inner.tile_is_present(req)
+        }
+
+        fn level_encoding(
+            &self,
+            scene: $crate::core::types::SceneId,
+            series: $crate::core::types::SeriesId,
+            level: $crate::core::types::LevelIdx,
+        ) -> Result<Option<$crate::core::types::SourceEncoding>, $crate::error::WsiError> {
+            self.$inner.level_encoding(scene, series, level)
+        }
+    };
 }
-
-impl ManagedSlideReader for ConservativeManagedReader {
-    fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
-        Ok(self.encoded_unit_bytes)
-    }
-
-    fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
-        Ok(if !reqs.is_empty() {
-            self.encoded_unit_bytes
-        } else {
-            0
-        })
-    }
-
-    fn display_tile_encoded_upper_bound(&self, _req: &TileViewRequest) -> Result<u64, WsiError> {
-        Ok(self.encoded_unit_bytes)
-    }
-
-    fn associated_encoded_upper_bound(&self, _name: &str) -> Result<u64, WsiError> {
-        Ok(self.encoded_unit_bytes)
-    }
-
-    fn region_fastpath_encoded_upper_bound(&self, _req: &RegionRequest) -> Result<u64, WsiError> {
-        Ok(self.encoded_unit_bytes)
-    }
-}
+pub(crate) use forward_slide_reader_methods;

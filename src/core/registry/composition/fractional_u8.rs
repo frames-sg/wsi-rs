@@ -1,3 +1,4 @@
+use crate::core::registry::composition::integral::IntegralClip;
 use crate::core::registry::composition::region::CompositionShape;
 use crate::core::types::{ColorSpace, CpuTile, CpuTileData, CpuTileLayout, TileHit};
 use crate::error::WsiError;
@@ -584,34 +585,32 @@ fn blit_integral_saturating(
     shape: CompositionShape,
 ) {
     let channels = shape.channels;
-    let x0 = dest.0.max(0);
-    let y0 = dest.1.max(0);
-    let x1 = (dest.0 + i64::from(tile.width)).min(shape.width as i64);
-    let y1 = (dest.1 + i64::from(tile.height)).min(shape.height as i64);
-    if x0 >= x1 || y0 >= y1 {
+    let Some(clip) =
+        IntegralClip::new(dest, (tile.width, tile.height), (shape.width, shape.height))
+    else {
         return;
-    }
+    };
     let tile_row_stride = tile.width as usize * channels;
     let opaque = unorm8_to_float(u8::MAX, true);
-    for out_y in y0..y1 {
-        let source_row = (out_y - dest.1) as usize * tile_row_stride;
-        let alpha_row = out_y as usize * shape.width;
-        let row_alpha = &mut alpha[alpha_row + x0 as usize..alpha_row + x1 as usize];
+    for row in 0..clip.height() {
+        let source_row = (clip.source_y + row) * tile_row_stride;
+        let alpha_row = (clip.y0 + row) * shape.width;
+        let row_alpha = &mut alpha[alpha_row + clip.x0..alpha_row + clip.x1];
         if row_alpha.iter().all(|&coverage| coverage == 0.0) {
-            let source = source_row + (x0 - dest.0) as usize * channels;
-            let target = (alpha_row + x0 as usize) * channels;
+            let source = source_row + clip.source_x * channels;
+            let target = (alpha_row + clip.x0) * channels;
             let bytes = row_alpha.len() * channels;
             out[target..target + bytes].copy_from_slice(&tile_data[source..source + bytes]);
             row_alpha.fill(opaque);
             continue;
         }
-        for out_x in x0..x1 {
-            let pixel = alpha_row + out_x as usize;
+        for column in 0..clip.width() {
+            let pixel = alpha_row + clip.x0 + column;
             let dest_alpha = alpha[pixel];
             if dest_alpha >= 1.0 {
                 continue;
             }
-            let source = source_row + (out_x - dest.0) as usize * channels;
+            let source = source_row + (clip.source_x + column) * channels;
             let target = pixel * channels;
             if dest_alpha == 0.0 {
                 // A pixel with zero coverage still holds zero samples.

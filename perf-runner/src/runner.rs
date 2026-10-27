@@ -1,6 +1,4 @@
-use std::fs::File;
 use std::hint::black_box;
-use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -14,6 +12,7 @@ use crate::{
     summarize_samples, Level0Bounds, LevelInfo, ReadSpec, WorkerConfig, Workload, WorkloadPlan,
     CAPTURE_WORKLOAD_NAMES,
 };
+pub use wsi_rs_test_support::corpus::sha256_file;
 use wsi_rs_test_support::openslide::{
     OpenSlide, OpenSlideApi, OpenSlideBounds, OpenSlideCache, OpenSlideLevel,
 };
@@ -615,24 +614,6 @@ fn read_digest(spec: ReadSpec, pixels: &[u32]) -> [u8; 32] {
     let mut checksum = Sha256::new();
     hash_read(&mut checksum, spec, pixels);
     checksum.finalize().into()
-}
-
-pub fn sha256_file(path: &Path) -> Result<String, String> {
-    let file = File::open(path)
-        .map_err(|err| format!("failed to open {} for hashing: {err}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut checksum = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|err| format!("failed to hash {}: {err}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        checksum.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", checksum.finalize()))
 }
 
 impl From<LevelInfo> for LevelResult {

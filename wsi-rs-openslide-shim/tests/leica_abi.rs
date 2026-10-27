@@ -41,7 +41,7 @@ unsafe fn property(osr: *mut openslide_t, name: &str) -> Option<String> {
 
 #[test]
 fn leica_exposes_the_openslide_collection_canvas() {
-    let Some(path) = fixture_path("leica-001", "scn") else {
+    let Some(path) = fixture_path("leica-001") else {
         return;
     };
 
@@ -88,7 +88,7 @@ fn leica_exposes_the_openslide_collection_canvas() {
 
 #[test]
 fn leica_reads_global_canvas_coordinates_at_each_level() {
-    let Some(path) = fixture_path("leica-001", "scn") else {
+    let Some(path) = fixture_path("leica-001") else {
         return;
     };
 

@@ -1,8 +1,12 @@
 use super::*;
 
+mod budget;
 mod execution;
 mod region;
+use super::open_config::validate_dataset_limits;
 use crate::core::limits::ReadExecutionContext;
+use crate::core::read_control::check_cancelled_opt;
+use budget::{check_subpixel_offset, checked_rgba_bytes};
 use execution::AdmittedReader;
 use std::sync::atomic::AtomicBool;
 
@@ -81,16 +85,31 @@ impl Slide {
         path: impl AsRef<Path>,
         options: SlideOpenOptions,
     ) -> Result<Self, WsiError> {
-        let resolved_path = crate::formats::svcache::resolve_open_path_with_policy(
-            path.as_ref(),
-            options.svcache_policy,
-        )?;
+        let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
+        Self::open_with_options_and_runtime(path, options, decode_runtime)
+    }
+
+    /// Opens `path` like [`Self::open_with_options`] on the given decode
+    /// runtime; tests pass their own so calibrations stay isolated.
+    pub(crate) fn open_with_options_and_runtime(
+        path: impl AsRef<Path>,
+        options: SlideOpenOptions,
+        decode_runtime: Arc<DecodeRuntime>,
+    ) -> Result<Self, WsiError> {
+        use crate::formats::svcache::SvcachePolicy;
+        // A registry without the `.svcache` backend cannot open a redirected
+        // path, so it opens the source; `RequireFresh` still errors.
+        let svcache_policy = match options.svcache_policy {
+            SvcachePolicy::PreferFresh if !options.registry.opens_svcache() => SvcachePolicy::Off,
+            policy => policy,
+        };
+        let resolved_path =
+            crate::formats::svcache::resolve_open_path_with_policy(path.as_ref(), svcache_policy)?;
         let source = options.registry.open_with_config(
             &resolved_path,
             BackendOpenConfig::new(options.cache_config, options.limits),
         )?;
         validate_dataset_limits(source.dataset(), options.limits)?;
-        let decode_runtime = DecodeRuntime::arc_for_options(options.decode_execution_options)?;
         Ok(Self::from_managed_source_with_config_and_runtime(
             source,
             options.cache_config,
@@ -224,21 +243,34 @@ impl Slide {
         let output_bytes = self.estimate_tile_output_bytes(req)?;
         let transient =
             self.ordinary_work_bytes(self.source.tile_encoded_upper_bound(req)?, output_bytes)?;
-        let reservation = self.admission.reserve(transient, None)?;
-        let calibration = AtomicBool::new(false);
+        self.with_admission(transient, None, &AtomicBool::new(false), |context| {
+            let tile = crate::core::batch::exactly_one(
+                self.source
+                    .read_tiles_with_context(std::slice::from_ref(req), context)?,
+                "admitted single tile",
+            )?;
+            self.validate_decoded_output(&tile, "decoded tile")?;
+            Ok(tile)
+        })
+    }
+
+    /// Runs `read` under a reservation of `bytes` transient work. Every
+    /// context of one public read shares its `calibration` flag.
+    fn with_admission<R>(
+        &self,
+        bytes: u64,
+        control: Option<&crate::ReadControl>,
+        calibration: &AtomicBool,
+        read: impl FnOnce(&ReadExecutionContext<'_>) -> Result<R, WsiError>,
+    ) -> Result<R, WsiError> {
+        let reservation = self.admission.reserve(bytes, control)?;
         let context = ReadExecutionContext::new(
             &reservation,
             self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
+            control,
+            calibration,
         );
-        let tile = crate::core::batch::exactly_one(
-            self.source
-                .read_tiles_with_context(std::slice::from_ref(req), &context)?,
-            "admitted single tile",
-        )?;
-        self.validate_decoded_output(&tile, "decoded tile")?;
-        Ok(tile)
+        read(&context)
     }
 
     pub fn read_tiles(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
@@ -349,37 +381,8 @@ impl Slide {
     /// tiles return `WsiError::DisplayConversion`.
     pub fn read_region(&self, req: &RegionRequest) -> Result<CpuTile, WsiError> {
         let output_bytes = self.check_region_output(req)?;
-        let mut planned = self.plan_region_read(req, None, output_bytes)?;
-        let reservation = self.admission.reserve(planned.work_bytes, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
-        let admitted = AdmittedReader {
-            source: self.source.as_ref(),
-            execution: &execution,
-        };
-        let cache = self.shared_tile_cache();
-        let mut ctx = SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
-        if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
-            let tile = result?;
-            self.validate_decoded_output(&tile, "decoded region")?;
-            return Ok(tile);
-        }
-        let (batch_ends, _parallel_staging) =
-            planned.batch_ends(self, req, output_bytes, &execution)?;
-        let tile = composition::composite_region_from_plan(
-            &admitted,
-            Some(cache.as_ref()),
-            req,
-            planned.plan,
-            &batch_ends,
-        )?;
-        self.validate_decoded_output(&tile, "decoded region")?;
-        Ok(tile)
+        let planned = self.plan_region_read(req, None, output_bytes)?;
+        self.execute_region_plan(req, output_bytes, planned, true)
     }
 
     /// Read a region whose origin includes a fractional level-pixel offset.
@@ -400,7 +403,8 @@ impl Slide {
         // Irregular tile maps have fractional tile placements and gaps even at
         // whole-pixel origins, so they keep the coverage-preserving plan.
         let irregular = self
-            .level_for(req)
+            .dataset()
+            .find_level(req.scene, req.series, req.level)
             .is_some_and(|level| matches!(level.tile_layout, TileLayout::Irregular { .. }));
         if offset_px == (0.0, 0.0) && !irregular {
             return self.read_region(req);
@@ -411,31 +415,45 @@ impl Slide {
             req.origin_px.0 as f64 + offset_px.0,
             req.origin_px.1 as f64 + offset_px.1,
         );
-        let mut planned = self.plan_region_read(req, Some(origin), output_bytes)?;
-        let reservation = self.admission.reserve(planned.work_bytes, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
-        let admitted = AdmittedReader {
-            source: self.source.as_ref(),
-            execution: &execution,
-        };
-        let cache = self.shared_tile_cache();
-        let (batch_ends, _parallel_staging) =
-            planned.batch_ends(self, req, output_bytes, &execution)?;
-        let tile = composition::composite_region_from_plan(
-            &admitted,
-            Some(cache.as_ref()),
-            req,
-            planned.plan,
-            &batch_ends,
-        )?;
-        self.validate_decoded_output(&tile, "decoded region")?;
-        Ok(tile)
+        let planned = self.plan_region_read(req, Some(origin), output_bytes)?;
+        self.execute_region_plan(req, output_bytes, planned, false)
+    }
+
+    fn execute_region_plan(
+        &self,
+        req: &RegionRequest,
+        output_bytes: u64,
+        mut planned: region::PlannedRegionRead<'_>,
+        allow_fastpath: bool,
+    ) -> Result<CpuTile, WsiError> {
+        let work_bytes = planned.work_bytes;
+        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+            let cache = self.shared_tile_cache();
+            if allow_fastpath {
+                let mut ctx =
+                    SlideReadContext::new(Some(cache.as_ref()), self.limits.region_pixels());
+                if let Some(result) = self.source.read_region_fastpath(&mut ctx, req) {
+                    let tile = result?;
+                    self.validate_decoded_output(&tile, "decoded region")?;
+                    return Ok(tile);
+                }
+            }
+            let (batch_ends, _parallel_staging) =
+                planned.batch_ends(self, req, output_bytes, execution)?;
+            let admitted = AdmittedReader {
+                source: self.source.as_ref(),
+                execution,
+            };
+            let tile = composition::composite_region_from_plan(
+                &admitted,
+                Some(cache.as_ref()),
+                req,
+                planned.plan,
+                &batch_ends,
+            )?;
+            self.validate_decoded_output(&tile, "decoded region")?;
+            Ok(tile)
+        })
     }
 
     /// Writes a cached tiled region straight into premultiplied
@@ -451,12 +469,15 @@ impl Slide {
         destination: &mut [u32],
     ) -> Result<bool, WsiError> {
         check_subpixel_offset(offset_px)?;
-        let tiled = self.level_for(req).is_some_and(|level| {
-            matches!(
-                level.tile_layout,
-                TileLayout::Regular { .. } | TileLayout::Irregular { .. }
-            )
-        });
+        let tiled = self
+            .dataset()
+            .find_level(req.scene, req.series, req.level)
+            .is_some_and(|level| {
+                matches!(
+                    level.tile_layout,
+                    TileLayout::Regular { .. } | TileLayout::Irregular { .. }
+                )
+            });
         if !tiled {
             return Ok(false);
         }
@@ -488,31 +509,28 @@ impl Slide {
         let output_bytes = checked_rgba_bytes(req.tile_width, req.tile_height, "display tile")?;
         self.check_output_limit(output_bytes, "decoded tile/associated output")?;
         let encoded = self.source.display_tile_encoded_upper_bound(req)?;
-        let reservation = self
-            .admission
-            .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
-        let calibration = AtomicBool::new(false);
-        let execution = ReadExecutionContext::new(
-            &reservation,
-            self.limits.operation_transient_bytes(),
-            None,
-            &calibration,
-        );
+        let work_bytes = self.ordinary_work_bytes(encoded, output_bytes)?;
+        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+            self.read_admitted_display_tile(req, execution)
+        })
+    }
+
+    fn read_admitted_display_tile(
+        &self,
+        req: &TileViewRequest,
+        execution: &ReadExecutionContext<'_>,
+    ) -> Result<CpuTile, WsiError> {
         let admitted = AdmittedReader {
             source: self.source.as_ref(),
-            execution: &execution,
+            execution,
         };
         // For Regular tile layouts, route through the generic composition path
         // with cache so intermediate tile reads are reused. For WholeLevel and
         // Irregular layouts, delegate to the source's override which may have
         // format-specific fast paths (e.g. NDPI MCU-level JPEG access).
         let is_regular = self
-            .source
             .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|s| s.series.get(req.series.get()))
-            .and_then(|s| s.levels.get(req.level.get() as usize))
+            .find_level(req.scene, req.series, req.level)
             .is_some_and(|level| matches!(level.tile_layout, TileLayout::Regular { .. }));
         if is_regular {
             let display_cache = self
@@ -591,31 +609,25 @@ impl Slide {
         let calibration = AtomicBool::new(false);
         let mut start = 0;
         while start < reqs.len() {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            check_cancelled_opt(control)?;
             let (len, chunk_bytes) =
                 self.tile_chunk_len(&reqs[start..], &estimates[start..], target)?;
             let end = start + len;
 
-            let reservation = self.admission.reserve(chunk_bytes, control)?;
-            let execution = ReadExecutionContext::new(
-                &reservation,
-                self.limits.operation_transient_bytes(),
-                control,
-                &calibration,
-            );
-            let chunk = decode(&reqs[start..end], &execution)?;
-            if chunk.len() != end - start {
-                return Err(WsiError::BackendContract {
-                    context,
-                    expected: end - start,
-                    actual: chunk.len(),
-                });
-            }
-            for tile in &chunk {
-                validate(tile)?;
-            }
+            let chunk = self.with_admission(chunk_bytes, control, &calibration, |execution| {
+                let chunk = decode(&reqs[start..end], execution)?;
+                if chunk.len() != end - start {
+                    return Err(WsiError::BackendContract {
+                        context,
+                        expected: end - start,
+                        actual: chunk.len(),
+                    });
+                }
+                for tile in &chunk {
+                    validate(tile)?;
+                }
+                Ok(chunk)
+            })?;
             output.extend(chunk);
             start = end;
         }
@@ -666,203 +678,6 @@ impl Slide {
         Ok((fit, self.ordinary_work_bytes(encoded, output)?))
     }
 
-    fn level_for(&self, req: &RegionRequest) -> Option<&crate::core::types::Level> {
-        self.source
-            .dataset()
-            .scenes
-            .get(req.scene.get())
-            .and_then(|scene| scene.series.get(req.series.get()))
-            .and_then(|series| series.levels.get(req.level.get() as usize))
-    }
-
-    fn estimate_tile_output_bytes(&self, req: &TileRequest) -> Result<u64, WsiError> {
-        let scene =
-            self.dataset()
-                .scenes
-                .get(req.scene.get())
-                .ok_or(WsiError::SceneOutOfRange {
-                    index: req.scene.get(),
-                    count: self.dataset().scenes.len(),
-                })?;
-        let series = scene
-            .series
-            .get(req.series.get())
-            .ok_or(WsiError::SeriesOutOfRange {
-                index: req.series.get(),
-                count: scene.series.len(),
-            })?;
-        let level =
-            series
-                .levels
-                .get(req.level.get() as usize)
-                .ok_or(WsiError::LevelOutOfRange {
-                    level: req.level.get(),
-                    count: u32::try_from(series.levels.len()).unwrap_or(u32::MAX),
-                })?;
-        let dimensions = match &level.tile_layout {
-            TileLayout::Regular {
-                tile_width,
-                tile_height,
-                ..
-            } => (*tile_width, *tile_height),
-            TileLayout::WholeLevel {
-                virtual_tile_width,
-                virtual_tile_height,
-                ..
-            } => (*virtual_tile_width, *virtual_tile_height),
-            TileLayout::Irregular { tiles, .. } => tiles
-                .get(&(req.col, req.row))
-                .map(|entry| entry.dimensions)
-                .ok_or_else(|| WsiError::TileRead {
-                    level: req.level.get(),
-                    col: req.col,
-                    row: req.row,
-                    reason: "tile not found".into(),
-                })?,
-        };
-        let channels = u64::try_from(series.channels.len().max(4)).unwrap_or(u64::MAX);
-        let output_bytes = u64::from(dimensions.0)
-            .checked_mul(u64::from(dimensions.1))
-            .and_then(|pixels| pixels.checked_mul(channels))
-            .and_then(|samples| samples.checked_mul(series.sample_type.byte_size() as u64))
-            .ok_or(WsiError::ResourceLimit {
-                resource: "decoded tile/associated output",
-                requested: u64::MAX,
-                limit: self.limits.decoded_output_bytes(),
-            })?;
-        self.check_output_limit(output_bytes, "decoded tile/associated output")?;
-        Ok(output_bytes)
-    }
-
-    fn estimate_associated_output_bytes(&self, name: &str) -> Result<u64, WsiError> {
-        let Some(image) = self.dataset().associated_images.get(name) else {
-            return Ok(0);
-        };
-        u64::from(image.dimensions.0)
-            .checked_mul(u64::from(image.dimensions.1))
-            .and_then(|pixels| pixels.checked_mul(u64::from(image.channels)))
-            .and_then(|samples| samples.checked_mul(image.sample_type.byte_size() as u64))
-            .ok_or(WsiError::ResourceLimit {
-                resource: "decoded tile/associated output",
-                requested: u64::MAX,
-                limit: self.limits.decoded_output_bytes(),
-            })
-    }
-
-    fn check_region_output(&self, req: &RegionRequest) -> Result<u64, WsiError> {
-        let pixels = u64::from(req.size_px.0)
-            .checked_mul(u64::from(req.size_px.1))
-            .ok_or(WsiError::ResourceLimit {
-                resource: "region pixels",
-                requested: u64::MAX,
-                limit: self.limits.region_pixels(),
-            })?;
-        if pixels > self.limits.region_pixels() {
-            return Err(WsiError::ResourceLimit {
-                resource: "region pixels",
-                requested: pixels,
-                limit: self.limits.region_pixels(),
-            });
-        }
-        let bytes = pixels.checked_mul(4).ok_or(WsiError::ResourceLimit {
-            resource: "region RGBA output",
-            requested: u64::MAX,
-            limit: self.limits.region_rgba_bytes(),
-        })?;
-        if bytes > self.limits.region_rgba_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "region RGBA output",
-                requested: bytes,
-                limit: self.limits.region_rgba_bytes(),
-            });
-        }
-        Ok(bytes)
-    }
-
-    fn region_work_bytes(
-        &self,
-        encoded_bytes: u64,
-        output_bytes: u64,
-        largest_source_bytes: u64,
-        fractional: bool,
-    ) -> Result<u64, WsiError> {
-        let staging = output_bytes.max(largest_source_bytes);
-        let mut requested = encoded_bytes
-            .checked_add(output_bytes)
-            .and_then(|bytes| bytes.checked_add(staging))
-            .unwrap_or(u64::MAX);
-        if fractional {
-            requested = requested.saturating_add(output_bytes);
-        }
-        if requested > self.limits.operation_transient_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "per-operation transient work",
-                requested,
-                limit: self.limits.operation_transient_bytes(),
-            });
-        }
-        Ok(requested)
-    }
-
-    fn ordinary_work_bytes(&self, encoded_bytes: u64, output_bytes: u64) -> Result<u64, WsiError> {
-        ReadWork::new(encoded_bytes, output_bytes)
-            .ordinary_bytes(self.limits.operation_transient_bytes())
-    }
-
-    fn check_output_limit(&self, bytes: u64, resource: &'static str) -> Result<(), WsiError> {
-        if bytes > self.limits.decoded_output_bytes() {
-            Err(WsiError::ResourceLimit {
-                resource,
-                requested: bytes,
-                limit: self.limits.decoded_output_bytes(),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn validate_decoded_output(
-        &self,
-        tile: &CpuTile,
-        resource: &'static str,
-    ) -> Result<(), WsiError> {
-        tile.validate_invariants()?;
-        self.check_output_limit(
-            u64::try_from(tile.data().byte_size()).unwrap_or(u64::MAX),
-            resource,
-        )
-    }
-
-    fn validate_encoded_unit(&self, byte_len: usize) -> Result<(), WsiError> {
-        let requested = u64::try_from(byte_len).unwrap_or(u64::MAX);
-        if requested > self.limits.encoded_unit_bytes() {
-            Err(WsiError::ResourceLimit {
-                resource: "encoded tile/frame unit",
-                requested,
-                limit: self.limits.encoded_unit_bytes(),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    pub(crate) fn validate_encoded_contract(
-        &self,
-        byte_len: usize,
-        promised: u64,
-        context: &'static str,
-    ) -> Result<(), WsiError> {
-        let actual = u64::try_from(byte_len).unwrap_or(u64::MAX);
-        if actual > promised {
-            return Err(WsiError::BackendContract {
-                context,
-                expected: usize::try_from(promised).unwrap_or(usize::MAX),
-                actual: byte_len,
-            });
-        }
-        self.validate_encoded_unit(byte_len)
-    }
-
     /// Read an associated image (label, macro, thumbnail).
     /// Direct delegation to the underlying SlideReader. No caching.
     pub fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
@@ -874,131 +689,12 @@ impl Slide {
             .reserve(self.ordinary_work_bytes(encoded, output_bytes)?, None)?;
         // Associated strips decode in parallel on the invoking pool.
         let tile = if rayon::current_thread_index().is_some() {
-            crate::core::decode_runtime::run_codec_work_on_worker(|| {
-                self.source.read_associated(name)
-            })?
+            crate::core::batch::run_codec_work_on_worker(|| self.source.read_associated(name))?
         } else {
             self.source.read_associated(name)?
         };
         self.validate_decoded_output(&tile, "decoded associated image")?;
         Ok(tile)
-    }
-}
-
-fn checked_rgba_bytes(width: u32, height: u32, resource: &'static str) -> Result<u64, WsiError> {
-    u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(WsiError::ResourceLimit {
-            resource,
-            requested: u64::MAX,
-            limit: u64::MAX,
-        })
-}
-
-fn validate_dataset_limits(dataset: &Dataset, limits: SlideLimits) -> Result<(), WsiError> {
-    let mut aggregate = 0_u64;
-    let mut add_metadata = |bytes: u64| -> Result<(), WsiError> {
-        if bytes > limits.metadata_value_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "individual metadata value",
-                requested: bytes,
-                limit: limits.metadata_value_bytes(),
-            });
-        }
-        aggregate = aggregate.saturating_add(bytes);
-        if aggregate > limits.aggregate_metadata_bytes() {
-            return Err(WsiError::ResourceLimit {
-                resource: "aggregate metadata",
-                requested: aggregate,
-                limit: limits.aggregate_metadata_bytes(),
-            });
-        }
-        Ok(())
-    };
-
-    for (key, value) in dataset.properties.iter() {
-        add_metadata(u64::try_from(key.len()).unwrap_or(u64::MAX))?;
-        add_metadata(u64::try_from(value.len()).unwrap_or(u64::MAX))?;
-    }
-    for scene in &dataset.scenes {
-        add_metadata(u64::try_from(scene.id.len()).unwrap_or(u64::MAX))?;
-        if let Some(name) = &scene.name {
-            add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-        }
-        for series in &scene.series {
-            add_metadata(u64::try_from(series.id.len()).unwrap_or(u64::MAX))?;
-            for channel in &series.channels {
-                if let Some(name) = &channel.name {
-                    add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-                }
-            }
-        }
-    }
-    for (name, image) in &dataset.associated_images {
-        add_metadata(u64::try_from(name.len()).unwrap_or(u64::MAX))?;
-        add_metadata(u64::try_from(image.icc_profile.len()).unwrap_or(u64::MAX))?;
-    }
-    for profile in dataset.icc_profiles.values() {
-        add_metadata(u64::try_from(profile.len()).unwrap_or(u64::MAX))?;
-    }
-    for profile in &dataset.source_icc_profiles {
-        add_metadata(u64::try_from(profile.bytes.len()).unwrap_or(u64::MAX))?;
-        match &profile.provenance {
-            IccProfileProvenance::DicomOpticalPath {
-                sop_instance_uid,
-                optical_path_identifier,
-            } => {
-                add_metadata(u64::try_from(sop_instance_uid.len()).unwrap_or(u64::MAX))?;
-                if let Some(identifier) = optical_path_identifier {
-                    add_metadata(u64::try_from(identifier.len()).unwrap_or(u64::MAX))?;
-                }
-            }
-            IccProfileProvenance::ReaderMetadata { source } => {
-                add_metadata(u64::try_from(source.len()).unwrap_or(u64::MAX))?;
-            }
-            IccProfileProvenance::TiffTag { .. } => {}
-        }
-    }
-
-    let mut index_bytes = 0_u64;
-    for scene in &dataset.scenes {
-        for series in &scene.series {
-            for level in &series.levels {
-                let entries = match &level.tile_layout {
-                    TileLayout::Regular {
-                        tiles_across,
-                        tiles_down,
-                        ..
-                    } => tiles_across.checked_mul(*tiles_down).unwrap_or(u64::MAX),
-                    TileLayout::WholeLevel { .. } => 1,
-                    TileLayout::Irregular { tiles, .. } => {
-                        u64::try_from(tiles.len()).unwrap_or(u64::MAX)
-                    }
-                };
-                index_bytes = index_bytes.saturating_add(entries.saturating_mul(64));
-                if index_bytes > limits.tile_index_bytes() {
-                    return Err(WsiError::ResourceLimit {
-                        resource: "tile/frame index",
-                        requested: index_bytes,
-                        limit: limits.tile_index_bytes(),
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_subpixel_offset(offset_px: (f64, f64)) -> Result<(), WsiError> {
-    let valid = |value: f64| value.is_finite() && (0.0..1.0).contains(&value);
-    if valid(offset_px.0) && valid(offset_px.1) {
-        Ok(())
-    } else {
-        Err(WsiError::DisplayConversion(format!(
-            "subpixel offset must be finite and in [0, 1), got ({}, {})",
-            offset_px.0, offset_px.1
-        )))
     }
 }
 

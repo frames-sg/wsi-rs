@@ -1,9 +1,6 @@
 use super::*;
 use crate::core::execution_telemetry::{record, Event};
 
-const NDPI_MCU_STARTS_LOW: u16 = 65426;
-const NDPI_MCU_STARTS_HIGH: u16 = 65432;
-
 /// Relative offsets already live in the validated TIFF tag allocation. Only
 /// high-word combination or file-absolute normalization needs a separate table.
 #[derive(Debug)]
@@ -47,22 +44,51 @@ impl TiffPixelReader {
         Some((clamped_width, clamped_height))
     }
 
-    pub(super) fn ndpi_full_decode_error(req: &TileRequest, reason: impl Into<String>) -> WsiError {
-        WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: reason.into(),
-        }
+    /// Locates `strip_key`'s restart segment. The outer error means the
+    /// MCU-starts table failed to load; the inner one that the table cannot
+    /// locate the segment.
+    fn ndpi_restart_segment(
+        &self,
+        ifd_id: IfdId,
+        mcu_starts_tag: u16,
+        tiles_across: u32,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        strip_key: NdpiStripKey,
+    ) -> Result<Result<(u64, u64), NdpiMcuSegmentError>, WsiError> {
+        let mcu_starts =
+            self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
+        let idx =
+            (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
+        Ok(ndpi_mcu_segment(
+            mcu_starts.as_slice(),
+            idx,
+            strip_byte_count,
+        ))
     }
 
-    pub(super) fn ndpi_restart_error_allows_full_decode_fallback(err: &WsiError) -> bool {
-        let WsiError::TileRead { reason, .. } = err else {
-            return false;
-        };
-        reason.contains("NDPI MCU segment")
-            || reason.contains("NDPI MCU-starts table")
-            || reason.contains("NDPI MCU-starts index")
+    /// Whether the MCU-starts table loads but cannot locate `strip_key`'s
+    /// restart segment, so only a full strip decode can serve the tile.
+    pub(super) fn ndpi_restart_segment_is_unlocatable(
+        &self,
+        ifd_id: IfdId,
+        mcu_starts_tag: u16,
+        tiles_across: u32,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        strip_key: NdpiStripKey,
+    ) -> bool {
+        matches!(
+            self.ndpi_restart_segment(
+                ifd_id,
+                mcu_starts_tag,
+                tiles_across,
+                strip_offset,
+                strip_byte_count,
+                strip_key,
+            ),
+            Ok(Err(_))
+        )
     }
 
     fn ndpi_mcu_starts_are_file_absolute(
@@ -119,13 +145,13 @@ impl TiffPixelReader {
             .container
             .get_u64_array(ifd_id, mcu_starts_tag)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
-        let has_high_words = mcu_starts_tag == NDPI_MCU_STARTS_LOW
+        let has_high_words = mcu_starts_tag == tags::NDPI_MCU_STARTS
             && self
                 .container
                 .ifd_by_id(ifd_id)
                 .map_err(|e| e.into_wsi_error(self.container.path()))?
                 .tags
-                .contains_key(&NDPI_MCU_STARTS_HIGH);
+                .contains_key(&tags::NDPI_MCU_STARTS_HIGH);
         let file_absolute = !has_high_words
             && Self::ndpi_mcu_starts_are_file_absolute(raw_starts, strip_offset, strip_byte_count);
         if !has_high_words && !file_absolute {
@@ -139,7 +165,7 @@ impl TiffPixelReader {
         if has_high_words {
             let high = self
                 .container
-                .get_u64_array(ifd_id, NDPI_MCU_STARTS_HIGH)
+                .get_u64_array(ifd_id, tags::NDPI_MCU_STARTS_HIGH)
                 .map_err(|e| e.into_wsi_error(self.container.path()))?;
             if high.len() != starts.len() {
                 return Err(WsiError::UnsupportedFormat(format!(
@@ -180,14 +206,36 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<Arc<CpuTile>, WsiError> {
+        let (_, _, level) = self
+            .layout
+            .dataset
+            .level(req.scene, req.series, req.level)?;
+        let (level_w, level_h) = level.dimensions;
+        let decoded = self.decode_ndpi_full_jpeg(
+            ifd_id,
+            strip_offset,
+            strip_byte_count,
+            J2kDownscale::None,
+            Some((level_w as u32, level_h as u32)),
+        )?;
+
+        Ok(Arc::new(decoded))
+    }
+
+    /// Decodes a whole-image NDPI JPEG at `scale` to RGB8. With `crop_to`, an
+    /// output larger than `(width, height)` is cropped to it from the origin.
+    pub(super) fn decode_ndpi_full_jpeg(
+        &self,
+        ifd_id: IfdId,
+        strip_offset: u64,
+        strip_byte_count: u64,
+        scale: J2kDownscale,
+        crop_to: Option<(u32, u32)>,
+    ) -> Result<CpuTile, WsiError> {
         let data = self
             .container
             .pread(strip_offset, strip_byte_count)
             .map_err(|e| e.into_wsi_error(self.container.path()))?;
-
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
-        let (level_w, level_h) = level.dimensions;
         let options = j2k_decode_options(
             self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, None)
                 .color_transform,
@@ -196,17 +244,22 @@ impl TiffPixelReader {
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
         let decoder =
             J2kJpegDecoder::from_view(view).map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let (pixels, outcome) = decoder
-            .decode_request(J2kJpegDecodeRequest::full(J2kPixelFormat::Rgb8))
+        let (source_w, source_h) = decoder.info().dimensions;
+        let scale_denom = scale.denominator();
+        let (pixels, _outcome) = decoder
+            .decode_request(J2kJpegDecodeRequest::scaled(J2kPixelFormat::Rgb8, scale))
             .map_err(|err| WsiError::Jpeg(err.to_string()))?;
-        let decoded = cpu_tile_from_rgb_pixels(outcome.decoded.w, outcome.decoded.h, pixels)?;
-        let decoded = if decoded.width > level_w as u32 || decoded.height > level_h as u32 {
-            crop_rgb_interleaved_u8_buffer(&decoded, 0, 0, level_w as u32, level_h as u32)?
-        } else {
-            decoded
-        };
-
-        Ok(Arc::new(decoded))
+        let decoded = cpu_tile_from_rgb_pixels(
+            source_w.div_ceil(scale_denom),
+            source_h.div_ceil(scale_denom),
+            pixels,
+        )?;
+        match crop_to {
+            Some((w, h)) if decoded.width > w || decoded.height > h => {
+                crop_rgb_interleaved_u8_buffer(&decoded, 0, 0, w, h)
+            }
+            _ => Ok(decoded),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -221,24 +274,14 @@ impl TiffPixelReader {
         strip_offset: u64,
         strip_byte_count: u64,
     ) -> Result<CpuTile, WsiError> {
-        let level = &self.layout.dataset.scenes[req.scene.get()].series[req.series.get()].levels
-            [req.level.get() as usize];
-        let (level_w, level_h) = level.dimensions;
-        let (vtw, vth) = match &level.tile_layout {
-            TileLayout::WholeLevel {
-                virtual_tile_width,
-                virtual_tile_height,
-                ..
-            } => (*virtual_tile_width, *virtual_tile_height),
-            _ => {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NdpiJpeg display tile expects WholeLevel layout".into(),
-                });
-            }
-        };
+        let (level_w, level_h, vtw, vth) = self.ndpi_whole_level_geometry(
+            req.scene,
+            req.series,
+            req.level,
+            req.col,
+            req.row,
+            "NdpiJpeg display tile expects WholeLevel layout",
+        )?;
 
         let tile_origin_x = req.col.saturating_mul(i64::from(req.tile_width));
         let tile_origin_y = req.row.saturating_mul(i64::from(req.tile_height));
@@ -319,12 +362,9 @@ impl TiffPixelReader {
                 needed_strips.push(NeededNdpiStrip {
                     strip_key,
                     strip_req: TileRequest {
-                        scene: req.scene.get().into(),
-                        series: req.series.get().into(),
-                        level: req.level.get().into(),
-                        plane: req.plane,
                         col: i64::from(native_col),
                         row: i64::from(native_row),
+                        ..req.source_tile()
                     },
                     copy_start_x,
                     copy_start_y,
@@ -423,20 +463,16 @@ impl TiffPixelReader {
         level_height: u32,
     ) -> Result<NdpiJpegTilePayload, WsiError> {
         if strip_key.native_row >= tiles_down {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("NDPI strip row {} out of range", strip_key.native_row),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("NDPI strip row {} out of range", strip_key.native_row),
+            ));
         }
         if strip_key.col >= tiles_across {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!("NDPI strip column {} out of range", strip_key.col),
-            });
+            return Err(WsiError::tile_read(
+                req,
+                format!("NDPI strip column {} out of range", strip_key.col),
+            ));
         }
 
         let strip_origin_y = strip_key.native_row * virtual_tile_height;
@@ -444,82 +480,24 @@ impl TiffPixelReader {
         let strip_width =
             virtual_tile_width.min(level_width.saturating_sub(strip_key.col * virtual_tile_width));
 
-        let mcu_starts =
-            self.ndpi_mcu_starts(ifd_id, mcu_starts_tag, strip_offset, strip_byte_count)?;
-        let mcu_starts = mcu_starts.as_slice();
-
-        let idx =
-            (strip_key.native_row as u64 * tiles_across as u64 + strip_key.col as u64) as usize;
-        if idx >= mcu_starts.len() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU-starts index {} out of range (len={})",
-                    idx,
-                    mcu_starts.len(),
-                ),
-            });
-        }
-
-        let segment_start = *mcu_starts.get(idx).ok_or_else(|| WsiError::TileRead {
-            col: req.col,
-            row: req.row,
-            level: req.level.get(),
-            reason: format!("NDPI MCU-starts index {idx} out of range"),
-        })?;
-        let next_segment_start = if idx + 1 < mcu_starts.len() {
-            Some(mcu_starts[idx + 1])
-        } else {
-            None
-        };
-
-        if idx + 1 < mcu_starts.len() && next_segment_start <= Some(segment_start) {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU-starts table is not strictly increasing at index {}",
-                    idx
-                ),
-            });
-        }
-
-        let segment_end = next_segment_start.unwrap_or(strip_byte_count);
-        if segment_start >= strip_byte_count
-            || segment_end > strip_byte_count
-            || segment_end <= segment_start
-        {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: format!(
-                    "NDPI MCU segment [{segment_start}, {segment_end}) exceeds strip byte count {strip_byte_count}"
-                ),
-            });
-        }
+        let (segment_start, segment_end) = self
+            .ndpi_restart_segment(
+                ifd_id,
+                mcu_starts_tag,
+                tiles_across,
+                strip_offset,
+                strip_byte_count,
+                strip_key,
+            )?
+            .map_err(|err| WsiError::tile_read(req, err.to_string()))?;
         if jpeg_header.is_empty() {
-            return Err(WsiError::TileRead {
-                col: req.col,
-                row: req.row,
-                level: req.level.get(),
-                reason: "NDPI JPEG header is empty".into(),
-            });
+            return Err(WsiError::tile_read(req, "NDPI JPEG header is empty"));
         }
 
         let segment_len = segment_end.saturating_sub(segment_start);
-        let read_offset =
-            strip_offset
-                .checked_add(segment_start)
-                .ok_or_else(|| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "NDPI strip offset overflow".into(),
-                })?;
+        let read_offset = strip_offset
+            .checked_add(segment_start)
+            .ok_or_else(|| WsiError::tile_read(req, "NDPI strip offset overflow"))?;
         let segment = self
             .container
             .pread(read_offset, segment_len)
@@ -588,15 +566,13 @@ impl TiffPixelReader {
             )?
         } else {
             let scale = j2k_downscale_for_factor(strip_key.scale_denom).ok_or_else(|| {
-                WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: format!(
+                WsiError::tile_read(
+                    req,
+                    format!(
                         "invalid NDPI strip scale denominator {}",
                         strip_key.scale_denom
                     ),
-                }
+                )
             })?;
             decode_jpeg_rgb_downscaled_with_size_override(
                 &payload.jpeg,
@@ -647,6 +623,94 @@ impl TiffPixelReader {
                 )
                 .map_err(|err| err.to_string())
             })
-            .map_err(|reason| Self::ndpi_full_decode_error(req, reason))
+            .map_err(|reason| WsiError::tile_read(req, reason))
     }
+}
+
+pub(super) fn ndpi_restart_segments_align_to_rows(
+    level_width: u64,
+    virtual_tile_width: u32,
+    restart_interval: u16,
+) -> bool {
+    if level_width == 0 || virtual_tile_width == 0 || restart_interval == 0 {
+        return false;
+    }
+    let restart_interval = u64::from(restart_interval);
+    let virtual_tile_width = u64::from(virtual_tile_width);
+    if !virtual_tile_width.is_multiple_of(restart_interval) {
+        return false;
+    }
+    let mcu_width = virtual_tile_width / restart_interval;
+    if mcu_width == 0 {
+        return false;
+    }
+    level_width
+        .div_ceil(mcu_width)
+        .is_multiple_of(restart_interval)
+}
+
+/// Why the MCU-starts table cannot locate a strip's restart segment.
+#[derive(Debug)]
+enum NdpiMcuSegmentError {
+    IndexOutOfRange {
+        idx: usize,
+        len: usize,
+    },
+    NotIncreasing {
+        idx: usize,
+    },
+    OutsideStrip {
+        start: u64,
+        end: u64,
+        strip_byte_count: u64,
+    },
+}
+
+impl std::fmt::Display for NdpiMcuSegmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IndexOutOfRange { idx, len } => {
+                write!(f, "NDPI MCU-starts index {idx} out of range (len={len})")
+            }
+            Self::NotIncreasing { idx } => write!(
+                f,
+                "NDPI MCU-starts table is not strictly increasing at index {idx}"
+            ),
+            Self::OutsideStrip {
+                start,
+                end,
+                strip_byte_count,
+            } => write!(
+                f,
+                "NDPI MCU segment [{start}, {end}) exceeds strip byte count {strip_byte_count}"
+            ),
+        }
+    }
+}
+
+/// Strip-relative byte range of restart segment `idx`.
+fn ndpi_mcu_segment(
+    mcu_starts: &[u64],
+    idx: usize,
+    strip_byte_count: u64,
+) -> Result<(u64, u64), NdpiMcuSegmentError> {
+    let Some(&start) = mcu_starts.get(idx) else {
+        return Err(NdpiMcuSegmentError::IndexOutOfRange {
+            idx,
+            len: mcu_starts.len(),
+        });
+    };
+    let next = mcu_starts.get(idx + 1).copied();
+    if next.is_some_and(|next| next <= start) {
+        return Err(NdpiMcuSegmentError::NotIncreasing { idx });
+    }
+    let end = next.unwrap_or(strip_byte_count);
+    if start >= strip_byte_count || end > strip_byte_count || end <= start {
+        return Err(NdpiMcuSegmentError::OutsideStrip {
+            start,
+            end,
+            strip_byte_count,
+        });
+    }
+    Ok((start, end))
 }

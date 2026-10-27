@@ -50,23 +50,6 @@ fn encode_test_jpeg(img: &image::RgbImage) -> Vec<u8> {
     encoded
 }
 
-fn decode_jpeg(
-    data: &[u8],
-    tables: Option<&[u8]>,
-    expected_width: u32,
-    expected_height: u32,
-) -> Result<image::RgbaImage, WsiError> {
-    let decoded = decode_jpeg_rgb(data, tables, expected_width, expected_height)?;
-    let mut rgba = Vec::with_capacity(decoded.pixels.len() / 3 * 4);
-    for rgb in decoded.pixels.as_chunks::<3>().0 {
-        rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
-    }
-    Ok(
-        image::RgbaImage::from_raw(decoded.width, decoded.height, rgba)
-            .expect("decoded RGB samples expand to exact RGBA dimensions"),
-    )
-}
-
 fn decode_jpeg_rgb(
     data: &[u8],
     tables: Option<&[u8]>,
@@ -221,33 +204,6 @@ fn sof_marker_classification_covers_every_marker_byte() {
             "unexpected SOF classification for marker FF{marker:02X}",
         );
     }
-}
-
-fn progressive_8x8_jpeg() -> Vec<u8> {
-    const HEX: &str = concat!(
-            "ffd8ffe000104a46494600010100000100010000ffdb0043000302020302020303030304030304050805050404050a07",
-            "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f171816141812141514ffdb0043010304",
-            "0405040509050509140d0b0d141414141414141414141414141414141414141414141414141414141414141414141414",
-            "1414141414141414141414141414ffc20011080008000803012200021101031101ffc400150001010000000000000000",
-            "0000000000000006ffc4001501010100000000000000000000000000000506ffda000c0301000210031000000188136f",
-            "7fffc4001410010000000000000000000000000000000000ffda00080101000105027fffc40014110100000000000000",
-            "000000000000000000ffda0008010301013f017fffc40014110100000000000000000000000000000000ffda00080102",
-            "01013f017fffc40014100100000000000000000000000000000000ffda0008010100063f027fffc40014100100000000",
-            "000000000000000000000000ffda0008010100013f217fffda000c03010002000300000010f7ffc40014110100000000",
-            "000000000000000000000000ffda0008010301013f107fffc40014110100000000000000000000000000000000ffda00",
-            "08010201013f107fffc40014100100000000000000000000000000000000ffda0008010100013f107fffd9",
-        );
-    assert_eq!(HEX.len() % 2, 0);
-    HEX.as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| {
-            let high = (pair[0] as char).to_digit(16).unwrap();
-            let low = (pair[1] as char).to_digit(16).unwrap();
-            ((high << 4) | low) as u8
-        })
-        .collect()
 }
 
 mod batch;

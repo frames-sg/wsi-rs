@@ -7,17 +7,19 @@ the [README](../README.md).
 
 | Path | What it does |
 | --- | --- |
-| `src/core/registry` | `Slide`, format detection, region and tile reads, composition. |
+| `src/core/registry` | `Slide`, format detection, region and tile reads, composition. `slide/budget.rs` estimates read sizes and checks limits. `managed.rs` holds `ConservativeManagedReader`, which admits reads for readers without their own encoded-size planning. |
 | `src/core/cache.rs`, `src/core/cache/` | Byte-bounded tile caches and shared in-flight decodes. |
 | `src/core/limits.rs` | `SlideLimits` and checked size arithmetic. |
-| `src/core/batch.rs` | The shared CPU thread pool and idle-core accounting. |
-| `src/core/decode_runtime` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
-| `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`. |
+| `src/core/batch.rs` | The process-wide CPU thread pool (`process_codec_cpu_pool`, `install_codec_cpu`), idle-core accounting, and sharing a batch's CPU work between the caller and idle pool threads. |
+| `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
+| `src/core/file_identity.rs` | Records a source file's identity and checks it before reads. |
+| `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`. `pixels/ycbcr.rs` converts YCbCr to RGB with OpenSlide 4.0.1's integer lookup tables. |
 | `src/formats/<format>` | One module per file format: parse metadata, locate and read tiles. |
-| `src/formats/tiff_family` | Every TIFF-based format. `container` parses TIFF, `layout` maps each vendor's TIFF layout to levels, `pixel_access` reads tiles. |
+| `src/formats/tiff_family` | Every TIFF-based format. `container` parses TIFF, `layout` maps each vendor's TIFF layout to levels (`layout/common.rs` holds the pieces the vendors share), `pixel_access` reads tiles. |
 | `src/decode` | Adapters to the JPEG, JPEG 2000 and JPEG XR codec crates. |
 | `src/output` | GPU tile types for Metal and CUDA, and copying GPU tiles to CPU memory. |
 | `wsi-rs-openslide-shim` | The OpenSlide-compatible C library. |
+| `wsi-rs-python` | Optional Python reader for metadata, tile geometry, and compressed payloads; tensor decoding stays in the separate `j2k` extension. |
 | `xtask` | Build, test, release and benchmark commands (`cargo xtask`). |
 | `fuzz` | Fuzz targets for every file parser. |
 | `perf-runner` | Benchmarks wsi-rs and OpenSlide through the same C API. |
@@ -32,8 +34,9 @@ parses the file's metadata and builds a `Dataset`.
 Parsing draws on an `OpenBudget`: one running total of metadata and index bytes
 shared by every file in the slide (MIRAX, VMS and VSI slides are several files).
 Every size read from a file goes through checked arithmetic against
-`SlideLimits` before anything is allocated. Formats remember each source file's
-identity and refuse to read a file that was replaced after opening.
+`SlideLimits` before anything is allocated. The TIFF-family, DICOM, CZI, MIRAX
+and VMS readers record each source file's identity with `core::file_identity`
+and refuse to read a file that was replaced after opening.
 
 ## Reading a region
 
@@ -101,7 +104,7 @@ Up to 1,024 route decisions are kept. A GPU error sends the read to the CPU.
 GPU and return an error when they can't.
 
 On Metal, compatible tiles decode together in groups of up to 16 images and
-4 MiB of output. Color conversion from YCbCr to RGB also runs on the GPU, using
+4 MiB of output, counting 4 bytes per pixel. Color conversion from YCbCr to RGB also runs on the GPU, using
 the same lookup tables as the CPU path, so the colors match exactly.
 
 `MetalBackendSessions::with_cooperative_cpu_workers` opts that session into
@@ -140,8 +143,9 @@ against CPU decoding outside the timed interval and records CPU participation
 for every measurement. A report with `cooperative_was_exercised: false` is a
 fallback comparison, not evidence of cooperative performance.
 
-CUDA uses bounded encoded-image batches and rejects YCbCr tiles that the CPU
-would convert.
+CUDA batches use the same window from `decode/jp2k/device.rs`: up to 16 images
+and 4 MiB, counting 4 bytes per pixel as on Metal. CUDA rejects YCbCr tiles
+that the CPU would convert.
 
 ## Formats
 
@@ -157,8 +161,9 @@ between the restart markers that a read needs.
 
 **DICOM** slides are a folder of DICOM files. Compressed frames are located
 through an index built once per image on first use, from the Extended Offset
-Table, the Basic Offset Table, or by scanning item headers. Every count and
-offset in the index is checked against the file size. Tiles that a sparse DICOM
+Table, the Basic Offset Table, or by scanning item headers. `transfer_syntax`
+classifies each image's transfer syntax once, so tile reads don't compare UIDs.
+Every count and offset in the index is checked against the file size. Tiles that a sparse DICOM
 image leaves out come back black.
 
 **MIRAX** stores tiles in separate data files listed in an index file. A batch

@@ -8,17 +8,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::core::hash::Quickhash1;
-use crate::core::types::{
-    AssociatedImage, AxesShape, Compression, Dataset, DatasetId, Level, SampleType, Scene, Series,
-};
-use crate::error::WsiError;
+use crate::core::types::{Compression, Dataset, DatasetId, TileRequest};
 use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
-use crate::formats::tiff_family::icc::attach_source_icc_profile;
-use crate::properties::Properties;
 
 pub(crate) mod aperio;
 pub(crate) mod argos;
+mod common;
 pub(crate) mod generic;
 pub(crate) mod huron;
 pub(crate) mod leica;
@@ -29,150 +25,6 @@ pub(crate) mod trestle;
 pub(crate) mod ventana;
 
 const QUICKHASH_MAX_LEVEL_BYTES: u64 = 5 << 20;
-const TAG_DOCUMENT_NAME: u16 = 269;
-const TAG_MAKE: u16 = 271;
-const TAG_MODEL: u16 = 272;
-const TAG_SOFTWARE: u16 = 305;
-const TAG_DATETIME: u16 = 306;
-const TAG_ARTIST: u16 = 315;
-const TAG_HOST_COMPUTER: u16 = 316;
-const TAG_COPYRIGHT: u16 = 33432;
-
-fn compression_from_tag(val: u32) -> Compression {
-    match val {
-        1 => Compression::None,
-        5 => Compression::Lzw,
-        8 | 32946 => Compression::Deflate,
-        6 | 7 => Compression::Jpeg,
-        50000 => Compression::Zstd,
-        22610 => Compression::JpegXr,
-        33003 | 33005 => Compression::Jp2kYcbcr,
-        33004 => Compression::Jp2kRgb,
-        _ => Compression::Other(val as u16),
-    }
-}
-
-fn single_scene_uint8_pyramid_dataset(
-    dataset_id: DatasetId,
-    axes: AxesShape,
-    levels: Vec<Level>,
-    associated_images: HashMap<String, AssociatedImage>,
-    properties: Properties,
-) -> Dataset {
-    Dataset::new(
-        dataset_id,
-        vec![Scene::new(
-            "s0",
-            vec![Series::new(
-                "ser0",
-                axes,
-                levels,
-                SampleType::Uint8,
-                Vec::new(),
-            )],
-        )],
-    )
-    .with_associated_images(associated_images)
-    .with_properties(properties)
-}
-
-fn regular_tiff_level(
-    vendor: &str,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    downsample: f64,
-) -> Result<Level, TiffParseError> {
-    if tile_width == 0 || tile_height == 0 {
-        return Err(TiffParseError::Structure(format!(
-            "{vendor}: tile dimensions must be > 0 (got {tile_width}x{tile_height})"
-        )));
-    }
-    let tiles_across = width.div_ceil(tile_width as u64);
-    let tiles_down = height.div_ceil(tile_height as u64);
-
-    Ok(Level {
-        dimensions: (width, height),
-        downsample,
-        tile_layout: crate::core::types::TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        },
-    })
-}
-
-fn add_tiff_resolution_properties(
-    container: &TiffContainer,
-    ifd_id: IfdId,
-    properties: &mut Properties,
-) {
-    let unit_microns = match container
-        .get_u32(ifd_id, tags::RESOLUTION_UNIT)
-        .unwrap_or(2)
-    {
-        3 => 10_000.0,
-        _ => 25_400.0,
-    };
-    if let Ok(value) = container.get_f64(ifd_id, tags::X_RESOLUTION) {
-        if value > 0.0 {
-            properties.insert("openslide.mpp-x", (unit_microns / value).to_string());
-        }
-    }
-    if let Ok(value) = container.get_f64(ifd_id, tags::Y_RESOLUTION) {
-        if value > 0.0 {
-            properties.insert("openslide.mpp-y", (unit_microns / value).to_string());
-        }
-    }
-}
-
-fn compute_tiff_dataset_id_and_record_quickhash(
-    container: &TiffContainer,
-    lowest_resolution_ifd: IfdId,
-    property_ifd: IfdId,
-    properties: &mut Properties,
-) -> Result<DatasetId, TiffParseError> {
-    let identity = compute_tiff_dataset_identity(container, lowest_resolution_ifd, property_ifd)?;
-    if let Some(quickhash1) = identity.quickhash1.as_deref() {
-        properties.insert("openslide.quickhash-1", quickhash1);
-    }
-    Ok(identity.dataset_id)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finish_single_scene_uint8_tiff_layout<I>(
-    container: &TiffContainer,
-    lowest_resolution_ifd: IfdId,
-    property_ifd: IfdId,
-    axes: AxesShape,
-    levels: Vec<Level>,
-    associated_images: HashMap<String, AssociatedImage>,
-    mut properties: Properties,
-    tile_sources: HashMap<TileSourceKey, TileSource>,
-    associated_sources: HashMap<String, TileSource>,
-    source_icc_ifds: I,
-) -> Result<DatasetLayout, TiffParseError>
-where
-    I: IntoIterator<Item = IfdId>,
-{
-    let dataset_id = compute_tiff_dataset_id_and_record_quickhash(
-        container,
-        lowest_resolution_ifd,
-        property_ifd,
-        &mut properties,
-    )?;
-    let mut dataset =
-        single_scene_uint8_pyramid_dataset(dataset_id, axes, levels, associated_images, properties);
-    attach_source_icc_profile(&mut dataset, container, source_icc_ifds, 0, 0)?;
-
-    Ok(DatasetLayout {
-        dataset,
-        tile_sources,
-        associated_sources,
-    })
-}
 
 pub(crate) struct DatasetIdentity {
     pub dataset_id: DatasetId,
@@ -228,6 +80,34 @@ pub(crate) struct TileSourceKey {
     pub z: u32,
     pub c: u32,
     pub t: u32,
+}
+
+impl TileSourceKey {
+    /// Key of `level`'s single plane in scene 0, series 0.
+    pub(crate) fn plane0(level: u32) -> Self {
+        Self {
+            scene: 0,
+            series: 0,
+            level,
+            z: 0,
+            c: 0,
+            t: 0,
+        }
+    }
+}
+
+impl From<&TileRequest> for TileSourceKey {
+    fn from(req: &TileRequest) -> Self {
+        let plane = req.plane.get();
+        Self {
+            scene: req.scene.get(),
+            series: req.series.get(),
+            level: req.level.get(),
+            z: plane.z,
+            c: plane.c,
+            t: plane.t,
+        }
+    }
 }
 
 /// Describes how to access a level's or associated image's pixel data.
@@ -402,8 +282,7 @@ fn hash_tiff_level(
         if len == 0 {
             continue;
         }
-        hash.hash_file_part(container.path(), offset, Some(len))
-            .map_err(wsi_to_tiff_error)?;
+        hash.hash_file_part(container.path(), offset, Some(len))?;
     }
 
     Ok(true)
@@ -449,13 +328,13 @@ fn tiff_data_ranges(
 fn hash_tiff_string_properties(hash: &mut Quickhash1, container: &TiffContainer, ifd_id: IfdId) {
     const STRING_PROPS: [(&str, u16); 8] = [
         ("tiff.ImageDescription", tags::IMAGE_DESCRIPTION),
-        ("tiff.Make", TAG_MAKE),
-        ("tiff.Model", TAG_MODEL),
-        ("tiff.Software", TAG_SOFTWARE),
-        ("tiff.DateTime", TAG_DATETIME),
-        ("tiff.Artist", TAG_ARTIST),
-        ("tiff.HostComputer", TAG_HOST_COMPUTER),
-        ("tiff.Copyright", TAG_COPYRIGHT),
+        ("tiff.Make", tags::MAKE),
+        ("tiff.Model", tags::MODEL),
+        ("tiff.Software", tags::SOFTWARE),
+        ("tiff.DateTime", tags::DATETIME),
+        ("tiff.Artist", tags::ARTIST),
+        ("tiff.HostComputer", tags::HOST_COMPUTER),
+        ("tiff.Copyright", tags::COPYRIGHT),
     ];
 
     for (name, tag) in STRING_PROPS {
@@ -466,7 +345,7 @@ fn hash_tiff_string_properties(hash: &mut Quickhash1, container: &TiffContainer,
         container,
         ifd_id,
         "tiff.DocumentName",
-        TAG_DOCUMENT_NAME,
+        tags::DOCUMENT_NAME,
     );
 }
 
@@ -528,18 +407,6 @@ fn fallback_dataset_id(
         TiffParseError::Structure("fallback dataset hash unexpectedly disabled".into())
     })?;
     dataset_id_from_hex(&hex)
-}
-
-fn wsi_to_tiff_error(err: WsiError) -> TiffParseError {
-    match err {
-        WsiError::Io(source) => source.into(),
-        WsiError::IoWithPath { source, path } => TiffParseError::Io {
-            kind: source.kind(),
-            source,
-            path: Some(std::sync::Arc::new(path)),
-        },
-        other => TiffParseError::Structure(other.to_string()),
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

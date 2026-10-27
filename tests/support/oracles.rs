@@ -975,7 +975,7 @@ fn scaled_bound_dimension(bound: u64, downsample: f64, level_dimension: u64) -> 
 }
 
 #[cfg(feature = "parity-openslide")]
-fn dimensions_within_one_pixel(a: (u64, u64), b: (u64, u64)) -> bool {
+pub(crate) fn dimensions_within_one_pixel(a: (u64, u64), b: (u64, u64)) -> bool {
     a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1
 }
 

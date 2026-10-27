@@ -30,7 +30,9 @@ impl TiffPixelReader {
         reqs: &[TileRequest],
         backend: BackendRequest,
     ) -> Result<Option<Vec<CpuTile>>, WsiError> {
-        let mut jobs = Vec::with_capacity(reqs.len());
+        // Decide whether the whole batch is supported before reading payloads;
+        // otherwise a late missing tile makes the fallback read them again.
+        let mut spans = Vec::with_capacity(reqs.len());
         for req in reqs {
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
@@ -52,19 +54,20 @@ impl TiffPixelReader {
             if span.byte_count == 0 {
                 return Ok(None);
             }
+            spans.push((*ifd_id, jpeg_tables.as_deref(), *compression, span));
+        }
+
+        let mut jobs = Vec::with_capacity(spans.len());
+        for (ifd_id, jpeg_tables, compression, span) in spans {
             let data = self.read_tiled_ifd_tile_span(span)?;
 
             let job = match compression {
                 Compression::Jpeg => {
-                    let options = self.tiff_jpeg_decode_options_for_data(
-                        *ifd_id,
-                        false,
-                        &data,
-                        jpeg_tables.as_deref(),
-                    );
+                    let options =
+                        self.tiff_jpeg_decode_options_for_data(ifd_id, false, &data, jpeg_tables);
                     CodecBatchJob::Jpeg(JpegDecodeJob {
                         data: Cow::Owned(data),
-                        tables: jpeg_tables.as_deref().map(Cow::Borrowed),
+                        tables: jpeg_tables.map(Cow::Borrowed),
                         expected_width: span.width,
                         expected_height: span.height,
                         color_transform: options.color_transform,
@@ -89,14 +92,7 @@ impl TiffPixelReader {
         decode_mixed_batch(jobs)?
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
@@ -146,12 +142,10 @@ impl TiffPixelReader {
                 compression: Compression::Jpeg,
             } = source
             else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "JPEG tiled batch received a non-JPEG tile source".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "JPEG tiled batch received a non-JPEG tile source",
+                ));
             };
             let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
             if span.byte_count == 0 {
@@ -186,10 +180,9 @@ impl TiffPixelReader {
         let decoded = if jobs.is_empty() {
             Vec::new()
         } else {
-            let runtime = crate::core::decode_runtime::DecodeRuntime::default_arc();
             let decode = || crate::core::batch::share_cpu_work(jobs, TiledJpegJob::decode);
-            if runtime.cpu_worker_count() >= crate::core::batch::cpu_core_count() {
-                runtime.install_jp2k_cpu(decode)
+            if crate::core::batch::cpu_worker_count() >= crate::core::batch::cpu_core_count() {
+                crate::core::batch::install_codec_cpu(decode)
             } else {
                 decode()
             }
@@ -213,9 +206,7 @@ impl TiffPixelReader {
     ) -> Result<Vec<Jp2kDecodeJob<'static>>, WsiError> {
         let mut jobs = Vec::with_capacity(reqs.len());
         for req in reqs {
-            if let Some(control) = control {
-                control.check_cancelled()?;
-            }
+            crate::core::read_control::check_cancelled_opt(control)?;
             let source = self.tile_source_for(req)?;
             let TileSource::TiledIfd {
                 ifd_id,
@@ -223,23 +214,19 @@ impl TiffPixelReader {
                 ..
             } = source
             else {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "JP2K tiled device batch received a non-tiled tile source".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "JP2K tiled device batch received a non-tiled tile source",
+                ));
             };
             if !matches!(
                 actual_compression,
                 Compression::Jp2kRgb | Compression::Jp2kYcbcr
             ) {
-                return Err(WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: "strict TIFF device reads support JP2K/HTJ2K tiles only".into(),
-                });
+                return Err(WsiError::tile_read(
+                    req,
+                    "strict TIFF device reads support JP2K/HTJ2K tiles only",
+                ));
             }
 
             let span = self.tiled_ifd_tile_span(req, *ifd_id)?;
@@ -270,14 +257,7 @@ impl TiffPixelReader {
         crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 
@@ -291,14 +271,7 @@ impl TiffPixelReader {
         crate::decode::jp2k::decode_batch_jp2k_cuda(&jobs, sessions)
             .into_iter()
             .zip(reqs.iter())
-            .map(|(result, req)| {
-                result.map_err(|err| WsiError::TileRead {
-                    col: req.col,
-                    row: req.row,
-                    level: req.level.get(),
-                    reason: err.to_string(),
-                })
-            })
+            .map(|(result, req)| result.map_err(|err| WsiError::tile_read(req, err.to_string())))
             .collect()
     }
 }

@@ -3,9 +3,7 @@ use super::resolution::{resolve_tile_miss, validate_region_request};
 
 use crate::core::cache::{CacheKey, TileCache};
 use crate::core::registry::{SlideReader, DEFAULT_MAX_REGION_PIXELS};
-use crate::core::types::{
-    CpuTile, LevelIdx, RegionRequest, TileLayout, TileRequest, TileViewRequest,
-};
+use crate::core::types::{CpuTile, RegionRequest, TileRequest, TileViewRequest};
 use crate::error::WsiError;
 
 pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
@@ -15,8 +13,8 @@ pub(crate) fn read_display_tile_from_source<T: SlideReader + ?Sized>(
 ) -> Result<CpuTile, WsiError> {
     let region_request = display_region_request(req);
     let (_, _, level) = validate_region_request(source.dataset(), &region_request)?;
-    if is_exact_native_display_request(&level.tile_layout, req) {
-        return read_exact_native_display_tile(source, cache, req);
+    if let Ok(tile) = level.native_display_tile(req) {
+        return read_exact_native_display_tile(source, cache, req, &tile);
     }
 
     compose_display_tile_fallback(source, cache, req, region_request, level.dimensions)
@@ -26,7 +24,7 @@ fn display_region_request(req: &TileViewRequest) -> RegionRequest {
     RegionRequest {
         scene: req.scene,
         series: req.series,
-        level: LevelIdx::new(req.level.get()),
+        level: req.level,
         plane: req.plane,
         origin_px: (
             req.col.saturating_mul(i64::from(req.tile_width)),
@@ -36,59 +34,24 @@ fn display_region_request(req: &TileViewRequest) -> RegionRequest {
     }
 }
 
-fn is_exact_native_display_request(layout: &TileLayout, req: &TileViewRequest) -> bool {
-    let TileLayout::Regular {
-        tile_width,
-        tile_height,
-        tiles_across,
-        tiles_down,
-    } = layout
-    else {
-        return false;
-    };
-
-    *tile_width == req.tile_width
-        && *tile_height == req.tile_height
-        && req.col >= 0
-        && req.row >= 0
-        && req.col < *tiles_across as i64
-        && req.row < *tiles_down as i64
-}
-
-fn display_tile_request(req: &TileViewRequest) -> TileRequest {
-    TileRequest {
-        scene: req.scene,
-        series: req.series,
-        level: req.level,
-        plane: req.plane,
-        col: req.col,
-        row: req.row,
-    }
-}
-
-fn read_display_source_tile<T: SlideReader + ?Sized>(
-    source: &T,
-    req: &TileViewRequest,
-) -> Result<CpuTile, WsiError> {
-    source.read_tile_cpu(&display_tile_request(req))
-}
-
+/// Reads `native`, the one native tile display request `req` names.
 fn read_exact_native_display_tile<T: SlideReader + ?Sized>(
     source: &T,
     cache: Option<&TileCache>,
     req: &TileViewRequest,
+    native: &TileRequest,
 ) -> Result<CpuTile, WsiError> {
     let started = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
     let (tile, cache_hit) = if let Some(cache) = cache {
-        let key = CacheKey::from_tile_request(source.dataset().id, &display_tile_request(req));
+        let key = CacheKey::from_tile_request(source.dataset().id, native);
         if let Some(cached) = cache.get(&key) {
             (cached.as_ref().clone(), Some(true))
         } else {
-            let tile = resolve_tile_miss(source, Some(cache), key, &display_tile_request(req))?;
+            let tile = resolve_tile_miss(source, Some(cache), key, native)?;
             (tile.as_ref().clone(), Some(false))
         }
     } else {
-        (read_display_source_tile(source, req)?, None)
+        (source.read_tile_cpu(native)?, None)
     };
     trace_exact_native_display_tile(req, cache, cache_hit, started.as_ref());
     Ok(tile)

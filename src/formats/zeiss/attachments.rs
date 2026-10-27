@@ -40,18 +40,7 @@ pub(super) fn decode_associated_attachment(
         .map_err(|source| WsiError::DisplayConversion(source.to_string()))?;
 
     if attachment.content_file_type.eq_ignore_ascii_case("JPG") {
-        let buffer = crate::core::batch::exactly_one(
-            decode_batch_jpeg(&[JpegDecodeJob {
-                data: Cow::Borrowed(&blob.data),
-                tables: None,
-                expected_width: 0,
-                expected_height: 0,
-                color_transform: j2k_jpeg::ColorTransform::Auto,
-                force_dimensions: false,
-                requested_size: None,
-            }]),
-            "CZI associated JPEG decode",
-        )??;
+        let buffer = crate::decode::jpeg::decode_standalone_jpeg(&blob.data)?;
         return Ok(Some((
             AssociatedImage {
                 dimensions: (buffer.width, buffer.height),
@@ -133,12 +122,10 @@ fn read_embedded_czi_blob(
 fn ensure_supported_embedded_czi(
     compressions: impl IntoIterator<Item = CziCompressionMode>,
 ) -> Result<(), WsiError> {
-    if let Some(compression) = compressions.into_iter().find(|compression| {
-        !matches!(
-            compression,
-            CziCompressionMode::UnCompressed | CziCompressionMode::Jpg | CziCompressionMode::JpgXr
-        )
-    }) {
+    if let Some(compression) = compressions
+        .into_iter()
+        .find(|compression| !compression.is_wsi_supported())
+    {
         return Err(WsiError::UnsupportedFormat(format!(
             "embedded CZI associated-image compression is not supported safely ({compression})"
         )));
@@ -312,21 +299,12 @@ fn read_attachment_prefix(
     let read_len_usize = usize::try_from(read_len).map_err(|_| {
         WsiError::DisplayConversion("Zeiss attachment probe length overflow".into())
     })?;
-    let mut file = File::open(path).map_err(|source| WsiError::IoWithPath {
-        source: Arc::new(source),
-        path: path.to_path_buf(),
-    })?;
+    let mut file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
     file.seek(SeekFrom::Start(payload_offset))
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     let mut buffer = vec![0u8; read_len_usize];
     file.read_exact(&mut buffer)
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path: path.to_path_buf(),
-        })?;
+        .map_err(|source| WsiError::io_with_path(path, source))?;
     Ok(buffer)
 }
 
@@ -352,10 +330,7 @@ fn with_temporary_czi_blob_in<T>(
         .as_file_mut()
         .write_all(data)
         .and_then(|()| temporary.as_file_mut().flush())
-        .map_err(|source| WsiError::IoWithPath {
-            source: Arc::new(source),
-            path,
-        })?;
+        .map_err(|source| WsiError::io_with_path(&path, source))?;
     operation(temporary.path())
 }
 

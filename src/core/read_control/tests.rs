@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{
-    DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome, ReadCancellationToken, ReadControl,
+    check_cancelled_opt, DicomIndexDiagnostic, DicomIndexMapping, DicomIndexOutcome,
+    ReadCancellationToken, ReadControl,
 };
 
 #[test]
@@ -88,4 +89,17 @@ fn deferred_diagnostics_recover_a_poisoned_buffer_and_preserve_order() {
 
     deferred.flush();
     assert_eq!(events.lock().unwrap().as_slice(), &[first, second]);
+}
+
+#[test]
+fn optional_control_cancels_only_a_present_cancelled_control() {
+    assert!(check_cancelled_opt(None).is_ok());
+    let token = ReadCancellationToken::new();
+    let control = ReadControl::new(token.clone());
+    assert!(check_cancelled_opt(Some(&control)).is_ok());
+    token.cancel();
+    assert!(matches!(
+        check_cancelled_opt(Some(&control)),
+        Err(crate::WsiError::Cancelled)
+    ));
 }

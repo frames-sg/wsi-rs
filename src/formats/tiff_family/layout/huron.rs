@@ -7,26 +7,14 @@ use crate::formats::tiff_family::container::{tags, TiffContainer};
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
 
-use super::{
-    add_tiff_resolution_properties, compression_from_tag, finish_single_scene_uint8_tiff_layout,
-    regular_tiff_level, DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey,
+use super::common::{
+    add_tiff_resolution_properties, associated_channels, averaged_downsample, compression_from_tag,
+    ensure_supported_compression, regular_tiff_level, stripped_tile_source, tiled_ifd_descriptor,
+    ResolutionStyle, SingleSceneTiffLayout,
 };
-
-const TAG_SUBFILE_TYPE: u16 = 254;
-const TAG_MAKE: u16 = 271;
-const TAG_IMAGE_DEPTH: u16 = 32_997;
+use super::{DatasetLayout, TiffLayoutInterpreter, TileSource, TileSourceKey};
 
 pub(crate) struct HuronInterpreter;
-
-struct TiledIfd {
-    ifd_id: IfdId,
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    compression: Compression,
-    jpeg_tables: Option<Vec<u8>>,
-}
 
 impl TiffLayoutInterpreter for HuronInterpreter {
     fn vendor_name(&self) -> &'static str {
@@ -41,7 +29,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             .ifd_by_id(first_ifd)
             .is_ok_and(|ifd| ifd.tags.contains_key(&tags::TILE_WIDTH))
             && container
-                .get_string(first_ifd, TAG_MAKE)
+                .get_string(first_ifd, tags::MAKE)
                 .is_ok_and(|make| make.starts_with("Huron"))
     }
 
@@ -58,7 +46,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
         let mut associated_images = HashMap::new();
         let mut associated_sources = HashMap::new();
         for (index, &ifd_id) in container.top_ifds().iter().enumerate() {
-            if let Ok(depth) = container.get_u32(ifd_id, TAG_IMAGE_DEPTH) {
+            if let Ok(depth) = container.get_u32(ifd_id, tags::IMAGE_DEPTH) {
                 if depth != 1 {
                     return Err(TiffParseError::Structure(format!(
                         "Huron IFD {ifd_id} has unsupported ImageDepth={depth}"
@@ -67,27 +55,16 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             }
             let ifd = container.ifd_by_id(ifd_id)?;
             let compression = compression_from_tag(container.get_u32(ifd_id, tags::COMPRESSION)?);
-            super::argos::ensure_supported_compression("Huron", compression)?;
+            ensure_supported_compression("Huron", compression)?;
             if ifd.tags.contains_key(&tags::TILE_WIDTH) {
-                tiled.push(TiledIfd {
-                    ifd_id,
-                    width: container.get_u64(ifd_id, tags::IMAGE_WIDTH)?,
-                    height: container.get_u64(ifd_id, tags::IMAGE_LENGTH)?,
-                    tile_width: container.get_u32(ifd_id, tags::TILE_WIDTH)?,
-                    tile_height: container.get_u32(ifd_id, tags::TILE_LENGTH)?,
-                    compression,
-                    jpeg_tables: container
-                        .get_bytes(ifd_id, tags::JPEG_TABLES)
-                        .ok()
-                        .map(<[u8]>::to_vec),
-                });
+                tiled.push(tiled_ifd_descriptor(container, ifd_id, compression)?);
                 continue;
             }
 
             let name = if index == 1 {
                 Some("thumbnail")
             } else {
-                match container.get_u32(ifd_id, TAG_SUBFILE_TYPE).ok() {
+                match container.get_u32(ifd_id, tags::SUBFILE_TYPE).ok() {
                     Some(1) => Some("label"),
                     Some(9) => Some("macro"),
                     _ => None,
@@ -110,15 +87,14 @@ impl TiffLayoutInterpreter for HuronInterpreter {
             ));
         }
 
-        let base_width = tiled[0].width as f64;
-        let base_height = tiled[0].height as f64;
+        let base_dims = (tiled[0].width, tiled[0].height);
         let mut levels = Vec::with_capacity(tiled.len());
         let mut tile_sources = HashMap::with_capacity(tiled.len());
         for (index, ifd) in tiled.iter().enumerate() {
             let downsample = if index == 0 {
                 1.0
             } else {
-                ((base_width / ifd.width as f64) + (base_height / ifd.height as f64)) / 2.0
+                averaged_downsample(base_dims, (ifd.width, ifd.height))
             };
             levels.push(regular_tiff_level(
                 "Huron",
@@ -129,14 +105,7 @@ impl TiffLayoutInterpreter for HuronInterpreter {
                 downsample,
             )?);
             tile_sources.insert(
-                TileSourceKey {
-                    scene: 0,
-                    series: 0,
-                    level: index as u32,
-                    z: 0,
-                    c: 0,
-                    t: 0,
-                },
+                TileSourceKey::plane0(index as u32),
                 TileSource::TiledIfd {
                     ifd_id: ifd.ifd_id,
                     jpeg_tables: ifd.jpeg_tables.clone(),
@@ -146,19 +115,25 @@ impl TiffLayoutInterpreter for HuronInterpreter {
         }
 
         let mut properties = parse_properties(description);
-        add_tiff_resolution_properties(container, first_ifd, &mut properties);
-        finish_single_scene_uint8_tiff_layout(
+        add_tiff_resolution_properties(
             container,
-            tiled.last().unwrap().ifd_id,
             first_ifd,
-            AxesShape::default(),
+            &mut properties,
+            ResolutionStyle::INCH_FULL_PRECISION,
+        );
+        SingleSceneTiffLayout {
+            lowest_resolution_ifd: tiled.last().unwrap().ifd_id,
+            property_ifd: first_ifd,
+            identity_extra_strings: &[],
+            axes: AxesShape::default(),
             levels,
             associated_images,
             properties,
             tile_sources,
             associated_sources,
-            tiled.iter().map(|ifd| ifd.ifd_id),
-        )
+            source_icc_ifds: tiled.iter().map(|ifd| ifd.ifd_id),
+        }
+        .finish(container)
     }
 }
 
@@ -198,27 +173,12 @@ fn insert_associated(
         AssociatedImage::new(
             (width, height),
             SampleType::Uint8,
-            container
-                .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
-                .unwrap_or(3) as u16,
+            associated_channels(container, ifd_id),
         ),
     );
     sources.insert(
         name.to_owned(),
-        TileSource::Stripped {
-            ifd_id,
-            jpeg_tables: container
-                .get_bytes(ifd_id, tags::JPEG_TABLES)
-                .ok()
-                .map(<[u8]>::to_vec),
-            compression,
-            strip_offsets: container
-                .get_u64_array(ifd_id, tags::STRIP_OFFSETS)?
-                .to_vec(),
-            strip_byte_counts: container
-                .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)?
-                .to_vec(),
-        },
+        stripped_tile_source(container, ifd_id, compression)?,
     );
     Ok(())
 }

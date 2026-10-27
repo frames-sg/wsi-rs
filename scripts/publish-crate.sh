@@ -51,6 +51,17 @@ if len(matches) != 1:
 PY
 }
 
+validate_registry_publish() {
+  python3 - <<'PY'
+import tomllib
+
+with open("Cargo.toml", "rb") as handle:
+    package = tomllib.load(handle)["package"]
+if package.get("publish") is False:
+    raise SystemExit("registry publication is disabled by package.publish = false")
+PY
+}
+
 validate_publish_ref() {
   local version="$1"
   local expected_tag="v${version}"
@@ -99,6 +110,8 @@ main() {
     printf 'release identity is valid for %s %s\n' "$crate" "$version"
     return 0
   fi
+
+  validate_registry_publish
 
   if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
     validate_publish_ref "$version"

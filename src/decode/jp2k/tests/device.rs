@@ -16,6 +16,22 @@ fn rgb_job(backend: J2kBackendRequest) -> Jp2kDecodeJob<'static> {
     }
 }
 
+#[cfg(any(feature = "cuda", all(feature = "metal", target_os = "macos")))]
+#[test]
+fn device_windows_count_four_bytes_per_pixel_and_at_most_sixteen_images() {
+    use super::super::device::{DeviceWindow, DEVICE_WINDOW_TARGET_BYTES};
+
+    // 512x512 RGB tiles count 1 MiB each; a 3 B/px rule would admit a fifth.
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert_eq!((0..8).take_while(|_| window.admit(512, 512)).count(), 4);
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert_eq!((0..32).take_while(|_| window.admit(1, 1)).count(), 16);
+    // An oversized first image still executes, alone.
+    let mut window = DeviceWindow::new(DEVICE_WINDOW_TARGET_BYTES);
+    assert!(window.admit(4096, 4096));
+    assert!(!window.admit(1, 1));
+}
+
 #[cfg(feature = "metal")]
 fn metal_sessions() -> Option<crate::output::metal::MetalBackendSessions> {
     crate::output::metal::MetalBackendSessions::system_default().ok()
@@ -162,14 +178,13 @@ fn bounded_metal_groups_keep_duplicate_crops_errors_and_one_color_pass() {
         let groups = test_count(Event::MetalBatchGroups);
         let colors = test_count(Event::ColorSubmissions);
         let actual = if reuse_prepared {
+            let mut options = j2k::BatchDecodeOptions::default();
+            options.layout = j2k::BatchLayout::Nhwc;
             let prepared = j2k::prepare_batch(
                 jobs.iter()
                     .map(|job| j2k::EncodedImage::full(std::sync::Arc::from(job.data.as_ref())))
                     .collect(),
-                j2k::BatchDecodeOptions {
-                    layout: j2k::BatchLayout::Nhwc,
-                    ..Default::default()
-                },
+                options,
             )
             .unwrap();
             let metadata = jobs

@@ -99,8 +99,9 @@ fn configured_metadata_limit_rejects_vms_ini_before_open_allocations() {
 fn backend_default_and_empty_level_return_defined_results() {
     let _backend = HamamatsuVmsBackend::default();
     assert!(matches!(
-        VmsLevel::new(Vec::new(), 1, 1, 1),
-        Err(WsiError::InvalidSlide { message, .. }) if message.contains("no JPEG shards")
+        VmsLevel::new(Path::new("slide.vms"), Vec::new(), 1, 1, 1),
+        Err(WsiError::InvalidSlide { path, message })
+            if path == Path::new("slide.vms") && message.contains("no JPEG shards")
     ));
 }
 
@@ -174,6 +175,32 @@ fn vms_reader_rejects_signed_and_grid_tile_bounds() {
             Err(WsiError::TileRead { .. })
         ));
     }
+}
+
+#[test]
+fn vms_raw_display_tiles_must_name_one_native_tile() {
+    let fixture = VmsFixture::complete();
+    let reader = HamamatsuVmsBackend::new()
+        .open(&fixture.path)
+        .expect("open synthetic VMS");
+    let view = |col, row, width, height| TileViewRequest::new(0, 0, 0, col, row, width, height);
+
+    let raw = reader
+        .read_raw_compressed_display_tile(&view(1, 1, 64, 8))
+        .expect("raw display tile on the native grid");
+    let native = reader
+        .read_raw_compressed_tile(&TileRequest::new(0, 0, 0, 1, 1))
+        .expect("raw native tile");
+    assert_eq!(raw.data(), native.data());
+    assert!(matches!(
+        reader.read_raw_compressed_display_tile(&view(0, 0, 32, 8)),
+        Err(WsiError::Unsupported { reason })
+            if reason == "VMS raw JPEG display tile size 32x8 does not match native tile size 64x8"
+    ));
+    assert!(matches!(
+        reader.read_raw_compressed_display_tile(&view(4, 0, 64, 8)),
+        Err(WsiError::TileRead { col: 4, row: 0, .. })
+    ));
 }
 
 fn open_public_slide() -> (VmsFixture, Slide) {
@@ -290,6 +317,42 @@ fn associated_reads_recover_poisoned_cache_and_report_removed_source() {
         reader.associated_encoding("macro"),
         Err(WsiError::IoWithPath { .. })
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_associated_source_is_refused_instead_of_read() {
+    let fixture = VmsFixture::complete();
+    let reader = HamamatsuVmsBackend::new()
+        .open(&fixture.path)
+        .expect("open synthetic VMS");
+    let macro_path = fs::canonicalize(&fixture.macro_path).expect("resolve VMS macro");
+    crate::test_support::replace_file_with_copy(&macro_path);
+
+    let error = reader
+        .read_associated("macro")
+        .expect_err("a replaced associated source must not be read");
+    assert!(
+        matches!(
+            &error,
+            WsiError::InvalidSlide { path, message }
+                if *path == macro_path
+                    && message == "VMS associated image changed after the slide was opened"
+        ),
+        "unexpected error: {error:?}"
+    );
+    let error = reader
+        .associated_encoding("macro")
+        .expect_err("a replaced associated source must not be sized");
+    assert!(
+        matches!(
+            &error,
+            WsiError::InvalidSlide { path, message }
+                if *path == macro_path
+                    && message == "VMS associated image changed after the slide was opened"
+        ),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]

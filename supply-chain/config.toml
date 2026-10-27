@@ -13,6 +13,66 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.j2k]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-codec-math]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-core]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-cuda]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-cuda-build-support]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-cuda-j2k-engine]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-cuda-runtime]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-jpeg]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-metal]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-metal-support]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-native]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-profile]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-tilecodec]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.j2k-types]
+audit-as-crates-io = true
+notes = "Require an audit for the exact Git revision used by the source release."
+
+[policy.wsi-rs]
+audit-as-crates-io = false
+notes = "First-party library reviewed in this checkout, including unpublished changes."
+
 [policy.wsi-rs-perf]
 criteria = "safe-to-run"
 notes = "Non-published local benchmark coordinator and worker."
@@ -83,10 +143,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.crypto-common]]
 version = "0.1.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.czi-rs]]
-version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-core]]

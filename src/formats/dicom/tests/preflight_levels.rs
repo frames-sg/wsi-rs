@@ -84,10 +84,11 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
         ],
     )
     .expect("split sparse parts should form one logical level");
+    let dataset = dataset_for_levels(&levels);
     let reader = DicomReader {
         slide: Arc::new(DicomSlide {
             encoded_unit_bytes: crate::SlideLimits::default().encoded_unit_bytes(),
-            dataset: empty_dataset(),
+            dataset,
             levels,
             associated: HashMap::new(),
         }),
@@ -105,6 +106,18 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
         reader.tile_codec_kind(&tile_request(2, 0)),
         TileCodecKind::Other
     );
+    let mut other_scene = tile_request(0, 0);
+    other_scene.scene = SceneId::new(1);
+    let mut other_series = tile_request(0, 0);
+    other_series.series = SeriesId::new(1);
+    let other_plane = tile_request(0, 0).with_plane(PlaneSelection::new(1, 0, 0));
+    for req in [other_scene, other_series, other_plane] {
+        assert_eq!(
+            reader.tile_codec_kind(&req),
+            TileCodecKind::Other,
+            "{req:?} names no tile of this slide"
+        );
+    }
     assert_eq!(
         reader.tile_is_present(&tile_request(0, 0)).unwrap(),
         Some(true)
@@ -117,4 +130,11 @@ fn tile_codec_kind_uses_actual_sparse_split_part_for_request() {
         reader.tile_is_present(&tile_request(2, 0)).unwrap(),
         Some(false)
     );
+    for (col, row) in [(-1, 0), (0, -1), (8, 0), (0, 8)] {
+        assert_eq!(
+            reader.tile_is_present(&tile_request(col, row)).unwrap(),
+            Some(false),
+            "tile ({col},{row}) lies outside the level grid"
+        );
+    }
 }

@@ -167,12 +167,12 @@ pub(super) fn build_ndpi_with_strips(
             short_tag(tags::COMPRESSION, compression_tag as u16), // COMPRESSION
             long_tag(273, strip_offsets[i]),                      // STRIP_OFFSETS
             long_tag(279, strip_byte_counts[i]),                  // STRIP_BYTE_COUNTS
-            float_tag(NDPI_SOURCELENS, lens),                     // SOURCELENS
+            float_tag(tags::NDPI_SOURCELENS, lens),               // SOURCELENS
         ];
 
         // Add FOCAL_PLANE only if non-zero
         if focal != 0 {
-            tags.push(float_tag(NDPI_FOCAL_PLANE, focal as f32));
+            tags.push(float_tag(tags::NDPI_FOCAL_PLANE, focal as f32));
         }
         if lens == -1.0 && compression_tag == 7 {
             if let Some(tables) = macro_jpeg_tables {

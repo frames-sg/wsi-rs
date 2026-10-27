@@ -156,7 +156,10 @@ pub(super) fn canvas_dimensions(
         return Ok(((max_x - min_x) as u64, (max_y - min_y) as u64));
     }
 
-    Err(invalid_slide(path, "missing Zeiss canvas dimensions"))
+    Err(WsiError::invalid_slide(
+        path,
+        "missing Zeiss canvas dimensions",
+    ))
 }
 
 pub(super) fn canvas_origin(statistics: &SubBlockStatistics) -> (i32, i32) {
@@ -376,11 +379,4 @@ fn extract_tag_text(xml: &str, tag: &str) -> Option<String> {
     let end = xml[start..].find(&close)? + start;
     let value = xml[start..end].trim();
     (!value.is_empty()).then_some(value.to_string())
-}
-
-pub(super) fn invalid_slide(path: &Path, message: impl Into<String>) -> WsiError {
-    WsiError::InvalidSlide {
-        path: path.to_path_buf(),
-        message: message.into(),
-    }
 }

@@ -1,19 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use wsi_rs_perf::{Engine, DEFAULT_CACHE_BYTES, PINNED_OPENSLIDE_VERSION};
+use wsi_rs_test_support::corpus::corpus_cache_dir;
 
 use super::capture::WorkerMatrix;
 use super::comparison::{P95_MIN_SAMPLE_COUNT, P99_MIN_SAMPLE_COUNT, REGRESSION_RATIO};
 use super::manifest::SlideSpec;
 use super::worker::{
-    cache_bytes, default_public_fixture, performance_gpu_feature, result_dir, workspace_root,
-    BenchLibrary, DEFAULT_CACHE_BYTES,
+    cache_bytes, default_public_fixture, performance_gpu_feature, required_version_prefix,
+    result_dir, WORKER_BINARY,
 };
 use super::PERF_CAPTURE_SCHEMA_VERSION;
+use crate::commands::process::{git_dirty, git_lenient, run_capture_lenient, workspace_root};
 
 const TRACKED_ENV_VARS: [&str; 20] = [
     "RUSTFLAGS",
@@ -50,16 +52,16 @@ pub(super) struct CapturePlan<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CaptureSubject {
     /// The workspace's wsi-rs build or the pinned OpenSlide library.
-    Current(BenchLibrary),
+    Current(Engine),
     /// A previous release's wsi-rs shim, run by the workspace's worker.
     PreviousRelease,
 }
 
 impl CaptureSubject {
-    fn library(self) -> BenchLibrary {
+    fn library(self) -> Engine {
         match self {
             Self::Current(library) => library,
-            Self::PreviousRelease => BenchLibrary::WsiRs,
+            Self::PreviousRelease => Engine::WsiRs,
         }
     }
 }
@@ -82,6 +84,7 @@ pub(super) fn capture_summary(
             "format": slide.format,
             "benchmark_group": slide.benchmark_group,
             "manifest_sha256": slide.manifest_sha256,
+            "pixel_tolerance": slide.pixel_tolerance,
         })).collect::<Vec<_>>(),
         "metadata": metadata,
         "runs": runs,
@@ -102,13 +105,13 @@ fn capture_metadata(
         && !runs.is_empty();
     let mut metadata = json!({
         "toolchain": {
-            "rustc": command_stdout("rustc", &["--version"]),
-            "cargo": command_stdout("cargo", &["--version"]),
+            "rustc": run_capture_lenient("rustc", &["--version"]),
+            "cargo": run_capture_lenient("cargo", &["--version"]),
         },
         "host": {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "uname": command_stdout("uname", &["-a"]),
+            "uname": run_capture_lenient("uname", &["-a"]),
             "cpu": cpu_identity(),
             "gpu": gpu_identity(),
             "pinned_host_id": std::env::var("WSI_RS_PERF_PINNED_HOST_ID").ok(),
@@ -122,10 +125,10 @@ fn capture_metadata(
         },
         "benchmark": {
             "library": library.name(),
-            "binary": library.binary(),
-            "worker_package": "wsi-rs-perf",
+            "binary": WORKER_BINARY,
+            "worker_package": WORKER_BINARY,
             "worker_schema_version": wsi_rs_perf::WORKER_SCHEMA_VERSION,
-            "required_openslide_version": library.required_version_prefix(),
+            "required_openslide_version": required_version_prefix(library),
             "cache_bytes": cache_bytes().unwrap_or(DEFAULT_CACHE_BYTES),
             "client_worker_matrix": worker_matrix.counts,
             "client_process_concurrency": {
@@ -146,7 +149,7 @@ fn capture_metadata(
                 "openslide": {
                     "decoder_threads_per_handle": 1,
                     "active_decode_threads": "worker_count independent handles",
-                    "version": "4.0.1",
+                    "version": PINNED_OPENSLIDE_VERSION,
                 },
             },
             "corpus_tier": corpus_tier(slides),
@@ -256,7 +259,7 @@ fn is_codec_dependency(name: &str) -> bool {
         || matches!(name, "image" | "png" | "flate2" | "weezl")
 }
 
-fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
+fn run_decode_concurrency_matches(library: Engine, run: &Value) -> bool {
     let Some(workers) = run.get("worker_count").and_then(Value::as_u64) else {
         return false;
     };
@@ -269,7 +272,7 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
         return false;
     }
     match library {
-        BenchLibrary::WsiRs => {
+        Engine::WsiRs => {
             control
                 .get("rayon_threads_process_wide")
                 .and_then(Value::as_u64)
@@ -279,7 +282,7 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
                     .and_then(Value::as_u64)
                     == Some(workers)
         }
-        BenchLibrary::OpenSlide => {
+        Engine::OpenSlide => {
             control
                 .get("decoder_threads_per_handle")
                 .and_then(Value::as_u64)
@@ -294,10 +297,11 @@ fn run_decode_concurrency_matches(library: BenchLibrary, run: &Value) -> bool {
 
 fn git_metadata() -> Value {
     json!({
-        "branch": command_stdout("git", &["branch", "--show-current"]),
-        "commit": command_stdout("git", &["rev-parse", "HEAD"]),
-        "dirty": !command_stdout("git", &["status", "--porcelain"]).is_empty(),
-        "status_short": command_stdout("git", &["status", "--short"]),
+        "branch": git_lenient(&["branch", "--show-current"]),
+        "commit": git_lenient(&["rev-parse", "HEAD"]),
+        // A tree whose state cannot be read is recorded as dirty, never clean.
+        "dirty": git_dirty().unwrap_or(true),
+        "status_short": git_lenient(&["status", "--short"]),
     })
 }
 
@@ -314,28 +318,14 @@ fn tracked_environment() -> Value {
     Value::Object(env)
 }
 
-fn command_stdout(program: &str, args: &[&str]) -> String {
-    match Command::new(program).args(args).output() {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
-        Ok(output) => format!(
-            "unavailable: {program} exited with {}; {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(err) => format!("unavailable: failed to run {program}: {err}"),
-    }
-}
-
 fn cpu_identity() -> String {
     if cfg!(target_os = "macos") {
-        let brand = command_stdout("sysctl", &["-n", "machdep.cpu.brand_string"]);
-        let model = command_stdout("sysctl", &["-n", "hw.model"]);
-        let cores = command_stdout("sysctl", &["-n", "hw.ncpu"]);
+        let brand = run_capture_lenient("sysctl", &["-n", "machdep.cpu.brand_string"]);
+        let model = run_capture_lenient("sysctl", &["-n", "hw.model"]);
+        let cores = run_capture_lenient("sysctl", &["-n", "hw.ncpu"]);
         return format!("model={model}; cores={cores}; brand={brand}");
     }
-    command_stdout(
+    run_capture_lenient(
         "sh",
         &[
             "-c",
@@ -346,7 +336,7 @@ fn cpu_identity() -> String {
 
 fn gpu_identity() -> String {
     if cfg!(target_os = "macos") {
-        let text = command_stdout(
+        let text = run_capture_lenient(
             "system_profiler",
             &["SPDisplaysDataType", "-detailLevel", "mini"],
         );
@@ -362,7 +352,7 @@ fn gpu_identity() -> String {
         return text;
     }
     if cfg!(target_os = "linux") {
-        return command_stdout(
+        return run_capture_lenient(
             "nvidia-smi",
             &[
                 "--query-gpu=name,uuid,driver_version",
@@ -374,16 +364,20 @@ fn gpu_identity() -> String {
 }
 
 fn corpus_tier(slides: &[SlideSpec]) -> &'static str {
+    corpus_tier_in(slides, &corpus_cache_dir())
+}
+
+fn corpus_tier_in(slides: &[SlideSpec], corpus_cache: &Path) -> &'static str {
     if slides.iter().all(|slide| {
         let path = slide.path.to_string_lossy();
         path.contains("tests/fixtures/")
     }) {
         return "public-fixture";
     }
-    if slides.iter().any(|slide| {
-        let path = slide.path.to_string_lossy();
-        path.contains(".cache/wsi-rs/parity-corpus")
-    }) {
+    if slides
+        .iter()
+        .any(|slide| slide.path.starts_with(corpus_cache))
+    {
         return "local-parity";
     }
     "custom"

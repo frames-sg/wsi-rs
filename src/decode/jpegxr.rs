@@ -108,9 +108,8 @@ pub(crate) fn decode_jpegxr(
     // Keep JPEG XR's nested Rayon stages inside the process codec pool. A
     // plain caller may hold slide admission while global Rayon workers are
     // blocked on the same slide; dispatching here prevents that wait cycle.
-    let decoded = crate::core::decode_runtime::DecodeRuntime::default_arc()
-        .install_jp2k_cpu(|| view.decoder().decode(&request))
-        .map_err(error)?;
+    let decoded =
+        crate::core::batch::install_codec_cpu(|| view.decoder().decode(&request)).map_err(error)?;
     decoded.validate_layout().map_err(error)?;
     let samples = match decoded.samples {
         DecodedSamples::U8(v) => CpuTileData::u8(v),
