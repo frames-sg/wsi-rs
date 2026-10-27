@@ -18,7 +18,7 @@ fn help_lists_supported_tasks_without_obsolete_guidance() {
         "api-check    run public API and semver stability checks",
         "doc-test     compile rustdoc examples with doctest",
         "fuzz-check   type-check cargo-fuzz targets",
-        "package      package the crate from a clean worktree with verification",
+        "package      verify the clean source build or registry package for this release",
         "rc-preflight run local release-candidate preflight gates",
     ] {
         assert!(help.contains(required), "missing help text: {required}");

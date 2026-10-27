@@ -56,6 +56,11 @@ mod unix {
             fs::create_dir_all(root.join("scripts")).unwrap();
             fs::create_dir_all(root.join("src")).unwrap();
             fs::create_dir_all(root.join("target")).unwrap();
+            fs::write(
+                root.join("Cargo.toml"),
+                "[package]\nname = \"wsi-rs\"\nversion = \"0.8.1\"\n",
+            )
+            .unwrap();
             fs::write(root.join("Cargo.lock"), "root-lock\n").unwrap();
             fs::write(root.join("fuzz/Cargo.lock"), "fuzz-lock\n").unwrap();
             fs::write(
@@ -611,15 +616,31 @@ EOF
                 .collect::<Vec<_>>();
             let mut expected = vec![
                 format!("{runner} --locked --lib --tests -p wsi-rs -p wsi-rs-test-support"),
-                format!("{runner} --locked --lib --tests -p wsi-rs --features parity-openslide"),
+                format!("{runner} --locked -p wsi-rs --test support_unit --features parity-openslide openslide_oracle_"),
             ];
             if cfg!(target_os = "macos") {
                 expected.push(format!(
-                    "{runner} --locked --lib --tests -p wsi-rs --features parity-metal"
+                    "{runner} --locked -p wsi-rs --lib --test metal_surface_smoke --features parity-metal"
                 ));
             }
             assert_eq!(invocations, expected, "{task}");
         }
+        let fixture = FakeRepository::new();
+        let output = fixture.run("validate", &[]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert!(
+            !log.contains("build --locked --release"),
+            "quick validation built release binaries: {log}"
+        );
+        let output = fixture.run("bench-check", &[]);
+        assert!(output.status.success());
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert!(log.contains("build --locked --release -p wsi-rs-perf -p wsi-rs-openslide-shim"));
     }
 
     #[test]
@@ -680,12 +701,51 @@ esac
             "package --locked",
             "publish --dry-run --locked",
             "test --locked --test openslide_parity",
+            "test --locked --test color_regression -- public_brightfield_color_sanity_svs_ndpi_dicom --exact --ignored",
+            "test --locked --test color_regression --features parity-openslide -- svs_and_ndpi_overview_color_matches_openslide --exact --ignored",
             "test --locked --lib --tests --release",
             "typos",
             "llvm-cov --locked --workspace",
         ] {
             assert!(log.contains(expected), "missing `{expected}` in:\n{log}");
         }
+    }
+
+    #[test]
+    fn github_only_package_verifies_the_source_build_without_registry_publication() {
+        let fixture = FakeRepository::new();
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            "[package]\nname = \"wsi-rs\"\nversion = \"0.8.1\"\npublish = false\n",
+        )
+        .unwrap();
+        git(&fixture.root, &["add", "Cargo.toml"]);
+        git(
+            &fixture.root,
+            &[
+                "-c",
+                "user.name=xtask-test",
+                "-c",
+                "user.email=xtask@example.invalid",
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "GitHub-only release",
+            ],
+        );
+        let output = fixture.run("package", &[]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let log = fs::read_to_string(&fixture.log_path).unwrap();
+        assert!(log.contains("build --locked --lib -p wsi-rs"), "{log}");
+        assert!(
+            !log.contains("publish") && !log.contains("package"),
+            "{log}"
+        );
     }
 
     #[test]

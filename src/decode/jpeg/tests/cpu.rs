@@ -53,22 +53,6 @@ fn standalone_jpeg_decodes_at_the_size_its_header_declares() {
 }
 
 #[test]
-fn decode_valid_jpeg() {
-    let mut rgb = image::RgbImage::new(8, 8);
-    for pixel in rgb.pixels_mut() {
-        *pixel = image::Rgb([200, 100, 50]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-    let decoded = decode_jpeg(&jpeg_data, None, 8, 8).unwrap();
-    assert_eq!(decoded.width(), 8);
-    assert_eq!(decoded.height(), 8);
-    // All alpha channels should be 255
-    for pixel in decoded.pixels() {
-        assert_eq!(pixel[3], 255);
-    }
-}
-
-#[test]
 fn expected_size_hints_preserve_rgb_and_grayscale_edge_crops() {
     let rgb = image::RgbImage::from_fn(8, 8, |x, y| {
         image::Rgb([(x * 29) as u8, (y * 31) as u8, 160])
@@ -92,92 +76,40 @@ fn expected_size_hints_preserve_rgb_and_grayscale_edge_crops() {
 }
 
 #[test]
-fn decode_with_jpeg_tables() {
-    // Create a valid JPEG
-    let mut rgb = image::RgbImage::new(8, 8);
-    for pixel in rgb.pixels_mut() {
-        *pixel = image::Rgb([100, 150, 200]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-
-    // Find SOS marker (0xFF, 0xDA) to split into tables and scan data.
-    // Tables = everything up to (but not including) SOS marker, plus EOI.
-    // Data = SOI + SOS marker onward.
-    let sos_pos = jpeg_data
-        .windows(2)
-        .position(|w| w == [0xFF, 0xDA])
-        .expect("SOS marker not found");
-
-    // tables: from start to just before SOS, with EOI appended
-    let mut tables = jpeg_data[..sos_pos].to_vec();
-    tables.extend_from_slice(&[0xFF, 0xD9]); // EOI
-
-    // data: SOI + from SOS onward
-    let mut data = vec![0xFF, 0xD8]; // SOI
-    data.extend_from_slice(&jpeg_data[sos_pos..]);
-
-    let decoded = decode_jpeg(&data, Some(&tables), 8, 8).unwrap();
-    assert_eq!(decoded.width(), 8);
-    assert_eq!(decoded.height(), 8);
-    for pixel in decoded.pixels() {
-        assert_eq!(pixel[3], 255);
-    }
-}
-
-#[test]
-fn decode_jpeg_rgb_returns_interleaved_rgb() {
-    let mut rgb = image::RgbImage::new(4, 4);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 200, 50]);
-    }
-    let jpeg_data = encode_test_jpeg(&rgb);
-
-    let decoded = decode_jpeg_rgb(&jpeg_data, None, 4, 4).unwrap();
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
-}
-
-#[test]
-fn decode_progressive_jpeg_rgb_returns_interleaved_rgb() {
-    let jpeg_data = progressive_8x8_jpeg();
-
-    let decoded = decode_jpeg_rgb(&jpeg_data, None, 8, 8).unwrap();
-
-    assert_eq!(decoded.width, 8);
-    assert_eq!(decoded.height, 8);
-    assert_eq!(decoded.pixels.len(), 8 * 8 * 3);
-}
-
-#[test]
-fn progressive_scaled_decode_falls_back_to_full_decode_resize() {
-    let jpeg_data = progressive_8x8_jpeg();
-
-    let decoded = decode_jpeg_rgb_with_size_override(
-        &jpeg_data,
-        None,
-        8,
-        8,
-        Some(4),
-        Some(4),
-        J2kColorTransform::Auto,
+fn baseline_jpeg_and_split_tables_preserve_reference_pixels_exactly() {
+    let jpeg_data = include_bytes!("../../../../tests/fixtures/jpeg/baseline_420_16x16.jpg");
+    let expected = image::load_from_memory_with_format(
+        include_bytes!("../../../../tests/fixtures/jpeg/baseline_420_16x16.ppm"),
+        image::ImageFormat::Pnm,
     )
-    .unwrap();
+    .unwrap()
+    .to_rgb8();
+    let sos = jpeg_data
+        .windows(2)
+        .position(|marker| marker == [0xff, 0xda])
+        .unwrap();
+    let mut tables = jpeg_data[..sos].to_vec();
+    tables.extend_from_slice(&[0xff, 0xd9]);
+    let mut scan = vec![0xff, 0xd8];
+    scan.extend_from_slice(&jpeg_data[sos..]);
 
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
-}
-#[test]
-fn decode_jpeg_rgb_scaled_returns_scaled_dimensions() {
-    let mut rgb = image::RgbImage::new(16, 16);
-    for (idx, pixel) in rgb.pixels_mut().enumerate() {
-        *pixel = image::Rgb([idx as u8, 100, 200]);
+    for (data, tables) in [
+        (jpeg_data.as_slice(), None),
+        (scan.as_slice(), Some(tables.as_slice())),
+    ] {
+        let decoded = decode_jpeg_rgb(data, tables, 16, 16).unwrap();
+        assert_eq!((decoded.width, decoded.height), expected.dimensions());
+        assert_eq!(decoded.pixels, *expected.as_raw());
     }
-    let jpeg_data = encode_test_jpeg(&rgb);
 
-    let decoded = try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
-        data: &jpeg_data,
+    let scaled_reference = image::load_from_memory_with_format(
+        include_bytes!("../../../../tests/fixtures/jpeg/baseline_420_16x16.r2.ppm"),
+        image::ImageFormat::Pnm,
+    )
+    .unwrap()
+    .to_rgb8();
+    let scaled = try_decode_jpeg_rgb_scaled(ScaledJpegDecode {
+        data: jpeg_data,
         tables: None,
         expected_width: 16,
         expected_height: 16,
@@ -187,11 +119,49 @@ fn decode_jpeg_rgb_scaled_returns_scaled_dimensions() {
         color_transform: J2kColorTransform::Auto,
     })
     .unwrap()
-    .expect("power-of-two downscale should use j2k IDCT scale");
+    .expect("baseline JPEG supports reduced IDCT");
+    assert_eq!((scaled.width, scaled.height), scaled_reference.dimensions());
+    assert_eq!(scaled.pixels, *scaled_reference.as_raw());
+}
 
-    assert_eq!(decoded.width, 4);
-    assert_eq!(decoded.height, 4);
-    assert_eq!(decoded.pixels.len(), 4 * 4 * 3);
+#[test]
+fn progressive_jpeg_preserves_reference_pixels_at_full_and_reduced_sizes() {
+    let jpeg_data = include_bytes!("../../../../tests/fixtures/jpeg/progressive_8x8.jpg");
+    let reference = image::load_from_memory_with_format(
+        include_bytes!("../../../../tests/fixtures/jpeg/progressive_8x8.ppm"),
+        image::ImageFormat::Pnm,
+    )
+    .unwrap()
+    .to_rgb8();
+    for (width, height) in [(8, 8), (4, 4), (3, 5)] {
+        let decoded = decode_jpeg_rgb_with_size_override(
+            jpeg_data,
+            None,
+            8,
+            8,
+            Some(width),
+            Some(height),
+            J2kColorTransform::Auto,
+        )
+        .unwrap();
+        let expected = if (width, height) == (4, 4) {
+            image::load_from_memory_with_format(
+                include_bytes!("../../../../tests/fixtures/jpeg/progressive_8x8.r1.ppm"),
+                image::ImageFormat::Pnm,
+            )
+            .unwrap()
+            .to_rgb8()
+        } else {
+            image::RgbImage::from_fn(width, height, |x, y| {
+                *reference.get_pixel(
+                    x * reference.width() / width,
+                    y * reference.height() / height,
+                )
+            })
+        };
+        assert_eq!((decoded.width, decoded.height), expected.dimensions());
+        assert_eq!(decoded.pixels, *expected.as_raw());
+    }
 }
 
 #[test]

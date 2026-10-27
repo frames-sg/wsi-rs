@@ -27,6 +27,7 @@ const FUZZ_TARGETS: [&str; 9] = [
 
 pub(super) fn ci() -> Result<(), String> {
     validate()?;
+    bench_check()?;
     package()
 }
 
@@ -38,6 +39,7 @@ pub(super) fn rc_preflight() -> Result<(), String> {
     run_fuzz_campaigns(RELEASE_FUZZ_BUDGET)?;
     feature_check()?;
     validate()?;
+    bench_check()?;
     release_test()?;
     parity_corpus_test()?;
     coverage_with_corpus(true)?;
@@ -48,7 +50,6 @@ pub(super) fn rc_preflight() -> Result<(), String> {
 pub(super) fn validate() -> Result<(), String> {
     fmt()?;
     clippy()?;
-    bench_check()?;
     nextest()?;
     doc_test()?;
     doc()
@@ -78,21 +79,48 @@ pub(super) fn nextest() -> Result<(), String> {
 }
 
 fn run_test_matrix(runner: &[&str]) -> Result<(), String> {
-    for feature in [
-        None,
-        Some("parity-openslide"),
-        #[cfg(target_os = "macos")]
-        Some("parity-metal"),
-    ] {
+    let mut args = runner.to_vec();
+    args.extend([
+        "--locked",
+        "--lib",
+        "--tests",
+        "-p",
+        "wsi-rs",
+        "-p",
+        "wsi-rs-test-support",
+    ]);
+    run_cargo(&args)?;
+
+    // OpenSlide only adds oracle tests. Real-slide comparisons belong to
+    // parity-corpus-test and conformance-test, where their inputs are required.
+    let mut args = runner.to_vec();
+    args.extend([
+        "--locked",
+        "-p",
+        "wsi-rs",
+        "--test",
+        "support_unit",
+        "--features",
+        "parity-openslide",
+        "openslide_oracle_",
+    ]);
+    run_cargo(&args)?;
+
+    // Metal changes production library paths, so retain the library suite
+    // under that configuration, without repeating unrelated integration tests.
+    #[cfg(target_os = "macos")]
+    {
         let mut args = runner.to_vec();
-        args.extend(["--locked", "--lib", "--tests", "-p", "wsi-rs"]);
-        if let Some(feature) = feature {
-            args.extend(["--features", feature]);
-        } else {
-            // Shared corpus and OpenSlide tests belong to their owning crate.
-            // They have no reader feature variants and only need to run once.
-            args.extend(["-p", "wsi-rs-test-support"]);
-        }
+        args.extend([
+            "--locked",
+            "-p",
+            "wsi-rs",
+            "--lib",
+            "--test",
+            "metal_surface_smoke",
+            "--features",
+            "parity-metal",
+        ]);
         run_cargo(&args)?;
     }
     Ok(())
@@ -173,6 +201,18 @@ const VENDOR_REFERENCE_RUN: CorpusRun = CorpusRun {
 };
 
 const CORPUS_RUNS: &[CorpusRun] = &[
+    CorpusRun {
+        target: &["--test", "color_regression"],
+        features: None,
+        tests: CorpusTests::Exact("public_brightfield_color_sanity_svs_ndpi_dicom"),
+        aliases: &["svs-001", "ndpi-001", "dicom-jp2k-001"],
+    },
+    CorpusRun {
+        target: &["--test", "color_regression"],
+        features: Some("parity-openslide"),
+        tests: CorpusTests::Exact("svs_and_ndpi_overview_color_matches_openslide"),
+        aliases: &["svs-001", "ndpi-001"],
+    },
     CorpusRun {
         target: &["--test", "argos_huron"],
         features: None,
@@ -761,6 +801,18 @@ fn coverage_with_corpus(include_corpus: bool) -> Result<(), String> {
 
 pub(super) fn package() -> Result<(), String> {
     ensure_clean_worktree()?;
+    let manifest =
+        fs::read_to_string("Cargo.toml").map_err(|err| format!("read Cargo.toml: {err}"))?;
+    let manifest: toml::Value =
+        toml::from_str(&manifest).map_err(|err| format!("parse Cargo.toml: {err}"))?;
+    if manifest
+        .get("package")
+        .and_then(|package| package.get("publish"))
+        == Some(&toml::Value::Boolean(false))
+    {
+        eprintln!("GitHub-only release: verify the source build; registry publication is disabled");
+        return run_cargo(&["build", "--locked", "--lib", "-p", "wsi-rs"]);
+    }
     run_cargo(&["package", "--locked"])?;
     run_cargo(&["publish", "--dry-run", "--locked"])
 }

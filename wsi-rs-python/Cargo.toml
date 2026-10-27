@@ -1,0 +1,30 @@
+[package]
+name = "wsi-rs-python"
+version = "0.8.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version = "1.99.0"
+description = "Read-only Python bindings for whole-slide metadata and compressed tiles"
+publish = false
+
+[lib]
+name = "wsi_rs_python"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[features]
+default = []
+python = ["dep:pyo3", "dep:pyo3-build-config"]
+extension-module = ["python", "pyo3/extension-module"]
+
+[dependencies]
+wsi-rs = { path = ".." }
+pyo3 = { version = "0.30.1", features = ["abi3-py310"], optional = true }
+
+[build-dependencies]
+pyo3-build-config = { version = "0.30.1", optional = true }
+
+[lints]
+workspace = true

@@ -1,6 +1,8 @@
 [package]
 name = "wsi-rs"
-version = "0.8.0"
+version = "0.8.1"
+# GitHub source release; fixed codec dependencies are pinned below.
+publish = false
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "wsi-rs whole-slide image reader"
@@ -64,16 +66,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 tempfile = "3"
-j2k-jpeg = "0.12.0"
-j2k-core = "0.12.0"
-j2k-tilecodec = "0.12.0"
-zstd = "0.13"
-j2k = "0.12.0"
+j2k-jpeg = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142" }
+j2k-core = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142" }
+j2k-tilecodec = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142" }
+zstd = "0.14.3"
+j2k = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142" }
 jxr = "0.3.1"
-j2k-metal = { version = "0.12.0", optional = true }
-j2k-metal-support = { version = "0.12.0", optional = true }
-j2k-cuda = { version = "0.12.0", optional = true, default-features = false }
-j2k-cuda-runtime = { version = "0.12.0", optional = true }
+j2k-metal = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142", optional = true }
+j2k-metal-support = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142", optional = true }
+j2k-cuda = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142", optional = true, default-features = false }
+j2k-cuda-runtime = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142", optional = true }
 objc2 = { version = "=0.6.4", optional = true, default-features = false, features = ["std"] }
 objc2-metal = { version = "=0.3.2", optional = true, default-features = false, features = [
     "std",
@@ -103,7 +105,6 @@ cfb = "0.14.0"
 sha2 = { version = "0.10", features = ["asm"] }
 
 [dev-dependencies]
-czi-rs = "0.1.0"
 flate2 = "1"
 weezl = "0.1.12"
 image = { version = "0.25", default-features = false, features = ["pnm"] }
@@ -111,7 +112,7 @@ jpeg-decoder = "0.3.2"
 jpeg-encoder = "0.6"
 tempfile = { workspace = true }
 toml = "0.8"
-j2k-native = "0.12.0"
+j2k-native = { git = "https://github.com/frames-sg/j2k", rev = "f4667dc9fc1da77f978ffb899ed674ce5c0c9142" }
 syn = { version = "2", features = ["full", "visit"] }
 wsi-rs-test-support = { path = "test-support" }
 
@@ -120,7 +121,7 @@ name = "svcache"
 path = "src/bin/svcache.rs"
 
 [workspace]
-members = [".", "perf-runner", "test-support", "xtask", "wsi-rs-openslide-shim"]
+members = [".", "perf-runner", "test-support", "xtask", "wsi-rs-openslide-shim", "wsi-rs-python"]
 resolver = "2"
 
 [workspace.package]
@@ -152,22 +153,3 @@ workspace = true
 [package.metadata.docs.rs]
 no-default-features = true
 features = []
-
-# J2K is consumed from its main branch until a release contains the TIFF LZW
-# decoder used for TIFF-flavored LZW (frames-sg/j2k main). Remove this section once
-# that release is on crates.io; crates.io rejects git dependencies.
-[patch.crates-io]
-j2k = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-codec-math = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-core = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-cuda = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-cuda-build-support = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-cuda-j2k-engine = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-cuda-runtime = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-jpeg = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-metal = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-metal-support = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-native = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-profile = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-tilecodec = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }
-j2k-types = { git = "https://github.com/frames-sg/j2k", rev = "4ca93a56f85634d9cf46c09db2c5955ec77b956b" }

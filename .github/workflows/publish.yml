@@ -19,6 +19,8 @@ env:
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    outputs:
+      registry_publish: ${{ steps.release-kind.outputs.registry_publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,11 +38,26 @@ jobs:
         run: cargo xtask deps
       - name: Test release policy behavior
         run: scripts/publish-crate-test.sh
+      - name: Determine release destination
+        id: release-kind
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("Cargo.toml", "rb") as handle:
+              registry_publish = tomllib.load(handle)["package"].get("publish") is not False
+          with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
+              handle.write(f"registry_publish={str(registry_publish).lower()}\n")
+          PY
+      - name: Validate release identity
+        run: scripts/publish-crate.sh --verify
       - name: Validate release identity and package
+        if: steps.release-kind.outputs.registry_publish == 'true'
         run: scripts/publish-crate.sh --dry-run
 
   publish-wsi-rs:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && needs.preflight.outputs.registry_publish == 'true'
     needs: preflight
     runs-on: ubuntu-latest
     environment: crates-io

@@ -1,6 +1,174 @@
 
 # cargo-vet audits file
 
+[[audits.j2k]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance, focusing on batch admission, retained workspaces, decode/output contracts and lossy-candidate reuse. The new shared worker cache uses exclusive try_lock ownership, discards poisoned workspaces, and caps retention at 256 MiB; concurrent calls use per-call workers. Host-memory queries and Linux cgroup reads only size admission and retain the checked per-request allocation budgets. Lossy candidate reuse keeps owned state and releases it before retrying a memory-constrained validation decode. No new unsafe code, network access, subprocess, or filesystem writes. Codec implementations and optional adapters have separate acceptance records."
+
+[[audits.j2k]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-codec-math]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published 0.12.0 to 0.13.0 source and manifest delta against the existing acceptance. New reversible midpoint reconstruction delegates to the existing bounded bit-plane derivation. JPEG canonical Huffman derivation remains capacity- and code-width-checked after conversion to const loops. New lossless predictors use bounded i32 intermediates and intentional modulo-u16 differences; seed precision is validated and the category-16 special case avoids an oversized shift. No build script or new runtime capabilities."
+
+[[audits.j2k-codec-math]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance. Adds BatchLayout and a physical-memory query. The new unsafe OS calls use initialized, correctly sized output structures, check return values, reject nonpositive results, and check page-count multiplication. Reads system memory information only; no network, subprocess, or filesystem writes. Container limits are explicitly outside this helper and are handled separately by the facade."
+
+[[audits.j2k-core]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-cuda]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published adapter delta against the existing 0.12.0 acceptance, focusing on chunked color batches, rebased errors, region window geometry, completion ownership and uninitialized host readback. Color work is chunked at 32 images with aggregate reports and source/job index rebasing. Windowed bands union required regions with complete selected blocks before shifting output strides; bounded slice access validates code-block ranges. Download runs require one allocation with adjacent, sufficiently long ranges; all successful copies must cover the entire requested length before Vec::set_len. Completion uncertainty retains owned resources rather than freeing live GPU memory. This acceptance covers the adapter code only: j2k-cuda-j2k-engine 0.13.0 has a separately recorded shared-memory race violation, and CUDA execution was not repeated for this source review."
+
+[[audits.j2k-cuda]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-cuda-build-support]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance. The build helper adds the packaged JPEG lossless source to rerun inputs and factors the existing cargo-oxide command into a constructor. It now scopes CARGO_TARGET_DIR to the staged project under OUT_DIR while retaining toolchain and wrapper environment removal. No new downloaded executable, command interpolation, or runtime capability."
+
+[[audits.j2k-cuda-build-support]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-cuda-j2k-engine]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.1@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "Reviewed the 0.12.0-to-pinned-source delta: host/device ABI layouts, bounded IDWT band windows, signed sample stores, DWT origin validation, pooled quantization ranges, chunked HT encode budgets, and packet-header scratch ownership. Kernel geometry remains bounded by validated host requests; shared tag-tree arrays fit the compile-time 48 KiB arena, serial fallback initializes its disjoint arrays, header bit buffers cap writes at 256 bits, and payload/header capacities remain checked. The maintenance branch is the published 0.13.0 tag plus PR #290's fix and tests, with the fixed engine version set to 0.13.1 and its adapter requirement updated. Eligibility and overflow now have one scratch slot per lane, a barrier, and a single thread reducing shared flags; no added allocations or barriers. The original fix passed all six packetization tests with required CUDA/PTX, zero memcheck errors, and zero INFO-level racecheck hazards on RTX 4070 SUPER (PR #290, GPU validation run 40442627185). That hardware result covers the identical fixed packetizer code; the backport's WSI integration is validated separately. The published registry 0.13.0 remains rejected by its exact-version violation. This source review does not claim exhaustive codec conformance or validation of all GPU models."
+
+[[audits.j2k-cuda-j2k-engine]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+violation = "=0.13.0"
+notes = "Published 0.13.0 adds write/write races in src/cuda_oxide_j2k_encode/simt/src/parallel_header.rs:187-190 and 337. Multiple threads write FLAG_SERIAL or FLAG_ANY_DATA in the same shared scratch.flags slots; store_u32 calls simt_store, which is an ordinary raw-pointer assignment in j2k-cuda-build-support/src/cuda_oxide_simt_prelude.rs. The following sync_threads barrier orders later reads but does not order the conflicting writes. The ANY_DATA race is reached by ordinary packets with coded blocks in multiple lanes, even though every writer stores 1. CUDA data races violate the memory model (https://docs.nvidia.com/cuda/archive/13.2.2/cuda-programming-guide/05-appendices/cuda-cpp-memory-model.html). Require atomic flag updates or disjoint per-thread flags reduced by one thread, then a CUDA racecheck regression before accepting a fixed release. Reproduced on an RTX 4070 SUPER with Compute Sanitizer 2026.1.1.0: the existing four-block native/CUDA byte comparison passed, but racecheck with --racecheck-detect-level info --print-level info reported 12 WAW hazards at the same packetizer write instruction and exited 99. The default warning level reported no hazards. These are identical-value flag writes; output corruption or memory disclosure was not demonstrated. A local unpublished J2K fix uses disjoint per-thread scratch slots and thread-0 reduction for eligibility and overflow flags. With required CUDA runtime and PTX generation, all six packetization tests, including expanded warp/chunk-boundary and overflow/fallback cases, passed memcheck with zero errors and INFO-level racecheck with zero hazards on the same GPU. The published 0.13.0 package remains unchanged, so this exact-version violation remains. Other engine source changes are not certified by this record."
+
+[[audits.j2k-cuda-runtime]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance and the surrounding external-buffer ownership contract. Adds lifetime-bound mutable destination and sub-range views. Empty ranges, checked offset/length addition, allocation bounds, and pointer addition are validated; the sub-view borrows its parent exclusively and keeps the context alive. The owned destination view borrows the existing live cuMemAlloc allocation. No new raw-pointer constructor or dynamic-library search behavior. CUDA hardware execution was not repeated for this source review."
+
+[[audits.j2k-cuda-runtime]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-jpeg]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance, focusing on variable-width Huffman tables, cache/allocation ownership, encoder spare-capacity writes and NEON bounds. Raw lookup pointers retain their table lifetime and are indexed by a bounded 15-bit peek shifted by the matching construction metadata. Canonical tables validate counts and over-subscribed codes before allocation. The speculative entropy writer requires 512 bytes of both physical spare capacity and logical budget; its maximum stuffed output plus speculative word is below that bound. Plane conversion checks dimensions/capacity, writes logical pixels and padding before set_len, and handles short NEON tails within fixed arrays. No new runtime filesystem, network or subprocess access. This source acceptance is not a claim of exhaustive JPEG conformance or testing every architecture."
+
+[[audits.j2k-jpeg]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-metal]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance, focusing on shared heaps, direct destinations, payload staging, zero-fill coverage and host-visible readback. Heap reuse retains Metal resource ownership and hazard tracking and respects device/host allocation caps. New direct destination routes validate layout, format, offsets and dense group geometry; their external buffer contracts remain explicit. HT uncovered-region and band-cell plans validate job extents and provide initialization for skipped coefficient cells. Borrowed encoded output waits for its sole writer command buffer before returning bytes tied to the owning Tier-1 result; typed staging goes through the separately reviewed checked buffer API. No new runtime filesystem, network or subprocess access. Hardware-wide conformance and CUDA behavior are outside this acceptance."
+
+[[audits.j2k-metal]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-metal-support]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance, including the shared typed-range validator. New heap allocations retain the device/host cap, use shared storage with hazard tracking, and report nil allocation failures. The new explicitly unsafe mutable-slice callback checks size, bounds, alignment, visibility and the GpuAbi contract; exclusive CPU/GPU access remains the caller obligation and the borrowed slice cannot escape through the callback result. No new runtime filesystem, network, or subprocess access."
+
+[[audits.j2k-metal-support]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance, focusing on parser/entropy boundaries, decode allocations, native wavelet extraction, parallel storage and geometry changes. HT cleanup suffix lengths are validated before constructing the MEL/reverse readers; table indices and input slices remain bounded. New wavelet selections validate tile/component/resolution indices and charge retained output plus active decoder storage. Large geometry and reusable workspaces use checked size helpers and fallible capped allocation. Parallel reconstruction uses owned or disjoint safe Rust slices. The crate continues to forbid unsafe code and adds no runtime filesystem/network/process access. This source review does not claim exhaustive codec conformance, numerical accuracy for every new encode mode, or absence of resource-exhaustion inputs."
+
+[[audits.j2k-native]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-profile]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published 0.12.0 and 0.13.0 source/manifest delta. Library runtime behavior is unchanged; source differences are test-only String spellings and a std feature guard around a test. Release metadata advances without adding dependencies, unsafe operations, build behavior, or runtime capabilities."
+
+[[audits.j2k-profile]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-tilecodec]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance. TIFF LZW uses weezl’s TIFF code-width switching rather than standard LZW; the existing output-plus-one scratch limit and decoded-length validation remain intact. Zstandard advances to 0.14.3, reviewed separately. Other decoder implementations and the no-unsafe policy are unchanged."
+
+[[audits.j2k-tilecodec]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
+[[audits.j2k-types]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.13.0"
+notes = "Reviewed the exact published delta against the existing 0.12.0 acceptance. Adds owned wavelet metadata, signed grayscale metadata, and origin-aware encode geometry. New subband/grid arithmetic widens to u64, validates shift depth and nonzero span, and checks narrowing conversions. Default accelerator hooks decline unsupported origin phases. The crate remains no_std with alloc; no unsafe code, build script, or runtime I/O is added."
+
+[[audits.j2k-types]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.0 -> 0.13.0@git:f4667dc9fc1da77f978ffb899ed674ce5c0c9142"
+notes = "The pinned maintenance revision is based on the published 0.13.0 tag. Runtime source is unchanged from that tag. The maintenance branch changes only the separately reviewed CUDA engine flag fix, its tests, and the engine version/dependency requirement; other package manifests are unchanged."
+
 [[audits.jxr]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
@@ -115,8 +283,74 @@ criteria = "safe-to-deploy"
 delta = "0.3.0 -> 0.3.1"
 notes = "Reviewed the exact published 0.3.0 and 0.3.1 package contents; the published source matches VCS commit c296c11 and still forbids unsafe code, with no new dependencies, build script, or runtime filesystem, network, subprocess or environment access. Reviewed the cached entropy bit reader (cache never exceeds the remaining packet bits; reads past the end are zero-filled and bounded), compile-time run-prefix tables, per-tile coefficient windows (split with checked bounds, overruns return errors, and a window must be fully written before it is accepted), four-lane transform and overlap kernels (wrapping fast paths only after a proven magnitude bound, otherwise the checked scalar path), and row-parallel packing behind existing plane validation. Request limits in prepare are unchanged. The release passed the T.834/T.835 CPU comparison on 517 in-scope cases and 15-minute runs of both CPU fuzz targets without failure; this is a source review, not a claim of exhaustive conformance."
 
+[[audits.portable-atomic]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "1.15.0"
+notes = "Reviewed the published manifest, build/version detection, target selection, core-atomic delegation and lock-based 64-bit fallback, including atomic chunk accesses, sequence validation and ordering fences. Build-time process execution is limited to the configured Rust compiler/wrapper; there is no runtime network or filesystem write. PyO3 requests this dependency only on targets without native 64-bit atomics, so the current 64-bit desktop builds do not execute its fallback. Acceptance covers the default-feature integration; optional unsafe single-core/privileged assumptions are not enabled. This review does not claim hardware validation of every architecture-specific assembly backend."
+
+[[audits.pyo3]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.30.1"
+notes = "Reviewed the published manifest/build script and the ownership boundaries exercised by the binding: Bound/Py lifetimes and reference release, frozen-class access, copied PyBytes, Python detach/reattach guards, and callback error/panic conversion. Rust panics are caught before crossing the C ABI; detach requires Ungil and an RAII guard restores interpreter attachment on unwind. Python-owned byte results copy the native slice rather than borrowing a slide buffer. Build-time interpreter configuration is delegated to the separately reviewed exact-version helper. Acceptance covers the current stable-ABI reader integration; it is not a sandbox for arbitrary Python code or a claim of exhaustive review of optional conversions and experimental APIs."
+
+[[audits.pyo3-build-config]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.30.1"
+notes = "Reviewed the published manifest and configuration implementation, including interpreter discovery, config serialization, ABI/version selection, environment handling and linker output. Build helpers intentionally read Cargo/PYO3 and virtual-environment configuration, run the selected Python interpreter with packaged scripts through stdin, inspect sysconfig data and invoke the configured RUSTC with --version. Commands use argument APIs rather than shell interpolation; no network fetch or hidden runtime action was found. Cross-compilation/config-file paths are build inputs, not slide inputs. Environment mutation is confined to documented build-script helpers."
+
+[[audits.pyo3-ffi]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.30.1"
+notes = "Reviewed the published manifest, build-time version/ABI guards and C-ABI boundaries used by the binding, including object layout gating, integer widths, bytes, reference ownership and interpreter attach/detach calls. APIs requiring version-specific structures are conditionally compiled; stable-ABI configuration is forwarded by pyo3-build-config. Raw pointers and extern calls remain explicitly unsafe and rely on the linked interpreter contract. Build scripts emit link/configuration metadata and reject unsupported combinations unless a caller deliberately sets an unsafe override; none is enabled here. Acceptance is for the abi3-py310 integration, not independent verification of every interpreter implementation."
+
+[[audits.pyo3-macros]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.30.1"
+notes = "Reviewed the entire published macro entry-point source and manifest. Attribute and derive inputs are parsed with syn and delegated to the exact-version pyo3-macros-backend; invalid inputs become compile_error tokens. No build script, unsafe execution, filesystem, network, environment or subprocess access is present in this entry-point crate. Generated runtime wrappers are reviewed with the backend and PyO3 library."
+
+[[audits.pyo3-macros-backend]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.30.1"
+notes = "Reviewed the published manifest, build script, method/function wrapper generation and class ownership/threading assertions for the binding integration. Generated calls pass through PyO3 trampolines and typed extraction/return conversion; normal classes assert Send/Sync, while unsendable classes use their explicit thread-checking policy. The build script reads only PYO3_WIP_NO_STD and emits a cfg. Macro execution constructs Rust tokens rather than accessing slide inputs, executing commands or fetching code. Acceptance covers macros used by the current frozen-class, stable-ABI binding, without claiming exhaustive validation of optional async/introspection features."
+
 [[audits.sha2-asm]]
 who = "Codex-assisted source review"
 criteria = "safe-to-deploy"
 version = "0.6.4"
 notes = "Reviewed the published MIT package manifest, build.rs, Rust facade, and macOS/aarch64 assembly selected by its build script for this project's target-restricted use. The build script reads Cargo target architecture/vendor and invokes the existing cc dependency on packaged assembly; no runtime filesystem, network or subprocess access is present. The selected assembly reads a fixed 32-byte state and 64-byte input block, uses a bounded 64-byte stack frame, preserves the required callee-saved registers, and writes only the state. wsi-rs does not call this facade directly: enabling sha2 0.10.9's asm feature on macOS/aarch64 selects sha2's own CPU-feature-guarded ARM intrinsics with its software fallback. Independent hash vectors across padding/file boundaries pass in accelerated and forced-software configurations. Other target configurations retain the previous sha2 feature set. This acceptance is for the reviewed integration, not a claim of formal cryptographic verification or testing every assembly target."
+
+[[audits.syn]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "2.0.119 -> 3.0.9"
+notes = "Reviewed the published manifest and parser delta against the existing syn 2.0.119 acceptance, with particular attention to token cursor operations, new syntax parsing, error ranges, and generated visitor changes. No dependency or build script is added. The new raw cursor advance only follows a matched punctuation entry; prev_span retains its start-of-buffer guard. Other changes represent Rust syntax as owned AST values and update parse/print/visit code. No filesystem, network, subprocess, or environment access is added. This compiler-input parser review is not a claim of exhaustive Rust grammar conformance."
+
+[[audits.target-lexicon]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+version = "0.13.5"
+notes = "Reviewed the published manifest, target-triple parser, data model, and build script. Runtime parsing uses safe Rust over caller-provided strings and returns structured errors for unknown fields; no unsafe code or runtime I/O was found. The build script parses Cargo TARGET, asks the configured RUSTC for its version with a fixed argument, and writes generated host.rs under OUT_DIR. It does not download code or execute a shell. The Apache-2.0 WITH LLVM-exception license is allowed by repository policy."
+
+[[audits.zstd]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "0.13.3 -> 0.14.3"
+notes = "Reviewed the published delta against the existing 0.13.3 acceptance, focusing on context and dictionary lifetimes, bounded output allocation, reader/writer state, and error handling. Borrowed contexts reset their sessions before reuse; prepared dictionary references now outlive their contexts. Bulk decompression checks the combined frame size against the caller cap, and streaming preallocation is capped. New file-compression helpers read only an explicitly supplied path. No hidden network or subprocess access. The low-level wrapper and bundled C package are accepted separately."
+
+[[audits.zstd-safe]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "7.2.4 -> 8.2.0"
+notes = "Reviewed the published wrapper delta against the existing 7.2.4 acceptance: streaming poison/reset state, dictionary borrows, successful-output commits, capacity checks, seekable offset clamping, callback unwind containment, context cloning, and optional Rust allocator ownership. Failed C operations restore buffer positions before Drop can commit output; write counts are checked against capacity. Unsafe block APIs become explicitly unsafe. Allocator headers use checked size/alignment, handle allocation failure and free(NULL), and are paired on release. No runtime network or subprocess access. This is a source review of the integration, not an independent proof of the Zstandard C implementation."
+
+[[audits.zstd-sys]]
+who = "Codex-assisted source review"
+criteria = "safe-to-deploy"
+delta = "2.0.16+zstd.1.5.7 -> 2.1.2+zstd.1.5.7"
+notes = "Reviewed the published manifest, build script, binding, and wasm-shim delta against the existing acceptance. Bundled C/H codec sources remain Zstandard 1.5.7 and are unchanged. The default build still compiles packaged sources through cc; optional CMake builds only the selected packaged library and contrib sources. No source downloads are introduced. Assembly selection now follows the target architecture, and symbol visibility changes require an explicit build environment override. Wasm allocation now checks multiplication, addition, Layout, NULL allocation and free(NULL); raw-pointer shims become explicitly unsafe. The BSD-3-Clause license is allowed by repository policy."
