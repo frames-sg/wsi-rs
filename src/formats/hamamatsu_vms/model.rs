@@ -26,6 +26,14 @@ pub(super) struct VmsLevel {
 
 pub(super) struct VmsJpeg {
     pub(super) path: PathBuf,
+    /// `path`, shared by every tile location in this file.
+    pub(super) location_path: Arc<Path>,
+    /// Decoder parameters shared by every tile of this file.
+    pub(super) codec: EncodedCodec,
+    /// Standalone header of each tile shape (interior, right edge, bottom
+    /// edge, corner): the file header with SOF set to the tile size and the
+    /// restart interval removed. Built on first use and shared by tiles.
+    pub(super) tile_prefixes: [OnceLock<Arc<[u8]>>; 4],
     /// Sequential cursor used only while extending the lazy restart-marker index.
     pub(super) file: Mutex<File>,
     /// Positional payload reads stay independent so warm-index readers can run concurrently.

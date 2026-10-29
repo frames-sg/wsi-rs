@@ -11,6 +11,7 @@ mod container_cases;
 mod error_cases;
 mod fixtures;
 mod generated;
+mod location_cases;
 mod metadata_cases;
 mod subblock_cache;
 mod tile_cases;

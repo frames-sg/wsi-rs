@@ -1,3 +1,4 @@
+use super::tiled_ifd::{is_lossless_tiff_codec, uncompressed_raw_tile};
 use super::*;
 use crate::core::registry::cairo_subtile_surface_u8;
 
@@ -134,7 +135,84 @@ impl TiffPixelReader {
         subtile.map_err(|err| tile_error(err.to_string()))
     }
 
-    fn subtile_entry(&self, req: &TileRequest) -> Result<&TileEntry, WsiError> {
+    /// Raw passthrough of a Ventana reduced-level cell. JPEG stored tiles
+    /// return a lossless crop of the cell's share, which starts at the MCU
+    /// boundary at or before the share, or the whole stored JPEG when the
+    /// crop does not fit the lossless-crop limit; lossless stored tiles return the
+    /// cell's samples as `Compression::None`; JPEG XR and J2K stored tiles
+    /// return the whole stored codestream. Where the output is larger than
+    /// the cell, [`RawCompressedTile::tile_region`] locates the cell in it.
+    pub(super) fn read_tiled_ifd_raw_subtile(
+        &self,
+        req: &TileRequest,
+        ifd_id: IfdId,
+        compression: Compression,
+        jpeg_tables: Option<&[u8]>,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let unit = match self.tiff_tile_location(req)? {
+            TileLocation::Stored(stored) => match stored.units() {
+                [unit] => unit.clone(),
+                _ => {
+                    return Err(WsiError::Unsupported {
+                        reason: "Ventana subtiles of planar stored tiles cannot be passed \
+                                 through; read their byte ranges through tile_location"
+                            .into(),
+                    })
+                }
+            },
+            TileLocation::Absent => {
+                return Err(WsiError::Unsupported {
+                    reason: "the Ventana stored tile is empty; tile_location reports it as Absent"
+                        .into(),
+                })
+            }
+            other => {
+                return Err(WsiError::Unsupported {
+                    reason: format!(
+                        "Ventana subtile pixels are resampled from their stored tile, so no \
+                         stored bytes hold them ({other:?})"
+                    ),
+                })
+            }
+        };
+        if is_lossless_tiff_codec(compression) {
+            let raw = uncompressed_raw_tile(&self.read_tile_cpu(req)?)?;
+            self.check_raw_output_limit(raw.data().len(), "uncompressed raw tile")?;
+            return Ok(raw);
+        }
+        if compression == Compression::Jpeg {
+            return self.tiff_jpeg_units_raw_tile(
+                ifd_id,
+                std::slice::from_ref(&unit),
+                unit.source_region(),
+                jpeg_tables,
+            );
+        }
+        if !matches!(
+            compression,
+            Compression::Jp2kRgb | Compression::Jp2kYcbcr | Compression::JpegXr
+        ) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "{compression:?} Ventana stored tiles cannot be passed through; \
+                     tile_location reports the stored tile with the subtile's source region"
+                ),
+            });
+        }
+        let data = self.read_single_segment(&unit)?;
+        let (stored_width, stored_height) = unit.stored_size();
+        let codec = unit.codec();
+        Ok(RawCompressedTile::builder(compression)
+            .dimensions(stored_width, stored_height)
+            .bits_allocated(codec.bits_per_sample())
+            .samples_per_pixel(codec.samples_per_pixel())
+            .photometric_interpretation(codec.photometric_interpretation())
+            .tile_region(unit.source_region())
+            .data(data)
+            .build()?)
+    }
+
+    pub(super) fn subtile_entry(&self, req: &TileRequest) -> Result<&TileEntry, WsiError> {
         let (_, _, level) = self
             .layout
             .dataset
@@ -152,7 +230,7 @@ impl TiffPixelReader {
         })
     }
 
-    fn stored_tile_geometry(&self, ifd_id: IfdId) -> Result<StoredTileGeometry, String> {
+    pub(super) fn stored_tile_geometry(&self, ifd_id: IfdId) -> Result<StoredTileGeometry, String> {
         let read_u64 = |tag, name| {
             self.container
                 .get_u64(ifd_id, tag)
@@ -183,11 +261,11 @@ impl TiffPixelReader {
     }
 }
 
-struct StoredTileGeometry {
-    width: u64,
-    height: u64,
-    tile_width: u32,
-    tile_height: u32,
-    tiles_across: u64,
-    tiles_down: u64,
+pub(super) struct StoredTileGeometry {
+    pub(super) width: u64,
+    pub(super) height: u64,
+    pub(super) tile_width: u32,
+    pub(super) tile_height: u32,
+    pub(super) tiles_across: u64,
+    pub(super) tiles_down: u64,
 }

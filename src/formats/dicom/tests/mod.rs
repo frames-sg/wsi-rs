@@ -39,6 +39,7 @@ mod frame_io;
 mod frame_lifecycle;
 mod frame_offsets;
 mod image_cache;
+mod locations;
 mod manifest_building;
 mod metadata_parsing;
 mod preflight_levels;

@@ -74,6 +74,15 @@ impl ManagedSlideReader for ConservativeManagedReader {
         Ok(self.encoded_unit_bytes)
     }
 
+    /// Raw reads reserve the larger of one encoded unit and the reader's
+    /// [`SlideReader::raw_compressed_tile_reservation_hint`], such as the
+    /// working set of a lossless JPEG crop.
+    fn raw_tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(self
+            .encoded_unit_bytes
+            .max(self.inner.raw_compressed_tile_reservation_hint(req)?))
+    }
+
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
         Ok(if !reqs.is_empty() {
             self.encoded_unit_bytes

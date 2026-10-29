@@ -20,8 +20,8 @@ const MIB: u64 = 1024 * 1024;
 /// Defaults are 128 MiB aggregate metadata, 16 MiB per metadata value,
 /// 128 MiB each for indexes, encoded units, and decoded outputs, 33,554,432
 /// pixels/128 MiB RGBA per region, 384 MiB transient work per operation,
-/// 512 MiB in flight per slide, and a 256 MiB batch-chunk target. Every
-/// `with_*` builder rejects zero; smaller values are useful at service trust
+/// 512 MiB in flight per slide, a 256 MiB batch-chunk target, and a 256 MiB
+/// lossless JPEG crop working set. Every `with_*` builder rejects zero; smaller values are useful at service trust
 /// boundaries. Batch limits preserve order and cardinality by chunking, while
 /// a single oversized tile, associated image, or region returns
 /// [`WsiError::ResourceLimit`].
@@ -38,6 +38,7 @@ pub struct SlideLimits {
     operation_transient_bytes: u64,
     slide_transient_bytes: u64,
     batch_chunk_bytes: u64,
+    lossless_crop_bytes: u64,
 }
 
 impl SlideLimits {
@@ -53,6 +54,7 @@ impl SlideLimits {
             operation_transient_bytes: 384 * MIB,
             slide_transient_bytes: 512 * MIB,
             batch_chunk_bytes: 256 * MIB,
+            lossless_crop_bytes: 256 * MIB,
         }
     }
 
@@ -85,6 +87,19 @@ impl SlideLimits {
     }
     pub const fn batch_chunk_bytes(self) -> u64 {
         self.batch_chunk_bytes
+    }
+    /// Working set of a raw read that crops a tile losslessly out of a larger
+    /// stored JPEG: the stored JPEG, its DCT coefficients (about 12 bytes per
+    /// pixel of a 4:4:4 JPEG, more for progressive ones) and the cropped
+    /// output. A crop that needs more returns the whole stored JPEG instead,
+    /// with [`crate::RawCompressedTile::tile_region`] locating the tile.
+    ///
+    /// Raw reads that may crop reserve this much transient work, so it must
+    /// not exceed [`Self::operation_transient_bytes`]; when it does, they
+    /// return [`WsiError::ResourceLimit`]. It does not change
+    /// [`Self::encoded_unit_bytes`], which still caps every stored unit.
+    pub const fn lossless_crop_bytes(self) -> u64 {
+        self.lossless_crop_bytes
     }
 
     pub fn with_aggregate_metadata_bytes(mut self, value: u64) -> Result<Self, SlideLimitError> {
@@ -125,6 +140,11 @@ impl SlideLimits {
     }
     pub fn with_batch_chunk_bytes(mut self, value: u64) -> Result<Self, SlideLimitError> {
         self.batch_chunk_bytes = checked_limit("batch chunk", value)?;
+        Ok(self)
+    }
+    /// Sets [`Self::lossless_crop_bytes`].
+    pub fn with_lossless_crop_bytes(mut self, value: u64) -> Result<Self, SlideLimitError> {
+        self.lossless_crop_bytes = checked_limit("lossless crop", value)?;
         Ok(self)
     }
 

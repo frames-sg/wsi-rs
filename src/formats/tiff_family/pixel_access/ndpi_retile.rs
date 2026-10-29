@@ -1,4 +1,8 @@
 use super::*;
+use crate::decode::jpeg::lossless::{
+    append_quantized_block_window, assemble_baseline_dct_image, compare_dct_coding_profile,
+    dct_mcu_dimensions, DctProfileMismatch,
+};
 
 pub(super) struct NdpiDctRetileSegment {
     pub(super) native_row: u32,
@@ -9,26 +13,9 @@ pub(super) struct NdpiDctRetileSegment {
 
 /// MCU width and height in pixels: 8 times the largest component sampling factor.
 pub(super) fn ndpi_dct_mcu_dimensions(image: &JpegDctImage) -> Result<(u32, u32), WsiError> {
-    let max_h = image
-        .components
-        .iter()
-        .map(|component| component.h_samp)
-        .max()
-        .unwrap_or(1);
-    let max_v = image
-        .components
-        .iter()
-        .map(|component| component.v_samp)
-        .max()
-        .unwrap_or(1);
-    let mcu_width = u32::from(max_h) * 8;
-    let mcu_height = u32::from(max_v) * 8;
-    if mcu_width == 0 || mcu_height == 0 {
-        return Err(WsiError::Unsupported {
-            reason: "NDPI raw JPEG retile requires nonzero MCU dimensions".into(),
-        });
-    }
-    Ok((mcu_width, mcu_height))
+    dct_mcu_dimensions(image).ok_or_else(|| WsiError::Unsupported {
+        reason: "NDPI raw JPEG retile requires nonzero MCU dimensions".into(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -116,23 +103,27 @@ pub(super) fn build_ndpi_retiled_dct_image(
                             ),
                         });
                     }
-                    let start_block = block_y * component.block_cols + segment.crop_start_mcu * h;
-                    let block_count = segment.crop_mcus * h;
-                    let end_block = start_block.checked_add(block_count).ok_or_else(|| {
-                        WsiError::Unsupported {
-                            reason: "NDPI raw JPEG retile block range overflow".into(),
-                        }
-                    })?;
-                    let start = start_block as usize;
-                    let end = end_block as usize;
-                    if end > component.quantized_blocks.len() {
+                    let (Some(block_x), Some(block_count)) = (
+                        segment.crop_start_mcu.checked_mul(h),
+                        segment.crop_mcus.checked_mul(h),
+                    ) else {
                         return Err(WsiError::Unsupported {
-                            reason: format!(
-                                "NDPI raw JPEG retile crop exceeds component {component_idx} block grid"
-                            ),
+                            reason: "NDPI raw JPEG retile block range overflow".into(),
                         });
-                    }
-                    blocks.extend_from_slice(&component.quantized_blocks[start..end]);
+                    };
+                    append_quantized_block_window(
+                        component,
+                        block_x,
+                        block_y,
+                        block_count,
+                        1,
+                        blocks,
+                    )
+                    .map_err(|_| WsiError::Unsupported {
+                        reason: format!(
+                            "NDPI raw JPEG retile crop exceeds component {component_idx} block grid"
+                        ),
+                    })?;
                 }
                 let copied = blocks.len() - row_start_len;
                 let expected = (output_mcu_cols * h) as usize;
@@ -147,37 +138,7 @@ pub(super) fn build_ndpi_retiled_dct_image(
         }
     }
 
-    let components = first
-        .components
-        .iter()
-        .enumerate()
-        .map(|(idx, component)| JpegDctComponent {
-            component_index: idx,
-            width: content_width
-                .saturating_mul(u32::from(component.h_samp))
-                .div_ceil(mcu_width / 8),
-            height: content_height
-                .saturating_mul(u32::from(component.v_samp))
-                .div_ceil(mcu_height / 8),
-            h_samp: component.h_samp,
-            v_samp: component.v_samp,
-            block_cols: output_mcu_cols * u32::from(component.h_samp),
-            block_rows: output_mcu_rows * u32::from(component.v_samp),
-            quant_table: component.quant_table,
-            quantized_blocks: std::mem::take(&mut component_blocks[idx]),
-            dequantized_blocks: Vec::new(),
-        })
-        .collect();
-
-    Ok(JpegDctImage {
-        width: content_width,
-        height: content_height,
-        color_space: first.color_space,
-        coding_mode: JpegDctCodingMode::BaselineSequential,
-        scan_count: 1,
-        components,
-        restart_index: None,
-    })
+    assemble_baseline_dct_image(first, content_width, content_height, component_blocks)
 }
 
 pub(super) fn validate_ndpi_retile_segment(
@@ -189,29 +150,14 @@ pub(super) fn validate_ndpi_retile_segment(
             reason: "NDPI raw JPEG retile supports baseline sequential JPEG only".into(),
         });
     }
-    if candidate.color_space != reference.color_space
-        || candidate.components.len() != reference.components.len()
-    {
-        return Err(WsiError::Unsupported {
+    compare_dct_coding_profile(reference, candidate).map_err(|mismatch| match mismatch {
+        DctProfileMismatch::ColorProfile => WsiError::Unsupported {
             reason: "NDPI raw JPEG retile source segment color profile changed".into(),
-        });
-    }
-    for (idx, (expected, actual)) in reference
-        .components
-        .iter()
-        .zip(candidate.components.iter())
-        .enumerate()
-    {
-        if expected.h_samp != actual.h_samp
-            || expected.v_samp != actual.v_samp
-            || expected.quant_table != actual.quant_table
-        {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "NDPI raw JPEG retile source segment component {idx} coding profile changed"
-                ),
-            });
-        }
-    }
-    Ok(())
+        },
+        DctProfileMismatch::Component(idx) => WsiError::Unsupported {
+            reason: format!(
+                "NDPI raw JPEG retile source segment component {idx} coding profile changed"
+            ),
+        },
+    })
 }

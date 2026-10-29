@@ -94,3 +94,33 @@ fn czi_fuzz_seed_reaches_pixel_decoding() {
         .into_rgb8();
     assert_eq!(tile.data().as_u8(), Some(expected.as_raw().as_slice()));
 }
+
+#[test]
+fn czi_jpegxr_tile_location_is_the_subblock_stream_and_round_trips() {
+    let seed = include_bytes!("fixtures/jxr/rgb.czi");
+    let mut file = tempfile::Builder::new().suffix(".czi").tempfile().unwrap();
+    file.write_all(seed).unwrap();
+    let slide = Slide::open(file.path()).unwrap();
+    let req = wsi_rs::TileRequest::new(0usize, 0usize, 0, 0, 0);
+
+    let wsi_rs::TileLocation::Stored(stored) = slide.tile_location(&req).unwrap() else {
+        panic!("the CZI tile is stored")
+    };
+    let unit = stored.single_unit().expect("one subblock paints the tile");
+    assert_eq!(unit.codec().compression(), wsi_rs::Compression::JpegXr);
+    assert_eq!(unit.framing(), wsi_rs::StoredFraming::Standalone);
+    let [segment] = unit.segments() else {
+        panic!("a subblock data part is one byte range")
+    };
+    let bytes = &seed[segment.offset as usize..segment.end().unwrap() as usize];
+    assert_eq!(bytes, include_bytes!("fixtures/jxr/rgb.jxr"));
+
+    let raw = slide.read_raw_compressed_tile(&req).unwrap();
+    assert_eq!(unit.assemble([bytes]).unwrap(), raw.data());
+    assert_eq!(raw.compression(), wsi_rs::Compression::JpegXr);
+
+    let level = slide
+        .level_tile_locations(0usize, 0usize, 0, wsi_rs::PlaneSelection::default())
+        .unwrap();
+    assert_eq!(level.tiles.len(), 1);
+}

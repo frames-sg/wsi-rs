@@ -302,35 +302,7 @@ impl TiffPixelReader {
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>, WsiError> {
-        let mut out = vec![0_u8; expected_bytes];
-        let written = match compression {
-            Compression::Lzw => {
-                let mut pool = LzwPool::new();
-                LzwCodec::decompress_into(&mut pool, input, &mut out)
-                    .map_err(|error| codec_error("tiff-lzw", error))?
-            }
-            Compression::Deflate => {
-                let mut pool = DeflatePool::new();
-                DeflateCodec::decompress_into(&mut pool, input, &mut out)
-                    .map_err(|error| codec_error("tiff-deflate", error))?
-            }
-            Compression::Zstd => {
-                let mut pool = ZstdPool::new();
-                ZstdCodec::decompress_into(&mut pool, input, &mut out)
-                    .map_err(|error| codec_error("tiff-zstd", error))?
-            }
-            other => {
-                return Err(WsiError::UnsupportedFormat(format!(
-                    "compression {:?} is not a tilecodec payload",
-                    other
-                )));
-            }
-        };
-        if written != expected_bytes {
-            return Err(WsiError::UnsupportedFormat(format!(
-                "decoded TIFF payload produced {written} bytes for a {expected_bytes}-byte tile"
-            )));
-        }
+        let mut out = inflate_tiff_payload(compression, input, expected_bytes)?;
         self.apply_tiff_predictor(ifd_id, width, height, &mut out)?;
         Ok(out)
     }
@@ -513,4 +485,43 @@ impl TiffPixelReader {
             data,
         )
     }
+}
+
+/// The `expected_bytes` a TIFF LZW, Deflate or Zstandard payload inflates
+/// to, before any predictor is undone.
+pub(in super::super) fn inflate_tiff_payload(
+    compression: Compression,
+    input: &[u8],
+    expected_bytes: usize,
+) -> Result<Vec<u8>, WsiError> {
+    let mut out = vec![0_u8; expected_bytes];
+    let written = match compression {
+        Compression::Lzw => {
+            let mut pool = LzwPool::new();
+            LzwCodec::decompress_into(&mut pool, input, &mut out)
+                .map_err(|error| codec_error("tiff-lzw", error))?
+        }
+        Compression::Deflate => {
+            let mut pool = DeflatePool::new();
+            DeflateCodec::decompress_into(&mut pool, input, &mut out)
+                .map_err(|error| codec_error("tiff-deflate", error))?
+        }
+        Compression::Zstd => {
+            let mut pool = ZstdPool::new();
+            ZstdCodec::decompress_into(&mut pool, input, &mut out)
+                .map_err(|error| codec_error("tiff-zstd", error))?
+        }
+        other => {
+            return Err(WsiError::UnsupportedFormat(format!(
+                "compression {:?} is not a tilecodec payload",
+                other
+            )));
+        }
+    };
+    if written != expected_bytes {
+        return Err(WsiError::UnsupportedFormat(format!(
+            "decoded TIFF payload produced {written} bytes for a {expected_bytes}-byte tile"
+        )));
+    }
+    Ok(out)
 }

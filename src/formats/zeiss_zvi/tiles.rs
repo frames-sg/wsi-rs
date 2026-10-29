@@ -137,6 +137,11 @@ impl ZviSlide {
         w: u32,
         h: u32,
     ) -> Result<CpuTile, WsiError> {
+        let decompressed = self.inflate_plane(plane)?;
+        crop_decoded_zvi_plane(plane, &decompressed, x, y, w, h)
+    }
+
+    fn inflate_plane(&self, plane: &ZviPlane) -> Result<Vec<u8>, WsiError> {
         let compressed = self.read_plane_payload(plane)?;
         let expected_len =
             zvi_image_len(plane.width, plane.height, u64::from(plane.bytes_per_sample))?;
@@ -154,7 +159,47 @@ impl ZviSlide {
                 ),
             ));
         }
-        crop_decoded_zvi_plane(plane, &decompressed, x, y, w, h)
+        Ok(decompressed)
+    }
+
+    /// The little-endian sample bytes of a window of an uncompressed or zlib
+    /// plane, rows packed, as the plane stores them once inflated.
+    pub(super) fn plane_window_bytes(
+        &self,
+        plane: &ZviPlane,
+        window: RawReadWindow,
+    ) -> Result<Vec<u8>, WsiError> {
+        if window.x.saturating_add(window.width) > plane.width
+            || window.y.saturating_add(window.height) > plane.height
+        {
+            return Err(WsiError::DisplayConversion(
+                "ZVI plane window out of bounds".into(),
+            ));
+        }
+        let mut samples =
+            vec![0u8; zvi_image_len(window.width, window.height, window.bytes_per_sample)?];
+        match plane.compression {
+            ZviCompression::Raw => self.read_raw_rows(plane, window, &mut samples)?,
+            ZviCompression::Zlib => {
+                let inflated = self.inflate_plane(plane)?;
+                let row_bytes = zvi_image_len(window.width, 1, window.bytes_per_sample)?;
+                let stride = zvi_image_len(plane.width, 1, window.bytes_per_sample)?;
+                let left = zvi_image_len(window.x, 1, window.bytes_per_sample)?;
+                for (row, destination) in samples.chunks_exact_mut(row_bytes).enumerate() {
+                    let start = (window.y as usize + row) * stride + left;
+                    let source = inflated.get(start..start + row_bytes).ok_or_else(|| {
+                        WsiError::DisplayConversion("ZVI plane window out of bounds".into())
+                    })?;
+                    destination.copy_from_slice(source);
+                }
+            }
+            ZviCompression::Jpeg => {
+                return Err(WsiError::Unsupported {
+                    reason: "ZVI JPEG planes store no uncompressed samples".into(),
+                })
+            }
+        }
+        Ok(samples)
     }
 
     fn read_jpeg_plane_window(
@@ -177,7 +222,7 @@ impl ZviSlide {
         crop_interleaved_tile(&decoded, x, y, w, h)
     }
 
-    fn read_plane_payload(&self, plane: &ZviPlane) -> Result<Vec<u8>, WsiError> {
+    pub(super) fn read_plane_payload(&self, plane: &ZviPlane) -> Result<Vec<u8>, WsiError> {
         let mut compound = self.compound.lock().unwrap_or_else(|e| e.into_inner());
         let mut stream = compound.open_stream(&plane.stream_path)?;
         stream.seek(SeekFrom::Start(plane.payload_offset))?;

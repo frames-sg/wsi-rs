@@ -20,9 +20,11 @@ pub(super) struct CompressedTile {
     height: u32,
     codec: String,
     bits_allocated: u16,
+    significant_bits: Option<u16>,
     samples_per_pixel: u16,
     photometric_interpretation: &'static str,
     color_transform: &'static str,
+    tile_region: (u32, u32, u32, u32),
 }
 
 impl CompressedTile {
@@ -36,27 +38,39 @@ impl CompressedTile {
             (Compression::Jpeg, Photometric::YbrFull422) => "ycbcr",
             _ => "auto",
         };
-        let codec = match tile.compression() {
-            Compression::Jpeg => "jpeg".into(),
-            Compression::Jp2kRgb | Compression::Jp2kYcbcr => "jpeg2000".into(),
-            other => format!("{other:?}").to_lowercase(),
-        };
+        let region = tile.tile_region();
         Ok(Self {
             data: PyBytes::new(py, tile.data()).unbind(),
             coords,
             width: tile.width(),
             height: tile.height(),
-            codec,
+            codec: codec_name(tile.compression()),
             bits_allocated: tile.bits_allocated(),
+            significant_bits: tile.significant_bits(),
             samples_per_pixel: tile.samples_per_pixel(),
-            photometric_interpretation: match tile.photometric_interpretation() {
-                Photometric::Monochrome2 => "monochrome2",
-                Photometric::Rgb => "rgb",
-                Photometric::YbrFull422 => "ybr_full_422",
-                _ => "unknown",
-            },
+            photometric_interpretation: photometric_name(tile.photometric_interpretation()),
             color_transform,
+            tile_region: (region.x, region.y, region.width, region.height),
         })
+    }
+}
+
+/// Lower-case codec name shared by compressed tiles and tile locations.
+pub(super) fn codec_name(compression: Compression) -> String {
+    match compression {
+        Compression::Jpeg => "jpeg".into(),
+        Compression::Jp2kRgb | Compression::Jp2kYcbcr => "jpeg2000".into(),
+        other => format!("{other:?}").to_lowercase(),
+    }
+}
+
+pub(super) fn photometric_name(photometric: Photometric) -> &'static str {
+    match photometric {
+        Photometric::Monochrome1 => "monochrome1",
+        Photometric::Monochrome2 => "monochrome2",
+        Photometric::Rgb => "rgb",
+        Photometric::YbrFull422 => "ybr_full_422",
+        _ => "unknown",
     }
 }
 

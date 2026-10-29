@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use wsi_rs::{
     ColorSpace, Compression, CpuTile, CpuTileData, CpuTileLayout, DisplayWindow, LevelIdx,
-    RegionRequest, SampleType, SceneId, SeriesId, Slide, TileLayout, TileRequest,
+    RegionRequest, SampleType, SceneId, SeriesId, Slide, StoredFraming, TileLayout, TileLocation,
+    TileRequest,
 };
 
 const MATRIX: (u32, u32) = (40, 28);
@@ -200,5 +201,84 @@ fn twelve_bit_dicom_raw_frames_report_16_bits_allocated() {
         assert_eq!((raw.width(), raw.height()), (TILE, TILE), "{name}");
         assert!(raw.data().starts_with(&[0xFF, 0xD8]), "{name}: SOI");
         assert!(raw.data().ends_with(&[0xFF, 0xD9]), "{name}: EOI");
+    }
+}
+
+#[test]
+fn twelve_bit_dicom_frame_locations_name_the_raw_frame_bytes() {
+    for (name, samples_per_pixel) in FIXTURES {
+        let path = fixture_root().join(format!("{name}.dcm"));
+        let slide = Slide::open(&path).expect(name);
+        let file = std::fs::read(&path).expect(name);
+        let level = slide
+            .level_tile_locations(0usize, 0usize, 0u32, wsi_rs::PlaneSelection::default())
+            .expect(name);
+        assert_eq!((level.tiles_across, level.tiles_down), (3, 2), "{name}");
+        for tile in &level.tiles {
+            let TileLocation::Stored(stored) = &tile.location else {
+                panic!("{name}: tile ({}, {}) is stored", tile.col, tile.row);
+            };
+            let unit = stored.single_unit().expect("one frame per tile");
+            assert_eq!(unit.path(), path.as_path(), "{name}");
+            assert_eq!(unit.framing(), StoredFraming::Standalone, "{name}");
+            assert_eq!(unit.codec().compression(), Compression::Jpeg, "{name}");
+            assert_eq!(
+                unit.codec().samples_per_pixel(),
+                samples_per_pixel,
+                "{name}"
+            );
+            let segments = unit
+                .segments()
+                .iter()
+                .map(|range| {
+                    let start = range.offset as usize;
+                    assert_eq!(
+                        file[start - 8..start - 4],
+                        [0xFE, 0xFF, 0x00, 0xE0],
+                        "{name}: each segment is a fragment value after its Item header"
+                    );
+                    &file[start..start + range.length as usize]
+                })
+                .collect::<Vec<_>>();
+            // Several of these frames have odd lengths and a DICOM padding
+            // byte; locations leave it out exactly as raw reads trim it.
+            let assembled = unit.assemble(segments).expect(name);
+            let raw = slide
+                .read_raw_compressed_tile(&tile_request(tile.col, tile.row))
+                .expect(name);
+            assert_eq!(
+                assembled,
+                raw.data(),
+                "{name} tile ({}, {})",
+                tile.col,
+                tile.row
+            );
+        }
+    }
+}
+
+#[test]
+fn twelve_bit_dicom_edge_frames_locate_the_tile_and_state_significant_bits() {
+    for (name, _) in FIXTURES {
+        let slide = Slide::open(fixture_root().join(format!("{name}.dcm"))).expect(name);
+        for (col, row, region) in [
+            (0, 0, wsi_rs::PixelRect::new(0, 0, 16, 16)),
+            (2, 0, wsi_rs::PixelRect::new(0, 0, 8, 16)),
+            (0, 1, wsi_rs::PixelRect::new(0, 0, 16, 12)),
+            (2, 1, wsi_rs::PixelRect::new(0, 0, 8, 12)),
+        ] {
+            let request = tile_request(col, row);
+            let raw = slide.read_raw_compressed_tile(&request).expect(name);
+            assert_eq!((raw.width(), raw.height()), (TILE, TILE), "{name}");
+            assert_eq!(raw.tile_region(), region, "{name} tile ({col}, {row})");
+            assert_eq!(raw.significant_bits(), Some(12), "{name}");
+            let TileLocation::Stored(stored) = slide.tile_location(&request).expect(name) else {
+                panic!("{name}: tile ({col}, {row}) is stored");
+            };
+            assert_eq!(stored.tile_size(), (region.width, region.height), "{name}");
+            let codec = stored.single_unit().expect(name).codec();
+            assert_eq!(codec.bits_per_sample(), 16, "{name}");
+            assert_eq!(codec.significant_bits(), Some(12), "{name}");
+        }
     }
 }

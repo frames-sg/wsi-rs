@@ -711,6 +711,10 @@ pub enum Compression {
     /// DICOM run-length encoding (lossless).
     Rle,
     JpegXr,
+    /// A complete PNG file.
+    Png,
+    /// A complete BMP file.
+    Bmp,
     Other(u16),
 }
 
@@ -786,6 +790,9 @@ impl TileCodecKind {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum EncodedTilePhotometricInterpretation {
+    /// Grayscale with the minimum sample value displayed as white (DICOM
+    /// `MONOCHROME1`, TIFF `MinIsWhite`).
+    Monochrome1,
     Monochrome2,
     Rgb,
     YbrFull422,
@@ -800,8 +807,10 @@ pub struct RawCompressedTile {
     width: u32,
     height: u32,
     bits_allocated: u16,
+    significant_bits: Option<u16>,
     samples_per_pixel: u16,
     photometric_interpretation: EncodedTilePhotometricInterpretation,
+    tile_region: Option<PixelRect>,
     data: Vec<u8>,
 }
 
@@ -811,8 +820,10 @@ impl RawCompressedTile {
             compression,
             dimensions: None,
             bits_allocated: None,
+            significant_bits: None,
             samples_per_pixel: None,
             photometric_interpretation: None,
+            tile_region: None,
             data: None,
         }
     }
@@ -833,12 +844,32 @@ impl RawCompressedTile {
         self.bits_allocated
     }
 
+    /// The low bits of each `bits_allocated` sample that carry it, when
+    /// fewer (DICOM `BitsStored` 12 in 16-bit words); the high bits must be
+    /// ignored.
+    pub fn significant_bits(&self) -> Option<u16> {
+        self.significant_bits
+    }
+
     pub fn samples_per_pixel(&self) -> u16 {
         self.samples_per_pixel
     }
 
     pub fn photometric_interpretation(&self) -> EncodedTilePhotometricInterpretation {
         self.photometric_interpretation
+    }
+
+    /// The requested tile inside the encoded image. It is the whole image
+    /// unless the tile is part of a larger stored image: a tile cut
+    /// losslessly from a larger JPEG whose MCU grid does not start at the
+    /// tile origin (the image then starts at the previous MCU boundary), or
+    /// a whole stored JPEG 2000, JPEG XR or JPEG image returned unchanged,
+    /// such as a JPEG too large to crop within
+    /// [`crate::SlideLimits::lossless_crop_bytes`]. This rectangle locates
+    /// the tile in it.
+    pub fn tile_region(&self) -> PixelRect {
+        self.tile_region
+            .unwrap_or(PixelRect::new(0, 0, self.width, self.height))
     }
 
     pub fn data(&self) -> &[u8] {
@@ -857,8 +888,10 @@ pub struct RawCompressedTileBuilder {
     compression: Compression,
     dimensions: Option<(u32, u32)>,
     bits_allocated: Option<u16>,
+    significant_bits: Option<u16>,
     samples_per_pixel: Option<u16>,
     photometric_interpretation: Option<EncodedTilePhotometricInterpretation>,
+    tile_region: Option<PixelRect>,
     data: Option<Vec<u8>>,
 }
 
@@ -873,6 +906,12 @@ impl RawCompressedTileBuilder {
         self
     }
 
+    /// See [`RawCompressedTile::significant_bits`].
+    pub fn significant_bits(mut self, bits: u16) -> Self {
+        self.significant_bits = Some(bits);
+        self
+    }
+
     pub fn samples_per_pixel(mut self, samples_per_pixel: u16) -> Self {
         self.samples_per_pixel = Some(samples_per_pixel);
         self
@@ -883,6 +922,13 @@ impl RawCompressedTileBuilder {
         photometric_interpretation: EncodedTilePhotometricInterpretation,
     ) -> Self {
         self.photometric_interpretation = Some(photometric_interpretation);
+        self
+    }
+
+    /// Locates the requested tile inside a larger encoded image; see
+    /// [`RawCompressedTile::tile_region`].
+    pub fn tile_region(mut self, region: PixelRect) -> Self {
+        self.tile_region = Some(region);
         self
     }
 
@@ -918,14 +964,28 @@ impl RawCompressedTileBuilder {
         if data.is_empty() {
             return Err(RawCompressedTileBuildError::EmptyData);
         }
+        if self
+            .tile_region
+            .is_some_and(|region| !region.fits_within(width, height))
+        {
+            return Err(RawCompressedTileBuildError::InvalidTileRegion);
+        }
+        if self
+            .significant_bits
+            .is_some_and(|bits| bits == 0 || bits > bits_allocated)
+        {
+            return Err(RawCompressedTileBuildError::InvalidSignificantBits);
+        }
 
         Ok(RawCompressedTile {
             compression: self.compression,
             width,
             height,
             bits_allocated,
+            significant_bits: self.significant_bits,
             samples_per_pixel,
             photometric_interpretation,
+            tile_region: self.tile_region,
             data,
         })
     }
@@ -944,6 +1004,8 @@ pub enum RawCompressedTileBuildError {
     InvalidBitsAllocated,
     InvalidSamplesPerPixel,
     EmptyData,
+    InvalidTileRegion,
+    InvalidSignificantBits,
 }
 
 impl fmt::Display for RawCompressedTileBuildError {
@@ -960,6 +1022,12 @@ impl fmt::Display for RawCompressedTileBuildError {
             Self::InvalidBitsAllocated => "raw compressed tile bit depth must be positive",
             Self::InvalidSamplesPerPixel => "raw compressed tile sample count must be positive",
             Self::EmptyData => "raw compressed tile payload data must not be empty",
+            Self::InvalidTileRegion => {
+                "raw compressed tile region must be non-empty and inside the encoded image"
+            }
+            Self::InvalidSignificantBits => {
+                "raw compressed tile significant bits must be between 1 and the bit depth"
+            }
         };
         f.write_str(message)
     }

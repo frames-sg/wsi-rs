@@ -127,17 +127,6 @@ impl DicomTransferSyntax {
             Self::Jp2k { .. } => Compression::Jp2kRgb,
         }
     }
-
-    /// The compression of frames handed out as raw compressed tiles; only
-    /// JPEG and JPEG 2000 frames pass through.
-    pub(super) fn raw_compression(self, photometric_interpretation: &str) -> Option<Compression> {
-        match self {
-            Self::Jpeg(_) | Self::Jp2k { .. } => {
-                Some(self.source_compression(photometric_interpretation))
-            }
-            Self::Native { .. } | Self::Rle => None,
-        }
-    }
 }
 
 impl DicomJpegProcess {

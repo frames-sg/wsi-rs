@@ -123,6 +123,20 @@ fn jpeg_unknown_encoded_photometric_follows_tiff_photometric() {
     );
 }
 
+#[test]
+fn grayscale_jpeg_photometric_follows_tiff_min_is_white() {
+    let gray = |photometric| {
+        tiff_jpeg_encoded_photometric_interpretation(
+            photometric,
+            1,
+            JpegBitstreamColorHint::Unknown,
+        )
+        .unwrap()
+    };
+    assert_eq!(gray(0), EncodedTilePhotometricInterpretation::Monochrome1);
+    assert_eq!(gray(1), EncodedTilePhotometricInterpretation::Monochrome2);
+}
+
 // ── FullDecodeCache tests ─────────────────────────────────────
 
 #[test]
@@ -312,24 +326,26 @@ fn raw_compressed_tile_returns_standalone_ndpi_restart_jpeg() {
 }
 
 #[test]
-fn raw_compressed_tile_rejects_ndpi_restart_segments_that_cross_rows() {
+fn raw_compressed_tile_crops_ndpi_levels_whose_restart_segments_cross_rows() {
     let (reader, _) = build_test_ndpi_reader_for_strip_cache(130, 16, 2);
 
-    let err = reader
-        .read_raw_compressed_tile(&TileRequest {
-            scene: 0usize.into(),
-            series: 0usize.into(),
-            level: 1u32.into(),
-            plane: PlaneSelection::default().into(),
-            col: 0,
-            row: 0,
-        })
-        .unwrap_err();
+    for (col, width) in [(0, 128), (1, 2)] {
+        let req = TileRequest::new(0usize, 0usize, 1u32, col, 0);
+        let err = ndpi_restart_raw_error(&reader, &req);
+        assert!(
+            err.to_string().contains("align to image rows"),
+            "unexpected error: {err}"
+        );
 
-    assert!(
-        err.to_string().contains("align to image rows"),
-        "unexpected error: {err}"
-    );
+        // The restart interval cannot stand for the tile, so the raw tile is
+        // cropped losslessly out of the level JPEG its location reports.
+        let raw = reader.read_raw_compressed_tile(&req).unwrap();
+        assert_eq!(raw.compression(), Compression::Jpeg);
+        assert_eq!((raw.width(), raw.height()), (width, 16));
+        assert_eq!(raw.tile_region(), PixelRect::new(0, 0, width, 16));
+        let decoded = decode_raw_ndpi_tile(&raw);
+        assert!(decoded.iter().all(|&sample| sample < 16), "black fixture");
+    }
 }
 
 #[test]

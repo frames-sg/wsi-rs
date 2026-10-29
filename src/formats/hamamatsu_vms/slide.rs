@@ -10,12 +10,12 @@ pub(super) struct VmsReader {
     pub(super) slide: Arc<VmsSlide>,
 }
 
-struct ResolvedVmsTile<'a> {
-    level: &'a VmsLevel,
-    jpeg: &'a VmsJpeg,
-    tile_index: usize,
-    width: u32,
-    height: u32,
+pub(super) struct ResolvedVmsTile<'a> {
+    pub(super) level: &'a VmsLevel,
+    pub(super) jpeg: &'a VmsJpeg,
+    pub(super) tile_index: usize,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 impl SlideReader for VmsReader {
@@ -45,6 +45,14 @@ impl SlideReader for VmsReader {
             WsiError::TileRead { .. } | WsiError::Unsupported { .. } => error,
             other => WsiError::tile_read(req, other.to_string()),
         })
+    }
+
+    /// Full-resolution tiles are one restart interval each, located as a
+    /// `Prefixed` unit whose prefix is the file header with SOF set to the
+    /// tile size and the restart interval removed. DCT-scaled levels report
+    /// `NotAddressable(SyntheticLevel)`.
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.location(req)
     }
 
     fn read_raw_compressed_display_tile(
@@ -113,7 +121,7 @@ impl SlideReader for VmsReader {
 }
 
 impl VmsReader {
-    fn resolve_tile(&self, req: &TileRequest) -> Result<ResolvedVmsTile<'_>, WsiError> {
+    pub(super) fn resolve_tile(&self, req: &TileRequest) -> Result<ResolvedVmsTile<'_>, WsiError> {
         let (_, _, level_meta) = self.slide.dataset.level(req.scene, req.series, req.level)?;
         let level =
             self.slide
@@ -160,7 +168,7 @@ impl VmsReader {
         if tile.level.scale_denom != 1 {
             return Err(WsiError::Unsupported {
                 reason: format!(
-                    "VMS raw JPEG access requires a full-resolution physical tile; level {} is scaled by {}",
+                    "VMS raw JPEG access requires a full-resolution physical tile; level {} is scaled by {} at decode, so no stored bytes hold it (tile_location reports NotAddressable(SyntheticLevel))",
                     req.level.get(),
                     tile.level.scale_denom
                 ),

@@ -15,16 +15,74 @@
   16-bit, palette, CMYK and alpha strip images still return an error, and a
   strip-only `.vsi` file without its companion folder is not opened as a
   plain TIFF.
+- `Slide::tile_location` and `Slide::level_tile_locations` report where tiles'
+  encoded bytes are stored: the file, byte ranges, framing (`Standalone`,
+  `JpegTables`, `BarePayload` or `Prefixed`) and the codec parameters a decoder
+  outside wsi-rs needs, or that a tile is `Absent` or `NotAddressable` and why.
+  `EncodedUnit::assemble` turns the bytes at those ranges into a standalone
+  stream; for a unit that covers its whole tile it equals what
+  `read_raw_compressed_tile` returns, except for bare payloads that raw reads
+  return as reordered or decoded samples. A unit a tile is cut from assembles
+  to the whole stored image. Every range is checked against the file size,
+  and a level listing stays within the tile-index limit. Every slide format
+  reports locations; `.svcache` files, which hold wsi-rs's own decoded tiles,
+  do not. ([#27](https://github.com/frames-sg/wsi-rs/issues/27))
+- `read_raw_compressed_tile` covers tiles it used to reject. A tile cut from a
+  larger stored JPEG (Ventana subtiles, NDPI levels without restart markers,
+  MIRAX and CZI crops, strip-based TIFFs, ZVI windows) is cropped in the
+  coefficient domain, as `jpegtran -crop` does: quantized coefficients are kept
+  and only the entropy coding is redone. When the tile origin is not on the
+  JPEG's MCU grid, the crop starts at the previous MCU boundary and the new
+  `RawCompressedTile::tile_region` locates the tile. A crop holds the whole
+  source unit's DCT coefficients, about 12 bytes per pixel for a 4:4:4 JPEG,
+  and its working set must fit the new `SlideLimits::lossless_crop_bytes`
+  (256 MiB by default). A crop that does not fit returns the whole stored
+  JPEG unchanged, made standalone as `tile_location` describes it, with
+  `tile_region` locating the tile, as JPEG 2000 and JPEG XR crops do;
+  `jpegtran -crop` can cut it. So does a crop whose output would exceed the
+  encoded-unit limit. Apart from the usual admission limits, only a stored
+  JPEG over the encoded-unit limit, or a tile spanning several JPEG strips
+  whose crop does not fit, returns `WsiError::ResourceLimit`. TIFF LZW,
+  Deflate, Zstd, uncompressed and JPEG XR tiles, DICOM native and RLE frames, MIRAX PNG and
+  BMP records, CZI subblocks, Hamamatsu VMU and Zeiss ZVI planes now pass
+  through. Tiles of lossless codecs that cannot be returned as stored come
+  back as exact uncompressed samples.
+- `SlideLimits::lossless_crop_bytes` and `with_lossless_crop_bytes` set the
+  working set of a lossless JPEG crop in a raw tile read, 256 MiB by default,
+  so 4096x4096 4:4:4 sources and large NDPI levels crop. Raw reads that may
+  crop reserve it as per-operation transient work, so it must stay within
+  `operation_transient_bytes` (384 MiB); decoded reads and other raw reads
+  do not reserve it. `encoded_unit_bytes` still caps every stored unit.
+  Custom `SlideReader`s admitted at the encoded-unit limit can ask for more
+  for a raw read with `SlideReader::raw_compressed_tile_reservation_hint`.
+- Python: `Slide.tile_location`, `Slide.level_tile_locations` and
+  `CompressedTile.tile_region`, with a kerchunk-style reference example in the
+  Python README. The `tile_locations` example checks reported ranges against
+  `read_raw_compressed_tile`.
+- `Compression::Png`, `Compression::Bmp` and
+  `EncodedTilePhotometricInterpretation::Monochrome1`.
 
 ### Changed
 
+- Raw DICOM `MONOCHROME1` tiles and raw grayscale TIFF JPEG tiles tagged
+  MinIsWhite report `EncodedTilePhotometricInterpretation::Monochrome1`
+  instead of `Monochrome2`.
+- Raw TIFF JPEG and JPEG 2000 edge tiles report the size of the encoded
+  image, which usually keeps the whole stored tile, with `tile_region`
+  marking the clipped tile in it. They used to report the clipped size, which
+  did not match the image the bytes decode to. A JPEG or codestream smaller
+  than its tile returns an error.
+- Raw Hamamatsu VMS tiles carry a JPEG header with the restart interval
+  cleared, the same header `tile_location` reports. Only that header field
+  changes; decoded pixels are unchanged.
 - J2K dependencies follow the J2K `main` branch instead of the 0.8.1
   maintenance revision. Main carries the CUDA packet-header fix along with
   later decoder fixes and speedups.
 - JXR follows its `main` branch, which builds on J2K `main`, so wsi-rs compiles
   one J2K instead of also J2K 0.12 for JXR.
 - Builds take the newest J2K and JXR `main` commits: `cargo latest` updates
-  them, and every CI job runs it before building. cargo-vet treats J2K and JXR
+  them, and every CI job but packaging runs it before building; packaging
+  checks the committed `Cargo.lock`. cargo-vet treats J2K and JXR
   as first-party code, reviewed in their own repositories, instead of
   requiring an audit for each revision.
 - The J2K dependencies require 0.13.1, so a published wsi-rs resolves at
@@ -36,11 +94,18 @@
   tiles serially side by side, where J2K decodes Tier-1 in bands as the inverse
   DWT reads them. Smaller levels still decode whole. Metal decodes tile batches
   at reductions up to 3 as one batch of regions sharing the codestream's bytes;
-  deeper levels decode on the CPU. CUDA decoding and compressed passthrough are
-  offered only when the full resolution is one tile.
+  deeper levels decode on the CPU. CUDA decoding is offered only when the full
+  resolution is one tile. A raw read of a full-resolution tile returns the
+  whole codestream with `tile_region` locating the tile; reduced resolutions
+  have no raw read.
 
 ### Fixed
 
+- NDPI DCT retiling returns an error for an AC coefficient outside the
+  8-bit baseline range, which it encoded wrongly, and for corrupt block grids,
+  where it copied blocks wrapped from the next row.
+- Merging TIFF `JPEGTables` into a tile shorter than its SOI marker returns
+  an error instead of panicking.
 - Raw `.j2k` and `.j2c` files whose decoded image exceeds 128 MiB, about 44.7
   megapixels of RGB, open. The decoded-image limit now bounds each decoded
   tile; it rejected the whole image at open. Reduced levels of such files

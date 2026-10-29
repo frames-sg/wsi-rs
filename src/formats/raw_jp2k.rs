@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::limits::{read_to_end_bounded, MAX_COMPRESSED_INPUT_BYTES};
@@ -12,9 +13,11 @@ use crate::core::registry::{
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::{
-    AssociatedImage, AxesShape, ChannelInfo, Compression, CpuTile, Dataset,
-    EncodedTilePhotometricInterpretation, Level, PlaneSelection, RawCompressedTile, RegionRequest,
-    SampleType, Scene, Series, TileCodecKind, TileLayout, TileRequest, TileViewRequest,
+    AssociatedImage, AxesShape, ByteRange, ChannelInfo, Compression, CpuTile, Dataset,
+    EncodedCodec, EncodedTilePhotometricInterpretation, EncodedUnit, Level, NotAddressableReason,
+    PixelRect, PlaneSelection, RawCompressedTile, RegionRequest, SampleType, Scene, Series,
+    StoredFraming, StoredTile, TileCodecKind, TileLayout, TileLocation, TileRequest,
+    TileViewRequest,
 };
 use crate::decode::jp2k::{
     decode_jp2k_region_to_sample_buffer, decode_jp2k_to_sample_buffer,
@@ -160,6 +163,7 @@ fn open_raw_jp2k(
             grid,
         )?,
         data,
+        path: Arc::from(path),
         width: header.image_width,
         height: header.image_height,
     })
@@ -260,7 +264,10 @@ fn is_one_tile(level: &Level) -> bool {
 
 struct RawJp2kReader {
     dataset: Dataset,
+    /// The whole file, which is the codestream.
     data: Vec<u8>,
+    /// The file as opened, shared by its tile location.
+    path: Arc<Path>,
     width: u32,
     height: u32,
 }
@@ -362,6 +369,7 @@ impl RawJp2kReader {
     /// Only full resolution is stored as a codestream, and only a full
     /// resolution that is one tile is that codestream. Reduced levels and the
     /// tiles of a larger image are decoded from it on the CPU.
+    #[cfg(feature = "cuda")]
     fn validate_full_resolution_request(
         &self,
         req: &TileRequest,
@@ -484,15 +492,59 @@ impl SlideReader for RawJp2kReader {
             .collect()
     }
 
+    /// The file's codestream, unchanged. A full-resolution tile of a larger
+    /// image is a window of that one codestream, so it comes back whole with
+    /// [`RawCompressedTile::tile_region`] locating the tile. Reduced levels
+    /// are decoded from the codestream's lower resolutions and have no
+    /// stored bytes of their own.
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        self.validate_full_resolution_request(req, "compressed passthrough")?;
-        Ok(RawCompressedTile::builder(Compression::Jp2kRgb)
+        let tile = self.tile_decode(req)?;
+        if tile.reduction != 0 {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "raw JP2K level {} is decoded from the codestream's lower resolutions; no stored bytes hold it on their own (tile_location reports NotAddressable(CodestreamWindow))",
+                    req.level.get()
+                ),
+            });
+        }
+        let mut builder = RawCompressedTile::builder(Compression::Jp2kRgb)
             .dimensions(self.width, self.height)
             .bits_allocated(8)
             .samples_per_pixel(3)
-            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
-            .data(self.data.clone())
-            .build()?)
+            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb);
+        if !tile.whole_level {
+            let Rect { x, y, w, h } = tile.region;
+            builder = builder.tile_region(PixelRect::new(x, y, w, h));
+        }
+        Ok(builder.data(self.data.clone()).build()?)
+    }
+
+    /// The whole file when full resolution is one tile. Other tiles are
+    /// windows or reductions of the one codestream, which has no byte range
+    /// per wsi-rs tile.
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        let tile = self.tile_decode(req)?;
+        if tile.reduction != 0 || !tile.whole_level {
+            return Ok(TileLocation::NotAddressable(
+                NotAddressableReason::CodestreamWindow,
+            ));
+        }
+        let file_len = u64::try_from(self.data.len()).unwrap_or(u64::MAX);
+        let codec = EncodedCodec::new(
+            Compression::Jp2kRgb,
+            8,
+            3,
+            EncodedTilePhotometricInterpretation::Rgb,
+        );
+        let unit = EncodedUnit::builder(self.path.clone(), codec, self.width, self.height)
+            .segment(ByteRange::new(0, file_len))
+            .framing(StoredFraming::Standalone)
+            .build(file_len)?;
+        Ok(TileLocation::Stored(StoredTile::new(
+            self.width,
+            self.height,
+            vec![unit],
+        )?))
     }
 }
 

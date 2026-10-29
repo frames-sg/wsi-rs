@@ -5,11 +5,13 @@ use crate::error::WsiError;
 use crate::properties::Properties;
 
 mod geometry;
+mod locations;
 mod model;
 mod pixels;
 mod requests;
 
 pub use geometry::*;
+pub use locations::*;
 pub use model::*;
 pub use pixels::*;
 pub use requests::*;

@@ -1,4 +1,5 @@
-//! ETS payload reads, codec dispatch and sparse background tiles.
+//! ETS payload reads, codec dispatch, tile locations and sparse background
+//! tiles.
 
 use std::borrow::Cow;
 
@@ -8,8 +9,9 @@ use crate::core::limits::{
     checked_product_to_usize, MAX_COMPRESSED_INPUT_BYTES, MAX_DECODED_IMAGE_BYTES,
 };
 use crate::core::types::{
-    ColorSpace, Compression, CpuTile, CpuTileData, CpuTileLayout,
-    EncodedTilePhotometricInterpretation, RawCompressedTile, SampleType,
+    ByteRange, ColorSpace, Compression, CpuTile, CpuTileData, CpuTileLayout, EncodedCodec,
+    EncodedTilePhotometricInterpretation, EncodedUnit, PixelRect, RawCompressedTile, SampleType,
+    StoredFraming, StoredTile, TileLocation,
 };
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::error::WsiError;
@@ -72,7 +74,58 @@ impl EtsScene {
         &self,
         tile: &EtsTile,
     ) -> Result<RawCompressedTile, WsiError> {
-        let bits_allocated = match self.sample_type {
+        let (bits_allocated, samples_per_pixel, photometric_interpretation) =
+            self.stored_sample_format()?;
+        Ok(RawCompressedTile::builder(Compression::Jp2kRgb)
+            .dimensions(self.levels[0].tile_width, self.levels[0].tile_height)
+            .bits_allocated(bits_allocated)
+            .samples_per_pixel(samples_per_pixel)
+            .photometric_interpretation(photometric_interpretation)
+            .data(self.read_payload(tile)?)
+            .build()?)
+    }
+
+    /// Where a stored tile's codestream is, from the ETS tile table. Every
+    /// codestream is a full-size RGB or grayscale tile; `width` x `height`
+    /// is the part of it inside the level.
+    pub(super) fn tile_location(
+        &self,
+        tile: &EtsTile,
+        width: u32,
+        height: u32,
+    ) -> Result<TileLocation, WsiError> {
+        let (bits, samples, photometric_interpretation) = self.stored_sample_format()?;
+        let codec = EncodedCodec::new(
+            Compression::Jp2kRgb,
+            bits,
+            samples,
+            photometric_interpretation,
+        );
+        let region = PixelRect::new(0, 0, width, height);
+        let unit = EncodedUnit::builder(
+            self.location_path.clone(),
+            codec,
+            self.levels[0].tile_width,
+            self.levels[0].tile_height,
+        )
+        .segment(ByteRange::new(tile.offset, u64::from(tile.byte_count)))
+        .framing(StoredFraming::Standalone)
+        .source_region(region)
+        .tile_region(region)
+        .build(self.file_len)?;
+        Ok(TileLocation::Stored(StoredTile::new(
+            width,
+            height,
+            vec![unit],
+        )?))
+    }
+
+    /// Bits, samples and color of the stored codestreams, for the sample
+    /// formats J2K passthrough describes.
+    fn stored_sample_format(
+        &self,
+    ) -> Result<(u16, u16, EncodedTilePhotometricInterpretation), WsiError> {
+        let bits = match self.sample_type {
             SampleType::Uint8 => 8,
             SampleType::Uint16 => 16,
             SampleType::Float32 => {
@@ -81,24 +134,15 @@ impl EtsScene {
                 })
             }
         };
-        let (samples_per_pixel, photometric_interpretation) = match self.samples_per_pixel {
-            1 => (1, EncodedTilePhotometricInterpretation::Monochrome2),
-            3 => (3, EncodedTilePhotometricInterpretation::Rgb),
-            other => {
-                return Err(WsiError::Unsupported {
-                    reason: format!(
-                        "J2K passthrough requires 1 or 3 ETS samples per pixel, got {other}"
-                    ),
-                })
-            }
-        };
-        Ok(RawCompressedTile::builder(Compression::Jp2kRgb)
-            .dimensions(self.levels[0].tile_width, self.levels[0].tile_height)
-            .bits_allocated(bits_allocated)
-            .samples_per_pixel(samples_per_pixel)
-            .photometric_interpretation(photometric_interpretation)
-            .data(self.read_payload(tile)?)
-            .build()?)
+        match self.samples_per_pixel {
+            1 => Ok((bits, 1, EncodedTilePhotometricInterpretation::Monochrome2)),
+            3 => Ok((bits, 3, EncodedTilePhotometricInterpretation::Rgb)),
+            other => Err(WsiError::Unsupported {
+                reason: format!(
+                    "J2K passthrough requires 1 or 3 ETS samples per pixel, got {other}"
+                ),
+            }),
+        }
     }
 
     pub(super) fn background_tile(&self, width: u32, height: u32) -> Result<CpuTile, WsiError> {

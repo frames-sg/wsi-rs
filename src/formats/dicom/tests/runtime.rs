@@ -26,6 +26,9 @@ pub(super) fn test_dicom_image_with_transfer_syntax(
         icc_profile: Vec::new(),
         frame_store: DicomFrameStore {
             path: PathBuf::from(format!("{sop_instance_uid}.dcm")),
+            source_path: Arc::from(Path::new(&format!("{sop_instance_uid}.dcm"))),
+            source_len: 0,
+            location_file: std::sync::OnceLock::new(),
             encoded_unit_bytes: crate::SlideLimits::default().encoded_unit_bytes(),
             native_pixel_data: None,
             encapsulated_frames: Mutex::new(None),

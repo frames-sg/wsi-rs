@@ -792,11 +792,6 @@ fn transfer_syntax_classification_covers_every_supported_uid() {
         );
         assert_eq!(transfer_syntax.is_lossy(), lossy, "{uid}");
         assert_eq!(transfer_syntax.is_encapsulated(), encapsulated, "{uid}");
-        assert_eq!(
-            transfer_syntax.raw_compression(rgb),
-            matches!(compression, Compression::Jpeg | Compression::Jp2kRgb).then_some(compression),
-            "{uid}"
-        );
     }
     assert_eq!(
         DicomTransferSyntax::from_uid(HTJ2K_TRANSFER_SYNTAX)
@@ -973,4 +968,19 @@ fn corrupt_compressed_frames_preserve_tile_context_for_each_codec() {
         assert_eq!((col, row, level), (0, 0, 0));
         assert!(!reason.is_empty());
     }
+}
+
+#[test]
+fn raw_photometric_keeps_monochrome1_apart_from_monochrome2() {
+    use super::super::decode::raw_photometric_interpretation;
+
+    assert_eq!(
+        raw_photometric_interpretation(1, "MONOCHROME1").unwrap(),
+        EncodedTilePhotometricInterpretation::Monochrome1
+    );
+    assert_eq!(
+        raw_photometric_interpretation(1, "MONOCHROME2").unwrap(),
+        EncodedTilePhotometricInterpretation::Monochrome2
+    );
+    assert!(raw_photometric_interpretation(1, "PALETTE COLOR").is_err());
 }

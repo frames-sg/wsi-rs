@@ -154,6 +154,74 @@ fn raw_tile_preserves_the_original_codestream_and_metadata() {
     assert_ne!(reader.dataset().id, other.dataset().id);
 }
 
+#[test]
+fn whole_full_resolution_location_is_the_file_and_assembles_to_the_raw_tile() {
+    let fixture = write_fixture("j2c", RGB_CODESTREAM);
+    let slide = crate::Slide::open(&fixture.path).unwrap();
+    let request = TileRequest::new(0, 0, 0, 0, 0);
+
+    let TileLocation::Stored(stored) = slide.tile_location(&request).unwrap() else {
+        panic!("a one-tile full resolution is the stored codestream");
+    };
+    assert_eq!(stored.tile_size(), (16, 12));
+    let unit = stored.single_unit().unwrap();
+    assert_eq!(unit.path(), fixture.path.as_path());
+    assert_eq!(unit.framing(), StoredFraming::Standalone);
+    assert_eq!(
+        unit.segments(),
+        [ByteRange::new(0, RGB_CODESTREAM.len() as u64)]
+    );
+    assert_eq!(unit.codec().compression(), Compression::Jp2kRgb);
+    let file = fs::read(&fixture.path).unwrap();
+    let assembled = unit.assemble([file.as_slice()]).unwrap();
+    let raw = slide.read_raw_compressed_tile(&request).unwrap();
+    assert_eq!(raw.data(), assembled.as_slice());
+    let decoded = decode_jp2k_to_sample_buffer(&assembled, 16, 12, Jp2kColorSpace::Rgb).unwrap();
+    assert_eq!(decoded.as_u8(), slide.read_tile(&request).unwrap().as_u8());
+
+    let reduced = slide
+        .level_tile_locations(0, 0, 1, PlaneSelection::default())
+        .unwrap();
+    assert_eq!(reduced.tiles.len(), 1);
+    assert_eq!(
+        reduced.tiles[0].location,
+        TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
+    );
+}
+
+#[test]
+fn region_tiles_are_codestream_windows_and_raw_reads_locate_them() {
+    let fixture = write_fixture("j2k", RGB_CODESTREAM);
+    let slide = crate::Slide::from_source_with_cache_bytes(
+        Box::new(open_with_grid(&fixture.path, SMALL_GRID)),
+        0,
+    );
+    let level = slide
+        .level_tile_locations(0, 0, 0, PlaneSelection::default())
+        .unwrap();
+    assert_eq!((level.tiles_across, level.tiles_down), (4, 3));
+    assert!(level.tiles.iter().all(|tile| tile.location
+        == TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)));
+
+    let whole = decode_jp2k_to_sample_buffer(RGB_CODESTREAM, 16, 12, Jp2kColorSpace::Rgb).unwrap();
+    let whole = whole.as_u8().unwrap();
+    for tile in &level.tiles {
+        let request = TileRequest::new(0, 0, 0, tile.col, tile.row);
+        let raw = slide.read_raw_compressed_tile(&request).unwrap();
+        assert_eq!(raw.data(), RGB_CODESTREAM);
+        let region = raw.tile_region();
+        let read = slide.read_tile(&request).unwrap();
+        assert_eq!((read.width(), read.height()), (region.width, region.height));
+        let expected = (region.y..region.y + region.height)
+            .flat_map(|y| {
+                let start = ((y * 16 + region.x) * 3) as usize;
+                whole[start..start + region.width as usize * 3].to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(read.as_u8(), Some(expected.as_slice()), "{request:?}");
+    }
+}
+
 fn load_ppm(bytes: &[u8]) -> image::RgbImage {
     image::load_from_memory_with_format(bytes, image::ImageFormat::Pnm)
         .expect("decode PPM reference")
@@ -363,14 +431,21 @@ fn default_grid_tiles_levels_over_4096_px_in_1024_px_tiles() {
 }
 
 #[test]
-fn tiled_full_resolution_has_no_passthrough_or_adaptive_route() {
+fn tiled_full_resolution_passes_the_whole_codestream_through_without_an_adaptive_route() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let reader = open_with_grid(&fixture.path, SMALL_GRID);
     let first = TileRequest::new(0, 0, 0, 0, 0);
-    assert!(matches!(
-        reader.read_raw_compressed_tile(&first),
-        Err(WsiError::Unsupported { .. })
-    ));
+    // 16x12 in 4 px tiles: tile (1, 2) is the 4x4 window at (4, 8).
+    let raw = reader
+        .read_raw_compressed_tile(&TileRequest::new(0, 0, 0, 1, 2))
+        .unwrap();
+    assert_eq!(raw.data(), RGB_CODESTREAM);
+    assert_eq!((raw.width(), raw.height()), (16, 12));
+    assert_eq!(raw.tile_region(), PixelRect::new(4, 8, 4, 4));
+    assert_eq!(
+        reader.tile_location(&first).unwrap(),
+        TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
+    );
     #[cfg(any(feature = "metal", feature = "cuda"))]
     assert!(reader
         .prepare_adaptive_jp2k(std::slice::from_ref(&first), 2, None)
@@ -435,8 +510,12 @@ fn reduced_levels_have_no_passthrough_or_adaptive_route() {
     assert_eq!(managed.tile_codec_kind(&reduced), TileCodecKind::Jp2k);
     assert!(matches!(
         managed.read_raw_compressed_tile(&reduced),
-        Err(WsiError::Unsupported { .. })
+        Err(WsiError::Unsupported { reason }) if reason.contains("CodestreamWindow")
     ));
+    assert_eq!(
+        managed.tile_location(&reduced).unwrap(),
+        TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
+    );
     #[cfg(any(feature = "metal", feature = "cuda"))]
     assert!(managed
         .prepare_adaptive_jp2k(std::slice::from_ref(&reduced), 2, None)

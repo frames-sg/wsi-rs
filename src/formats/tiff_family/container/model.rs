@@ -51,6 +51,7 @@ pub(crate) mod tags {
     pub(crate) const EXTRA_SAMPLES: u16 = 338;
     pub(crate) const SAMPLE_FORMAT: u16 = 339;
     pub(crate) const JPEG_TABLES: u16 = 347;
+    pub(crate) const YCBCR_SUBSAMPLING: u16 = 530;
     pub(crate) const XMP: u16 = 700;
     pub(crate) const COPYRIGHT: u16 = 33432;
     pub(crate) const ICC_PROFILE: u16 = 34675;

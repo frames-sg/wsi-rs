@@ -287,6 +287,9 @@ pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 pub fn wsi_rs::Slide::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
+impl wsi_rs::Slide
+pub fn wsi_rs::Slide::level_tile_locations(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, impl core::convert::Into<wsi_rs::PlaneIdx>) -> core::result::Result<wsi_rs::LevelTileLocations, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::tile_location(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::TileLocation, wsi_rs::error::WsiError>
 impl core::fmt::Debug for wsi_rs::Slide
 pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct wsi_rs::prelude::SlideLimits
@@ -295,6 +298,7 @@ pub const fn wsi_rs::SlideLimits::aggregate_metadata_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::batch_chunk_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::decoded_output_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::encoded_unit_bytes(self) -> u64
+pub const fn wsi_rs::SlideLimits::lossless_crop_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::metadata_value_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::operation_transient_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::region_pixels(self) -> u64
@@ -305,6 +309,7 @@ pub fn wsi_rs::SlideLimits::with_aggregate_metadata_bytes(self, u64) -> core::re
 pub fn wsi_rs::SlideLimits::with_batch_chunk_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_decoded_output_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_encoded_unit_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
+pub fn wsi_rs::SlideLimits::with_lossless_crop_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_metadata_value_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_operation_transient_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_region_pixels(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
@@ -355,6 +360,12 @@ pub fn wsi_rs::properties::Properties::new() -> Self
 pub fn wsi_rs::properties::Properties::objective_power(&self) -> core::option::Option<f64>
 pub fn wsi_rs::properties::Properties::quickhash1(&self) -> core::option::Option<&str>
 pub fn wsi_rs::properties::Properties::vendor(&self) -> core::option::Option<&str>
+#[non_exhaustive] pub enum wsi_rs::ByteOrder
+pub wsi_rs::ByteOrder::BigEndian
+pub wsi_rs::ByteOrder::LittleEndian
+#[non_exhaustive] pub enum wsi_rs::ChannelOrder
+pub wsi_rs::ChannelOrder::Bgr
+pub wsi_rs::ChannelOrder::Rgb
 #[non_exhaustive] pub enum wsi_rs::ColorSpace
 pub wsi_rs::ColorSpace::Cmyk
 pub wsi_rs::ColorSpace::Grayscale
@@ -364,6 +375,7 @@ pub wsi_rs::ColorSpace::Rgba
 pub wsi_rs::ColorSpace::Unknown
 pub wsi_rs::ColorSpace::YCbCr
 #[non_exhaustive] pub enum wsi_rs::Compression
+pub wsi_rs::Compression::Bmp
 pub wsi_rs::Compression::Deflate
 pub wsi_rs::Compression::Jp2kRgb
 pub wsi_rs::Compression::Jp2kYcbcr
@@ -373,6 +385,7 @@ pub wsi_rs::Compression::JpegXr
 pub wsi_rs::Compression::Lzw
 pub wsi_rs::Compression::None
 pub wsi_rs::Compression::Other(u16)
+pub wsi_rs::Compression::Png
 pub wsi_rs::Compression::Rle
 pub wsi_rs::Compression::Zstd
 #[non_exhaustive] pub enum wsi_rs::CpuTileData
@@ -410,6 +423,7 @@ pub wsi_rs::DicomIndexOutcome::FastPathFallback
 pub wsi_rs::DicomIndexOutcome::Reused
 pub wsi_rs::DicomIndexOutcome::TokenFallback
 #[non_exhaustive] pub enum wsi_rs::EncodedTilePhotometricInterpretation
+pub wsi_rs::EncodedTilePhotometricInterpretation::Monochrome1
 pub wsi_rs::EncodedTilePhotometricInterpretation::Monochrome2
 pub wsi_rs::EncodedTilePhotometricInterpretation::Rgb
 pub wsi_rs::EncodedTilePhotometricInterpretation::YbrFull422
@@ -425,6 +439,13 @@ pub wsi_rs::IccProfileProvenance::TiffTag::tag: u16
 #[non_exhaustive] pub enum wsi_rs::LevelSourceKind
 pub wsi_rs::LevelSourceKind::Physical
 pub wsi_rs::LevelSourceKind::SyntheticDownsample
+#[non_exhaustive] pub enum wsi_rs::NotAddressableReason
+pub wsi_rs::NotAddressableReason::CodestreamWindow
+pub wsi_rs::NotAddressableReason::NotStored
+pub wsi_rs::NotAddressableReason::Resampled
+pub wsi_rs::NotAddressableReason::SyntheticLevel
+pub wsi_rs::NotAddressableReason::SyntheticLevel::base_level: wsi_rs::LevelIdx
+pub wsi_rs::NotAddressableReason::SyntheticLevel::factor: u32
 #[non_exhaustive] pub enum wsi_rs::PixelFormat
 pub wsi_rs::PixelFormat::Gray16
 pub wsi_rs::PixelFormat::Gray8
@@ -438,6 +459,13 @@ pub const fn wsi_rs::PixelFormat::bytes_per_sample(self) -> usize
 pub const fn wsi_rs::PixelFormat::channels(self) -> usize
 pub const fn wsi_rs::PixelFormat::color_space(self) -> wsi_rs::ColorSpace
 pub const fn wsi_rs::PixelFormat::sample_type(self) -> wsi_rs::SampleType
+#[non_exhaustive] pub enum wsi_rs::PlanarConfiguration
+pub wsi_rs::PlanarConfiguration::Chunky
+pub wsi_rs::PlanarConfiguration::Planar
+#[non_exhaustive] pub enum wsi_rs::Predictor
+pub wsi_rs::Predictor::FloatingPoint
+pub wsi_rs::Predictor::Horizontal
+pub wsi_rs::Predictor::None
 #[non_exhaustive] pub enum wsi_rs::ProbeConfidence
 pub wsi_rs::ProbeConfidence::Definite
 pub wsi_rs::ProbeConfidence::Likely
@@ -446,6 +474,8 @@ pub wsi_rs::RawCompressedTileBuildError::EmptyData
 pub wsi_rs::RawCompressedTileBuildError::InvalidBitsAllocated
 pub wsi_rs::RawCompressedTileBuildError::InvalidDimensions
 pub wsi_rs::RawCompressedTileBuildError::InvalidSamplesPerPixel
+pub wsi_rs::RawCompressedTileBuildError::InvalidSignificantBits
+pub wsi_rs::RawCompressedTileBuildError::InvalidTileRegion
 pub wsi_rs::RawCompressedTileBuildError::MissingBitsAllocated
 pub wsi_rs::RawCompressedTileBuildError::MissingData
 pub wsi_rs::RawCompressedTileBuildError::MissingDimensions
@@ -472,6 +502,11 @@ pub wsi_rs::SampleType::Uint16
 pub wsi_rs::SampleType::Uint8
 impl wsi_rs::SampleType
 pub fn wsi_rs::SampleType::byte_size(&self) -> usize
+#[non_exhaustive] pub enum wsi_rs::StoredFraming
+pub wsi_rs::StoredFraming::BarePayload
+pub wsi_rs::StoredFraming::JpegTables
+pub wsi_rs::StoredFraming::Prefixed
+pub wsi_rs::StoredFraming::Standalone
 #[non_exhaustive] pub enum wsi_rs::SvcachePolicy
 pub wsi_rs::SvcachePolicy::Off
 pub wsi_rs::SvcachePolicy::PreferFresh
@@ -502,6 +537,10 @@ pub wsi_rs::TileLayout::WholeLevel::virtual_tile_width: u32
 pub wsi_rs::TileLayout::WholeLevel::width: u64
 impl wsi_rs::TileLayout
 pub fn wsi_rs::TileLayout::tiles_for_region(&self, i64, i64, u32, u32) -> alloc::vec::Vec<wsi_rs::TileHit>
+#[non_exhaustive] pub enum wsi_rs::TileLocation
+pub wsi_rs::TileLocation::Absent
+pub wsi_rs::TileLocation::NotAddressable(wsi_rs::NotAddressableReason)
+pub wsi_rs::TileLocation::Stored(wsi_rs::StoredTile)
 #[non_exhaustive] pub enum wsi_rs::WsiError
 pub wsi_rs::WsiError::AssociatedImageNotFound(alloc::string::String)
 pub wsi_rs::WsiError::BackendContract
@@ -571,6 +610,12 @@ impl wsi_rs::AxesShape
 pub const fn wsi_rs::AxesShape::new(u32, u32, u32) -> Self
 impl core::default::Default for wsi_rs::AxesShape
 pub fn wsi_rs::AxesShape::default() -> Self
+pub struct wsi_rs::ByteRange
+pub wsi_rs::ByteRange::length: u64
+pub wsi_rs::ByteRange::offset: u64
+impl wsi_rs::ByteRange
+pub fn wsi_rs::ByteRange::end(&self) -> core::option::Option<u64>
+pub const fn wsi_rs::ByteRange::new(u64, u64) -> Self
 #[non_exhaustive] pub struct wsi_rs::CacheConfig
 pub wsi_rs::CacheConfig::display_tile_bytes: core::option::Option<u64>
 pub wsi_rs::CacheConfig::shared_tile_bytes: core::option::Option<u64>
@@ -647,6 +692,50 @@ impl wsi_rs::DisplayWindow
 pub fn wsi_rs::DisplayWindow::max(&self) -> f64
 pub fn wsi_rs::DisplayWindow::min(&self) -> f64
 pub fn wsi_rs::DisplayWindow::new(f64, f64) -> core::result::Result<Self, wsi_rs::error::WsiError>
+#[non_exhaustive] pub struct wsi_rs::EncodedCodec
+impl wsi_rs::EncodedCodec
+pub fn wsi_rs::EncodedCodec::bits_per_sample(&self) -> u16
+pub fn wsi_rs::EncodedCodec::byte_order(&self) -> core::option::Option<wsi_rs::ByteOrder>
+pub fn wsi_rs::EncodedCodec::channel_order(&self) -> wsi_rs::ChannelOrder
+pub fn wsi_rs::EncodedCodec::chroma_subsampling(&self) -> core::option::Option<(u8, u8)>
+pub fn wsi_rs::EncodedCodec::compression(&self) -> wsi_rs::Compression
+pub fn wsi_rs::EncodedCodec::jpeg_tables(&self) -> core::option::Option<&[u8]>
+pub fn wsi_rs::EncodedCodec::new(wsi_rs::Compression, u16, u16, wsi_rs::EncodedTilePhotometricInterpretation) -> Self
+pub fn wsi_rs::EncodedCodec::photometric_interpretation(&self) -> wsi_rs::EncodedTilePhotometricInterpretation
+pub fn wsi_rs::EncodedCodec::planar_configuration(&self) -> wsi_rs::PlanarConfiguration
+pub fn wsi_rs::EncodedCodec::predictor(&self) -> wsi_rs::Predictor
+pub fn wsi_rs::EncodedCodec::samples_per_pixel(&self) -> u16
+pub fn wsi_rs::EncodedCodec::significant_bits(&self) -> core::option::Option<u16>
+pub fn wsi_rs::EncodedCodec::with_byte_order(self, wsi_rs::ByteOrder) -> Self
+pub fn wsi_rs::EncodedCodec::with_channel_order(self, wsi_rs::ChannelOrder) -> Self
+pub fn wsi_rs::EncodedCodec::with_chroma_subsampling(self, u8, u8) -> Self
+pub fn wsi_rs::EncodedCodec::with_jpeg_tables(self, alloc::sync::Arc<[u8]>) -> Self
+pub fn wsi_rs::EncodedCodec::with_planar_configuration(self, wsi_rs::PlanarConfiguration) -> Self
+pub fn wsi_rs::EncodedCodec::with_predictor(self, wsi_rs::Predictor) -> Self
+pub fn wsi_rs::EncodedCodec::with_significant_bits(self, u16) -> Self
+#[non_exhaustive] pub struct wsi_rs::EncodedUnit
+impl wsi_rs::EncodedUnit
+pub fn wsi_rs::EncodedUnit::assemble<'a>(&self, impl core::iter::traits::collect::IntoIterator<Item = &'a [u8]>) -> core::result::Result<alloc::vec::Vec<u8>, wsi_rs::error::WsiError>
+pub fn wsi_rs::EncodedUnit::builder(alloc::sync::Arc<std::path::Path>, wsi_rs::EncodedCodec, u32, u32) -> wsi_rs::EncodedUnitBuilder
+pub fn wsi_rs::EncodedUnit::codec(&self) -> &wsi_rs::EncodedCodec
+pub fn wsi_rs::EncodedUnit::framing(&self) -> wsi_rs::StoredFraming
+pub fn wsi_rs::EncodedUnit::path(&self) -> &std::path::Path
+pub fn wsi_rs::EncodedUnit::prefix(&self) -> &[u8]
+pub fn wsi_rs::EncodedUnit::segments(&self) -> &[wsi_rs::ByteRange]
+pub fn wsi_rs::EncodedUnit::source_region(&self) -> wsi_rs::PixelRect
+pub fn wsi_rs::EncodedUnit::stored_len(&self) -> core::option::Option<u64>
+pub fn wsi_rs::EncodedUnit::stored_size(&self) -> (u32, u32)
+pub fn wsi_rs::EncodedUnit::suffix(&self) -> &[u8]
+pub fn wsi_rs::EncodedUnit::tile_region(&self) -> wsi_rs::PixelRect
+pub struct wsi_rs::EncodedUnitBuilder
+impl wsi_rs::EncodedUnitBuilder
+pub fn wsi_rs::EncodedUnitBuilder::build(self, u64) -> core::result::Result<wsi_rs::EncodedUnit, wsi_rs::error::WsiError>
+pub fn wsi_rs::EncodedUnitBuilder::framing(self, wsi_rs::StoredFraming) -> Self
+pub fn wsi_rs::EncodedUnitBuilder::prefix_suffix(self, alloc::sync::Arc<[u8]>, alloc::sync::Arc<[u8]>) -> Self
+pub fn wsi_rs::EncodedUnitBuilder::segment(self, wsi_rs::ByteRange) -> Self
+pub fn wsi_rs::EncodedUnitBuilder::segments(self, alloc::vec::Vec<wsi_rs::ByteRange>) -> Self
+pub fn wsi_rs::EncodedUnitBuilder::source_region(self, wsi_rs::PixelRect) -> Self
+pub fn wsi_rs::EncodedUnitBuilder::tile_region(self, wsi_rs::PixelRect) -> Self
 pub struct wsi_rs::FormatRegistry
 impl wsi_rs::FormatRegistry
 pub fn wsi_rs::FormatRegistry::builtin() -> Self
@@ -674,6 +763,26 @@ pub const fn wsi_rs::LevelIdx::get(self) -> u32
 pub const fn wsi_rs::LevelIdx::new(u32) -> Self
 impl core::convert::From<u32> for wsi_rs::LevelIdx
 pub fn wsi_rs::LevelIdx::from(u32) -> Self
+#[non_exhaustive] pub struct wsi_rs::LevelTileLocation
+pub wsi_rs::LevelTileLocation::col: i64
+pub wsi_rs::LevelTileLocation::location: wsi_rs::TileLocation
+pub wsi_rs::LevelTileLocation::row: i64
+impl wsi_rs::LevelTileLocation
+pub fn wsi_rs::LevelTileLocation::new(i64, i64, wsi_rs::TileLocation) -> Self
+#[non_exhaustive] pub struct wsi_rs::LevelTileLocations
+pub wsi_rs::LevelTileLocations::tile_height: u32
+pub wsi_rs::LevelTileLocations::tile_width: u32
+pub wsi_rs::LevelTileLocations::tiles: alloc::vec::Vec<wsi_rs::LevelTileLocation>
+pub wsi_rs::LevelTileLocations::tiles_across: u64
+pub wsi_rs::LevelTileLocations::tiles_down: u64
+pub struct wsi_rs::PixelRect
+pub wsi_rs::PixelRect::height: u32
+pub wsi_rs::PixelRect::width: u32
+pub wsi_rs::PixelRect::x: u32
+pub wsi_rs::PixelRect::y: u32
+impl wsi_rs::PixelRect
+pub fn wsi_rs::PixelRect::fits_within(&self, u32, u32) -> bool
+pub const fn wsi_rs::PixelRect::new(u32, u32, u32, u32) -> Self
 #[non_exhaustive] pub struct wsi_rs::PlaneIdx(_)
 impl wsi_rs::PlaneIdx
 pub const fn wsi_rs::PlaneIdx::get(self) -> wsi_rs::PlaneSelection
@@ -719,6 +828,8 @@ pub fn wsi_rs::RawCompressedTile::height(&self) -> u32
 pub fn wsi_rs::RawCompressedTile::into_data(self) -> alloc::vec::Vec<u8>
 pub fn wsi_rs::RawCompressedTile::photometric_interpretation(&self) -> wsi_rs::EncodedTilePhotometricInterpretation
 pub fn wsi_rs::RawCompressedTile::samples_per_pixel(&self) -> u16
+pub fn wsi_rs::RawCompressedTile::significant_bits(&self) -> core::option::Option<u16>
+pub fn wsi_rs::RawCompressedTile::tile_region(&self) -> wsi_rs::PixelRect
 pub fn wsi_rs::RawCompressedTile::width(&self) -> u32
 pub struct wsi_rs::RawCompressedTileBuilder
 impl wsi_rs::RawCompressedTileBuilder
@@ -728,6 +839,8 @@ pub fn wsi_rs::RawCompressedTileBuilder::data(self, alloc::vec::Vec<u8>) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::dimensions(self, u32, u32) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::photometric_interpretation(self, wsi_rs::EncodedTilePhotometricInterpretation) -> Self
 pub fn wsi_rs::RawCompressedTileBuilder::samples_per_pixel(self, u16) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::significant_bits(self, u16) -> Self
+pub fn wsi_rs::RawCompressedTileBuilder::tile_region(self, wsi_rs::PixelRect) -> Self
 pub struct wsi_rs::ReadCancellationToken
 impl wsi_rs::ReadCancellationToken
 pub fn wsi_rs::ReadCancellationToken::cancel(&self)
@@ -817,6 +930,9 @@ pub fn wsi_rs::Slide::replace_shared_tile_cache(&self, alloc::sync::Arc<wsi_rs::
 pub fn wsi_rs::Slide::source(&self) -> &dyn wsi_rs::SlideReader
 pub fn wsi_rs::Slide::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 pub fn wsi_rs::Slide::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
+impl wsi_rs::Slide
+pub fn wsi_rs::Slide::level_tile_locations(&self, impl core::convert::Into<wsi_rs::SceneId>, impl core::convert::Into<wsi_rs::SeriesId>, impl core::convert::Into<wsi_rs::LevelIdx>, impl core::convert::Into<wsi_rs::PlaneIdx>) -> core::result::Result<wsi_rs::LevelTileLocations, wsi_rs::error::WsiError>
+pub fn wsi_rs::Slide::tile_location(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::TileLocation, wsi_rs::error::WsiError>
 impl core::fmt::Debug for wsi_rs::Slide
 pub fn wsi_rs::Slide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct wsi_rs::SlideLimitError
@@ -829,6 +945,7 @@ pub const fn wsi_rs::SlideLimits::aggregate_metadata_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::batch_chunk_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::decoded_output_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::encoded_unit_bytes(self) -> u64
+pub const fn wsi_rs::SlideLimits::lossless_crop_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::metadata_value_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::operation_transient_bytes(self) -> u64
 pub const fn wsi_rs::SlideLimits::region_pixels(self) -> u64
@@ -839,6 +956,7 @@ pub fn wsi_rs::SlideLimits::with_aggregate_metadata_bytes(self, u64) -> core::re
 pub fn wsi_rs::SlideLimits::with_batch_chunk_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_decoded_output_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_encoded_unit_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
+pub fn wsi_rs::SlideLimits::with_lossless_crop_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_metadata_value_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_operation_transient_bytes(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
 pub fn wsi_rs::SlideLimits::with_region_pixels(self, u64) -> core::result::Result<Self, wsi_rs::SlideLimitError>
@@ -896,6 +1014,12 @@ impl wsi_rs::SourceIccProfileKey
 pub const fn wsi_rs::SourceIccProfileKey::new(wsi_rs::SceneId, wsi_rs::SeriesId) -> Self
 pub const fn wsi_rs::SourceIccProfileKey::with_channel(self, usize) -> Self
 pub const fn wsi_rs::SourceIccProfileKey::with_optical_path(self, usize) -> Self
+#[non_exhaustive] pub struct wsi_rs::StoredTile
+impl wsi_rs::StoredTile
+pub fn wsi_rs::StoredTile::new(u32, u32, alloc::vec::Vec<wsi_rs::EncodedUnit>) -> core::result::Result<Self, wsi_rs::error::WsiError>
+pub fn wsi_rs::StoredTile::single_unit(&self) -> core::option::Option<&wsi_rs::EncodedUnit>
+pub fn wsi_rs::StoredTile::tile_size(&self) -> (u32, u32)
+pub fn wsi_rs::StoredTile::units(&self) -> &[wsi_rs::EncodedUnit]
 #[non_exhaustive] pub struct wsi_rs::SvcacheTileSelection
 pub wsi_rs::SvcacheTileSelection::col: i64
 pub wsi_rs::SvcacheTileSelection::level: wsi_rs::LevelIdx
@@ -995,6 +1119,7 @@ pub fn wsi_rs::SlideReader::dataset(&self) -> &wsi_rs::Dataset
 pub fn wsi_rs::SlideReader::level_encoding(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<core::option::Option<wsi_rs::SourceEncoding>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::level_source_kind(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx) -> core::result::Result<wsi_rs::LevelSourceKind, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::prepare_level_controlled(&self, wsi_rs::SceneId, wsi_rs::SeriesId, wsi_rs::LevelIdx, &wsi_rs::ReadControl) -> core::result::Result<(), wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::raw_compressed_tile_reservation_hint(&self, &wsi_rs::TileRequest) -> core::result::Result<u64, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_associated(&self, &str) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::CpuTile, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::read_raw_compressed_display_tile(&self, &wsi_rs::TileViewRequest) -> core::result::Result<wsi_rs::RawCompressedTile, wsi_rs::error::WsiError>
@@ -1006,6 +1131,7 @@ pub fn wsi_rs::SlideReader::read_tiles_cpu(&self, &[wsi_rs::TileRequest]) -> cor
 pub fn wsi_rs::SlideReader::read_tiles_cpu_controlled(&self, &[wsi_rs::TileRequest], &wsi_rs::ReadControl) -> core::result::Result<alloc::vec::Vec<wsi_rs::CpuTile>, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::tile_codec_kind(&self, &wsi_rs::TileRequest) -> wsi_rs::TileCodecKind
 pub fn wsi_rs::SlideReader::tile_is_present(&self, &wsi_rs::TileRequest) -> core::result::Result<core::option::Option<bool>, wsi_rs::error::WsiError>
+pub fn wsi_rs::SlideReader::tile_location(&self, &wsi_rs::TileRequest) -> core::result::Result<wsi_rs::TileLocation, wsi_rs::error::WsiError>
 pub fn wsi_rs::SlideReader::use_display_tile_cache(&self, &wsi_rs::TileViewRequest) -> bool
 pub fn wsi_rs::build_svcache(&std::path::Path, &std::path::Path) -> core::result::Result<(), wsi_rs::error::WsiError>
 pub fn wsi_rs::build_svcache_tile_payloads_merge(&std::path::Path, &std::path::Path, &[(wsi_rs::SvcacheTileSelection, wsi_rs::CpuTile)]) -> core::result::Result<usize, wsi_rs::error::WsiError>

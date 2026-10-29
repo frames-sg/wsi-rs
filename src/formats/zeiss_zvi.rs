@@ -1,7 +1,9 @@
 mod compound;
 mod header;
+mod locations;
 mod model;
 mod mosaic;
+mod sectors;
 mod slide;
 mod tags;
 mod tiles;
@@ -13,11 +15,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cfb::CompoundFile;
 use image::ImageFormat;
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::hash::{dataset_id_from_quickhash, Quickhash1};
 use crate::core::registry::{
     BackendOpenConfig, ConfiguredDatasetReader, ConfiguredFormatProbe, ConservativeManagedReader,
@@ -38,6 +41,9 @@ const MAX_ZVI_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ZVI_STREAMS: usize = 32_768;
 const MAX_ZVI_PLANES: usize = 16_384;
 const MAX_ZVI_TAGS: usize = 16_384;
+/// Directory entries the location map reads: every stream, its storages and
+/// unused slots.
+const MAX_ZVI_DIRECTORY_ENTRIES: usize = 8 * MAX_ZVI_STREAMS;
 const MAX_ZVI_AXIS_INDEX: u32 = 65_535;
 
 pub(crate) struct ZeissZviBackend;

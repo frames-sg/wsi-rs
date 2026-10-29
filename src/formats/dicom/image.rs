@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use j2k_core::BackendRequest;
 
@@ -8,7 +8,7 @@ use crate::core::cache::{PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;
 use crate::core::positioned_file::PositionedFile;
 use crate::core::registry::OpenBudget;
-use crate::core::types::{CpuTile, RawCompressedTile, SourceEncoding};
+use crate::core::types::{CpuTile, PixelRect, RawCompressedTile, SourceEncoding};
 use crate::error::WsiError;
 
 use super::decode::{
@@ -23,6 +23,7 @@ use super::transfer_syntax::DicomTransferSyntax;
 
 mod frame_decode;
 mod frame_io;
+mod frame_location;
 
 pub(super) const BATCH_FRAME_READ_MAX_SPAN_BYTES: u64 = 32 * 1024 * 1024;
 pub(super) const BATCH_FRAME_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
@@ -54,6 +55,13 @@ pub(super) struct DicomImage {
 #[derive(Debug)]
 pub(super) struct DicomFrameStore {
     pub(super) path: PathBuf,
+    /// The instance file as opened, shared by its tile locations.
+    pub(super) source_path: Arc<Path>,
+    /// File size when the metadata was parsed; locations are checked against it.
+    pub(super) source_len: u64,
+    /// Opened on the first location request, which reads the last bytes of
+    /// JPEG and JPEG 2000 frames to tell DICOM padding from the stream.
+    pub(super) location_file: OnceLock<PositionedFile>,
     pub(super) encoded_unit_bytes: u64,
     pub(super) native_pixel_data: Option<NativePixelData>,
     pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
@@ -108,6 +116,7 @@ impl DicomImage {
         } else {
             DicomGrid::Full
         };
+        let source_len = meta.source_identity.length();
         let encapsulated_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
         let decoded_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
         let native_pixel_data = if transfer_syntax.is_encapsulated() {
@@ -161,6 +170,9 @@ impl DicomImage {
             objective_lens_power: meta.objective_lens_power,
             icc_profile,
             frame_store: DicomFrameStore {
+                source_path: Arc::from(meta.path.as_path()),
+                source_len,
+                location_file: OnceLock::new(),
                 path: meta.path,
                 encoded_unit_bytes: open_budget.limits().encoded_unit_bytes(),
                 native_pixel_data,
@@ -196,6 +208,19 @@ impl DicomImage {
         crop_or_keep_sample_buffer_rgb(buffer, actual_width, actual_height)
     }
 
+    /// The tile's stored frame, without decoding it.
+    ///
+    /// JPEG and JPEG 2000 frames come back as their codestreams, without
+    /// the DICOM padding byte after an odd-length stream, and RLE frames as
+    /// stored, header included; both equal the bytes `tile_location` names.
+    /// Native frames come back as uncompressed samples: interleaved,
+    /// multi-byte samples in host byte order with the bits above
+    /// `BitsStored` cleared, as `read_tile` reads them; `tile_location`
+    /// names the stored bytes and their layout. Edge frames keep their
+    /// stored size, and [`RawCompressedTile::tile_region`] is the part of
+    /// the frame inside the image. Samples in 16-bit words report
+    /// `BitsStored` as [`RawCompressedTile::significant_bits`] when it is
+    /// fewer than 16; RLE and compressed frames keep the high bits as stored.
     pub(super) fn read_raw_compressed_tile(
         &self,
         col: i64,
@@ -209,31 +234,42 @@ impl DicomImage {
         };
         let compression = self
             .transfer_syntax
-            .raw_compression(&self.photometric_interpretation)
-            .ok_or_else(|| WsiError::Unsupported {
-                reason: format!(
-                    "raw compressed DICOM tile access requires JPEG or J2K/HTJ2K transfer syntax, got {}",
-                    self.transfer_syntax_uid
-                ),
-            })?;
+            .source_compression(&self.photometric_interpretation);
         let photometric_interpretation = raw_photometric_interpretation(
             self.samples_per_pixel,
             &self.photometric_interpretation,
         )?;
-        let bytes = self.extract_encapsulated_frame(frame_index, level, col, row, true)?;
-        let mut data = bytes.as_ref().clone();
-        trim_encapsulated_frame_padding(&mut data);
-        if matches!(self.transfer_syntax, DicomTransferSyntax::Jpeg(_)) {
-            self.validate_jpeg_frame(&data)?;
-        }
+        let data = match self.transfer_syntax {
+            DicomTransferSyntax::Native { .. } => {
+                self.read_native_raw_frame(frame_index, level, col, row)?
+            }
+            DicomTransferSyntax::Jpeg(_) | DicomTransferSyntax::Jp2k { .. } => {
+                let bytes = self.extract_encapsulated_frame(frame_index, level, col, row, true)?;
+                let mut data = bytes.as_ref().clone();
+                trim_encapsulated_frame_padding(&mut data);
+                if matches!(self.transfer_syntax, DicomTransferSyntax::Jpeg(_)) {
+                    self.validate_jpeg_frame(&data)?;
+                }
+                data
+            }
+            DicomTransferSyntax::Rle => self
+                .extract_encapsulated_frame(frame_index, level, col, row, true)?
+                .as_ref()
+                .clone(),
+        };
 
-        Ok(RawCompressedTile::builder(compression)
+        let (width, height) = self.actual_tile_dimensions(col_u32, row_u32);
+        let mut builder = RawCompressedTile::builder(compression)
             .dimensions(self.tile_width, self.tile_height)
+            .tile_region(PixelRect::new(0, 0, width, height))
             .bits_allocated(self.bit_depth.bits_allocated())
             .samples_per_pixel(self.samples_per_pixel)
-            .photometric_interpretation(photometric_interpretation)
-            .data(data)
-            .build()?)
+            .photometric_interpretation(photometric_interpretation);
+        let bits_stored = u16::from(self.bit_depth.bits_stored());
+        if bits_stored < self.bit_depth.bits_allocated() {
+            builder = builder.significant_bits(bits_stored);
+        }
+        Ok(builder.data(data).build()?)
     }
 
     pub(super) fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

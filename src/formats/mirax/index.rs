@@ -124,7 +124,10 @@ pub(super) fn process_hier_data_pages_from_indexfile<R: Read + Seek>(
     } = context;
     // Thousands of image records refer to a small set of data files. Retain
     // each path once instead of allocating a full PathBuf for every image.
-    let datafile_paths: Vec<_> = datafile_paths.iter().cloned().map(Arc::new).collect();
+    let datafile_paths: Vec<Arc<Path>> = datafile_paths
+        .iter()
+        .map(|path| Arc::from(path.as_path()))
+        .collect();
     // Records are four adjacent i32 fields. Bound read-ahead while avoiding a
     // file read for every field; BufReader also handles absolute page seeks.
     let mut buffered_index = std::io::BufReader::with_capacity(8 * 1024, index_file);
@@ -542,7 +545,7 @@ pub(super) fn build_associated_records(
         associated.insert(
             name.into(),
             MiraxRecord {
-                path: Arc::new(record.path),
+                path: Arc::from(record.path),
                 offset: record.offset,
                 len: record.len,
             },

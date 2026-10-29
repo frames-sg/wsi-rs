@@ -22,6 +22,8 @@ mod codecs;
 mod device;
 mod dispatch;
 mod fixtures;
+mod locations;
+mod lossless_raw;
 mod ndpi;
 mod synthetic;
 

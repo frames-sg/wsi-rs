@@ -340,7 +340,10 @@ fn classic_jpeg_subblock_decodes_with_czi_geometry_and_rgb_color() {
     let slide = ZeissSlide::parse(fixture.path()).expect("parse JPEG-compressed CZI");
 
     let raw = slide
-        .read_raw_jpeg_tile(&TileRequest::new(0usize, 0usize, 0u32, 0, 0))
+        .read_raw_tile(
+            &TileRequest::new(0usize, 0usize, 0u32, 0, 0),
+            crate::SlideLimits::default().lossless_crop_bytes(),
+        )
         .expect("exact raw JPEG tile");
     assert_eq!(raw.data(), jpeg);
     assert_eq!(slide.level_encoding(0), None);

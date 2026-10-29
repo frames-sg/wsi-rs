@@ -309,3 +309,52 @@ pub(in super::super) fn build_ndpi_scan_data_tiff_from_blobs_with_mcu_mode_and_o
 }
 
 // ── TiffPixelReader tests ─────────────────────────────────────
+
+/// The error of `req`'s restart-interval passthrough alone, before raw reads
+/// fall back to cropping the level JPEG.
+pub(in super::super) fn ndpi_restart_raw_error(
+    reader: &TiffPixelReader,
+    req: &TileRequest,
+) -> WsiError {
+    let TileSource::NdpiJpeg {
+        ifd_id,
+        jpeg_header,
+        mcu_starts_tag,
+        tiles_across,
+        tiles_down,
+        restart_interval,
+        strip_offset,
+        strip_byte_count,
+    } = reader.tile_source_for(req).unwrap()
+    else {
+        panic!("{req:?} is not an NDPI restart-interval tile");
+    };
+    reader
+        .read_ndpi_raw_jpeg_tile(
+            req,
+            *ifd_id,
+            jpeg_header,
+            *mcu_starts_tag,
+            *tiles_across,
+            *tiles_down,
+            *restart_interval,
+            *strip_offset,
+            *strip_byte_count,
+        )
+        .unwrap_err()
+}
+
+/// Decodes a raw NDPI JPEG tile as the TIFF reader decodes photometric 6.
+pub(in super::super) fn decode_raw_ndpi_tile(raw: &RawCompressedTile) -> Vec<u8> {
+    decode_jpeg_rgb_with_size_override(
+        raw.data(),
+        None,
+        raw.width(),
+        raw.height(),
+        None,
+        None,
+        tiff_jpeg_color_transform(6, 3, jpeg_bitstream_color_hint(raw.data(), None)),
+    )
+    .unwrap()
+    .pixels
+}

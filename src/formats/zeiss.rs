@@ -3,6 +3,7 @@ mod batch;
 mod composition;
 mod container;
 mod level;
+mod locations;
 mod metadata;
 mod preflight;
 mod raster;

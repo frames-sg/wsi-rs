@@ -8,7 +8,8 @@ use crate::core::registry::{
     ManagedSlideReader, ProbeConfidence, ProbeResult, SlideReader,
 };
 use crate::core::types::{
-    checked_grid_tile, CpuTile, Dataset, RawCompressedTile, TileCodecKind, TileRequest,
+    checked_grid_tile, CpuTile, Dataset, RawCompressedTile, TileCodecKind, TileLocation,
+    TileRequest,
 };
 use crate::error::WsiError;
 
@@ -123,9 +124,36 @@ impl SlideReader for OlympusVsiReader {
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         let (scene, _, tile) = self.tile_for_request(req)?;
         let tile = tile.ok_or_else(|| WsiError::Unsupported {
-            reason: "J2K passthrough is not available for sparse ETS background tiles".into(),
+            reason: format!(
+                "ETS tile ({}, {}) at level {} has no stored codestream: the tile table leaves this background tile out, and readers paint the ETS background color (tile_location reports it Absent)",
+                req.col,
+                req.row,
+                req.level.get()
+            ),
         })?;
         scene.raw_compressed_tile(tile)
+    }
+
+    /// The codestream's byte range in the scene's `.ets` file, from its tile
+    /// table; tiles the table leaves out are background and absent.
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        let (scene, level, tile) = self.tile_for_request(req)?;
+        let Some(tile) = tile else {
+            return Ok(TileLocation::Absent);
+        };
+        let clipped = |extent: u32, tile_size: u32, index: i64| {
+            let start = u64::try_from(index)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(u64::from(tile_size));
+            u64::from(extent)
+                .saturating_sub(start)
+                .min(u64::from(tile_size)) as u32
+        };
+        scene.tile_location(
+            tile,
+            clipped(level.width, level.tile_width, req.col),
+            clipped(level.height, level.tile_height, req.row),
+        )
     }
 
     #[cfg(feature = "metal")]

@@ -1,5 +1,8 @@
 use super::model::VmsJpeg;
 use super::*;
+use crate::decode::jpeg::frame::{
+    disable_jpeg_restart_interval, jpeg_segment_color_hint, JpegBitstreamColorHint,
+};
 use memchr::memchr;
 
 const JPEG_HEADER_MAX_BYTES: usize = 1 << 20;
@@ -80,8 +83,21 @@ impl VmsJpeg {
         let payload_file =
             File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
 
+        let photometric = match (header.components, jpeg_segment_color_hint(&header.header)) {
+            (1, _) => EncodedTilePhotometricInterpretation::Monochrome2,
+            (_, JpegBitstreamColorHint::Rgb) => EncodedTilePhotometricInterpretation::Rgb,
+            _ => EncodedTilePhotometricInterpretation::YbrFull422,
+        };
         Ok(Self {
             path: path.to_path_buf(),
+            location_path: Arc::from(path),
+            codec: EncodedCodec::new(
+                Compression::Jpeg,
+                8,
+                u16::from(header.components),
+                photometric,
+            ),
+            tile_prefixes: Default::default(),
             file: Mutex::new(scan_file),
             payload_file: crate::core::positioned_file::PositionedFile::new(payload_file),
             header: header.header,
@@ -177,12 +193,67 @@ impl VmsJpeg {
         Ok(tile)
     }
 
+    /// A standalone JPEG of one tile: [`Self::tile_prefix`], the tile's
+    /// restart interval, and EOI in place of the trailing marker.
     pub(super) fn tile_jpeg_bytes(
         &self,
         tile_index: usize,
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>, WsiError> {
+        let (start, stop) = self.checked_tile_entropy_bounds(tile_index)?;
+        let prefix = self.tile_prefix(width, height)?;
+        let data_len = checked_vms_entropy_len_with_limit(
+            stop - start,
+            prefix.len(),
+            self.encoded_unit_bytes,
+        )?;
+        let mut tile = Vec::new();
+        tile.try_reserve_exact(prefix.len() + data_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "VMS JPEG tile",
+                requested: (prefix.len() + data_len) as u64,
+                limit: self.encoded_unit_bytes,
+            })?;
+        tile.extend_from_slice(&prefix);
+        tile.resize(prefix.len() + data_len, 0);
+        self.payload_file
+            .read_exact_at(&mut tile[prefix.len()..], start)
+            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
+        if data_len < 2 || tile[tile.len() - 2] != 0xFF {
+            return Err(WsiError::Jpeg(format!(
+                "VMS JPEG entropy segment for {} does not end at a marker",
+                self.path.display()
+            )));
+        }
+        let last = tile.len() - 1;
+        tile[last] = 0xD9;
+        Ok(tile)
+    }
+
+    /// The file header for a `width` x `height` tile: SOF patched to the
+    /// tile size and the restart interval removed, since a tile is exactly
+    /// one restart interval.
+    pub(super) fn tile_prefix(&self, width: u32, height: u32) -> Result<Arc<[u8]>, WsiError> {
+        let shape =
+            usize::from(width != self.tile_width) | usize::from(height != self.tile_height) << 1;
+        if let Some(prefix) = self.tile_prefixes[shape].get() {
+            return Ok(Arc::clone(prefix));
+        }
+        let mut header = self.header.clone();
+        patch_sof_dimensions(&mut header, self.sof_dimensions_offset, width, height)?;
+        disable_jpeg_restart_interval(&mut header);
+        let prefix: Arc<[u8]> = header.into();
+        Ok(Arc::clone(self.tile_prefixes[shape].get_or_init(|| prefix)))
+    }
+
+    /// Entropy bytes of one tile: from the byte after the previous restart
+    /// marker to the end of its own trailing marker (RSTn, or EOI for the
+    /// last tile), found through the lazy restart-marker index.
+    pub(super) fn checked_tile_entropy_bounds(
+        &self,
+        tile_index: usize,
+    ) -> Result<(u64, u64), WsiError> {
         let (start, stop) = self.tile_entropy_bounds(tile_index)?;
         if stop <= start || stop > self.file_len {
             return Err(WsiError::Jpeg(format!(
@@ -192,43 +263,7 @@ impl VmsJpeg {
                 self.path.display()
             )));
         }
-        let data_len = checked_vms_entropy_len_with_limit(
-            stop - start,
-            self.header.len(),
-            self.encoded_unit_bytes,
-        )?;
-        let mut entropy = Vec::new();
-        entropy
-            .try_reserve_exact(data_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "VMS JPEG tile",
-                requested: data_len as u64,
-                limit: self.encoded_unit_bytes,
-            })?;
-        entropy.resize(data_len, 0);
-        self.payload_file
-            .read_exact_at(&mut entropy, start)
-            .map_err(|source| WsiError::io_with_path(&self.path, source))?;
-        if entropy.len() < 2 || entropy[entropy.len() - 2] != 0xFF {
-            return Err(WsiError::Jpeg(format!(
-                "VMS JPEG entropy segment for {} does not end at a marker",
-                self.path.display()
-            )));
-        }
-        let last = entropy.len() - 1;
-        entropy[last] = 0xD9;
-
-        let mut header = self.header.clone();
-        patch_sof_dimensions(&mut header, self.sof_dimensions_offset, width, height)?;
-        header
-            .try_reserve_exact(entropy.len())
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "VMS JPEG tile",
-                requested: header.len() as u64 + entropy.len() as u64,
-                limit: self.encoded_unit_bytes,
-            })?;
-        header.extend_from_slice(&entropy);
-        Ok(header)
+        Ok((start, stop))
     }
 
     fn tile_entropy_bounds(&self, tile_index: usize) -> Result<(u64, u64), WsiError> {
@@ -382,6 +417,7 @@ fn checked_vms_entropy_len_with_limit(
 pub(super) struct VmsJpegHeader {
     file: File,
     pub(super) header: Vec<u8>,
+    pub(super) components: u8,
     pub(super) geometry: JpegTileGeometry,
     pub(super) sof_dimensions_offset: usize,
     pub(super) scan_data_offset: u64,
@@ -403,6 +439,7 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
     }
 
     let mut dimensions = None;
+    let mut components = 0u8;
     let mut sof_dimensions_offset = None;
     let mut max_h = 0u8;
     let mut max_v = 0u8;
@@ -442,13 +479,14 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
                 }
                 let height = u16::from_be_bytes([payload[1], payload[2]]) as u32;
                 let width = u16::from_be_bytes([payload[3], payload[4]]) as u32;
-                let components = payload[5] as usize;
-                if components == 0 || payload.len() < 6 + components * 3 {
+                components = payload[5];
+                let component_count = usize::from(components);
+                if component_count == 0 || payload.len() < 6 + component_count * 3 {
                     return Err(WsiError::Jpeg("truncated VMS JPEG component list".into()));
                 }
                 max_h = 0;
                 max_v = 0;
-                for idx in 0..components {
+                for idx in 0..component_count {
                     let sampling = payload[6 + idx * 3 + 1];
                     max_h = max_h.max(sampling >> 4);
                     max_v = max_v.max(sampling & 0x0F);
@@ -509,6 +547,7 @@ pub(super) fn read_vms_jpeg_header(path: &Path) -> Result<VmsJpegHeader, WsiErro
                 return Ok(VmsJpegHeader {
                     file,
                     header,
+                    components,
                     geometry: JpegTileGeometry {
                         width,
                         height,

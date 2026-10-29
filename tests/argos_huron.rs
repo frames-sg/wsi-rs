@@ -1,7 +1,10 @@
 mod support;
 
 use support::corpus::{find_slide_by_alias, load_public};
-use wsi_rs::{CpuTileData, PlaneSelection, Slide, TileLayout, TileRequest};
+use wsi_rs::{
+    Compression, CpuTileData, EncodedUnit, PlaneSelection, Slide, StoredFraming, TileLayout,
+    TileLocation, TileRequest,
+};
 
 #[test]
 #[ignore = "requires the public ARGOS/Huron corpus"]
@@ -97,6 +100,87 @@ fn public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images() {
                 .read_associated(name)
                 .unwrap_or_else(|error| panic!("read {alias} {name}: {error}"));
             assert!(image.width() > 0 && image.height() > 0);
+        }
+    }
+}
+
+/// Reads `unit`'s segments straight from the slide file and assembles them.
+fn assemble_from_file(unit: &EncodedUnit) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(unit.path()).expect("open located slide file");
+    let segments: Vec<Vec<u8>> = unit
+        .segments()
+        .iter()
+        .map(|segment| {
+            let mut bytes = vec![0; segment.length as usize];
+            file.seek(SeekFrom::Start(segment.offset)).unwrap();
+            file.read_exact(&mut bytes).unwrap();
+            bytes
+        })
+        .collect();
+    unit.assemble(segments.iter().map(Vec::as_slice))
+        .expect("assemble located segments")
+}
+
+#[test]
+fn local_huron_uncompressed_tiles_pass_through_at_their_locations() {
+    let Some(path) = find_slide_by_alias("huron-uncompressed-001") else {
+        eprintln!("skipping: corpus slide huron-uncompressed-001 not found");
+        return;
+    };
+    let slide = Slide::open(&path).expect("open huron-uncompressed-001");
+    let series = &slide.dataset().scenes[0].series[0];
+    for (level_index, level) in series.levels.iter().enumerate() {
+        let level_index = level_index as u32;
+        let locations = slide
+            .level_tile_locations(0usize, 0usize, level_index, PlaneSelection::default())
+            .unwrap_or_else(|error| panic!("level {level_index} locations: {error}"));
+        let TileLayout::Regular {
+            tiles_across,
+            tiles_down,
+            ..
+        } = level.tile_layout
+        else {
+            panic!("Huron level {level_index} should use a regular tile grid");
+        };
+        assert_eq!(
+            (locations.tiles_across, locations.tiles_down),
+            (tiles_across, tiles_down)
+        );
+        assert_eq!(locations.tiles.len() as u64, tiles_across * tiles_down);
+
+        let last = locations.tiles.len() - 1;
+        for entry in [&locations.tiles[0], &locations.tiles[last]] {
+            let TileLocation::Stored(stored) = &entry.location else {
+                panic!("Huron tile ({}, {}) should be stored", entry.col, entry.row);
+            };
+            let unit = stored.single_unit().expect("one stored TIFF tile");
+            assert_eq!(unit.path(), path.as_path());
+            assert_eq!(unit.framing(), StoredFraming::BarePayload);
+            assert_eq!(unit.codec().compression(), Compression::None);
+
+            let req = TileRequest::new(0usize, 0usize, level_index, entry.col, entry.row);
+            let raw = slide
+                .read_raw_compressed_tile(&req)
+                .unwrap_or_else(|error| panic!("raw Huron tile {req:?}: {error}"));
+            assert_eq!(raw.compression(), Compression::None);
+            assert_eq!(assemble_from_file(unit), raw.data());
+
+            // The stored tile keeps its padding; its rows up to the tile
+            // width are the decoded pixels.
+            let tile = slide.read_tile(&req).expect("decode Huron tile");
+            let CpuTileData::U8(pixels) = tile.data() else {
+                panic!("Huron tiles decode to 8-bit samples");
+            };
+            let channels = usize::from(raw.samples_per_pixel());
+            let stored_row = raw.width() as usize * channels;
+            let visible_row = tile.width() as usize * channels;
+            let region = raw.tile_region();
+            assert_eq!((region.width, region.height), (tile.width(), tile.height()));
+            for (row, expected) in pixels.chunks(visible_row).enumerate() {
+                let start = row * stored_row;
+                assert_eq!(&raw.data()[start..start + visible_row], expected);
+            }
         }
     }
 }

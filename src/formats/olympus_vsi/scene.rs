@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::registry::OpenBudget;
 use crate::core::types::{AxesShape, ChannelInfo, SampleType};
@@ -16,6 +17,10 @@ use index::{EtsIndex, MAX_ETS_AXIS_INDEX};
 
 pub(super) struct EtsScene {
     pub(super) path: PathBuf,
+    /// The `.ets` file as opened, shared by its tile locations.
+    pub(super) location_path: Arc<Path>,
+    /// File size when the header was read; locations are checked against it.
+    pub(super) file_len: u64,
     pub(super) file: crate::core::positioned_file::PositionedFile,
     pub(super) name: Option<String>,
     pub(super) levels: Vec<EtsLevel>,
@@ -38,6 +43,7 @@ impl EtsScene {
         let axes = index.axes(path)?;
         let channels = scene_channels(header.samples_per_pixel, axes, budget)?;
         let EtsHeader {
+            file_len,
             sample_type,
             samples_per_pixel,
             background,
@@ -46,6 +52,8 @@ impl EtsScene {
         let tiles = index.tiles;
         Ok(Self {
             path: path.to_path_buf(),
+            location_path: Arc::from(path),
+            file_len,
             file: crate::core::positioned_file::PositionedFile::new(file),
             name: {
                 let name = path

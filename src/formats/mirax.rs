@@ -1,6 +1,7 @@
 mod batch;
 mod helpers;
 mod index;
+mod locations;
 mod slide;
 
 #[cfg(test)]
@@ -165,33 +166,35 @@ struct MiraxReader {
 
 impl ManagedSlideReader for MiraxReader {
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
-        let (_, tile) = self.tile_for_request(req)?;
-        let image = &tile.image;
-        if image.format != MiraxImageFormat::Jpeg {
-            return Ok(self.slide.encoded_unit_bytes);
-        }
-        // A logical subtile may decode a larger JPEG. Reserve its full RGB
-        // source and codec staging as well as input and possible EOI repair;
-        // ordinary admission separately accounts for the logical output.
-        Ok(image
-            .record
-            .len
-            .saturating_mul(2)
-            .saturating_add(2)
-            .saturating_add(
-                u64::from(image.expected_width)
-                    .saturating_mul(u64::from(image.expected_height))
-                    .saturating_mul(6),
-            ))
+        let (entry, tile) = self.tile_for_request(req)?;
+        Ok(self.decode_upper_bound(entry, tile))
     }
 
+    /// Raw JPEG reads never decode pixels: they hold the record and a
+    /// possible EOI-repaired copy, or for crop tiles a lossless crop's
+    /// working set (see [`MiraxReader::jpeg_crop_budget`]), which returns the
+    /// record when it does not fit. PNG/BMP crops decode, so they reserve the
+    /// decode bound.
+    fn raw_tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        let (entry, tile) = self.tile_for_request(req)?;
+        if tile.image.format != MiraxImageFormat::Jpeg {
+            return Ok(self.decode_upper_bound(entry, tile));
+        }
+        let record = tile.image.record.len.saturating_mul(2).saturating_add(2);
+        Ok(self
+            .jpeg_crop_budget(entry, tile)
+            .map_or(record, |crop| crop.max(record)))
+    }
+
+    /// Batches only decode, so they reserve the decode bound of each source
+    /// image once.
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
         let mut seen = HashSet::with_capacity(reqs.len());
         let mut bytes = 0_u64;
         for req in reqs {
-            let (_, tile) = self.tile_for_request(req)?;
+            let (entry, tile) = self.tile_for_request(req)?;
             if seen.insert(tile.image.id) {
-                bytes = bytes.saturating_add(self.tile_encoded_upper_bound(req)?);
+                bytes = bytes.saturating_add(self.decode_upper_bound(entry, tile));
             }
         }
         Ok(bytes)
@@ -230,43 +233,22 @@ impl SlideReader for MiraxReader {
         self.decode_tile(req)
     }
 
+    /// The stored record for whole-image tiles: the JPEG as stored, or a
+    /// PNG/BMP record unchanged as `Compression::Png` or `Compression::Bmp`.
+    /// A tile cropped from a JPEG is cut losslessly in the coefficient
+    /// domain, starting at the MCU corner at or before the tile, with
+    /// `tile_region` locating the tile when that corner is not the tile
+    /// origin; a crop that does not fit the lossless-crop limit returns the
+    /// whole record, with `tile_region` set. A tile cropped from a PNG or BMP image
+    /// is returned as exact uncompressed RGB samples, lossless because both
+    /// codecs are lossless. Resampled fractional subtiles have no stored
+    /// bytes and are refused.
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        let (entry, tile) = self.tile_for_request(req)?;
-        if tile.image.format != MiraxImageFormat::Jpeg {
-            return Err(WsiError::Unsupported {
-                reason: "MIRAX raw compressed tile access requires a JPEG backing image".into(),
-            });
-        }
-        if tile.image.resample {
-            return Err(WsiError::Unsupported {
-                reason:
-                    "MIRAX raw JPEG passthrough cannot represent a resampled fractional subtile"
-                        .into(),
-            });
-        }
-        if tile.src_x != 0.0 || tile.src_y != 0.0 {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "MIRAX raw JPEG passthrough cannot represent a logical tile cropped from source offset ({}, {})",
-                    tile.src_x, tile.src_y
-                ),
-            });
-        }
+        self.raw_tile(req)
+    }
 
-        let data = self.slide.read_record_bytes(&tile.image.record)?;
-        let raw = crate::decode::jpeg::standalone_raw_jpeg_tile(data)?;
-        if (raw.width(), raw.height()) != entry.dimensions {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "MIRAX raw JPEG geometry {}x{} does not exactly match logical tile {}x{}",
-                    raw.width(),
-                    raw.height(),
-                    entry.dimensions.0,
-                    entry.dimensions.1
-                ),
-            });
-        }
-        Ok(raw)
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.location(req)
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
@@ -291,10 +273,54 @@ impl SlideReader for MiraxReader {
 }
 
 impl MiraxReader {
+    /// Bytes a raw lossless crop of a JPEG crop tile may hold, or `None` for
+    /// other tiles: [`locations::jpeg_crop_reservation`], capped at the
+    /// lossless-crop limit.
+    fn jpeg_crop_budget(&self, entry: &TileEntry, tile: &MiraxTile) -> Option<u64> {
+        locations::jpeg_crop_reservation(entry, tile)
+            .map(|bytes| bytes.min(self.slide.limits.lossless_crop_bytes()))
+    }
+
+    /// Bytes one decode of `tile`'s source image holds, beyond its output.
+    fn decode_upper_bound(&self, entry: &TileEntry, tile: &MiraxTile) -> u64 {
+        let image = &tile.image;
+        if image.format != MiraxImageFormat::Jpeg {
+            // A raw tile cropped from a PNG/BMP record is its RGB samples.
+            let crop_rgb = u64::from(entry.dimensions.0)
+                .saturating_mul(u64::from(entry.dimensions.1))
+                .saturating_mul(3);
+            return self.slide.encoded_unit_bytes.max(crop_rgb);
+        }
+        // A logical subtile may decode a larger JPEG. Reserve its full RGB
+        // source and codec staging as well as input and possible EOI repair;
+        // ordinary admission separately accounts for the logical output.
+        image
+            .record
+            .len
+            .saturating_mul(2)
+            .saturating_add(2)
+            .saturating_add(
+                u64::from(image.expected_width)
+                    .saturating_mul(u64::from(image.expected_height))
+                    .saturating_mul(6),
+            )
+    }
+
     fn tile_for_request<'a>(
         &'a self,
         req: &TileRequest,
     ) -> Result<(&'a TileEntry, &'a MiraxTile), WsiError> {
+        self.stored_tile_for_request(req)?.ok_or_else(|| {
+            WsiError::tile_read(req, format!("no MIRAX tile at ({},{})", req.col, req.row))
+        })
+    }
+
+    /// The tile and its backing image, or `None` when the index stores no
+    /// image for this grid entry.
+    fn stored_tile_for_request<'a>(
+        &'a self,
+        req: &TileRequest,
+    ) -> Result<Option<(&'a TileEntry, &'a MiraxTile)>, WsiError> {
         let shared = &self.slide.shared;
         let (_, series, level) = shared.dataset.level(req.scene, req.series, req.level)?;
         series.axes.validate_plane(req.plane.get())?;
@@ -303,9 +329,9 @@ impl MiraxReader {
                 "MIRAX levels must use irregular tiles".into(),
             ));
         };
-        let entry = tiles.get(&(req.col, req.row)).ok_or_else(|| {
-            WsiError::tile_read(req, format!("no MIRAX tile at ({},{})", req.col, req.row))
-        })?;
+        let Some(entry) = tiles.get(&(req.col, req.row)) else {
+            return Ok(None);
+        };
         let tile_index = entry
             .tiff_tile_index
             .ok_or_else(|| WsiError::tile_read(req, "MIRAX tile is missing backing descriptor"))?;
@@ -323,7 +349,7 @@ impl MiraxReader {
                 format!("invalid MIRAX tile descriptor index {tile_index}"),
             )
         })?;
-        Ok((entry, tile))
+        Ok(Some((entry, tile)))
     }
 
     fn decode_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
@@ -422,7 +448,8 @@ struct MiraxImage {
 
 #[derive(Clone)]
 struct MiraxRecord {
-    path: Arc<PathBuf>,
+    /// One shared path per data file, as Slidedat.ini resolved it.
+    path: Arc<Path>,
     offset: u64,
     len: u64,
 }
