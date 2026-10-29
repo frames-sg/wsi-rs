@@ -61,14 +61,6 @@ cargo add wsi-rs
 
 wsi-rs needs Rust 1.99 or newer and a 64-bit x86 or ARM target.
 
-Version 0.8.1 is a GitHub source release with an exact Git pin for the J2K
-CUDA packet-header fix. It is not on crates.io. To use this version:
-
-```toml
-[dependencies]
-wsi-rs = { git = "https://github.com/frames-sg/wsi-rs", tag = "v0.8.1" }
-```
-
 For Python access to metadata, compressed tile bytes and tile byte locations,
 see the experimental [reader binding](wsi-rs-python/README.md); releases
 publish it to PyPI as `wsi-rs`. Pixel decoding and tensors use the separate
