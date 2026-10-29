@@ -71,7 +71,7 @@ j2k-core = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branc
 j2k-tilecodec = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
 zstd = "0.14.3"
 j2k = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
-jxr = { version = "0.3", git = "https://github.com/frames-sg/jxr", branch = "main" }
+jxr = { version = "0.4", git = "https://github.com/frames-sg/jxr", branch = "main" }
 j2k-metal = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 j2k-metal-support = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 j2k-cuda = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true, default-features = false }
