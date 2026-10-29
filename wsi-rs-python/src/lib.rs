@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Read-only Python access to slide metadata, tile geometry, and encoded payloads.
+//! Read-only Python access to slide metadata, tile geometry, encoded payloads,
+//! and the byte locations of stored tiles.
 
 #![cfg(feature = "python")]
 #![deny(unsafe_code)]
@@ -14,9 +15,11 @@ use pyo3::{
 };
 use wsi_rs::{Level, PlaneSelection, Series, Slide, TileRequest, WsiError};
 
+mod locations;
 mod metadata;
 mod tiles;
 
+use locations::{PyEncodedUnit, PyLevelTileLocations, PyTileLocation};
 use tiles::{CompressedTile, TileHit};
 
 /// An open reader. Construct one inside each DataLoader worker.
@@ -123,21 +126,7 @@ impl PySlide {
             limits.tile_index_bytes(),
             "compressed batch metadata",
         )?;
-        self.level(scene, series, level)?;
-        let axes = self.series(scene, series)?.axes;
-        for (axis, value, extent) in [
-            ("z", plane.0, axes.z),
-            ("c", plane.1, axes.c),
-            ("t", plane.2, axes.t),
-        ] {
-            if value >= extent {
-                return Err(wsi_error(WsiError::PlaneOutOfRange {
-                    axis: axis.into(),
-                    value,
-                    max: extent.saturating_sub(1),
-                }));
-            }
-        }
+        let plane = self.plane(scene, series, level, plane)?;
         let mut coordinates = Vec::new();
         coordinates
             .try_reserve_exact(count)
@@ -158,8 +147,7 @@ impl PySlide {
                 .map_err(|e| PyMemoryError::new_err(e.to_string()))?;
             let mut bytes = 0_u64;
             for (index, &(col, row)) in coordinates.iter().enumerate() {
-                let request = TileRequest::new(scene, series, level, col, row)
-                    .with_plane(PlaneSelection::new(plane.0, plane.1, plane.2));
+                let request = TileRequest::new(scene, series, level, col, row).with_plane(plane);
                 let tile = self.inner.read_raw_compressed_tile(&request).map_err(|e| {
                     let message = format!("input {index}: {e}");
                     if matches!(e, WsiError::Io(_) | WsiError::IoWithPath { .. }) {
@@ -190,6 +178,47 @@ impl PySlide {
         }
         Ok(output)
     }
+
+    /// Where one tile's encoded bytes are stored, read from metadata only.
+    #[pyo3(signature = (col, row, *, level=0, scene=0, series=0, plane=(0, 0, 0)))]
+    #[allow(clippy::too_many_arguments)]
+    fn tile_location(
+        &self,
+        py: Python<'_>,
+        col: i64,
+        row: i64,
+        level: u32,
+        scene: usize,
+        series: usize,
+        plane: (u32, u32, u32),
+    ) -> PyResult<PyTileLocation> {
+        self.check_process()?;
+        let plane = self.plane(scene, series, level, plane)?;
+        let request = TileRequest::new(scene, series, level, col, row).with_plane(plane);
+        let location = py
+            .detach(|| self.inner.tile_location(&request))
+            .map_err(wsi_error)?;
+        Ok(PyTileLocation::new(location))
+    }
+
+    /// Every tile location of one level plane in row-major order. Bounded by
+    /// the reader's tile-index limit; a failing tile fails the whole call.
+    #[pyo3(signature = (*, level=0, scene=0, series=0, plane=(0, 0, 0)))]
+    fn level_tile_locations(
+        &self,
+        py: Python<'_>,
+        level: u32,
+        scene: usize,
+        series: usize,
+        plane: (u32, u32, u32),
+    ) -> PyResult<PyLevelTileLocations> {
+        self.check_process()?;
+        let plane = self.plane(scene, series, level, plane)?;
+        let locations = py
+            .detach(|| self.inner.level_tile_locations(scene, series, level, plane))
+            .map_err(wsi_error)?;
+        PyLevelTileLocations::new(py, locations)
+    }
 }
 
 impl PySlide {
@@ -218,6 +247,28 @@ impl PySlide {
         })
     }
 
+    /// Checks the level and `(z, c, t)` plane before any tile work.
+    fn plane(
+        &self,
+        scene: usize,
+        series: usize,
+        level: u32,
+        (z, c, t): (u32, u32, u32),
+    ) -> PyResult<PlaneSelection> {
+        self.level(scene, series, level)?;
+        let axes = self.series(scene, series)?.axes;
+        for (axis, value, extent) in [("z", z, axes.z), ("c", c, axes.c), ("t", t, axes.t)] {
+            if value >= extent {
+                return Err(wsi_error(WsiError::PlaneOutOfRange {
+                    axis: axis.into(),
+                    value,
+                    max: extent.saturating_sub(1),
+                }));
+            }
+        }
+        Ok(PlaneSelection::new(z, c, t))
+    }
+
     fn level(&self, scene: usize, series: usize, level: u32) -> PyResult<&Level> {
         let levels = &self.series(scene, series)?.levels;
         levels.get(level as usize).ok_or_else(|| {
@@ -244,5 +295,8 @@ fn wsi_rs_python(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySlide>()?;
     module.add_class::<CompressedTile>()?;
     module.add_class::<TileHit>()?;
+    module.add_class::<PyTileLocation>()?;
+    module.add_class::<PyEncodedUnit>()?;
+    module.add_class::<PyLevelTileLocations>()?;
     Ok(())
 }

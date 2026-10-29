@@ -7,6 +7,11 @@ use j2k_jpeg::{JpegBackend, JpegEncodeOptions, JpegSubsampling};
 
 use crate::error::WsiError;
 
+mod frame_writer;
+
+/// Largest AC magnitude category an 8-bit baseline Huffman table can code.
+const MAX_BASELINE_AC_CATEGORY: u8 = 10;
+
 struct BitWriter {
     bytes: Vec<u8>,
     current: u8,
@@ -60,7 +65,139 @@ impl BitWriter {
     }
 }
 
-pub(super) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>, WsiError> {
+/// Re-emit quantized DCT blocks as a baseline JPEG with numeric component IDs,
+/// one shared chroma quant table, and an Adobe APP14 marker that states the
+/// resolved color transform.
+pub(crate) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>, WsiError> {
+    let BaselineDctLayout {
+        sampling,
+        adobe_transform,
+    } = baseline_dct_layout(image)?;
+    let component_count = image.components.len();
+
+    let options = JpegEncodeOptions {
+        quality: 90,
+        subsampling: if component_count == 1 {
+            JpegSubsampling::Gray
+        } else {
+            JpegSubsampling::Ybr420
+        },
+        restart_interval: None,
+        backend: JpegBackend::Cpu,
+    };
+    let mut tables = baseline_encode_tables(options)
+        .map_err(|err| WsiError::Jpeg(format!("DCT JPEG table setup failed: {err}")))?;
+    tables.sampling = sampling;
+    tables.q_luma = zigzag_quant_to_natural_u8(&image.components[0].quant_table)?;
+    if component_count == 3 {
+        if image.components[1].quant_table != image.components[2].quant_table {
+            return Err(WsiError::Unsupported {
+                reason: "DCT JPEG re-emission supports one shared chroma quant table".into(),
+            });
+        }
+        tables.q_chroma = zigzag_quant_to_natural_u8(&image.components[1].quant_table)?;
+    }
+
+    let dc_tables = [&tables.huff_dc_luma, &tables.huff_dc_chroma];
+    let ac_tables = [&tables.huff_ac_luma, &tables.huff_ac_chroma];
+    let entropy = encode_dct_entropy(image, sampling, dc_tables, ac_tables)?;
+    assemble_jpeg_baseline_frame(
+        &entropy,
+        image.width,
+        image.height,
+        &tables,
+        options,
+        JpegBackend::Cpu,
+    )
+    .map(|encoded| {
+        let mut data = encoded.data;
+        if let Some(transform) = adobe_transform {
+            // Re-emission writes numeric component IDs and drops source APP
+            // markers. Preserve the resolved component semantics explicitly,
+            // including 4:4:4 YCbCr, whose sampling alone is ambiguous.
+            data.splice(
+                2..2,
+                [
+                    0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, transform,
+                ],
+            );
+        }
+        data
+    })
+    .map_err(|err| WsiError::Jpeg(format!("DCT JPEG frame assembly failed: {err}")))
+}
+
+/// Source signalling that a coefficient-domain re-emission carries over.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DctFrameMarkers {
+    /// Complete APPn marker segments (marker, length, payload), such as JFIF
+    /// APP0 and Adobe APP14, written right after SOI.
+    pub(crate) app_segments: Vec<u8>,
+    /// SOF component identifiers in declaration order.
+    pub(crate) component_ids: Vec<u8>,
+}
+
+/// Re-emit quantized DCT blocks as a baseline JPEG that keeps the source's
+/// signalling: `markers.app_segments` follow SOI, SOF and SOS use
+/// `markers.component_ids`, and every component keeps its own quant table, so
+/// distinct Cb and Cr tables survive. Huffman tables are the JPEG Annex K
+/// defaults and no restart interval is written.
+pub(crate) fn encode_baseline_dct_image_with_markers(
+    image: &JpegDctImage,
+    markers: &DctFrameMarkers,
+) -> Result<Vec<u8>, WsiError> {
+    let BaselineDctLayout { sampling, .. } = baseline_dct_layout(image)?;
+    let (width, height) = match (u16::try_from(image.width), u16::try_from(image.height)) {
+        (Ok(width), Ok(height)) if width > 0 && height > 0 => (width, height),
+        _ => {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "DCT JPEG re-emission requires nonzero u16 dimensions, got {}x{}",
+                    image.width, image.height
+                ),
+            });
+        }
+    };
+    let components = frame_components(image, &markers.component_ids)?;
+    let quant_tables = frame_quant_tables(image, &components)?;
+    frame_writer::validate_app_segments(&markers.app_segments)?;
+
+    let options = JpegEncodeOptions {
+        quality: 90,
+        subsampling: if components.len() == 1 {
+            JpegSubsampling::Gray
+        } else {
+            JpegSubsampling::Ybr420
+        },
+        restart_interval: None,
+        backend: JpegBackend::Cpu,
+    };
+    let tables = baseline_encode_tables(options)
+        .map_err(|err| WsiError::Jpeg(format!("DCT JPEG table setup failed: {err}")))?;
+    let dc_tables = [&tables.huff_dc_luma, &tables.huff_dc_chroma];
+    let ac_tables = [&tables.huff_ac_luma, &tables.huff_ac_chroma];
+    let entropy = encode_dct_entropy(image, sampling, dc_tables, ac_tables)?;
+    frame_writer::write_baseline_frame(
+        &frame_writer::BaselineFrame {
+            width,
+            height,
+            app_segments: &markers.app_segments,
+            quant_tables: &quant_tables,
+            components: &components,
+            dc_tables,
+            ac_tables,
+        },
+        &entropy,
+    )
+}
+
+struct BaselineDctLayout {
+    sampling: JpegBaselineSampling,
+    /// Adobe APP14 transform matching the image's resolved color space.
+    adobe_transform: Option<u8>,
+}
+
+fn baseline_dct_layout(image: &JpegDctImage) -> Result<BaselineDctLayout, WsiError> {
     if image.coding_mode != JpegDctCodingMode::BaselineSequential {
         return Err(WsiError::Unsupported {
             reason: "DCT JPEG re-emission supports baseline sequential input only".into(),
@@ -74,7 +211,7 @@ pub(super) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>,
             ),
         });
     }
-    let color_transform = match (component_count, image.color_space) {
+    let adobe_transform = match (component_count, image.color_space) {
         (1, j2k_jpeg::ColorSpace::Grayscale) => None,
         (3, j2k_jpeg::ColorSpace::Rgb) => Some(0),
         (3, j2k_jpeg::ColorSpace::YCbCr) => Some(1),
@@ -120,57 +257,87 @@ pub(super) fn encode_baseline_dct_image(image: &JpegDctImage) -> Result<Vec<u8>,
         sampling.v[idx] = component.v_samp;
     }
     validate_dct_component_grids(image, sampling)?;
+    Ok(BaselineDctLayout {
+        sampling,
+        adobe_transform,
+    })
+}
 
-    let options = JpegEncodeOptions {
-        quality: 90,
-        subsampling: if component_count == 1 {
-            JpegSubsampling::Gray
-        } else {
-            JpegSubsampling::Ybr420
-        },
-        restart_interval: None,
-        backend: JpegBackend::Cpu,
-    };
-    let mut tables = baseline_encode_tables(options)
-        .map_err(|err| WsiError::Jpeg(format!("DCT JPEG table setup failed: {err}")))?;
-    tables.sampling = sampling;
-    tables.q_luma = zigzag_quant_to_natural_u8(&image.components[0].quant_table)?;
-    if component_count == 3 {
-        if image.components[1].quant_table != image.components[2].quant_table {
+fn frame_components(
+    image: &JpegDctImage,
+    component_ids: &[u8],
+) -> Result<Vec<frame_writer::FrameComponent>, WsiError> {
+    if component_ids.len() != image.components.len() {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "DCT JPEG re-emission got {} component IDs for {} components",
+                component_ids.len(),
+                image.components.len()
+            ),
+        });
+    }
+    for (idx, id) in component_ids.iter().enumerate() {
+        if component_ids[..idx].contains(id) {
             return Err(WsiError::Unsupported {
-                reason: "DCT JPEG re-emission supports one shared chroma quant table".into(),
+                reason: format!("DCT JPEG re-emission requires unique component IDs, {id} repeats"),
             });
         }
-        tables.q_chroma = zigzag_quant_to_natural_u8(&image.components[1].quant_table)?;
     }
-
-    let dc_tables = [&tables.huff_dc_luma, &tables.huff_dc_chroma];
-    let ac_tables = [&tables.huff_ac_luma, &tables.huff_ac_chroma];
-    let entropy = encode_dct_entropy(image, sampling, dc_tables, ac_tables)?;
-    assemble_jpeg_baseline_frame(
-        &entropy,
-        image.width,
-        image.height,
-        &tables,
-        options,
-        JpegBackend::Cpu,
-    )
-    .map(|encoded| {
-        let mut data = encoded.data;
-        if let Some(transform) = color_transform {
-            // Re-emission writes numeric component IDs and drops source APP
-            // markers. Preserve the resolved component semantics explicitly,
-            // including 4:4:4 YCbCr, whose sampling alone is ambiguous.
-            data.splice(
-                2..2,
-                [
-                    0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, transform,
-                ],
-            );
+    let mut distinct_tables: Vec<&[u16; 64]> = Vec::with_capacity(image.components.len());
+    let mut components = Vec::with_capacity(image.components.len());
+    for (component, &id) in image.components.iter().zip(component_ids) {
+        if !(1..=4).contains(&component.h_samp) || !(1..=4).contains(&component.v_samp) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "DCT JPEG re-emission requires sampling factors in 1..=4, component {id} has {}x{}",
+                    component.h_samp, component.v_samp
+                ),
+            });
         }
-        data
-    })
-    .map_err(|err| WsiError::Jpeg(format!("DCT JPEG frame assembly failed: {err}")))
+        let slot = match distinct_tables
+            .iter()
+            .position(|table| **table == component.quant_table)
+        {
+            Some(slot) => slot,
+            None => {
+                distinct_tables.push(&component.quant_table);
+                distinct_tables.len() - 1
+            }
+        };
+        components.push(frame_writer::FrameComponent {
+            id,
+            h_samp: component.h_samp,
+            v_samp: component.v_samp,
+            quant_slot: slot as u8,
+        });
+    }
+    Ok(components)
+}
+
+/// DQT payload tables in zigzag order, indexed by each component's `quant_slot`.
+fn frame_quant_tables(
+    image: &JpegDctImage,
+    components: &[frame_writer::FrameComponent],
+) -> Result<Vec<[u8; 64]>, WsiError> {
+    let mut tables: Vec<[u8; 64]> = Vec::with_capacity(components.len());
+    for (idx, (component, frame_component)) in image.components.iter().zip(components).enumerate() {
+        if usize::from(frame_component.quant_slot) < tables.len() {
+            continue;
+        }
+        let mut table = [0u8; 64];
+        for (dst, &value) in table.iter_mut().zip(component.quant_table.iter()) {
+            *dst = u8::try_from(value)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or_else(|| WsiError::Unsupported {
+                    reason: format!(
+                        "DCT JPEG re-emission requires 8-bit nonzero quant values, component {idx} has {value}"
+                    ),
+                })?;
+        }
+        tables.push(table);
+    }
+    Ok(tables)
 }
 
 fn validate_dct_component_grids(
@@ -295,6 +462,13 @@ fn encode_block(
             zero_run -= 16;
         }
         let size = magnitude_category(coeff);
+        if size > MAX_BASELINE_AC_CATEGORY {
+            // A larger category would spill into the run-length nibble and
+            // silently encode a different symbol.
+            return Err(WsiError::Jpeg(format!(
+                "DCT JPEG AC coefficient {coeff} exceeds the 8-bit baseline range"
+            )));
+        }
         let symbol = (zero_run << 4) | size;
         write_huffman_symbol(ac_table, symbol, writer)?;
         writer.write_bits(magnitude_bits(coeff, size), size);

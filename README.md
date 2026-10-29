@@ -69,9 +69,9 @@ CUDA packet-header fix. It is not on crates.io. To use this version:
 wsi-rs = { git = "https://github.com/frames-sg/wsi-rs", tag = "v0.8.1" }
 ```
 
-For Python access to metadata and compressed tile bytes, see the experimental
-[reader binding](wsi-rs-python/README.md). Pixel decoding and tensors use the
-separate `j2k` Python extension.
+For Python access to metadata, compressed tile bytes and tile byte locations,
+see the experimental [reader binding](wsi-rs-python/README.md). Pixel decoding
+and tensors use the separate `j2k` Python extension.
 
 ## Example
 
@@ -134,6 +134,118 @@ Ways to read pixels:
 | `read_tile`, `read_tiles` | Tiles exactly as the file stores them. |
 | `read_display_tile` | Tiles on a regular grid of a size you choose, whatever the file uses. Useful for viewers. |
 | `read_associated` | An associated image by name. |
+
+## Lossless tile extraction and byte locations
+
+`read_raw_compressed_tile` returns a tile's encoded bytes without decoding its
+pixels. The result is a standalone stream that a standard decoder reads on its
+own: TIFF `JPEGTables` are merged into each JPEG, and NDPI restart intervals
+get a JPEG header. When a tile is part of a larger stored JPEG, wsi-rs crops
+the JPEG losslessly: the quantized coefficients are kept and only the entropy
+coding is redone, so no pixels are decoded or re-encoded. A crop starts on the
+JPEG's block (MCU) grid. When the tile origin is not on that grid, the image
+starts at the previous block boundary and `RawCompressedTile::tile_region`
+locates the tile inside it. A crop holds the whole stored JPEG's DCT
+coefficients, about 12 bytes per pixel for a 4:4:4 JPEG and more for a
+progressive one, and its working set must fit
+`SlideLimits::lossless_crop_bytes` (256 MiB by default). When it does not,
+the tile comes back as the whole stored JPEG, unchanged and still lossless,
+with `tile_region` locating the tile; `jpegtran -crop` can cut it, as it is
+when the crop's output would exceed the encoded-unit limit. Apart from the
+usual per-operation and per-slide admission limits, only a stored JPEG over
+the encoded-unit limit, or a tile spanning several stored JPEGs (TIFF strips)
+whose crop does not fit, returns `WsiError::ResourceLimit`.
+A tile cut from a larger JPEG 2000 or JPEG XR image returns the whole stored
+image, with `tile_region` set. A tile cut from, or joined from, units of a
+lossless codec (strips of an LZW TIFF, a crop of a PNG, uncompressed planes)
+is returned as its exact uncompressed samples
+(`Compression::None`). So is a lossless tile whose decoding needs parameters
+`RawCompressedTile` does not carry: a TIFF predictor, separate sample planes,
+a non-native byte order, B, G, R sample order or masked high bits. In TIFF,
+separate sample planes are handled for 8-bit RGB; other planar tiles,
+floating-point predictors and subsampled YCbCr payloads return
+`WsiError::Unsupported`. `RawCompressedTile::significant_bits` reports how
+many low bits of each sample are used when fewer than its bit depth. Tiles with no stored pixels, and tiles joined from
+several lossy units, return `WsiError::Unsupported`; `tile_location` still
+describes them.
+
+`tile_location` says where a tile's encoded bytes are, from the file's index,
+without decoding the tile. A few formats read a handful of marker bytes to
+place a range exactly: the end of a DICOM frame, NDPI restart markers once
+per level, and the restart-marker scan VMS files need because they store no
+per-tile offsets. `level_tile_locations` does this for every tile of a level
+plane in one call, within the tile-index limit. Each result is one of:
+
+- `TileLocation::Stored`: one `EncodedUnit` per stored image the tile uses,
+  usually one. A unit has the file path, byte ranges, framing, codec
+  parameters (compression, bit depth, samples, photometric interpretation,
+  planar configuration, channel order, predictor, byte order, chroma
+  subsampling, JPEG tables), the stored image size, the part of it the tile uses
+  (`source_region`) and where that part lands in the tile (`tile_region`).
+- `TileLocation::Absent`: the file stores no pixels for the tile, such as a
+  sparse or empty TIFF tile, a missing DICOM frame or VSI background.
+- `TileLocation::NotAddressable`: no byte range holds the tile's pixels. The
+  reason is a synthetic level (with its base level and factor), a resampled
+  tile, a window of one large JPEG 2000 codestream, or pixels the file does
+  not store.
+
+| Framing | The bytes at a unit's ranges are |
+| --- | --- |
+| `Standalone` | A complete stream: a JPEG with its tables, a JPEG 2000 codestream, a JPEG XR image. |
+| `JpegTables` | A TIFF abbreviated JPEG. The tables it needs are in `codec().jpeg_tables()`. |
+| `BarePayload` | A codec payload without framing, such as TIFF LZW, Deflate, Zstd or uncompressed data. |
+| `Prefixed` | Part of a larger JPEG (NDPI). `prefix()`, the ranges and `suffix()` form a standalone JPEG. |
+
+`EncodedUnit::assemble` builds the standalone stream from the bytes at the
+ranges. For a unit that covers its whole tile, the result equals
+`read_raw_compressed_tile`'s data, except for the bare payloads above that raw
+reads return as reordered or decoded uncompressed samples. Every range is checked against the file
+size; a range past the end of the file is an error. `.svcache` files, which
+hold wsi-rs's own decoded tiles, have no locations and return
+`WsiError::Unsupported`.
+
+```rust,no_run
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+
+use wsi_rs::{PlaneSelection, Slide, TileLocation, TileRequest};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let slide = Slide::open("sample.svs")?;
+
+    // Where every tile of level 0 is stored.
+    let level = slide.level_tile_locations(0usize, 0usize, 0u32, PlaneSelection::default())?;
+    for entry in &level.tiles {
+        if let TileLocation::Stored(stored) = &entry.location {
+            for unit in stored.units() {
+                println!("({}, {}) {:?} {:?}", entry.col, entry.row, unit.framing(), unit.segments());
+            }
+        }
+    }
+
+    // Rebuild one tile from its byte ranges.
+    let req = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    if let TileLocation::Stored(stored) = slide.tile_location(&req)? {
+        let unit = stored.single_unit().ok_or("tile is joined from several units")?;
+        let mut file = File::open(unit.path())?;
+        let mut parts = Vec::new();
+        for range in unit.segments() {
+            let mut bytes = vec![0; usize::try_from(range.length)?];
+            file.seek(SeekFrom::Start(range.offset))?;
+            file.read_exact(&mut bytes)?;
+            parts.push(bytes);
+        }
+        let stream = unit.assemble(parts.iter().map(Vec::as_slice))?;
+        assert_eq!(stream, slide.read_raw_compressed_tile(&req)?.data());
+    }
+    Ok(())
+}
+```
+
+`cargo run --example tile_locations -- <slide>` checks these ranges against
+`read_raw_compressed_tile` for the first tiles of a level. The
+[Python binding](wsi-rs-python/README.md) exposes the same locations, with a
+kerchunk-style reference example.
 
 ## Supported formats
 
@@ -206,12 +318,15 @@ Every slide also has hard limits that protect against bad files:
 | One compressed tile or frame | 128 MiB |
 | One decoded tile or image | 128 MiB |
 | One region | 33,554,432 pixels (128 MiB as RGBA) |
+| One lossless JPEG crop in a raw tile read | 256 MiB |
 | Scratch memory per operation | 384 MiB |
 | Memory in use per slide at once | 512 MiB |
 
 Large batches are split and processed in order. A request fails only when a
-single tile, image or region is over a limit. To change the limits, pass a
-`SlideLimits` to `SlideOpenOptions::with_limits`.
+single tile, image or region is over a limit. A raw tile read that may crop a
+stored JPEG reserves the crop limit as scratch memory, so keep it within the
+per-operation limit; other reads do not reserve it. To change the limits, pass
+a `SlideLimits` to `SlideOpenOptions::with_limits`.
 
 ## GPU decoding
 

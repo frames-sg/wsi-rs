@@ -316,3 +316,126 @@ fn vmu_macro_and_parallel_reads_use_bound_sources() {
         .read_tile_controlled(&wsi_rs::TileRequest::new(0usize, 0usize, 0, 0, 0), &control)
         .is_err());
 }
+
+fn stored_units(
+    slide: &Slide,
+    req: &wsi_rs::TileRequest,
+) -> (wsi_rs::StoredTile, Vec<wsi_rs::EncodedUnit>) {
+    let wsi_rs::TileLocation::Stored(stored) = slide.tile_location(req).unwrap() else {
+        panic!("VMU tiles are stored")
+    };
+    let units = stored.units().to_vec();
+    (stored, units)
+}
+
+fn assembled(unit: &wsi_rs::EncodedUnit) -> Vec<u8> {
+    let file = std::fs::read(unit.path()).unwrap();
+    unit.assemble(
+        unit.segments()
+            .iter()
+            .map(|range| &file[range.offset as usize..range.end().unwrap() as usize]),
+    )
+    .unwrap()
+}
+
+#[test]
+fn vmu_column_tiles_are_single_contiguous_bare_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path());
+    let slide = Slide::open(&path).unwrap();
+    for (level, across, down) in [(0, 3, 3), (1, 3, 2)] {
+        let locations = slide
+            .level_tile_locations(0usize, 0usize, level, wsi_rs::PlaneSelection::default())
+            .unwrap();
+        assert_eq!(
+            (locations.tiles_across, locations.tiles_down),
+            (across, down)
+        );
+        for entry in &locations.tiles {
+            let req = wsi_rs::TileRequest::new(0usize, 0usize, level, entry.col, entry.row);
+            let (stored, units) = stored_units(&slide, &req);
+            let [unit] = units.as_slice() else {
+                panic!("a column-wide tile is one stored unit")
+            };
+            assert_eq!(unit.segments().len(), 1, "column rows are contiguous");
+            assert_eq!(unit.framing(), wsi_rs::StoredFraming::BarePayload);
+            let codec = unit.codec();
+            assert_eq!(codec.compression(), wsi_rs::Compression::None);
+            assert_eq!(
+                (codec.bits_per_sample(), codec.samples_per_pixel()),
+                (16, 3)
+            );
+            assert_eq!(codec.byte_order(), Some(wsi_rs::ByteOrder::LittleEndian));
+            assert_eq!(unit.stored_size(), stored.tile_size());
+
+            let raw = slide.read_raw_compressed_tile(&req).unwrap();
+            assert_eq!(raw.compression(), wsi_rs::Compression::None);
+            assert_eq!(raw.bits_allocated(), 16);
+            let stored_bytes = assembled(unit);
+            let native: Vec<u8> = stored_bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|pair| u16::from_le_bytes(*pair).to_ne_bytes())
+                .collect();
+            assert_eq!(raw.data(), native);
+            let tile = slide.read_tile(&req).unwrap();
+            let CpuTileData::U16(samples) = tile.data() else {
+                panic!("expected U16")
+            };
+            let raw_samples: Vec<u16> = raw
+                .data()
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_ne_bytes(*pair))
+                .collect();
+            assert_eq!(samples.as_slice(), raw_samples);
+        }
+    }
+}
+
+#[test]
+fn vmu_tiles_crossing_storage_columns_have_one_unit_per_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path());
+    write_ngr(&dir.path().join("base.ngr"), 600, 131, 300);
+    let slide = Slide::open(&path).unwrap();
+    let req = wsi_rs::TileRequest::new(0usize, 0usize, 0, 1, 2);
+    let (stored, units) = stored_units(&slide, &req);
+    assert_eq!(stored.tile_size(), (256, 3));
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].tile_region(), wsi_rs::PixelRect::new(0, 0, 44, 3));
+    assert_eq!(
+        units[1].tile_region(),
+        wsi_rs::PixelRect::new(44, 0, 212, 3)
+    );
+    assert!(units.iter().all(|unit| unit.segments().len() == 3));
+
+    // Interleave the units' rows to rebuild the tile from stored bytes.
+    let parts: Vec<_> = units.iter().map(assembled).collect();
+    let mut tile = Vec::new();
+    for row in 0..3 {
+        for (unit, part) in units.iter().zip(&parts) {
+            let row_bytes = unit.stored_size().0 as usize * 6;
+            tile.extend_from_slice(&part[row * row_bytes..(row + 1) * row_bytes]);
+        }
+    }
+    let expected: Vec<u8> = (128..131)
+        .flat_map(|y| (256..512).flat_map(move |x| (0..3).map(move |c| sample(x, y, c))))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    assert_eq!(tile, expected);
+    let raw = slide.read_raw_compressed_tile(&req).unwrap();
+    let raw_le: Vec<u8> = raw
+        .data()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|pair| u16::from_ne_bytes(*pair).to_le_bytes())
+        .collect();
+    assert_eq!(raw_le, expected);
+    assert!(slide
+        .tile_location(&wsi_rs::TileRequest::new(0usize, 0usize, 0, 3, 0))
+        .is_err());
+}

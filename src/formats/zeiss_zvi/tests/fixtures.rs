@@ -50,6 +50,12 @@ pub(super) struct ZviFixture {
 
 impl ZviFixture {
     pub(super) fn whole_u8() -> Self {
+        Self::whole_u8_with_version(cfb::Version::V4)
+    }
+
+    /// One raw, one zlib and one JPEG 8x4 plane, each small enough for the
+    /// compound file's mini stream.
+    pub(super) fn whole_u8_with_version(version: cfb::Version) -> Self {
         let width = 8;
         let height = 4;
         let raw = (0..width * height).map(|value| value as u8).collect();
@@ -77,7 +83,7 @@ impl ZviFixture {
                 ..PlaneSpec::raw_u8(width, height, Vec::new())
             },
         ];
-        Self::write(
+        Self::write_with_version(
             &planes,
             &[
                 (515, width.to_string()),
@@ -88,6 +94,7 @@ impl ZviFixture {
                 (2076, "20".into()),
             ],
             Some(&thumbnail_bmp()),
+            version,
         )
     }
 
@@ -152,9 +159,27 @@ impl ZviFixture {
         global_tags: &[(i32, String)],
         thumbnail: Option<&[u8]>,
     ) -> Self {
+        Self::write_with_version(planes, global_tags, thumbnail, cfb::Version::V4)
+    }
+
+    /// Like [`Self::write`], in a compound file of `version`: 512-byte
+    /// sectors for version 3, as AxioVision writes, or 4096 for version 4.
+    pub(super) fn write_with_version(
+        planes: &[PlaneSpec],
+        global_tags: &[(i32, String)],
+        thumbnail: Option<&[u8]>,
+        version: cfb::Version,
+    ) -> Self {
         let temp = tempfile::tempdir().expect("temporary ZVI fixture directory");
         let path = temp.path().join("synthetic.zvi");
-        let mut compound = cfb::create(&path).expect("create synthetic ZVI compound file");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create synthetic ZVI file");
+        let mut compound = cfb::CompoundFile::create_with_version(version, file)
+            .expect("create synthetic ZVI compound file");
         write_stream(
             &mut compound,
             "/Image/Tags/Contents",
@@ -302,7 +327,7 @@ fn push_empty_variant(bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(&0_u16.to_le_bytes());
 }
 
-fn write_stream(compound: &mut cfb::CompoundFile<fs::File>, path: &str, bytes: &[u8]) {
+pub(super) fn write_stream(compound: &mut cfb::CompoundFile<fs::File>, path: &str, bytes: &[u8]) {
     let parent = PathBuf::from(path)
         .parent()
         .expect("synthetic stream has parent")

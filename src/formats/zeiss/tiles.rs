@@ -100,36 +100,6 @@ impl ZeissSlide {
             && u64::from(info.stored_size.h) == tile_h
     }
 
-    pub(super) fn read_raw_jpeg_tile(
-        &self,
-        req: &TileRequest,
-    ) -> Result<RawCompressedTile, WsiError> {
-        let Some(info) = self.exact_raw_jpeg_subblock(req)? else {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "Zeiss raw JPEG access requires one exact classic-JPEG subblock for tile ({}, {}) at level {}",
-                    req.col,
-                    req.row,
-                    req.level.get()
-                ),
-            });
-        };
-        let raw = self.read_source_subblock(&info)?;
-        let tile = crate::decode::jpeg::standalone_raw_jpeg_tile(raw.data)?;
-        if (tile.width(), tile.height()) != (info.stored_size.w, info.stored_size.h) {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "Zeiss raw JPEG dimensions {}x{} do not match stored subblock {}x{}",
-                    tile.width(),
-                    tile.height(),
-                    info.stored_size.w,
-                    info.stored_size.h
-                ),
-            });
-        }
-        Ok(tile)
-    }
-
     pub(super) fn read_tile(
         &self,
         scene: usize,

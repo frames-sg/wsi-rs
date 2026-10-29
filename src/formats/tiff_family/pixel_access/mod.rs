@@ -8,9 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
 
 use j2k_core::BackendRequest;
-use j2k_jpeg::transcode::{
-    extract_dct_blocks, DctExtractOptions, JpegDctCodingMode, JpegDctComponent, JpegDctImage,
-};
+use j2k_jpeg::transcode::{extract_dct_blocks, DctExtractOptions, JpegDctCodingMode, JpegDctImage};
 use j2k_jpeg::{
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,
@@ -32,6 +30,7 @@ use crate::core::registry::{
 };
 use crate::core::types::*;
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
+use crate::decode::jpeg::dct_reemit::encode_baseline_dct_image;
 use crate::decode::jpeg::{
     decode_batch_jpeg, decode_jpeg_rgb_downscaled_with_size_override,
     decode_jpeg_rgb_with_size_override, JpegDecodeJob,
@@ -43,7 +42,6 @@ use crate::formats::tiff_family::layout::{DatasetLayout, TileSource, TileSourceK
 
 mod associated;
 mod caches;
-mod dct_reemit;
 mod decode_batch;
 mod dispatch;
 mod image_ops;
@@ -60,8 +58,10 @@ mod subtiles;
 mod synthetic;
 mod tiled_ifd;
 
+mod locations;
+mod lossless_raw;
+
 use caches::*;
-use dct_reemit::encode_baseline_dct_image;
 use decode_batch::*;
 use image_ops::*;
 use jpeg_frame::*;

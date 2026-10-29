@@ -112,3 +112,74 @@ fn builtin_registry_opens_zeiss_zvi_variants_and_reads_u16_regions() {
         }
     }
 }
+
+/// The bytes at each of `unit`'s segments in its file.
+fn located_bytes(unit: &wsi_rs::EncodedUnit) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(unit.path()).expect("open located ZVI file");
+    let segments = unit
+        .segments()
+        .iter()
+        .map(|range| {
+            let mut bytes = vec![0; range.length as usize];
+            file.seek(SeekFrom::Start(range.offset)).unwrap();
+            file.read_exact(&mut bytes).unwrap();
+            bytes
+        })
+        .collect::<Vec<_>>();
+    unit.assemble(segments.iter().map(Vec::as_slice))
+        .expect("assemble located ZVI payload")
+}
+
+#[test]
+#[ignore = "requires WSI_RS_ZVI_ROOT or local Zeiss ZVI testdata"]
+fn zeiss_zvi_tile_locations_name_the_raw_plane_payloads() {
+    let paths = fixture_paths().expect("set WSI_RS_ZVI_ROOT to the Zeiss ZVI fixture directory");
+
+    for path in paths {
+        let slide = Slide::open(&path).expect("open Zeiss ZVI");
+        let level = slide
+            .level_tile_locations(0usize, 0usize, 0u32, PlaneSelection::default())
+            .expect("ZVI level tile locations");
+        let mut stored = 0;
+        for tile in level.tiles.iter().take(16) {
+            let wsi_rs::TileLocation::Stored(location) = &tile.location else {
+                continue;
+            };
+            stored += 1;
+            let unit = location.single_unit().expect("one plane per tile");
+            assert_eq!(unit.path(), path.as_path());
+            let request = wsi_rs::TileRequest::new(0usize, 0usize, 0u32, tile.col, tile.row);
+            let raw = slide
+                .read_raw_compressed_tile(&request)
+                .expect("raw ZVI tile");
+            let (stored_width, stored_height) = unit.stored_size();
+            let whole_plane =
+                unit.source_region() == wsi_rs::PixelRect::new(0, 0, stored_width, stored_height);
+            if whole_plane
+                && (cfg!(target_endian = "little") || unit.codec().bits_per_sample() == 8)
+            {
+                assert_eq!(
+                    raw.data(),
+                    located_bytes(unit).as_slice(),
+                    "{} tile ({}, {})",
+                    path.display(),
+                    tile.col,
+                    tile.row
+                );
+            }
+            if raw.compression() == wsi_rs::Compression::None {
+                let read = slide.read_tile(&request).expect("read ZVI tile");
+                let CpuTileData::U16(samples) = read.data() else {
+                    panic!("ZVI tiles decode as U16");
+                };
+                let expected = samples
+                    .iter()
+                    .flat_map(|sample| sample.to_ne_bytes())
+                    .collect::<Vec<_>>();
+                assert_eq!(raw.data(), expected.as_slice(), "{}", path.display());
+            }
+        }
+        assert!(stored > 0, "{} has stored tiles", path.display());
+    }
+}

@@ -1,14 +1,21 @@
 //! Little-endian NGR columns; layout documented by OpenSlide's ImHex pattern.
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::positioned_file::PositionedFile;
 use crate::core::types::*;
 use crate::error::WsiError;
 
+/// Bytes of one stored pixel: three little-endian 16-bit samples.
+const PIXEL_BYTES: u64 = 6;
+
 pub(super) struct Ngr {
     file: PositionedFile,
     path: PathBuf,
+    /// `path`, shared by every tile location.
+    location_path: Arc<Path>,
+    file_len: u64,
     pub width: u32,
     pub height: u32,
     column_width: u32,
@@ -56,6 +63,8 @@ impl Ngr {
         Ok(Self {
             file,
             path: path.to_path_buf(),
+            location_path: Arc::from(path),
+            file_len: length,
             width,
             height,
             column_width,
@@ -101,44 +110,14 @@ impl Ngr {
     }
 
     pub(super) fn read_tile(&self, req: &TileRequest, limit: u64) -> Result<CpuTile, WsiError> {
-        let (x, y, width, height) = self.tile_dimensions(req)?;
-        let bytes = u64::from(width) * u64::from(height) * 6;
-        if bytes > limit {
-            return Err(WsiError::ResourceLimit {
-                resource: "encoded tile/frame unit",
-                requested: bytes,
-                limit,
-            });
-        }
-        // Maximum 256 × 64 RGB16 samples, independent of whole-slide size.
-        let mut samples = vec![0u16; width as usize * height as usize * 3];
-        let mut row = vec![0u8; width as usize * 6];
-        for dy in 0..height {
-            let mut dx = 0;
-            while dx < width {
-                let sx = x + dx;
-                let column = sx / self.column_width;
-                let within = sx % self.column_width;
-                let count = (self.column_width - within).min(width - dx);
-                // Open validates the complete span, so all in-bounds offsets fit u64.
-                let pixel =
-                    u64::from(column) * u64::from(self.height) * u64::from(self.column_width)
-                        + u64::from(y + dy) * u64::from(self.column_width)
-                        + u64::from(within);
-                let data = &mut row[..count as usize * 6];
-                self.file
-                    .read_exact_at(data, self.start + pixel * 6)
-                    .map_err(|e| WsiError::io_with_path(&self.path, e))?;
-                let dest = (dy as usize * width as usize + dx as usize) * 3;
-                for (out, pair) in samples[dest..dest + count as usize * 3]
-                    .iter_mut()
-                    .zip(data.as_chunks::<2>().0)
-                {
-                    *out = u16::from_le_bytes(*pair);
-                }
-                dx += count;
-            }
-        }
+        let (_, _, width, height) = self.tile_dimensions(req)?;
+        let bytes = self.read_tile_bytes(req, limit)?;
+        let samples = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
         CpuTile::new(
             width,
             height,
@@ -148,4 +127,136 @@ impl Ngr {
             CpuTileData::u16(samples),
         )
     }
+
+    /// The tile's interleaved RGB16 samples in native byte order. They are
+    /// the stored bytes, reordered only on big-endian hosts.
+    pub(super) fn read_raw_tile(
+        &self,
+        req: &TileRequest,
+        limit: u64,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let (_, _, width, height) = self.tile_dimensions(req)?;
+        let mut bytes = self.read_tile_bytes(req, limit)?;
+        if cfg!(target_endian = "big") {
+            for pair in bytes.as_chunks_mut::<2>().0 {
+                pair.swap(0, 1);
+            }
+        }
+        Ok(RawCompressedTile::builder(Compression::None)
+            .dimensions(width, height)
+            .bits_allocated(16)
+            .samples_per_pixel(3)
+            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
+            .data(bytes)
+            .build()?)
+    }
+
+    /// Where the tile's samples are stored. Each NGR column the tile
+    /// crosses is one bare little-endian RGB16 unit (12 significant bits),
+    /// `count` pixels wide:
+    /// one segment per tile row, or a single segment when the tile spans
+    /// the whole column width and its rows are therefore contiguous.
+    pub(super) fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        let (x, y, width, height) = self.tile_dimensions(req)?;
+        let codec = EncodedCodec::new(
+            Compression::None,
+            16,
+            3,
+            EncodedTilePhotometricInterpretation::Rgb,
+        )
+        .with_significant_bits(12)
+        .with_byte_order(ByteOrder::LittleEndian);
+        let mut units = Vec::new();
+        for span in self.column_spans(x, width) {
+            let rows: Vec<_> = if span.count == self.column_width {
+                vec![self.pixel_range(span.column, y, 0, span.count * height)]
+            } else {
+                (0..height)
+                    .map(|dy| self.pixel_range(span.column, y + dy, span.within, span.count))
+                    .collect()
+            };
+            units.push(
+                EncodedUnit::builder(
+                    Arc::clone(&self.location_path),
+                    codec.clone(),
+                    span.count,
+                    height,
+                )
+                .segments(rows)
+                .framing(StoredFraming::BarePayload)
+                .tile_region(PixelRect::new(span.dx, 0, span.count, height))
+                .build(self.file_len)?,
+            );
+        }
+        Ok(TileLocation::Stored(StoredTile::new(width, height, units)?))
+    }
+
+    /// Interleaved little-endian RGB16 bytes of the tile, as stored.
+    fn read_tile_bytes(&self, req: &TileRequest, limit: u64) -> Result<Vec<u8>, WsiError> {
+        let (x, y, width, height) = self.tile_dimensions(req)?;
+        let bytes = u64::from(width) * u64::from(height) * PIXEL_BYTES;
+        if bytes > limit {
+            return Err(WsiError::ResourceLimit {
+                resource: "encoded tile/frame unit",
+                requested: bytes,
+                limit,
+            });
+        }
+        // Maximum 256 × 64 RGB16 pixels, independent of whole-slide size.
+        let row_bytes = width as usize * PIXEL_BYTES as usize;
+        let mut data = vec![0u8; row_bytes * height as usize];
+        for span in self.column_spans(x, width) {
+            for dy in 0..height {
+                let range = self.pixel_range(span.column, y + dy, span.within, span.count);
+                let dest = dy as usize * row_bytes + span.dx as usize * PIXEL_BYTES as usize;
+                self.file
+                    .read_exact_at(&mut data[dest..dest + range.length as usize], range.offset)
+                    .map_err(|e| WsiError::io_with_path(&self.path, e))?;
+            }
+        }
+        Ok(data)
+    }
+
+    /// The parts of image columns `x .. x + width` that lie in each NGR
+    /// column, left to right.
+    fn column_spans(&self, x: u32, width: u32) -> impl Iterator<Item = ColumnSpan> + '_ {
+        let mut dx = 0;
+        std::iter::from_fn(move || {
+            (dx < width).then(|| {
+                let sx = x + dx;
+                let within = sx % self.column_width;
+                let span = ColumnSpan {
+                    column: sx / self.column_width,
+                    within,
+                    dx,
+                    count: (self.column_width - within).min(width - dx),
+                };
+                dx += span.count;
+                span
+            })
+        })
+    }
+
+    /// Bytes of `count` pixels starting at column-local `within` on image
+    /// row `row` of NGR column `column`.
+    fn pixel_range(&self, column: u32, row: u32, within: u32, count: u32) -> ByteRange {
+        // Open validates the complete span, so all in-bounds offsets fit u64.
+        let pixel = u64::from(column) * u64::from(self.height) * u64::from(self.column_width)
+            + u64::from(row) * u64::from(self.column_width)
+            + u64::from(within);
+        ByteRange::new(
+            self.start + pixel * PIXEL_BYTES,
+            u64::from(count) * PIXEL_BYTES,
+        )
+    }
+}
+
+/// Part of a tile that lies in one NGR column.
+struct ColumnSpan {
+    column: u32,
+    /// First pixel inside the column.
+    within: u32,
+    /// First pixel inside the tile.
+    dx: u32,
+    count: u32,
 }

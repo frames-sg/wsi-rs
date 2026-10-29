@@ -1,3 +1,5 @@
+use super::locations::bare_codec_is_self_describing;
+use super::tiled_ifd::{is_lossless_tiff_codec, uncompressed_raw_tile};
 use super::*;
 
 /// The fields of `TileSource::StrippedLevel`, borrowed for one tile read.
@@ -12,7 +14,7 @@ pub(super) struct StrippedLevelSource<'a> {
 
 impl StrippedLevelSource<'_> {
     /// `(offset, byte_count)` of strip `index`.
-    fn strip(&self, index: usize) -> Result<(u64, u64), WsiError> {
+    pub(super) fn strip(&self, index: usize) -> Result<(u64, u64), WsiError> {
         match (
             self.strip_offsets.get(index),
             self.strip_byte_counts.get(index),
@@ -30,13 +32,13 @@ impl StrippedLevelSource<'_> {
 
 /// The pixels one tile covers in an `image_width` x `image_height` level.
 #[derive(Clone, Copy)]
-struct StripWindow {
-    image_width: u32,
-    image_height: u32,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
+pub(super) struct StripWindow {
+    pub(super) image_width: u32,
+    pub(super) image_height: u32,
+    pub(super) x: u32,
+    pub(super) y: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 impl TiffPixelReader {
@@ -59,7 +61,99 @@ impl TiffPixelReader {
         }
     }
 
-    fn stripped_level_window(&self, req: &TileRequest) -> Result<StripWindow, WsiError> {
+    /// Raw passthrough of a strip-level tile. A tile that is exactly one
+    /// whole strip, stored as a payload [`RawCompressedTile`] fully describes,
+    /// is returned as stored, which is what assembling its location yields.
+    /// Other tiles of losslessly stored strips return their exact samples as
+    /// `Compression::None`: interleaved 8-bit grayscale or RGB, the pixels
+    /// `read_tile` returns. A tile of JPEG strips is cropped losslessly out
+    /// of the strips it covers, stacked; the crop starts at the MCU boundary
+    /// at or before the tile and [`RawCompressedTile::tile_region`] locates
+    /// the tile in it. A crop that does not fit the lossless-crop limit
+    /// returns the whole strip when the tile lies in one, and fails with
+    /// [`WsiError::ResourceLimit`] when it spans several.
+    pub(super) fn read_stripped_level_raw_tile(
+        &self,
+        req: &TileRequest,
+        source: &StrippedLevelSource<'_>,
+    ) -> Result<RawCompressedTile, WsiError> {
+        let location = self.tiff_tile_location(req)?;
+        let TileLocation::Stored(stored) = &location else {
+            return Err(WsiError::tile_read(
+                req,
+                "strip-level tile has no stored strips",
+            ));
+        };
+        if let Some(raw) = self.whole_strip_raw_tile(stored)? {
+            return Ok(raw);
+        }
+        if is_lossless_tiff_codec(source.compression) {
+            let raw = uncompressed_raw_tile(&self.read_stripped_level_tile(req, source)?)?;
+            self.check_raw_output_limit(raw.data().len(), "uncompressed raw tile")?;
+            return Ok(raw);
+        }
+        if source.compression != Compression::Jpeg {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "{:?} strips cannot be passed through; tile_location reports each strip \
+                     the tile covers with its source region",
+                    source.compression
+                ),
+            });
+        }
+        let units = stored.units();
+        let first = units
+            .first()
+            .ok_or_else(|| WsiError::tile_read(req, "strip-level tile covers no strips"))?;
+        if first.codec().planar_configuration() == PlanarConfiguration::Planar {
+            return Err(WsiError::Unsupported {
+                reason: "JPEG strips stored as separate sample planes cannot be cropped into \
+                         one JPEG"
+                    .into(),
+            });
+        }
+        let (width, height) = stored.tile_size();
+        let origin = first.source_region();
+        self.tiff_jpeg_units_raw_tile(
+            source.ifd_id,
+            units,
+            PixelRect::new(origin.x, origin.y, width, height),
+            source.jpeg_tables,
+        )
+    }
+
+    /// The stored payload of a tile that is exactly one whole strip, when
+    /// [`RawCompressedTile`] describes that payload without its codec
+    /// parameters.
+    fn whole_strip_raw_tile(
+        &self,
+        stored: &StoredTile,
+    ) -> Result<Option<RawCompressedTile>, WsiError> {
+        let Some(unit) = stored.single_unit() else {
+            return Ok(None);
+        };
+        let (width, height) = unit.stored_size();
+        let whole = PixelRect::new(0, 0, width, height);
+        if unit.framing() != StoredFraming::BarePayload
+            || unit.source_region() != whole
+            || unit.tile_region() != whole
+            || !bare_codec_is_self_describing(unit.codec())
+        {
+            return Ok(None);
+        }
+        let codec = unit.codec();
+        Ok(Some(
+            RawCompressedTile::builder(codec.compression())
+                .dimensions(width, height)
+                .bits_allocated(codec.bits_per_sample())
+                .samples_per_pixel(codec.samples_per_pixel())
+                .photometric_interpretation(codec.photometric_interpretation())
+                .data(self.read_single_segment(unit)?)
+                .build()?,
+        ))
+    }
+
+    pub(super) fn stripped_level_window(&self, req: &TileRequest) -> Result<StripWindow, WsiError> {
         let (_, _, level) = self
             .layout
             .dataset

@@ -322,6 +322,11 @@ impl TiffContainer {
         self.path.as_ref()
     }
 
+    /// Size of the file in bytes, as measured when it was opened.
+    pub(crate) fn file_len(&self) -> u64 {
+        self.file_len
+    }
+
     pub(crate) fn endian(&self) -> Endian {
         self.endian
     }

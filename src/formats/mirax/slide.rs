@@ -213,7 +213,7 @@ impl MiraxSlide {
         .map_err(|message| WsiError::invalid_slide(&record.path, message))?;
         let mut bytes = vec![0; len];
         file.read_exact_at(&mut bytes, record.offset)
-            .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
+            .map_err(|source| WsiError::io_with_path(&record.path, source))?;
         Ok(bytes)
     }
 

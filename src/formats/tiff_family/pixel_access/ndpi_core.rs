@@ -47,7 +47,7 @@ impl TiffPixelReader {
     /// Locates `strip_key`'s restart segment. The outer error means the
     /// MCU-starts table failed to load; the inner one that the table cannot
     /// locate the segment.
-    fn ndpi_restart_segment(
+    pub(super) fn ndpi_restart_segment(
         &self,
         ifd_id: IfdId,
         mcu_starts_tag: u16,
@@ -651,7 +651,7 @@ pub(super) fn ndpi_restart_segments_align_to_rows(
 
 /// Why the MCU-starts table cannot locate a strip's restart segment.
 #[derive(Debug)]
-enum NdpiMcuSegmentError {
+pub(super) enum NdpiMcuSegmentError {
     IndexOutOfRange {
         idx: usize,
         len: usize,

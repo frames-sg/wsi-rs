@@ -17,18 +17,27 @@ SECOND_JPEG = JPEG[:2] + b"\xff\xfe\x00\x08second" + JPEG[2:]
 J2K = (ROOT / "tests/fixtures/jp2k/rgb_rct.j2k").read_bytes()
 
 
-def write_tiff(path, payloads, *, compression=7, photometric=6, tile_size=(16, 16), tables=None):
+def write_tiff(path, payloads, *, compression=7, photometric=6, tile_size=(16, 16), tables=None, extra_tags=None):
     """A little-endian tiled TIFF, two tiles across with no pixel decoding."""
     width, height = tile_size
     tags = {
         256: (4, [width * len(payloads)]), 257: (4, [height]),
-        258: (3, [8, 8, 8]), 259: (3, [compression]),
-        262: (3, [photometric]), 277: (3, [3]), 284: (3, [1]),
         322: (4, [width]), 323: (4, [height]),
-        324: (4, [0] * len(payloads)), 325: (4, [len(p) for p in payloads]),
     }
     if tables is not None:
         tags[347] = (7, tables)
+    tags.update(extra_tags or {})
+    write_tiff_payloads(path, payloads, tags, compression=compression, photometric=photometric, offsets_tag=324, counts_tag=325)
+
+
+def write_tiff_payloads(path, payloads, tags, *, compression, photometric, offsets_tag, counts_tag):
+    """A little-endian 8-bit RGB TIFF whose tile or strip payloads follow its IFD."""
+    tags = {
+        258: (3, [8, 8, 8]), 259: (3, [compression]),
+        262: (3, [photometric]), 277: (3, [3]), 284: (3, [1]),
+        offsets_tag: (4, [0] * len(payloads)), counts_tag: (4, [len(p) for p in payloads]),
+        **tags,
+    }
     data = bytearray(struct.pack("<2sHIH", b"II", 42, 8, len(tags)))
     data.extend(bytes(12 * len(tags) + 4))
     for index, (tag, (kind, values)) in enumerate(sorted(tags.items())):
@@ -42,7 +51,7 @@ def write_tiff(path, payloads, *, compression=7, photometric=6, tile_size=(16, 1
             position = len(data)
             struct.pack_into("<I", data, entry + 8, position)
             data.extend(encoded)
-        if tag == 324:
+        if tag == offsets_tag:
             offsets_position = position
     offsets = []
     for payload in payloads:
@@ -125,6 +134,7 @@ class ReaderTests(unittest.TestCase):
         for tile in tiles:
             self.assertEqual((tile.width, tile.height, tile.bits_allocated, tile.samples_per_pixel), (16, 16, 8, 3))
             self.assertEqual((tile.codec, tile.photometric_interpretation, tile.color_transform), ("jpeg", "ybr_full_422", "ycbcr"))
+            self.assertEqual(tile.tile_region, (0, 0, 16, 16))
         del slide
         self.assertEqual(tiles[0].data, SECOND_JPEG)
         with self.assertRaises(AttributeError):

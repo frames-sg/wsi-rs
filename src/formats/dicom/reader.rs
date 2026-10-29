@@ -5,7 +5,7 @@ use j2k_core::BackendRequest;
 use crate::core::registry::SlideReader;
 use crate::core::types::{
     CpuTile, Dataset, LevelIdx, RawCompressedTile, SceneId, Series, SeriesId, SourceEncoding,
-    TileCodecKind, TileRequest,
+    TileCodecKind, TileLocation, TileRequest,
 };
 use crate::error::WsiError;
 
@@ -116,6 +116,12 @@ impl SlideReader for DicomReader {
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         let image = dicom_level_for_request(&self.slide, req)?;
         image.read_raw_compressed_tile(req.col, req.row, req.level.get())
+    }
+
+    /// The frame's fragments or native byte range in the instance file that
+    /// holds it; tiles a sparse grid leaves out are absent.
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        dicom_level_for_request(&self.slide, req)?.tile_location(req)
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {

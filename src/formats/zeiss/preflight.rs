@@ -56,15 +56,35 @@ pub(super) fn preflight_czi_open_subblock_bounds(
     offset: u64,
     limits: crate::SlideLimits,
 ) -> Result<(FileIdentity, u64), WsiError> {
+    preflight_czi_open_subblock_extent(path, file, offset, limits)
+        .map(|(identity, extent)| (identity, extent.used_bytes))
+}
+
+/// Validates the subblock segment at `offset` and reports its layout.
+pub(super) fn preflight_czi_open_subblock_extent(
+    path: &Path,
+    file: &mut File,
+    offset: u64,
+    limits: crate::SlideLimits,
+) -> Result<(FileIdentity, SubblockExtent), WsiError> {
     let identity = FileIdentity::from_open_file(path, file)?;
     let file_len = file.metadata()?.len();
-    let bytes = preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits).map_err(
-        |error| match error {
+    let extent = preflight_czi_subblock_reader_with_limits(file, file_len, offset, limits)
+        .map_err(|error| match error {
             WsiError::ResourceLimit { .. } => error,
             error => WsiError::invalid_slide(path, error.to_string()),
-        },
-    )?;
-    Ok((identity, bytes))
+        })?;
+    Ok((identity, extent))
+}
+
+/// Byte layout of one validated subblock segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SubblockExtent {
+    /// Header, metadata, data and attachment bytes the segment uses.
+    pub(super) used_bytes: u64,
+    /// The data part: the stored image stream alone, without the segment
+    /// header, the subblock XML metadata or the attachment.
+    pub(super) data: ByteRange,
 }
 
 fn preflight_czi_reader_with_limits(
@@ -243,7 +263,7 @@ fn preflight_czi_subblock_reader_with_limits(
     file_len: u64,
     offset: u64,
     limits: crate::SlideLimits,
-) -> Result<u64, WsiError> {
+) -> Result<SubblockExtent, WsiError> {
     let effective_size = read_segment_header(
         reader,
         file_len,
@@ -312,8 +332,8 @@ fn preflight_czi_subblock_reader_with_limits(
         .checked_add(32)
         .and_then(|value| value.checked_add(dimension_count.checked_mul(20)?))
         .ok_or_else(|| preflight_error("CZI subblock header size overflows"))?;
-    let actual_bytes = dynamic_header_bytes
-        .max(SUBBLOCK_FIXED_BYTES)
+    let header_bytes = dynamic_header_bytes.max(SUBBLOCK_FIXED_BYTES);
+    let actual_bytes = header_bytes
         .checked_add(metadata_bytes)
         .and_then(|value| value.checked_add(data_bytes))
         .and_then(|value| value.checked_add(attachment_bytes))
@@ -323,7 +343,12 @@ fn preflight_czi_subblock_reader_with_limits(
             "CZI subblock requires {actual_bytes} bytes, exceeding its {effective_size}-byte segment"
         )));
     }
-    Ok(actual_bytes)
+    // The segment fits the file, so the data offset cannot overflow.
+    let data_offset = offset + SEGMENT_HEADER_BYTES + header_bytes + metadata_bytes;
+    Ok(SubblockExtent {
+        used_bytes: actual_bytes,
+        data: ByteRange::new(data_offset, data_bytes),
+    })
 }
 
 pub(super) fn read_segment_header(

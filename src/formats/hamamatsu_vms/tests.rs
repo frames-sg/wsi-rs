@@ -38,6 +38,7 @@ impl VmsSlide {
 mod backend;
 mod errors;
 pub(super) mod fixtures;
+mod locations;
 
 use fixtures::write_restart_jpeg;
 

@@ -15,6 +15,7 @@ use crate::core::registry::{OpenBudget, Slide};
 use crate::core::types::*;
 
 mod fixtures;
+mod locations;
 
 use fixtures::*;
 

@@ -13,10 +13,10 @@ the [README](../README.md).
 | `src/core/batch.rs` | The process-wide CPU thread pool (`process_codec_cpu_pool`, `install_codec_cpu`), idle-core accounting, and sharing a batch's CPU work between the caller and idle pool threads. |
 | `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
 | `src/core/file_identity.rs` | Records a source file's identity and checks it before reads. |
-| `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`. `pixels/ycbcr.rs` converts YCbCr to RGB with OpenSlide 4.0.1's integer lookup tables. |
+| `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`, and tile byte locations (`locations.rs`). `pixels/ycbcr.rs` converts YCbCr to RGB with OpenSlide 4.0.1's integer lookup tables. |
 | `src/formats/<format>` | One module per file format: parse metadata, locate and read tiles. |
 | `src/formats/tiff_family` | Every TIFF-based format. `container` parses TIFF, `layout` maps each vendor's TIFF layout to levels (`layout/common.rs` holds the pieces the vendors share), `pixel_access` reads tiles. |
-| `src/decode` | Adapters to the JPEG, JPEG 2000 and JPEG XR codec crates. |
+| `src/decode` | Adapters to the JPEG, JPEG 2000 and JPEG XR codec crates. `jpeg/frame.rs` walks JPEG markers and merges TIFF tables; `jpeg/lossless.rs` crops JPEGs in the coefficient domain. |
 | `src/output` | GPU tile types for Metal and CUDA, and copying GPU tiles to CPU memory. |
 | `wsi-rs-openslide-shim` | The OpenSlide-compatible C library. |
 | `wsi-rs-python` | Optional Python reader for metadata, tile geometry, and compressed payloads; tensor decoding stays in the separate `j2k` extension. |
@@ -64,6 +64,43 @@ any request it declines.
 Tile reads (`read_tile`, `read_tiles`) skip planning and composition: they
 admit, resolve and return tiles in request order. Every batch read returns
 exactly one result per request, in the order requested.
+
+## Raw tiles and byte locations
+
+`read_raw_compressed_tile` returns a tile's encoded bytes and
+`tile_location` reports where they are stored (`src/core/types/locations.rs`).
+Each format implements both from the same index, so for a stored unit that
+covers its tile, `EncodedUnit::assemble` over the bytes at its ranges equals
+the raw tile; format tests check that round trip. `Slide::level_tile_locations`
+calls `tile_location` for every grid cell and counts shared header and table
+buffers once against the tile-index limit.
+
+A tile that is part of a stored JPEG is cropped in the coefficient domain by
+`src/decode/jpeg/lossless.rs`: `j2k_jpeg` extracts the quantized DCT blocks,
+an MCU-aligned window of them is re-emitted as a baseline JPEG by
+`src/decode/jpeg/dct_reemit.rs` with the source's quantization tables, JFIF and
+Adobe markers and component IDs, and standard Huffman tables. Extraction holds
+the whole source unit's coefficients, so each crop's working set (source,
+coefficients, output) is bounded by `SlideLimits::lossless_crop_bytes`.
+`lossless_crop_or_whole_jpeg` decides from the headers, before any entropy
+decoding: a crop whose coefficients do not fit returns the whole standalone
+JPEG with `tile_region` locating the tile, the same bytes `tile_location` and
+`EncodedUnit::assemble` give. So does a crop whose output, coded with
+standard Huffman tables, would exceed the encoded-unit limit while the source
+fits. `lossless_crop_jpeg_stack` crops vertically
+stacked JPEGs such as TIFF strips; with no single JPEG to fall back to, it
+returns `WsiError::ResourceLimit` instead. The NDPI display-tile retiler uses
+the same block-window helpers.
+
+`Slide::read_raw_compressed_tile` reserves
+`ManagedSlideReader::raw_tile_encoded_upper_bound`, which defaults to the
+decode bound. Formats that crop raise it to the crop working set for crop
+tiles only: TIFF (Ventana subtiles, JPEG strips, NDPI level JPEGs) and MIRAX,
+which caps its computed crop reservation at the limit. CZI and ZVI are
+admitted by `ConservativeManagedReader` at one encoded unit per read; their
+`SlideReader::raw_compressed_tile_reservation_hint` returns the crop limit for
+crop tiles, and the wrapper reserves the larger of the two for raw reads
+only. The reservation must fit `operation_transient_bytes`.
 
 ## Caches
 
@@ -196,8 +233,10 @@ decodes only the tiles it covers and the decoded-image limit applies per tile.
 A batch decodes its tiles serially side by side, which lets J2K decode Tier-1
 in bands as the inverse DWT reads them. Smaller levels decode whole. Metal
 decodes a batch of tiles at reductions up to 3 as one batch of regions sharing
-the codestream's bytes; deeper levels are decoded on the CPU. CUDA decoding and
-compressed passthrough need the full resolution as one tile.
+the codestream's bytes; deeper levels are decoded on the CPU. CUDA decoding
+needs the full resolution as one tile. A raw read of a full-resolution tile
+returns the whole codestream with `tile_region` set; reduced resolutions have
+no raw read and no byte location.
 
 ## The OpenSlide shim
 

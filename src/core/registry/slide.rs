@@ -2,6 +2,7 @@ use super::*;
 
 mod budget;
 mod execution;
+mod locations;
 mod region;
 use super::open_config::validate_dataset_limits;
 use crate::core::limits::ReadExecutionContext;
@@ -345,11 +346,21 @@ impl Slide {
         )
     }
 
+    /// Reads a tile's encoded bytes without decoding its pixels.
+    ///
+    /// The read reserves the reader's raw-read bound as transient work. For a
+    /// tile cropped losslessly out of a larger stored JPEG that is the crop
+    /// working set, [`SlideLimits::lossless_crop_bytes`], which must fit
+    /// [`SlideLimits::operation_transient_bytes`]; otherwise the read returns
+    /// [`WsiError::ResourceLimit`]. A crop that does not fit its working set,
+    /// or whose output would exceed [`SlideLimits::encoded_unit_bytes`],
+    /// returns the whole stored JPEG, with [`RawCompressedTile::tile_region`]
+    /// locating the tile in it.
     pub fn read_raw_compressed_tile(
         &self,
         req: &TileRequest,
     ) -> Result<RawCompressedTile, WsiError> {
-        let promised = self.source.tile_encoded_upper_bound(req)?;
+        let promised = self.source.raw_tile_encoded_upper_bound(req)?;
         let work = ReadWork::new(promised, 0)
             .encoded_only_bytes(self.limits.operation_transient_bytes())?;
         let _reservation = self.admission.reserve(work, None)?;

@@ -72,6 +72,8 @@ fn every_slide_limit_builder_accepts_positive_values_and_rejects_zero() {
         .with_slide_transient_bytes(9)
         .unwrap()
         .with_batch_chunk_bytes(10)
+        .unwrap()
+        .with_lossless_crop_bytes(11)
         .unwrap();
     assert_eq!(limits.aggregate_metadata_bytes(), 1);
     assert_eq!(limits.metadata_value_bytes(), 2);
@@ -83,6 +85,7 @@ fn every_slide_limit_builder_accepts_positive_values_and_rejects_zero() {
     assert_eq!(limits.operation_transient_bytes(), 8);
     assert_eq!(limits.slide_transient_bytes(), 9);
     assert_eq!(limits.batch_chunk_bytes(), 10);
+    assert_eq!(limits.lossless_crop_bytes(), 11);
 
     for error in [
         SlideLimits::default().with_aggregate_metadata_bytes(0),
@@ -91,9 +94,30 @@ fn every_slide_limit_builder_accepts_positive_values_and_rejects_zero() {
         SlideLimits::default().with_region_rgba_bytes(0),
         SlideLimits::default().with_slide_transient_bytes(0),
         SlideLimits::default().with_batch_chunk_bytes(0),
+        SlideLimits::default().with_lossless_crop_bytes(0),
     ] {
         assert!(error.unwrap_err().to_string().contains("greater than zero"));
     }
+}
+
+#[test]
+fn default_lossless_crop_working_set_fits_one_operation_beside_the_encoded_unit_limit() {
+    let limits = SlideLimits::default();
+    assert_eq!(limits.lossless_crop_bytes(), 256 * MIB);
+    // A dedicated limit: compressed units keep their own cap.
+    assert_eq!(limits.encoded_unit_bytes(), 128 * MIB);
+    // Raw reads that may crop reserve the working set as transient work.
+    assert!(limits.lossless_crop_bytes() <= limits.operation_transient_bytes());
+    assert!(ReadWork::new(limits.lossless_crop_bytes(), 0)
+        .encoded_only_bytes(limits.operation_transient_bytes())
+        .is_ok());
+    let error = SlideLimits::default()
+        .with_lossless_crop_bytes(0)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "lossless crop limit must be greater than zero"
+    );
 }
 
 #[test]

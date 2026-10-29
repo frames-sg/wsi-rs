@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::decode::jpeg::frame::JpegFrameInfo;
 
 #[derive(Clone, Copy)]
 pub(in super::super) struct TiledIfdTileSpan {
@@ -331,38 +332,64 @@ impl TiffPixelReader {
         }
         let tile_data = self.read_tiled_ifd_tile_span(span)?;
         let (data, info) = standalone_jpeg_frame_owned(tile_data, jpeg_tables)?;
-        let bitstream_hint = jpeg_bitstream_color_hint(&data, None);
-        let photometric_interpretation = if self.layout.dataset.properties.vendor()
-            == Some("philips")
-        {
-            match bitstream_hint {
-                JpegBitstreamColorHint::Rgb => EncodedTilePhotometricInterpretation::Rgb,
-                JpegBitstreamColorHint::YCbCr => EncodedTilePhotometricInterpretation::YbrFull422,
-                JpegBitstreamColorHint::RgbComponentIds012 | JpegBitstreamColorHint::Unknown => {
-                    info.photometric_interpretation
-                }
-            }
-        } else {
-            let photometric = self
-                .container
-                .get_u32(ifd_id, tags::PHOTOMETRIC)
-                .unwrap_or(2);
-            tiff_jpeg_encoded_photometric_interpretation(
-                photometric,
-                u32::from(info.samples_per_pixel),
-                bitstream_hint,
-            )?
-        };
-        Ok(RawCompressedTile::builder(Compression::Jpeg)
-            // The encoded JPEG commonly retains a full physical tile at the
-            // right and bottom edges. Preserve the TIFF level's logical edge
-            // dimensions so device decoders crop exactly like the CPU path.
-            .dimensions(span.width, span.height)
+        let photometric_interpretation = self.tiff_jpeg_raw_photometric(ifd_id, &data, &info)?;
+        if info.width < span.width || info.height < span.height {
+            return Err(WsiError::tile_read(
+                req,
+                format!(
+                    "TIFF JPEG tile is {}x{}, smaller than its {}x{} tile",
+                    info.width, info.height, span.width, span.height
+                ),
+            ));
+        }
+        let builder = RawCompressedTile::builder(Compression::Jpeg)
+            .dimensions(info.width, info.height)
             .bits_allocated(info.bits_allocated)
             .samples_per_pixel(info.samples_per_pixel)
             .photometric_interpretation(photometric_interpretation)
-            .data(data)
-            .build()?)
+            .data(data);
+        // The JPEG commonly keeps the whole stored tile at the right and
+        // bottom edges; tile_region marks the clipped tile in it.
+        let builder = if (info.width, info.height) == (span.width, span.height) {
+            builder
+        } else {
+            builder.tile_region(PixelRect::new(0, 0, span.width, span.height))
+        };
+        Ok(builder.build()?)
+    }
+
+    /// The photometric interpretation of `data`, a standalone JPEG of
+    /// `ifd_id` whose SOF is `info`, as the TIFF JPEG decoder reads it: the
+    /// bitstream's color markers, then the TIFF Photometric tag.
+    pub(in super::super) fn tiff_jpeg_raw_photometric(
+        &self,
+        ifd_id: IfdId,
+        data: &[u8],
+        info: &JpegFrameInfo,
+    ) -> Result<EncodedTilePhotometricInterpretation, WsiError> {
+        let bitstream_hint = jpeg_bitstream_color_hint(data, None);
+        Ok(
+            if self.layout.dataset.properties.vendor() == Some("philips") {
+                match bitstream_hint {
+                    JpegBitstreamColorHint::Rgb => EncodedTilePhotometricInterpretation::Rgb,
+                    JpegBitstreamColorHint::YCbCr => {
+                        EncodedTilePhotometricInterpretation::YbrFull422
+                    }
+                    JpegBitstreamColorHint::RgbComponentIds012
+                    | JpegBitstreamColorHint::Unknown => info.photometric_interpretation,
+                }
+            } else {
+                let photometric = self
+                    .container
+                    .get_u32(ifd_id, tags::PHOTOMETRIC)
+                    .unwrap_or(2);
+                tiff_jpeg_encoded_photometric_interpretation(
+                    photometric,
+                    u32::from(info.samples_per_pixel),
+                    bitstream_hint,
+                )?
+            },
+        )
     }
 
     pub(in super::super) fn read_tiled_ifd_raw_jp2k_tile(
@@ -379,6 +406,43 @@ impl TiffPixelReader {
         }
 
         let data = self.read_tiled_ifd_tile_span(span)?;
+        let (bits_allocated, samples_per_pixel, photometric_interpretation) =
+            self.tiled_ifd_jp2k_format(ifd_id, compression)?;
+        let (width, height) = j2k::J2kDecoder::inspect(&data)
+            .map_err(|err| WsiError::tile_read(req, format!("J2K tile header: {err}")))?
+            .dimensions;
+        if width < span.width || height < span.height {
+            return Err(WsiError::tile_read(
+                req,
+                format!(
+                    "TIFF J2K tile is {width}x{height}, smaller than its {}x{} tile",
+                    span.width, span.height
+                ),
+            ));
+        }
+
+        let builder = RawCompressedTile::builder(compression)
+            .dimensions(width, height)
+            .bits_allocated(bits_allocated)
+            .samples_per_pixel(samples_per_pixel)
+            .photometric_interpretation(photometric_interpretation)
+            .data(data);
+        // Like JPEG, an edge codestream commonly keeps the whole stored tile.
+        let builder = if (width, height) == (span.width, span.height) {
+            builder
+        } else {
+            builder.tile_region(PixelRect::new(0, 0, span.width, span.height))
+        };
+        Ok(builder.build()?)
+    }
+
+    /// Bits, samples and photometric interpretation of `ifd_id`'s J2K
+    /// codestreams, from the TIFF tags and the J2K compression code.
+    pub(in super::super) fn tiled_ifd_jp2k_format(
+        &self,
+        ifd_id: IfdId,
+        compression: Compression,
+    ) -> Result<(u16, u16, EncodedTilePhotometricInterpretation), WsiError> {
         let samples_per_pixel = self
             .container
             .get_u32(ifd_id, tags::SAMPLES_PER_PIXEL)
@@ -430,12 +494,10 @@ impl TiffPixelReader {
             }
         };
 
-        Ok(RawCompressedTile::builder(compression)
-            .dimensions(span.width, span.height)
-            .bits_allocated(bits_allocated as u16)
-            .samples_per_pixel(samples_per_pixel as u16)
-            .photometric_interpretation(photometric_interpretation)
-            .data(data)
-            .build()?)
+        Ok((
+            bits_allocated as u16,
+            samples_per_pixel as u16,
+            photometric_interpretation,
+        ))
     }
 }

@@ -62,8 +62,28 @@ impl SlideReader for ZeissReader {
         )
     }
 
+    /// A classic-JPEG subblock that is exactly the tile is returned as
+    /// stored; one that covers the tile is cropped losslessly in the
+    /// coefficient domain from the MCU corner at or before the tile, or
+    /// returned whole with the tile region inside it when the crop does not
+    /// fit the lossless-crop limit. A JPEG XR subblock covering the tile is
+    /// returned as its whole stream with the tile region inside it. Tiles
+    /// painted only from uncompressed subblocks are returned as their exact
+    /// uncompressed RGB samples, which is lossless. Other compositions of
+    /// lossy subblocks fail with [`WsiError::Unsupported`]; `tile_location`
+    /// reports their parts.
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        self.slide.read_raw_jpeg_tile(req)
+        self.slide
+            .read_raw_tile(req, self.slide.limits.lossless_crop_bytes())
+    }
+
+    /// The lossless-crop limit for tiles cropped from one JPEG subblock.
+    fn raw_compressed_tile_reservation_hint(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        self.slide.raw_tile_reservation_hint(req)
+    }
+
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.slide.tile_location(req)
     }
 
     fn level_encoding(
@@ -90,7 +110,15 @@ impl SlideReader for ZeissReader {
             req,
             "Zeiss raw JPEG display",
         )?;
-        self.slide.read_raw_jpeg_tile(&tile)
+        // Display reads are admitted at one encoded unit, so their crops
+        // must fit it.
+        let limits = self.slide.limits;
+        self.slide.read_raw_tile(
+            &tile,
+            limits
+                .lossless_crop_bytes()
+                .min(limits.encoded_unit_bytes()),
+        )
     }
 
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
@@ -102,6 +130,8 @@ pub(super) struct ZeissSlide {
     pub(super) probe: crate::core::test_hooks::SourceProbe,
     pub(super) limits: crate::SlideLimits,
     pub(super) source_path: PathBuf,
+    /// `source_path`, shared by every tile location.
+    pub(super) location_path: Arc<Path>,
     pub(super) source_identity: FileIdentity,
     pub(super) dataset: Dataset,
     pub(super) czi: Mutex<CziContainer>,
@@ -115,6 +145,9 @@ pub(super) struct ZeissSlide {
     pub(super) subblock_origin: (i32, i32),
     pub(super) canvas_level_subblocks: Vec<Vec<usize>>,
     pub(super) canvas_level_tile_subblocks: Vec<CanvasTileSubblockMap>,
+    /// Data part of each subblock, in directory order, from the open-time
+    /// preflight of every subblock header.
+    pub(super) subblock_data: Vec<ByteRange>,
 }
 
 impl ZeissSlide {

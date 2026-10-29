@@ -2,7 +2,7 @@ use super::compound::{
     compound_stream_paths_with_budget, item_contents_index, read_stream_declared_bounded,
 };
 use super::header::read_zvi_header;
-use super::model::{ZviCompression, ZviPlane, ZviSlide};
+use super::model::{ZviCompression, ZviPlane, ZviSlide, ZviTileSource};
 use super::mosaic::{apply_mosaic_positions, build_mosaic_grid, build_zvi_channels};
 use super::tags::{read_tags_if_present, tag_color, tag_f64, tag_string, tag_u32};
 use super::*;
@@ -30,6 +30,31 @@ impl SlideReader for ZviReader {
             .ok_or_else(|| WsiError::AssociatedImageNotFound(name.into()))
     }
 
+    /// The plane payload bytes that hold the tile, mapped through the
+    /// compound file's sector chains to absolute file ranges.
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.slide.tile_location(req)
+    }
+
+    /// A tile that is a whole plane comes back as its stored payload:
+    /// uncompressed samples, a zlib stream (`Compression::Deflate`) or a
+    /// JPEG. A tile that is part of a plane comes back as its exact samples
+    /// (`Compression::None`), cut from the uncompressed or inflated plane,
+    /// which is lossless; or, for a JPEG plane, cropped from the stored JPEG
+    /// in the coefficient domain, with [`RawCompressedTile::tile_region`]
+    /// locating the tile when the crop starts at an earlier MCU boundary.
+    /// A JPEG plane too large to crop within the lossless-crop limit comes
+    /// back whole, with `tile_region` locating the tile in it.
+    /// Uncompressed 16-bit samples are in host byte order.
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        self.slide.read_raw_compressed_tile(req)
+    }
+
+    /// The lossless-crop limit for tiles cropped from a JPEG plane.
+    fn raw_compressed_tile_reservation_hint(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        self.slide.raw_tile_reservation_hint(req)
+    }
+
     /// The thumbnail is a BMP stream, stored without lossy compression.
     fn associated_encoding(&self, name: &str) -> Result<Option<SourceEncoding>, WsiError> {
         Ok(self
@@ -46,8 +71,11 @@ impl ZviSlide {
         config: BackendOpenConfig,
     ) -> Result<Self, WsiError> {
         let budget = OpenBudget::new(config.limits);
-        let mut compound =
-            cfb::open(path).map_err(|source| WsiError::invalid_slide(path, source.to_string()))?;
+        let file =
+            File::open(path).map_err(|source| WsiError::invalid_slide(path, source.to_string()))?;
+        let source_identity = FileIdentity::from_open_file(path, &file)?;
+        let mut compound = CompoundFile::open(file)
+            .map_err(|source| WsiError::invalid_slide(path, source.to_string()))?;
         let stream_paths = compound_stream_paths_with_budget(&compound, &budget)?;
         let global_tags = read_tags_if_present(&mut compound, "/Image/Tags/Contents", &budget)?;
         let global_width = tag_u32(&global_tags, 515);
@@ -290,6 +318,12 @@ impl ZviSlide {
         Ok(Self {
             dataset,
             compound: Mutex::new(compound),
+            source_path: Arc::from(path),
+            source_identity,
+            location_index_limit: config.limits.tile_index_bytes(),
+            lossless_crop_bytes: config.limits.lossless_crop_bytes(),
+            encoded_unit_bytes: config.limits.encoded_unit_bytes(),
+            payload_segments: OnceLock::new(),
             planes,
             plane_by_whole,
             plane_by_tile,
@@ -298,6 +332,16 @@ impl ZviSlide {
     }
 
     fn read_tile(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
+        match self.tile_source(req)? {
+            ZviTileSource::Plane { index, window } => {
+                self.read_plane_window(index, window.x, window.y, window.width, window.height)
+            }
+            ZviTileSource::Missing(reason) => Err(WsiError::tile_read(req, reason)),
+        }
+    }
+
+    /// The plane that stores `req` and the window of it the tile covers.
+    pub(super) fn tile_source(&self, req: &TileRequest) -> Result<ZviTileSource, WsiError> {
         let (_, series, level) = self.dataset.level(req.scene, req.series, req.level)?;
         let plane = req.plane.get();
         series.axes.validate_plane(plane)?;
@@ -309,11 +353,9 @@ impl ZviSlide {
                 virtual_tile_width,
                 virtual_tile_height,
             } => {
-                let plane_index = self
-                    .plane_by_whole
-                    .get(&(req.plane.get().z, req.plane.get().c, req.plane.get().t))
-                    .copied()
-                    .ok_or_else(|| WsiError::tile_read(req, "ZVI plane has no image payload"))?;
+                let Some(&index) = self.plane_by_whole.get(&(plane.z, plane.c, plane.t)) else {
+                    return Ok(ZviTileSource::Missing("ZVI plane has no image payload"));
+                };
                 let x = req.col.saturating_mul(i64::from(*virtual_tile_width));
                 let y = req.row.saturating_mul(i64::from(*virtual_tile_height));
                 if x < 0 || y < 0 || x >= *width as i64 || y >= *height as i64 {
@@ -321,22 +363,23 @@ impl ZviSlide {
                 }
                 let w = (*virtual_tile_width).min((*width as i64 - x) as u32);
                 let h = (*virtual_tile_height).min((*height as i64 - y) as u32);
-                self.read_plane_window(plane_index, x as u32, y as u32, w, h)
+                Ok(ZviTileSource::Plane {
+                    index,
+                    window: PixelRect::new(x as u32, y as u32, w, h),
+                })
             }
             TileLayout::Irregular { .. } => {
-                let plane_index = self
+                let Some(&index) = self
                     .plane_by_tile
-                    .get(&(
-                        req.plane.get().z,
-                        req.plane.get().c,
-                        req.plane.get().t,
-                        req.col,
-                        req.row,
-                    ))
-                    .copied()
-                    .ok_or_else(|| WsiError::tile_read(req, "ZVI mosaic tile not found"))?;
-                let plane = &self.planes[plane_index];
-                self.read_plane_window(plane_index, 0, 0, plane.width, plane.height)
+                    .get(&(plane.z, plane.c, plane.t, req.col, req.row))
+                else {
+                    return Ok(ZviTileSource::Missing("ZVI mosaic tile not found"));
+                };
+                let plane = &self.planes[index];
+                Ok(ZviTileSource::Plane {
+                    index,
+                    window: PixelRect::new(0, 0, plane.width, plane.height),
+                })
             }
             TileLayout::Regular { .. } => Err(WsiError::tile_read(
                 req,

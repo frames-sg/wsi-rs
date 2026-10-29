@@ -32,12 +32,12 @@ pub(super) fn read_jpeg_dimensions_from_record(
 ) -> Result<(u32, u32), WsiError> {
     let file = &mut cached_file(quickhash_files, &record.path)?.file;
     file.seek(SeekFrom::Start(record.offset))
-        .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
+        .map_err(|source| WsiError::io_with_path(&record.path, source))?;
 
     let probe_len = record.len.min(MIRAX_ASSOCIATED_DIMENSION_PROBE_BYTES) as usize;
     let mut probe = vec![0u8; probe_len];
     file.read_exact(&mut probe)
-        .map_err(|source| WsiError::io_with_path(record.path.as_path(), source))?;
+        .map_err(|source| WsiError::io_with_path(&record.path, source))?;
     if let Ok(dimensions) = jpeg_dimensions(&probe) {
         return Ok(dimensions);
     }

@@ -28,12 +28,19 @@ fn ndpi_cpu_tile_falls_back_to_full_decode_when_mcu_table_is_invalid() {
     let reader = TiffPixelReader::new(container, layout);
     let req = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
 
-    let raw_err = reader.read_raw_compressed_tile(&req).unwrap_err();
-    assert!(raw_err.to_string().contains("exceeds strip byte count"));
+    let restart_err = ndpi_restart_raw_error(&reader, &req);
+    assert!(restart_err.to_string().contains("exceeds strip byte count"));
 
     let tile = reader.read_tile_cpu(&req).unwrap();
     assert_eq!((tile.width, tile.height), (64, 8));
     assert_eq!(tile.channels, 3);
+    // Raw reads crop the tile out of the level JPEG instead.
+    let raw = reader.read_raw_compressed_tile(&req).unwrap();
+    assert_eq!((raw.width(), raw.height()), (64, 8));
+    assert_eq!(
+        tile.data.as_u8(),
+        Some(decode_raw_ndpi_tile(&raw).as_slice())
+    );
 }
 
 #[test]
@@ -76,10 +83,10 @@ fn ndpi_cpu_tile_falls_back_to_full_decode_for_each_unlocatable_segment() {
         let reader = TiffPixelReader::new(container, layout);
         let req = TileRequest::new(0usize, 0usize, 0u32, col, row);
 
-        let raw_err = reader.read_raw_compressed_tile(&req).unwrap_err();
+        let restart_err = ndpi_restart_raw_error(&reader, &req);
         assert!(
-            raw_err.to_string().contains(restart_error),
-            "unexpected restart error: {raw_err}"
+            restart_err.to_string().contains(restart_error),
+            "unexpected restart error: {restart_err}"
         );
 
         let tile = reader
@@ -95,6 +102,13 @@ fn ndpi_cpu_tile_falls_back_to_full_decode_for_each_unlocatable_segment() {
                 "tile ({col},{row}) pixel {actual:?} is not {expected:?}"
             );
         }
+        let raw = reader
+            .read_raw_compressed_tile(&req)
+            .unwrap_or_else(|err| panic!("no level JPEG crop after {restart_error}: {err}"));
+        assert_eq!(
+            tile.data.as_u8(),
+            Some(decode_raw_ndpi_tile(&raw).as_slice())
+        );
     }
 }
 

@@ -369,6 +369,16 @@ impl DicomLevel {
         Err(sparse_missing_raw_tile_error(col, row, level))
     }
 
+    /// Where the tile's frame is stored, in the part that holds it. Tiles
+    /// no part stores are absent.
+    pub(super) fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        let (col, row) = self.tile_coordinates(req)?;
+        match self.image_for_tile(col, row) {
+            Some(image) => image.tile_location(col, row),
+            None => Ok(TileLocation::Absent),
+        }
+    }
+
     pub(super) fn actual_tile_dimensions(&self, col: u32, row: u32) -> (u32, u32) {
         dicom_actual_tile_dimensions(
             self.width,

@@ -550,9 +550,8 @@ pub(super) fn raw_photometric_interpretation(
     photometric_interpretation: &str,
 ) -> Result<EncodedTilePhotometricInterpretation, WsiError> {
     match (samples_per_pixel, photometric_interpretation) {
-        (1, "MONOCHROME1" | "MONOCHROME2") => {
-            Ok(EncodedTilePhotometricInterpretation::Monochrome2)
-        }
+        (1, "MONOCHROME1") => Ok(EncodedTilePhotometricInterpretation::Monochrome1),
+        (1, "MONOCHROME2") => Ok(EncodedTilePhotometricInterpretation::Monochrome2),
         (3, "RGB") => Ok(EncodedTilePhotometricInterpretation::Rgb),
         (3, "YBR_FULL_422" | "YBR_FULL" | "YBR_ICT" | "YBR_RCT") => {
             Ok(EncodedTilePhotometricInterpretation::YbrFull422)

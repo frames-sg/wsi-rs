@@ -25,85 +25,7 @@ impl DicomImage {
         col: i64,
         row: i64,
     ) -> Result<CpuTile, WsiError> {
-        let frame_len = crate::core::limits::checked_product_to_usize(
-            &[
-                u64::from(self.tile_width),
-                u64::from(self.tile_height),
-                u64::from(self.samples_per_pixel),
-                u64::from(self.bit_depth.bytes_per_sample()),
-            ],
-            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
-            "native DICOM frame",
-        )
-        .map_err(|reason| WsiError::TileRead {
-            col,
-            row,
-            level,
-            reason,
-        })?;
-        let start = u64::from(frame_index)
-            .checked_mul(frame_len as u64)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame offset overflow".into(),
-            })?;
-        let end = start
-            .checked_add(frame_len as u64)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame byte range overflow".into(),
-            })?;
-        let native_pixel_data =
-            self.frame_store
-                .native_pixel_data
-                .as_ref()
-                .ok_or_else(|| WsiError::TileRead {
-                    col,
-                    row,
-                    level,
-                    reason: "native DICOM Pixel Data location is unavailable".into(),
-                })?;
-        if end > u64::from(native_pixel_data.value_len) {
-            return Err(WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: format!(
-                    "DICOM frame {frame_index} byte range {}..{} exceeds pixel data length {}",
-                    start, end, native_pixel_data.value_len
-                ),
-            });
-        }
-        let absolute_start = native_pixel_data
-            .value_offset
-            .checked_add(start)
-            .ok_or_else(|| WsiError::TileRead {
-                col,
-                row,
-                level,
-                reason: "DICOM frame file offset overflow".into(),
-            })?;
-        let mut frame = Vec::new();
-        frame
-            .try_reserve_exact(frame_len)
-            .map_err(|_| WsiError::ResourceLimit {
-                resource: "native DICOM frame",
-                requested: frame_len as u64,
-                limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
-            })?;
-        frame.resize(frame_len, 0);
-        native_pixel_data.source_identity.ensure_matches(
-            &self.frame_store.path,
-            "DICOM source changed after metadata was parsed",
-        )?;
-        native_pixel_data
-            .source_file
-            .read_exact_at(&mut frame, absolute_start)
-            .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
+        let frame = self.read_native_frame(frame_index, level, col, row)?;
         let planar_configuration = self.planar_configuration.unwrap_or(0);
         // Interleaved 8-bit RGB frames pass through without a copy.
         let data = match self.bit_depth {
@@ -157,6 +79,91 @@ impl DicomImage {
             level,
             reason: err.to_string(),
         })
+    }
+
+    /// The stored bytes of native frame `frame_index`, once the frame fits
+    /// the decoded-image limit and the Pixel Data value.
+    fn read_native_frame(
+        &self,
+        frame_index: u32,
+        level: u32,
+        col: i64,
+        row: i64,
+    ) -> Result<Vec<u8>, WsiError> {
+        let tile_read = |reason: String| WsiError::TileRead {
+            col,
+            row,
+            level,
+            reason,
+        };
+        let frame_len = crate::core::limits::checked_product_to_usize(
+            &[
+                u64::from(self.tile_width),
+                u64::from(self.tile_height),
+                u64::from(self.samples_per_pixel),
+                u64::from(self.bit_depth.bytes_per_sample()),
+            ],
+            crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            "native DICOM frame",
+        )
+        .map_err(tile_read)?;
+        let native_pixel_data =
+            self.frame_store.native_pixel_data.as_ref().ok_or_else(|| {
+                tile_read("native DICOM Pixel Data location is unavailable".into())
+            })?;
+        let range = self.native_frame_range(frame_index).map_err(tile_read)?;
+        let mut frame = Vec::new();
+        frame
+            .try_reserve_exact(frame_len)
+            .map_err(|_| WsiError::ResourceLimit {
+                resource: "native DICOM frame",
+                requested: frame_len as u64,
+                limit: crate::core::limits::MAX_DECODED_IMAGE_BYTES,
+            })?;
+        frame.resize(frame_len, 0);
+        native_pixel_data.source_identity.ensure_matches(
+            &self.frame_store.path,
+            "DICOM source changed after metadata was parsed",
+        )?;
+        native_pixel_data
+            .source_file
+            .read_exact_at(&mut frame, range.offset)
+            .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
+        Ok(frame)
+    }
+
+    /// A native frame as a raw uncompressed tile: interleaved samples, and
+    /// 16-bit samples in host byte order with the bits above `BitsStored`
+    /// cleared. Frames already stored that way pass through unchanged;
+    /// others are reordered and masked as `read_tile` reads them.
+    pub(in super::super) fn read_native_raw_frame(
+        &self,
+        frame_index: u32,
+        level: u32,
+        col: i64,
+        row: i64,
+    ) -> Result<Vec<u8>, WsiError> {
+        let mut frame = self.read_native_frame(frame_index, level, col, row)?;
+        let sample_bytes = usize::from(self.bit_depth.bytes_per_sample());
+        if sample_bytes == 2 {
+            let from_stored =
+                if self.transfer_syntax == (DicomTransferSyntax::Native { big_endian: true }) {
+                    u16::from_be_bytes
+                } else {
+                    u16::from_le_bytes
+                };
+            // Bits above BitsStored are not part of the sample; read_tile
+            // clears them too.
+            let mask = self.bit_depth.unsigned_sample_mask();
+            for word in frame.as_chunks_mut::<2>().0 {
+                *word = (from_stored(*word) & mask).to_ne_bytes();
+            }
+        }
+        if self.samples_per_pixel > 1 && self.planar_configuration == Some(1) {
+            frame =
+                interleave_sample_planes(&frame, usize::from(self.samples_per_pixel), sample_bytes);
+        }
+        Ok(frame)
     }
 
     /// Checks that a JPEG frame uses this image's declared JPEG process and
@@ -293,4 +300,17 @@ impl DicomImage {
         }
         Ok(buffer)
     }
+}
+
+/// Interleaves `planes` equal sample planes of `sample_bytes`-byte samples.
+fn interleave_sample_planes(planar: &[u8], planes: usize, sample_bytes: usize) -> Vec<u8> {
+    let pixel_count = planar.len() / (planes * sample_bytes);
+    let mut interleaved = vec![0; pixel_count * planes * sample_bytes];
+    for (plane, plane_bytes) in planar.chunks_exact(pixel_count * sample_bytes).enumerate() {
+        for (pixel, sample) in plane_bytes.chunks_exact(sample_bytes).enumerate() {
+            let start = (pixel * planes + plane) * sample_bytes;
+            interleaved[start..start + sample_bytes].copy_from_slice(sample);
+        }
+    }
+    interleaved
 }

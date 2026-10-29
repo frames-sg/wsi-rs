@@ -13,6 +13,7 @@ pub(crate) struct TiffPixelReader {
     pub(super) ndpi_mcu_starts_cache: Mutex<NdpiMcuStartsCache>,
     pub(super) synthetic_level_cache: SyntheticLevelCache,
     pub(super) synthetic_region_cache: Mutex<SyntheticRegionCache>,
+    pub(super) locations: super::locations::TiffLocations,
 }
 
 impl TiffPixelReader {
@@ -32,6 +33,7 @@ impl TiffPixelReader {
         let (full_decode_bytes, ndpi_strip_bytes, ndpi_mcu_bytes, synthetic_bytes) =
             private_cache_budgets(cache_config, uses_ndpi_caches);
         Self {
+            locations: super::locations::TiffLocations::new(&container),
             container,
             layout,
             full_decode_cache: FullDecodeCache::new(full_decode_bytes),

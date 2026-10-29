@@ -210,3 +210,4 @@ mod batch;
 mod cpu;
 mod errors;
 mod input_repair;
+mod lossless;

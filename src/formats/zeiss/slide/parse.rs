@@ -13,6 +13,8 @@ struct ValidatedCzi {
     statistics: SubBlockStatistics,
     attachments: Vec<AttachmentInfo>,
     subblocks: Vec<DirectorySubBlockInfo>,
+    /// Data part of each subblock, in directory order.
+    subblock_data: Vec<ByteRange>,
 }
 
 struct CziDatasetParts {
@@ -26,6 +28,7 @@ struct CziDatasetParts {
     subblock_origin: (i32, i32),
     canvas_level_subblocks: Vec<Vec<usize>>,
     canvas_level_tile_subblocks: Vec<CanvasTileSubblockMap>,
+    subblock_data: Vec<ByteRange>,
 }
 
 struct CziAssociatedImages {
@@ -136,13 +139,15 @@ fn open_and_validate_czi(
         }
     }
 
+    let mut subblock_data = Vec::with_capacity(czi.subblocks().len());
     for subblock in czi.subblocks() {
-        super::super::preflight::preflight_czi_open_subblock_with_limits(
+        let (_, extent) = super::super::preflight::preflight_czi_open_subblock_extent(
             path,
             &mut preflight_file,
             subblock.file_position,
             limits,
         )?;
+        subblock_data.push(extent.data);
         if subblock.file_part != 0 {
             return Err(WsiError::invalid_slide(
                 path,
@@ -196,6 +201,7 @@ fn open_and_validate_czi(
         statistics: czi.statistics().clone(),
         attachments: czi.attachments().to_vec(),
         subblocks: czi.subblocks().to_vec(),
+        subblock_data,
         source_identity,
         preflight_file,
         czi,
@@ -295,6 +301,7 @@ fn build_dataset_parts(
         subblock_origin,
         canvas_level_subblocks,
         canvas_level_tile_subblocks,
+        subblock_data: input.subblock_data,
     })
 }
 
@@ -421,6 +428,7 @@ fn assemble_slide(
         probe: Default::default(),
         limits: crate::SlideLimits::default(),
         source_path: path.to_path_buf(),
+        location_path: Arc::from(path),
         source_identity: parts.source_identity,
         dataset,
         czi: Mutex::new(parts.czi),
@@ -434,5 +442,6 @@ fn assemble_slide(
         subblock_origin: parts.subblock_origin,
         canvas_level_subblocks: parts.canvas_level_subblocks,
         canvas_level_tile_subblocks: parts.canvas_level_tile_subblocks,
+        subblock_data: parts.subblock_data,
     }
 }

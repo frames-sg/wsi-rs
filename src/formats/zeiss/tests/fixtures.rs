@@ -20,6 +20,8 @@ pub(super) struct SubblockSpec {
     pub(super) pixel_type: i32,
     pub(super) compression: i32,
     pub(super) pyramid_type: u8,
+    /// Subblock XML metadata, stored between the header and the data.
+    pub(super) metadata: Vec<u8>,
     pub(super) data: Vec<u8>,
 }
 
@@ -37,6 +39,7 @@ impl SubblockSpec {
             pixel_type: 3,
             compression: 0,
             pyramid_type: 0,
+            metadata: Vec::new(),
             data,
         }
     }
@@ -144,7 +147,7 @@ pub(super) fn build_czi_bytes(
     let mut subblock_offsets = Vec::with_capacity(subblocks.len());
     for spec in subblocks {
         subblock_offsets.push(cursor);
-        cursor += 32 + SUBBLOCK_FIXED_BYTES + spec.data.len();
+        cursor += 32 + SUBBLOCK_FIXED_BYTES + spec.metadata.len() + spec.data.len();
     }
     let mut attachment_offsets = Vec::with_capacity(attachments.len());
     for attachment in attachments {
@@ -223,8 +226,9 @@ pub(super) fn build_czi_bytes(
             &mut bytes,
             file_position,
             b"ZISRAWSUBBLOCK\0\0",
-            SUBBLOCK_FIXED_BYTES + spec.data.len(),
+            SUBBLOCK_FIXED_BYTES + spec.metadata.len() + spec.data.len(),
         );
+        write_u32(&mut bytes, file_position + 32, spec.metadata.len() as u32);
         write_u64(&mut bytes, file_position + 32 + 8, spec.data.len() as u64);
         let entry_start = file_position + 32 + 16;
         write_directory_entry(
@@ -232,7 +236,9 @@ pub(super) fn build_czi_bytes(
             spec,
             file_position,
         );
-        let data_start = file_position + 32 + SUBBLOCK_FIXED_BYTES;
+        let metadata_start = file_position + 32 + SUBBLOCK_FIXED_BYTES;
+        bytes[metadata_start..metadata_start + spec.metadata.len()].copy_from_slice(&spec.metadata);
+        let data_start = metadata_start + spec.metadata.len();
         bytes[data_start..data_start + spec.data.len()].copy_from_slice(&spec.data);
     }
 

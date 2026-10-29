@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use wsi_rs::{
     Compression, CpuTile, EncodedTilePhotometricInterpretation, FormatRegistry, PlaneSelection,
-    RegionRequest, Slide, TileLayout, TileRequest,
+    RegionRequest, Slide, StoredFraming, TileLayout, TileLocation, TileRequest,
 };
 
 mod support;
@@ -275,4 +275,73 @@ fn aperio_jp2k_exposes_raw_compressed_codestream_tile() {
     ));
     assert!(raw.data().starts_with(&[0xFF, 0x4F]));
     assert!(raw.data().windows(2).any(|marker| marker == [0xFF, 0x51]));
+}
+
+/// Asserts that `req`'s single stored unit, read from the slide file and
+/// assembled, is the raw compressed tile.
+fn assert_location_matches_raw_tile(handle: &Slide, req: &TileRequest) -> StoredFraming {
+    use std::io::{Read, Seek, SeekFrom};
+    let location = handle.tile_location(req).expect("tile location");
+    let TileLocation::Stored(stored) = &location else {
+        panic!("tile {req:?} should be stored, got {location:?}");
+    };
+    let unit = stored.single_unit().expect("one stored unit");
+    let mut file = std::fs::File::open(unit.path()).expect("open located file");
+    let segments: Vec<Vec<u8>> = unit
+        .segments()
+        .iter()
+        .map(|segment| {
+            let mut bytes = vec![0; segment.length as usize];
+            file.seek(SeekFrom::Start(segment.offset)).unwrap();
+            file.read_exact(&mut bytes).unwrap();
+            bytes
+        })
+        .collect();
+    let assembled = unit
+        .assemble(segments.iter().map(Vec::as_slice))
+        .expect("assemble located segments");
+    let raw = handle.read_raw_compressed_tile(req).expect("raw tile");
+    assert_eq!(
+        assembled,
+        raw.data(),
+        "location of {req:?} differs from the raw tile"
+    );
+    unit.framing()
+}
+
+#[test]
+#[ignore = "requires public parity corpus; run after scripts/parity-corpus-fetch.sh"]
+fn aperio_jpeg_tile_locations_assemble_to_raw_tiles() {
+    let handle = Slide::open(aperio_jpeg_slide()).expect("open Aperio JPEG slide");
+    let level = regular_level_with_min_tiles(&handle, 2, 2);
+    let locations = handle
+        .level_tile_locations(0usize, 0usize, level.index, PlaneSelection::default())
+        .expect("level tile locations");
+    assert_eq!(
+        (locations.tiles_across, locations.tiles_down),
+        (level.tiles_across, level.tiles_down)
+    );
+    for req in tile_requests(level, 0, 0, 2, 2) {
+        let framing = assert_location_matches_raw_tile(&handle, &req);
+        assert!(matches!(
+            framing,
+            StoredFraming::JpegTables | StoredFraming::Standalone
+        ));
+    }
+}
+
+#[test]
+#[ignore = "requires WSI_RS_HAMAMATSU1_NDPI_PATH or local Hamamatsu-1.ndpi fixture"]
+fn hamamatsu1_ndpi_restart_locations_assemble_to_raw_tiles() {
+    let Some(path) = hamamatsu1_ndpi_slide() else {
+        eprintln!("skipping: set WSI_RS_HAMAMATSU1_NDPI_PATH to Hamamatsu-1.ndpi");
+        return;
+    };
+    let handle = Slide::open(path).expect("open Hamamatsu-1 NDPI");
+    for col in 0..3 {
+        assert_eq!(
+            assert_location_matches_raw_tile(&handle, &tile_request(0, col, 0)),
+            StoredFraming::Prefixed
+        );
+    }
 }

@@ -1,4 +1,7 @@
+pub(crate) mod dct_reemit;
+pub(crate) mod frame;
 mod input;
+pub(crate) mod lossless;
 
 #[cfg(test)]
 mod tests;

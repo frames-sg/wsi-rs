@@ -22,10 +22,18 @@ pub(super) struct MiraxFixture {
     pub(super) slidedat_path: PathBuf,
     pub(super) index_path: PathBuf,
     pub(super) data_path: PathBuf,
+    /// `IMAGE_FORMAT` of zoom levels 0, 1 and 2.
+    formats: [&'static str; 3],
 }
 
 impl MiraxFixture {
     pub(super) fn complete() -> Self {
+        Self::with_formats(["JPEG", "PNG", "BMP24"])
+    }
+
+    /// A complete bundle whose zoom levels store images in `formats`
+    /// (`JPEG`, `PNG` or `BMP24`, as Slidedat.ini names them).
+    pub(super) fn with_formats(formats: [&'static str; 3]) -> Self {
         let temp = tempfile::tempdir().expect("temporary MIRAX fixture directory");
         let path = temp.path().join("synthetic.mrxs");
         let slide_dir = temp.path().join("synthetic");
@@ -43,21 +51,21 @@ impl MiraxFixture {
         for y in 0..4 {
             for x in 0..4 {
                 let image_index = y * 4 + x;
-                let jpeg = encode_jpeg(IMAGE_SIDE, IMAGE_SIDE, 5 + image_index as u8);
-                level0.push((image_index, append_record(&mut data, &jpeg)));
+                let image = encode_image(formats[0], 5 + image_index as u8);
+                level0.push((image_index, append_record(&mut data, &image)));
             }
         }
         hierarchy.push(level0);
 
         let mut level1 = Vec::new();
         for (x, y, bias) in [(0, 0, 60), (2, 0, 80), (0, 2, 100), (2, 2, 120)] {
-            let png = encode_raster(ImageFormat::Png, IMAGE_SIDE, IMAGE_SIDE, bias);
-            level1.push((y * 4 + x, append_record(&mut data, &png)));
+            let image = encode_image(formats[1], bias);
+            level1.push((y * 4 + x, append_record(&mut data, &image)));
         }
         hierarchy.push(level1);
 
-        let bmp = encode_raster(ImageFormat::Bmp, IMAGE_SIDE, IMAGE_SIDE, 180);
-        hierarchy.push(vec![(0, append_record(&mut data, &bmp))]);
+        let image = encode_image(formats[2], 180);
+        hierarchy.push(vec![(0, append_record(&mut data, &image))]);
 
         let macro_record = append_record(&mut data, &encode_jpeg(12, 8, 200));
         let label_record = append_record(&mut data, &encode_jpeg(10, 6, 210));
@@ -74,12 +82,14 @@ impl MiraxFixture {
             slidedat_path,
             index_path,
             data_path,
+            formats,
         };
         fixture.write_slidedat(&fixture.complete_slidedat());
         fixture
     }
 
     pub(super) fn complete_slidedat(&self) -> String {
+        let [format0, format1, format2] = self.formats;
         format!(
             "[GENERAL]\n\
              SLIDE_ID={SLIDE_ID}\n\
@@ -120,7 +130,7 @@ impl MiraxFixture {
              OVERLAP_X=0\n\
              OVERLAP_Y=0\n\
              IMAGE_CONCAT_FACTOR=0\n\
-             IMAGE_FORMAT=JPEG\n\
+             IMAGE_FORMAT={format0}\n\
              [LEVEL_1]\n\
              IMAGE_FILL_COLOR_BGR=1122867\n\
              MICROMETER_PER_PIXEL_X=0.5\n\
@@ -130,7 +140,7 @@ impl MiraxFixture {
              OVERLAP_X=0\n\
              OVERLAP_Y=0\n\
              IMAGE_CONCAT_FACTOR=1\n\
-             IMAGE_FORMAT=PNG\n\
+             IMAGE_FORMAT={format1}\n\
              [LEVEL_2]\n\
              IMAGE_FILL_COLOR_BGR=1122867\n\
              MICROMETER_PER_PIXEL_X=1\n\
@@ -140,7 +150,7 @@ impl MiraxFixture {
              OVERLAP_X=0\n\
              OVERLAP_Y=0\n\
              IMAGE_CONCAT_FACTOR=1\n\
-             IMAGE_FORMAT=BMP24\n\
+             IMAGE_FORMAT={format2}\n\
              [POSITIONS]\n\
              [MACRO]\n\
              THUMBNAIL_IMAGE_TYPE=JPEG\n\
@@ -193,6 +203,16 @@ pub(super) fn patterned_pixels(width: u32, height: u32, bias: u8) -> Vec<u8> {
         }
     }
     pixels
+}
+
+/// One `IMAGE_SIDE` square image in a Slidedat.ini `IMAGE_FORMAT`.
+fn encode_image(format: &str, bias: u8) -> Vec<u8> {
+    match format {
+        "JPEG" => encode_jpeg(IMAGE_SIDE, IMAGE_SIDE, bias),
+        "PNG" => encode_raster(ImageFormat::Png, IMAGE_SIDE, IMAGE_SIDE, bias),
+        "BMP24" => encode_raster(ImageFormat::Bmp, IMAGE_SIDE, IMAGE_SIDE, bias),
+        other => panic!("unsupported synthetic MIRAX image format {other}"),
+    }
 }
 
 fn encode_raster(format: ImageFormat, width: u32, height: u32, bias: u8) -> Vec<u8> {

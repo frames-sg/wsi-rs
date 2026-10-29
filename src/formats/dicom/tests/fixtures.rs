@@ -3,6 +3,8 @@ pub(super) enum TestPixelData {
     Native(Vec<u8>),
     Encapsulated(Vec<u8>),
     EncapsulatedFrames(Vec<Vec<u8>>),
+    /// Frames of several fragments each, indexed by a Basic Offset Table.
+    FragmentedFrames(Vec<Vec<Vec<u8>>>),
 }
 
 pub(super) struct TestOpticalPathIccProfile {
@@ -279,6 +281,25 @@ pub(super) fn write_test_dicom(path: &Path, options: TestDicomOptions) {
         }
         TestPixelData::Encapsulated(frame) => {
             let pixel_sequence = PixelFragmentSequence::from(vec![Fragments::new(frame, 0)]);
+            object.put(DataElement::<InMemDicomObject>::new(
+                tags::PIXEL_DATA,
+                VR::OB,
+                Value::from(pixel_sequence),
+            ));
+        }
+        TestPixelData::FragmentedFrames(frames) => {
+            let mut offset_table = Vec::with_capacity(frames.len());
+            let mut offset = 0u32;
+            for frame in &frames {
+                offset_table.push(offset);
+                for fragment in frame {
+                    offset += 8 + fragment.len() as u32;
+                }
+            }
+            let pixel_sequence = PixelFragmentSequence::new(
+                offset_table,
+                frames.into_iter().flatten().collect::<Vec<_>>(),
+            );
             object.put(DataElement::<InMemDicomObject>::new(
                 tags::PIXEL_DATA,
                 VR::OB,

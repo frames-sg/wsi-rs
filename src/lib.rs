@@ -131,14 +131,16 @@ pub use core::registry::{
     SlideLimitError, SlideLimits, SlideOpenOptions, SlideReadContext, SlideReader,
 };
 pub use core::types::{
-    AssociatedImage, AxesShape, ChannelInfo, ColorSpace, Compression, CpuTile, CpuTileData,
-    CpuTileLayout, Dataset, DatasetId, DisplayWindow, EncodedTilePhotometricInterpretation,
-    IccProfileKey, IccProfileProvenance, Level, LevelIdx, LevelSourceKind, PixelFormat, PlaneIdx,
-    PlaneSelection, RawCompressedTile, RawCompressedTileBuildError, RawCompressedTileBuilder,
-    RegionRequest, RegionRequestBuilder, RequestBuildError, SampleType, Scene, SceneId, Series,
-    SeriesId, SourceEncoding, SourceIccProfile, SourceIccProfileConflict, SourceIccProfileKey,
-    TileCodecKind, TileEntry, TileHit, TileLayout, TileRequest, TileRequestBuilder,
-    TileViewRequest, TileViewRequestBuilder,
+    AssociatedImage, AxesShape, ByteOrder, ByteRange, ChannelInfo, ChannelOrder, ColorSpace,
+    Compression, CpuTile, CpuTileData, CpuTileLayout, Dataset, DatasetId, DisplayWindow,
+    EncodedCodec, EncodedTilePhotometricInterpretation, EncodedUnit, EncodedUnitBuilder,
+    IccProfileKey, IccProfileProvenance, Level, LevelIdx, LevelSourceKind, LevelTileLocation,
+    LevelTileLocations, NotAddressableReason, PixelFormat, PixelRect, PlanarConfiguration,
+    PlaneIdx, PlaneSelection, Predictor, RawCompressedTile, RawCompressedTileBuildError,
+    RawCompressedTileBuilder, RegionRequest, RegionRequestBuilder, RequestBuildError, SampleType,
+    Scene, SceneId, Series, SeriesId, SourceEncoding, SourceIccProfile, SourceIccProfileConflict,
+    SourceIccProfileKey, StoredFraming, StoredTile, TileCodecKind, TileEntry, TileHit, TileLayout,
+    TileLocation, TileRequest, TileRequestBuilder, TileViewRequest, TileViewRequestBuilder,
 };
 
 pub mod prelude {

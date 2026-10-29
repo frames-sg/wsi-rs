@@ -343,11 +343,14 @@ impl TiffPixelReader {
             });
         }
 
+        // Color follows the whole header (Adobe APP14, then SOF component
+        // ids and sampling), as the NDPI decoder reads it.
+        let photometric = self.tiff_jpeg_raw_photometric(ifd_id, &data, &info)?;
         Ok(RawCompressedTile::builder(Compression::Jpeg)
             .dimensions(info.width, info.height)
             .bits_allocated(info.bits_allocated)
             .samples_per_pixel(info.samples_per_pixel)
-            .photometric_interpretation(info.photometric_interpretation)
+            .photometric_interpretation(photometric)
             .data(data)
             .build()?)
     }

@@ -1,6 +1,7 @@
 mod ini;
 mod jpeg;
 mod levels;
+mod locations;
 mod model;
 mod slide;
 
@@ -11,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::core::cache::{CacheConfig, PrivateCache, PrivateCacheBudget};
 use crate::core::file_identity::FileIdentity;

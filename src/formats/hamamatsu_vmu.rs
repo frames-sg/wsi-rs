@@ -292,6 +292,15 @@ impl SlideReader for VmuReader {
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         self.resolve(req)?.read_tile(req, self.encoded_limit)
     }
+    /// NGR stores uncompressed little-endian RGB16 samples, so a raw tile is
+    /// `Compression::None` with the tile's exact interleaved samples in
+    /// native byte order: the stored bytes unchanged on little-endian hosts.
+    fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
+        self.resolve(req)?.read_raw_tile(req, self.encoded_limit)
+    }
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.resolve(req)?.tile_location(req)
+    }
     fn read_associated(&self, name: &str) -> Result<CpuTile, WsiError> {
         let bytes = self
             .macro_bytes

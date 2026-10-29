@@ -126,6 +126,10 @@ impl SlideReader for TiffPixelReader {
         &self.layout.dataset
     }
 
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        self.tiff_tile_location(req)
+    }
+
     fn tile_is_present(&self, req: &TileRequest) -> Result<Option<bool>, WsiError> {
         match self.tile_source_for(req)? {
             TileSource::TiledIfd { ifd_id, .. } => Ok(Some(
@@ -212,6 +216,17 @@ impl SlideReader for TiffPixelReader {
         }
     }
 
+    /// Stored TIFF tiles (JPEG, J2K, JPEG XR and self-describing bare
+    /// payloads) and NDPI restart intervals come back as stored, framed the
+    /// way their [`TileLocation`] assembles. Tiles cut from a larger stored
+    /// JPEG (Ventana subtiles, JPEG strips, NDPI whole-level JPEGs) are
+    /// lossless coefficient-domain crops; one whose crop does not fit
+    /// [`crate::SlideLimits::lossless_crop_bytes`] is that whole stored JPEG,
+    /// with [`RawCompressedTile::tile_region`] locating the tile, unless it
+    /// spans several strips. Tiles of other lossless payloads
+    /// (strips, predictors, big-endian samples) are their exact samples as
+    /// `Compression::None`, which loses nothing because the stored codec is
+    /// lossless. Synthetic levels store no tiles and stay unsupported.
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         match self.tile_source_for(req)? {
             TileSource::TiledIfd {
@@ -224,12 +239,11 @@ impl SlideReader for TiffPixelReader {
                 compression: compression @ (Compression::Jp2kRgb | Compression::Jp2kYcbcr),
                 ..
             } => self.read_tiled_ifd_raw_jp2k_tile(req, *ifd_id, *compression),
-            TileSource::TiledIfd { compression, .. } => Err(WsiError::Unsupported {
-                reason: format!(
-                    "compressed passthrough requires TIFF JPEG or J2K compression, got {:?}",
-                    compression
-                ),
-            }),
+            TileSource::TiledIfd {
+                ifd_id,
+                compression,
+                ..
+            } => self.read_tiled_ifd_raw_payload_tile(req, *ifd_id, *compression),
             TileSource::NdpiJpeg {
                 ifd_id,
                 jpeg_header,
@@ -240,31 +254,69 @@ impl SlideReader for TiffPixelReader {
                 strip_offset,
                 strip_byte_count,
                 ..
-            } => self.read_ndpi_raw_jpeg_tile(
+            } => self
+                .read_ndpi_raw_jpeg_tile(
+                    req,
+                    *ifd_id,
+                    jpeg_header,
+                    *mcu_starts_tag,
+                    *tiles_across,
+                    *tiles_down,
+                    *restart_interval,
+                    *strip_offset,
+                    *strip_byte_count,
+                )
+                .or_else(|restart_err| {
+                    // Tiles no restart interval serves are cropped from the
+                    // level's JPEG, the unit their location reports.
+                    match self.ndpi_level_jpeg_location(req)? {
+                        Some(location) => self.read_ndpi_level_jpeg_raw_tile(req, location),
+                        None => Err(restart_err),
+                    }
+                }),
+            TileSource::NdpiFullDecode { .. } => {
+                self.read_ndpi_level_jpeg_raw_tile(req, self.tiff_tile_location(req)?)
+            }
+            TileSource::TiledIfdSubtiles {
+                ifd_id,
+                jpeg_tables,
+                compression,
+                ..
+            } => {
+                self.read_tiled_ifd_raw_subtile(req, *ifd_id, *compression, jpeg_tables.as_deref())
+            }
+            TileSource::SyntheticDownsample { base_level, factor } => Err(WsiError::Unsupported {
+                reason: format!(
+                    "level {} is synthesized by downsampling level {base_level} by {factor} and \
+                     stores no encoded tiles; tile_location reports it as a synthetic level",
+                    req.level.get()
+                ),
+            }),
+            TileSource::StrippedLevel {
+                ifd_id,
+                compression,
+                jpeg_tables,
+                rows_per_strip,
+                strip_offsets,
+                strip_byte_counts,
+            } => self.read_stripped_level_raw_tile(
                 req,
-                *ifd_id,
-                jpeg_header,
-                *mcu_starts_tag,
-                *tiles_across,
-                *tiles_down,
-                *restart_interval,
-                *strip_offset,
-                *strip_byte_count,
+                &StrippedLevelSource {
+                    ifd_id: *ifd_id,
+                    compression: *compression,
+                    jpeg_tables: jpeg_tables.as_deref(),
+                    rows_per_strip: *rows_per_strip,
+                    strip_offsets,
+                    strip_byte_counts,
+                },
             ),
-            TileSource::NdpiFullDecode { .. } => Err(WsiError::Unsupported {
-                reason: "NDPI JPEG passthrough is not available for whole-level full-decode JPEG sources".into(),
-            }),
-            TileSource::TiledIfdSubtiles { .. } => Err(WsiError::Unsupported {
-                reason: "compressed passthrough is not available for Ventana subtiles cropped from stored tiles".into(),
-            }),
-            TileSource::SyntheticDownsample { .. } => Err(WsiError::Unsupported {
-                reason: "JPEG passthrough is not available for synthetic downsample levels".into(),
-            }),
-            TileSource::Stripped { .. }
-            | TileSource::StrippedLevel { .. }
-            | TileSource::ExternalJpeg { .. } => Err(WsiError::Unsupported {
-                reason: "JPEG passthrough is only available for tiled image levels".into(),
-            }),
+            TileSource::Stripped { .. } | TileSource::ExternalJpeg { .. } => {
+                Err(WsiError::Unsupported {
+                    reason: "raw compressed tiles are only available for pyramid levels, not \
+                             associated images"
+                        .into(),
+                })
+            }
         }
     }
 

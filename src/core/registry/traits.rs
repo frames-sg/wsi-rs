@@ -201,6 +201,18 @@ pub trait SlideReader: Send + Sync {
             ),
         })
     }
+    /// Transient bytes a [`Self::read_raw_compressed_tile`] of `req` may
+    /// hold at peak, when that can exceed one encoded unit, such as the
+    /// working set of a lossless JPEG crop
+    /// ([`crate::SlideLimits::lossless_crop_bytes`]).
+    ///
+    /// Readers without their own admission planning, such as registry
+    /// readers, are admitted at one encoded unit per read; their raw reads
+    /// reserve the larger of that and this hint, and decoded reads ignore
+    /// it. The default, 0, asks for nothing beyond the encoded unit.
+    fn raw_compressed_tile_reservation_hint(&self, _req: &TileRequest) -> Result<u64, WsiError> {
+        Ok(0)
+    }
     fn read_raw_compressed_display_tile(
         &self,
         req: &TileViewRequest,
@@ -245,6 +257,23 @@ pub trait SlideReader: Send + Sync {
     /// Pixel color, including black, is never evidence that a tile is absent.
     fn tile_is_present(&self, _req: &TileRequest) -> Result<Option<bool>, WsiError> {
         Ok(None)
+    }
+
+    /// Where a source tile's encoded bytes are stored, from the file's index.
+    ///
+    /// Implementations must not decode the tile, may read only the few marker
+    /// bytes needed to place a range exactly, must report only the slide's
+    /// own files, and must check every byte range against the file size
+    /// ([`crate::EncodedUnitBuilder::build`] does).
+    fn tile_location(&self, req: &TileRequest) -> Result<TileLocation, WsiError> {
+        Err(WsiError::Unsupported {
+            reason: format!(
+                "tile locations are not available for tile ({}, {}) at level {}",
+                req.col,
+                req.row,
+                req.level.get()
+            ),
+        })
     }
 
     /// How the named associated image is stored, when the format reports it.
@@ -324,6 +353,13 @@ pub(crate) trait ManagedSlideReader: SlideReader {
     }
 
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError>;
+    /// Transient bytes a raw compressed read of `req` reserves, and the most
+    /// it may return. Readers whose raw reads crop stored JPEGs losslessly
+    /// raise it to the crop working set for those tiles only; the default
+    /// is the decode bound.
+    fn raw_tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        self.tile_encoded_upper_bound(req)
+    }
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError>;
     fn display_tile_encoded_upper_bound(&self, req: &TileViewRequest) -> Result<u64, WsiError>;
     fn associated_encoded_upper_bound(&self, name: &str) -> Result<u64, WsiError>;
@@ -392,11 +428,25 @@ macro_rules! forward_slide_reader_methods {
             self.$inner.read_raw_compressed_tile(req)
         }
 
+        fn raw_compressed_tile_reservation_hint(
+            &self,
+            req: &$crate::core::types::TileRequest,
+        ) -> Result<u64, $crate::error::WsiError> {
+            self.$inner.raw_compressed_tile_reservation_hint(req)
+        }
+
         fn read_raw_compressed_display_tile(
             &self,
             req: &$crate::core::types::TileViewRequest,
         ) -> Result<$crate::core::types::RawCompressedTile, $crate::error::WsiError> {
             self.$inner.read_raw_compressed_display_tile(req)
+        }
+
+        fn tile_location(
+            &self,
+            req: &$crate::core::types::TileRequest,
+        ) -> Result<$crate::core::types::TileLocation, $crate::error::WsiError> {
+            self.$inner.tile_location(req)
         }
 
         fn use_display_tile_cache(&self, req: &$crate::core::types::TileViewRequest) -> bool {

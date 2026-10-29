@@ -125,6 +125,10 @@ impl ManagedSlideReader for AdaptiveDecodeReader {
         self.inner.tile_encoded_upper_bound(req)
     }
 
+    fn raw_tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
+        self.inner.raw_tile_encoded_upper_bound(req)
+    }
+
     fn tile_batch_encoded_upper_bound(&self, reqs: &[TileRequest]) -> Result<u64, WsiError> {
         self.inner.tile_batch_encoded_upper_bound(reqs)
     }

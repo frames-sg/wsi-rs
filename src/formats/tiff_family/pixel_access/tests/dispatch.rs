@@ -537,6 +537,75 @@ fn tiled_ifd_raw_passthrough_reports_layout_and_table_errors() {
 }
 
 #[test]
+fn tiled_ifd_raw_edge_tiles_report_the_stored_image_and_mark_the_tile() {
+    // A 12x10 level in one 16x16 JPEG tile: the edge tile is clipped.
+    let jpeg = build_tiled_jpeg_reader(12, 10, 16, 16, &[encode_solid_rgb_jpeg(16, 16, [9, 9, 9])]);
+    let ifd_id = *jpeg.container.top_ifds().first().unwrap();
+    let req = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
+    let raw = jpeg
+        .read_tiled_ifd_raw_jpeg_tile(&req, ifd_id, None)
+        .unwrap();
+    assert_eq!((raw.width(), raw.height()), (16, 16));
+    assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 12, 10));
+    let TileLocation::Stored(stored) = jpeg.tiff_tile_location(&req).unwrap() else {
+        panic!("edge tile should be stored");
+    };
+    let unit = stored.single_unit().unwrap();
+    assert_eq!(unit.stored_size(), (raw.width(), raw.height()));
+    assert_eq!(unit.source_region(), raw.tile_region());
+
+    // A JPEG smaller than its tile cannot hold it.
+    let short = build_tiled_jpeg_reader(12, 10, 16, 16, &[encode_solid_rgb_jpeg(8, 8, [9, 9, 9])]);
+    let ifd_id = *short.container.top_ifds().first().unwrap();
+    let err = short
+        .read_tiled_ifd_raw_jpeg_tile(&req, ifd_id, None)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("smaller than its 12x10 tile"),
+        "{err}"
+    );
+
+    // The 16x12 codestream as the edge tile of a 12x10 level.
+    let codestream = include_bytes!("../../../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let jp2k = build_tiled_encoded_reader(
+        12,
+        10,
+        16,
+        12,
+        &[codestream],
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    let ifd_id = *jp2k.container.top_ifds().first().unwrap();
+    let raw = jp2k
+        .read_tiled_ifd_raw_jp2k_tile(&req, ifd_id, Compression::Jp2kRgb)
+        .unwrap();
+    assert_eq!((raw.width(), raw.height()), (16, 12));
+    assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 12, 10));
+
+    // A codestream that is exactly the tile has no region to mark.
+    let codestream = include_bytes!("../../../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let exact = build_tiled_encoded_reader(
+        16,
+        12,
+        16,
+        12,
+        &[codestream],
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    let ifd_id = *exact.container.top_ifds().first().unwrap();
+    let raw = exact
+        .read_tiled_ifd_raw_jp2k_tile(&req, ifd_id, Compression::Jp2kRgb)
+        .unwrap();
+    assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 16, 12));
+}
+
+#[test]
 fn tiled_ifd_irregular_layout_uses_tiff_grid_metadata_for_missing_tile_index() {
     let jpeg_tiles = [encode_solid_rgb_jpeg(8, 8, [200, 10, 10])];
     let mut reader = build_tiled_jpeg_reader(8, 8, 8, 8, &jpeg_tiles);
