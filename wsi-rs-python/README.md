@@ -5,6 +5,14 @@ geometry, and compressed tile bytes. It does not expose pixel decoding;
 use the separate `j2k` extension for JPEG/JPEG 2000 tensors.
 
 ```sh
+python -m pip install wsi-rs
+```
+
+Releases publish wheels to PyPI for Python 3.10 and later on Linux x86_64
+and aarch64 (glibc 2.28 or newer), macOS arm64 and x86_64, and Windows x64,
+and attach them to the GitHub release. To build from a checkout instead:
+
+```sh
 uvx maturin build --manifest-path wsi-rs-python/Cargo.toml --release --out target/python-wheels
 python -m pip install --no-deps --no-index --find-links target/python-wheels wsi-rs
 python -m unittest discover -s wsi-rs-python/tests -v

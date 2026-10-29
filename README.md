@@ -70,8 +70,9 @@ wsi-rs = { git = "https://github.com/frames-sg/wsi-rs", tag = "v0.8.1" }
 ```
 
 For Python access to metadata, compressed tile bytes and tile byte locations,
-see the experimental [reader binding](wsi-rs-python/README.md). Pixel decoding
-and tensors use the separate `j2k` Python extension.
+see the experimental [reader binding](wsi-rs-python/README.md); releases
+publish it to PyPI as `wsi-rs`. Pixel decoding and tensors use the separate
+`j2k` Python extension.
 
 ## Example
 
