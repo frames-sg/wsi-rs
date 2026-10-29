@@ -268,9 +268,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
           toolchain: "1.99.0"
-      - name: Take the latest J2K and JXR main
-        working-directory: wsi-rs
-        run: cargo latest
+      # Packages the committed Cargo.lock: `cargo latest` would leave the
+      # tree dirty whenever J2K or JXR main has moved, and packaging needs it
+      # clean.
       - run: cargo xtask package
         working-directory: wsi-rs
 

@@ -81,7 +81,8 @@
 - JXR follows its `main` branch, which builds on J2K `main`, so wsi-rs compiles
   one J2K instead of also J2K 0.12 for JXR.
 - Builds take the newest J2K and JXR `main` commits: `cargo latest` updates
-  them, and every CI job runs it before building. cargo-vet treats J2K and JXR
+  them, and every CI job but packaging runs it before building; packaging
+  checks the committed `Cargo.lock`. cargo-vet treats J2K and JXR
   as first-party code, reviewed in their own repositories, instead of
   requiring an audit for each revision.
 - The J2K dependencies require 0.13.1, so a published wsi-rs resolves at
