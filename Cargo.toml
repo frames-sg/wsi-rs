@@ -66,16 +66,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 tempfile = "3"
-j2k-jpeg = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main" }
-j2k-core = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main" }
-j2k-tilecodec = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main" }
+j2k-jpeg = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
+j2k-core = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
+j2k-tilecodec = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
 zstd = "0.14.3"
-j2k = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main" }
+j2k = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
 jxr = { version = "0.3", git = "https://github.com/frames-sg/jxr", branch = "main" }
-j2k-metal = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
-j2k-metal-support = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
-j2k-cuda = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true, default-features = false }
-j2k-cuda-runtime = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
+j2k-metal = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
+j2k-metal-support = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
+j2k-cuda = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true, default-features = false }
+j2k-cuda-runtime = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 objc2 = { version = "=0.6.4", optional = true, default-features = false, features = ["std"] }
 objc2-metal = { version = "=0.3.2", optional = true, default-features = false, features = [
     "std",
@@ -112,7 +112,7 @@ jpeg-decoder = "0.3.2"
 jpeg-encoder = "0.6"
 tempfile = { workspace = true }
 toml = "0.8"
-j2k-native = { version = "0.13", git = "https://github.com/frames-sg/j2k", branch = "main" }
+j2k-native = { version = "0.13.1", git = "https://github.com/frames-sg/j2k", branch = "main" }
 syn = { version = "2", features = ["full", "visit"] }
 wsi-rs-test-support = { path = "test-support" }
 

@@ -533,8 +533,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "j2k"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "j2k-core",
  "j2k-native",
@@ -545,16 +545,16 @@ dependencies = [
 
 [[package]]
 name = "j2k-codec-math"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "j2k-types",
 ]
 
 [[package]]
 name = "j2k-core"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "libc",
  "thiserror",
@@ -563,8 +563,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-jpeg"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -577,8 +577,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-native"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -590,13 +590,13 @@ dependencies = [
 
 [[package]]
 name = "j2k-profile"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 
 [[package]]
 name = "j2k-tilecodec"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 dependencies = [
  "flate2",
  "j2k-core",
@@ -607,8 +607,8 @@ dependencies = [
 
 [[package]]
 name = "j2k-types"
-version = "0.13.0"
-source = "git+https://github.com/frames-sg/j2k?branch=main#6ca1bdbf230a4507b4e70e4c4da23ec5de2be5f6"
+version = "0.13.1"
+source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
 
 [[package]]
 name = "jobserver"

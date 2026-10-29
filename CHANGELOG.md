@@ -27,6 +27,9 @@
   them, and every CI job runs it before building. cargo-vet treats J2K and JXR
   as first-party code, reviewed in their own repositories, instead of
   requiring an audit for each revision.
+- The J2K dependencies require 0.13.1, so a published wsi-rs resolves at
+  least J2K 0.13.1, with its CPU and Metal batch region fixes, instead of
+  accepting 0.13.0.
 - Raw `.j2k` and `.j2c` levels with a side over 4096 pixels are read as
   1024 x 1024 tiles, each a region decode, instead of one tile covering the
   level, so a read decodes only the tiles it covers. A tile batch decodes its
