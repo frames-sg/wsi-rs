@@ -73,7 +73,8 @@ recently used entry:
 - **Decoded tiles**, shared by all reads of the slide (64 MiB by default).
 - **Display tiles** for `read_display_tile` (32 MiB).
 - **Format caches** for format-specific data such as DICOM frames, NDPI restart
-  offsets and CZI source blocks. They split one 32 MiB budget.
+  offsets, CZI source blocks and decoded TIFF strips. They split one 32 MiB
+  budget.
 
 A cache sized too small for an entry decodes without storing it.
 
@@ -153,7 +154,13 @@ that the CPU would convert.
 OME-TIFF, generic TIFF). `container` reads TIFF and BigTIFF structure,
 including SubIFDs. Each module under `layout` recognizes one vendor and maps
 its images to pyramid levels and associated images. A generic layout catches
-any other tiled TIFF.
+any other tiled TIFF, and strip-only TIFFs whose largest image is 8-bit
+grayscale or RGB. It presents the strips as 256 x 256 tiles. An uncompressed
+tile reads only its own rows from the file. Compressed strips are decoded whole
+and kept in the format cache, so neighboring tiles share them; each must fit
+the decoded-image limit, and the whole image need not. The generic layout
+declines a strip-only `.vsi` file, which reaches it only when the Olympus
+companion folder is missing.
 
 **NDPI** stores each level as one huge JPEG with restart markers. wsi-rs presents
 it as virtual tiles of at most 256 x 256 pixels and decodes only the strips

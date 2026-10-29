@@ -273,12 +273,13 @@ where
 pub(super) type FullDecodeCache = SingleFlightTileCache<FullDecodeKey>;
 
 /// A decoded source image that several logical tiles read from: a whole NDPI
-/// or stripped level, or one stored TIFF tile that Ventana reduced-level
-/// subtiles crop.
+/// level, one stored TIFF tile that Ventana reduced-level subtiles crop, or
+/// one compressed strip of a generic stripped level.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum FullDecodeKey {
     Level(IfdId),
     StoredTile { ifd_id: IfdId, index: usize },
+    Strip { ifd_id: IfdId, index: usize },
 }
 pub(super) type NdpiStripCache = SingleFlightTileCache<NdpiStripKey>;
 pub(super) type SyntheticLevelCache = SingleFlightTileCache<SyntheticLevelKey>;

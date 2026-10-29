@@ -1,9 +1,9 @@
 //! Generic TIFF layout interpreter.
 //!
-//! Fallback interpreter for tiled TIFFs and a narrow set of strip-based RGB
-//! TIFFs that are not claimed by a vendor-specific interpreter. Registered
-//! last in the interpreter chain so it only fires when all specific vendors
-//! decline.
+//! Fallback interpreter for tiled TIFFs, and for strip-only TIFFs whose
+//! largest image is 8-bit grayscale or RGB, that are not claimed by a
+//! vendor-specific interpreter. Registered last in the interpreter chain so it
+//! only fires when all specific vendors decline.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ pub(crate) struct GenericTiffInterpreter;
 mod layout;
 mod support;
 
-use support::is_supported_stripped_rgb_ifd;
+use support::{is_supported_stripped_ifd, primary_stripped_ifd, rows_per_strip};
 
 #[cfg(test)]
 #[path = "generic/tests.rs"]

@@ -590,3 +590,184 @@ fn sparse_philips_and_generic_tiles_preserve_transparency_in_single_and_batch_re
         }
     }
 }
+
+/// Sample at column `x` of row `row` in strip `strip` of the stripped-level
+/// fixture.
+fn stripped_level_sample(strip: u8, row: u8, x: u32) -> u8 {
+    (x as u8).wrapping_add(strip * 50 + row)
+}
+
+/// A 300 x 4 Deflate grayscale TIFF in two 2-row strips, so the two tiles
+/// across share each strip.
+fn build_stripped_level_tiff() -> NamedTempFile {
+    let strips: Vec<Vec<u8>> = (0..2u8)
+        .map(|strip| {
+            let raw: Vec<u8> = (0..2u8)
+                .flat_map(|row| (0..300).map(move |x| stripped_level_sample(strip, row, x)))
+                .collect();
+            let mut encoder = ZlibEncoder::new(Vec::new(), DeflateCompression::fast());
+            encoder.write_all(&raw).unwrap();
+            encoder.finish().unwrap()
+        })
+        .collect();
+    build_multi_stripped_tiff(300, 4, 2, &strips, 8, 1, 1)
+}
+
+fn stripped_level_reader(
+    file: &NamedTempFile,
+    edit_source: impl FnOnce(&mut TileSource),
+) -> TiffPixelReader {
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let mut source = TileSource::StrippedLevel {
+        ifd_id,
+        compression: Compression::Deflate,
+        jpeg_tables: None,
+        rows_per_strip: 2,
+        strip_offsets: container
+            .get_u64_array(ifd_id, tags::STRIP_OFFSETS)
+            .unwrap()
+            .to_vec(),
+        strip_byte_counts: container
+            .get_u64_array(ifd_id, tags::STRIP_BYTE_COUNTS)
+            .unwrap()
+            .to_vec(),
+    };
+    edit_source(&mut source);
+    let layout = single_series_layout(
+        DatasetId::new(41),
+        vec![regular_level(300, 4, 256, 256)],
+        HashMap::from([(tile_source_key(0), source)]),
+    );
+    TiffPixelReader::new(container, layout)
+}
+
+#[test]
+fn stripped_level_tiles_share_each_decoded_strip() {
+    let file = build_stripped_level_tiff();
+    let reader = stripped_level_reader(&file, |_| {});
+    let ifd_id = reader.container.top_ifds()[0];
+
+    let left = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap();
+    let expected_left: Vec<u8> = (0..2u8)
+        .flat_map(|strip| (0..2u8).map(move |row| (strip, row)))
+        .flat_map(|(strip, row)| (0..256).map(move |x| stripped_level_sample(strip, row, x)))
+        .collect();
+    assert_eq!(left.as_u8().unwrap(), expected_left);
+
+    // Replace decoded strip 0: the right tile must take its rows from the
+    // cache, not decode the strip again.
+    let stand_in = vec![7u8; 300 * 2];
+    reader.full_decode_cache.put(
+        FullDecodeKey::Strip { ifd_id, index: 0 },
+        Arc::new(CpuTile::from_u8_interleaved(300, 2, 1, ColorSpace::Grayscale, stand_in).unwrap()),
+    );
+    let right = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 1, 0))
+        .unwrap();
+
+    assert_eq!((right.width, right.height), (44, 4));
+    let pixels = right.as_u8().unwrap();
+    assert_eq!(&pixels[..88], &[7u8; 88][..]);
+    let strip1_rows: Vec<u8> = (0..2u8)
+        .flat_map(|row| (256..300).map(move |x| stripped_level_sample(1, row, x)))
+        .collect();
+    assert_eq!(&pixels[88..], strip1_rows.as_slice());
+}
+
+#[test]
+fn stripped_level_reports_inconsistent_sources_as_tile_errors() {
+    fn set_compression(source: &mut TileSource, value: Compression) {
+        if let TileSource::StrippedLevel { compression, .. } = source {
+            *compression = value;
+        }
+    }
+    fn truncate_strip_table(source: &mut TileSource) {
+        if let TileSource::StrippedLevel {
+            strip_offsets,
+            strip_byte_counts,
+            ..
+        } = source
+        {
+            strip_offsets.truncate(1);
+            strip_byte_counts.truncate(1);
+        }
+    }
+    let file = build_stripped_level_tiff();
+    type SourceEdit = Box<dyn FnOnce(&mut TileSource)>;
+    let cases: [(&str, SourceEdit); 4] = [
+        (
+            "missing from the strip table",
+            Box::new(truncate_strip_table),
+        ),
+        (
+            "zero rows per strip",
+            Box::new(|source| {
+                if let TileSource::StrippedLevel { rows_per_strip, .. } = source {
+                    *rows_per_strip = 0;
+                }
+            }),
+        ),
+        (
+            "cannot decode Jp2kRgb strips",
+            Box::new(|source| set_compression(source, Compression::Jp2kRgb)),
+        ),
+        (
+            "byte limit",
+            Box::new(|source| {
+                if let TileSource::StrippedLevel {
+                    strip_byte_counts, ..
+                } = source
+                {
+                    strip_byte_counts[0] = MAX_COMPRESSED_INPUT_BYTES + 1;
+                }
+            }),
+        ),
+    ];
+    for (expected, edit) in cases {
+        let reader = stripped_level_reader(&file, edit);
+        let err = reader
+            .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+            .unwrap_err();
+        assert!(err.to_string().contains(expected), "{expected}: {err}");
+    }
+
+    // Decoded strips must match the level width and agree with each other.
+    let reader = stripped_level_reader(&file, |_| {});
+    let ifd_id = reader.container.top_ifds()[0];
+    let gray = |width| {
+        Arc::new(
+            CpuTile::from_u8_interleaved(
+                width,
+                2,
+                1,
+                ColorSpace::Grayscale,
+                vec![0; width as usize * 2],
+            )
+            .unwrap(),
+        )
+    };
+    reader
+        .full_decode_cache
+        .put(FullDecodeKey::Strip { ifd_id, index: 0 }, gray(10));
+    let err = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap_err();
+    assert!(err.to_string().contains("expected 300x2"), "{err}");
+
+    reader
+        .full_decode_cache
+        .put(FullDecodeKey::Strip { ifd_id, index: 0 }, gray(300));
+    reader.full_decode_cache.put(
+        FullDecodeKey::Strip { ifd_id, index: 1 },
+        Arc::new(
+            CpuTile::from_u8_interleaved(300, 2, 3, ColorSpace::Rgb, vec![0; 300 * 2 * 3]).unwrap(),
+        ),
+    );
+    let err = reader
+        .read_tile_cpu(&TileRequest::new(0, 0, 0, 0, 0))
+        .unwrap_err();
+    assert!(err.to_string().contains("other strips as"), "{err}");
+}

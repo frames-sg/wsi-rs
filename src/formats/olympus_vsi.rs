@@ -323,7 +323,8 @@ impl ManagedSlideReader for OlympusVsiReader {
     }
 }
 
-fn is_vsi_path(path: &Path) -> bool {
+/// Whether `path` has a `.vsi` extension, in any case.
+pub(crate) fn is_vsi_path(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|ext| ext.to_str()),
         Some(ext) if ext.eq_ignore_ascii_case("vsi")

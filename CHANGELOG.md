@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opens TIFFs stored in strips when the largest image is 8-bit grayscale or
+  RGB, uncompressed or compressed with LZW, Deflate, Zstd or JPEG, including
+  YCbCr JPEG and the horizontal predictor. Before, only a single-image
+  uncompressed 8-bit RGB TIFF opened. A tile read decodes only the strips it
+  covers, so images over the 128 MiB decoded-image limit open; each compressed
+  strip must fit it. Other images in the file become associated images.
+  16-bit, palette, CMYK and alpha strip images still return an error, and a
+  strip-only `.vsi` file without its companion folder is not opened as a
+  plain TIFF.
+
+### Fixed
+
+- A tile read from an uncompressed strip-based RGB TIFF reads only the rows it
+  covers. It read the whole image, and read it again for every tile when the
+  image was larger than the format cache.
+
 ## [0.8.1] - 2026-10-27
 
 This is a GitHub source release. The fixed J2K dependency is pinned to a Git

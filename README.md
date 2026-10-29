@@ -153,7 +153,7 @@ Ways to read pixels:
 | Zeiss CZI and ZVI | `.czi`, `.zvi` |
 | DICOM whole-slide images | `.dcm` files or a folder of them |
 | OME-TIFF | `.ome.tif`, `.ome.tiff` |
-| Other tiled TIFF | `.tif`, `.tiff` |
+| Other TIFF | `.tif`, `.tiff` |
 | Raw JPEG 2000 | `.j2k`, `.j2c` |
 | wsi-rs pre-decoded cache | `.svcache` (see below) |
 
@@ -170,8 +170,13 @@ Sakura is not supported: there is no public sample file to test against.
   `thumbnail` become associated images; other images become scenes.
   Multi-file datasets, `.companion.ome` metadata and stripped planes return an
   error.
-- **Other tiled TIFF:** any tiled TIFF, or a single uncompressed 8-bit RGB
-  image stored in strips. JPEG XR tiles must be 8-bit gray or RGB without alpha.
+- **Other TIFF:** any tiled TIFF. A TIFF stored in strips opens when its
+  largest image is 8-bit grayscale or RGB, uncompressed or compressed with
+  LZW, Deflate, Zstd or JPEG; its other images become associated images. A
+  read decodes only the strips its tiles cover, so the whole image may exceed
+  the decoded-image limit. Strip images with 16-bit samples, a color palette,
+  CMYK or alpha return an error. JPEG XR tiles must be 8-bit gray or RGB
+  without alpha.
 - **DICOM:** unsigned 8-bit images and images stored in 16-bit words. Native,
   RLE, lossless JPEG, JPEG 2000 and HTJ2K frames keep 9- through 16-bit samples
   as `Uint16`; JPEG Extended and progressive JPEG frames keep their 12-bit

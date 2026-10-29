@@ -22,7 +22,10 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             }
         }
 
-        // Accept any tiled TIFF, or one unambiguous strip-based RGB image.
+        // Accept any tiled TIFF, or a strip-only TIFF whose largest image the
+        // stripped level reader decodes. An Olympus VSI file that reached
+        // here lacks its companion pixel folder; opening its strip-based
+        // overview would pass a thumbnail off as the slide.
         let has_tiled_ifd = container.top_ifds().iter().any(|&ifd_id| {
             container
                 .ifd_by_id(ifd_id)
@@ -30,8 +33,9 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 .unwrap_or(false)
         });
         has_tiled_ifd
-            || (container.top_ifds().len() == 1
-                && is_supported_stripped_rgb_ifd(container, container.top_ifds()[0]))
+            || (!crate::formats::olympus_vsi::is_vsi_path(container.path())
+                && primary_stripped_ifd(container)
+                    .is_some_and(|ifd_id| is_supported_stripped_ifd(container, ifd_id)))
     }
 
     fn interpret(&self, container: &TiffContainer) -> Result<DatasetLayout, TiffParseError> {
@@ -85,13 +89,20 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
             }
         }
 
-        let stripped_level_index = (tiled_ifds.is_empty()
-            && stripped_ifds.len() == 1
-            && is_supported_stripped_rgb_ifd(container, stripped_ifds[0].ifd_id))
-        .then_some(0usize);
+        // Without tiled levels the largest image is the level; the other
+        // stripped images stay associated images.
+        let stripped_level_index = tiled_ifds
+            .is_empty()
+            .then(|| primary_stripped_ifd(container))
+            .flatten()
+            .filter(|&ifd_id| is_supported_stripped_ifd(container, ifd_id))
+            .and_then(|ifd_id| stripped_ifds.iter().position(|ifd| ifd.ifd_id == ifd_id));
         if tiled_ifds.is_empty() && stripped_level_index.is_none() {
             return Err(TiffParseError::Structure(
-                "No tiled IFDs or supported stripped RGB image found in generic TIFF".into(),
+                "No tiled IFDs or supported stripped image found in generic TIFF: strip-only \
+                 TIFFs need an 8-bit grayscale or RGB largest image stored uncompressed or \
+                 with LZW, Deflate, Zstd or JPEG"
+                    .into(),
             ));
         }
 
@@ -147,6 +158,16 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
 
         if let Some(index) = stripped_level_index {
             let stripped = &stripped_ifds[index];
+            // The support check accepted these rows, so they are non-zero and
+            // no taller than the u32-bounded image.
+            let rows_per_strip = rows_per_strip(container, stripped.ifd_id, stripped.height)
+                .and_then(|rows| u32::try_from(rows).ok())
+                .ok_or_else(|| {
+                    TiffParseError::Structure(format!(
+                        "generic stripped TIFF IFD {} has an invalid RowsPerStrip",
+                        stripped.ifd_id
+                    ))
+                })?;
             levels.push(regular_tiff_level(
                 "Generic stripped TIFF",
                 stripped.width,
@@ -160,6 +181,11 @@ impl TiffLayoutInterpreter for GenericTiffInterpreter {
                 TileSource::StrippedLevel {
                     ifd_id: stripped.ifd_id,
                     compression: stripped.compression,
+                    jpeg_tables: container
+                        .get_bytes(stripped.ifd_id, tags::JPEG_TABLES)
+                        .ok()
+                        .map(<[u8]>::to_vec),
+                    rows_per_strip,
                     strip_offsets: stripped.strip_offsets.clone(),
                     strip_byte_counts: stripped.strip_byte_counts.clone(),
                 },
