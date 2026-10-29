@@ -61,6 +61,12 @@
   `read_raw_compressed_tile`.
 - `Compression::Png`, `Compression::Bmp` and
   `EncodedTilePhotometricInterpretation::Monochrome1`.
+- Python wheels: publishing a GitHub release builds abi3 wheels for Python
+  3.10 and later (Linux x86_64 and aarch64 on glibc 2.28 or newer, macOS
+  arm64 and x86_64, Windows x64) and an sdist. Each wheel is tested, then all
+  of them are attached to the release and published to PyPI as `wsi-rs`
+  through trusted publishing, so `pip install wsi-rs` works. Pull requests
+  that touch the bindings build and test the same wheels.
 
 ### Changed
 

@@ -9,9 +9,23 @@ description = "Read whole-slide metadata and compressed tiles with Rust"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT OR Apache-2.0"
+keywords = ["whole-slide imaging", "digital pathology", "openslide", "dicom", "jpeg"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 
 [project.urls]
 Repository = "https://github.com/frames-sg/wsi-rs"
+Issues = "https://github.com/frames-sg/wsi-rs/issues"
+Changelog = "https://github.com/frames-sg/wsi-rs/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 features = ["extension-module"]
