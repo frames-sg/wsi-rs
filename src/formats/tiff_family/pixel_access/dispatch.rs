@@ -1,4 +1,5 @@
 use super::ndpi_tiles::NdpiRestartTile;
+use super::stripped_level::StrippedLevelSource;
 use super::*;
 
 impl TiffPixelReader {
@@ -493,14 +494,20 @@ impl SlideReader for TiffPixelReader {
             TileSource::StrippedLevel {
                 ifd_id,
                 compression,
+                jpeg_tables,
+                rows_per_strip,
                 strip_offsets,
                 strip_byte_counts,
             } => self.read_stripped_level_tile(
                 req,
-                *ifd_id,
-                *compression,
-                strip_offsets,
-                strip_byte_counts,
+                &StrippedLevelSource {
+                    ifd_id: *ifd_id,
+                    compression: *compression,
+                    jpeg_tables: jpeg_tables.as_deref(),
+                    rows_per_strip: *rows_per_strip,
+                    strip_offsets,
+                    strip_byte_counts,
+                },
             ),
             TileSource::Stripped { .. } => Err(WsiError::UnsupportedFormat(
                 "Associated stripped images cannot be read via read_tile()".into(),

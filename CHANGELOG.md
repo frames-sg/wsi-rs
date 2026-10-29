@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opens TIFFs stored in strips when the largest image is 8-bit grayscale or
+  RGB, uncompressed or compressed with LZW, Deflate, Zstd or JPEG, including
+  YCbCr JPEG and the horizontal predictor. Before, only a single-image
+  uncompressed 8-bit RGB TIFF opened. A tile read decodes only the strips it
+  covers, so images over the 128 MiB decoded-image limit open; each compressed
+  strip must fit it. Other images in the file become associated images.
+  16-bit, palette, CMYK and alpha strip images still return an error, and a
+  strip-only `.vsi` file without its companion folder is not opened as a
+  plain TIFF.
+
+### Changed
+
+- J2K dependencies follow the J2K `main` branch instead of the 0.8.1
+  maintenance revision. Main carries the CUDA packet-header fix along with
+  later decoder fixes and speedups.
+- JXR follows its `main` branch, which builds on J2K `main`, so wsi-rs compiles
+  one J2K instead of also J2K 0.12 for JXR.
+- Builds take the newest J2K and JXR `main` commits: `cargo latest` updates
+  them, and every CI job runs it before building. cargo-vet treats J2K and JXR
+  as first-party code, reviewed in their own repositories, instead of
+  requiring an audit for each revision.
+- Raw `.j2k` and `.j2c` levels with a side over 4096 pixels are read as
+  1024 x 1024 tiles, each a region decode, instead of one tile covering the
+  level, so a read decodes only the tiles it covers. A tile batch decodes its
+  tiles serially side by side, where J2K decodes Tier-1 in bands as the inverse
+  DWT reads them. Smaller levels still decode whole. Metal decodes tile batches
+  at reductions up to 3 as one batch of regions sharing the codestream's bytes;
+  deeper levels decode on the CPU. CUDA decoding and compressed passthrough are
+  offered only when the full resolution is one tile.
+
+### Fixed
+
+- Raw `.j2k` and `.j2c` files whose decoded image exceeds 128 MiB, about 44.7
+  megapixels of RGB, open. The decoded-image limit now bounds each decoded
+  tile; it rejected the whole image at open. Reduced levels of such files
+  decode, where they failed against the full-resolution size.
+- A tile read from an uncompressed strip-based RGB TIFF reads only the rows it
+  covers. It read the whole image, and read it again for every tile when the
+  image was larger than the format cache.
+- Some complete LZW-compressed TIFF tiles and strips failed to decode as
+  truncated: J2K's LZW decoder stopped when the input ran out, before reading
+  the end code in its last bytes. J2K `main` reads to the end code.
+
 ## [0.8.1] - 2026-10-27
 
 This is a GitHub source release. The fixed J2K dependency is pinned to a Git

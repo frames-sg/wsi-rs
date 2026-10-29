@@ -27,6 +27,7 @@ impl OwnedJob {
             row_bytes: self.dimensions.0 as usize * 3,
             output_len: self.dimensions.0 as usize * self.dimensions.1 as usize * 3,
             backend,
+            request: j2k::DecodeRequest::Full,
         }
     }
 }

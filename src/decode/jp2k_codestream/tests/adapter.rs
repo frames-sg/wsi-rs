@@ -46,3 +46,20 @@ fn wsi_pixel_contract_rejects_unsupported_samples_and_output_sizes() {
     info.components.pop();
     assert!(validate_pixel_contract(&info).is_err());
 }
+
+#[test]
+fn region_decodes_bound_their_own_output_not_the_whole_image() {
+    let bytes = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
+    let mut info = parse_codestream_header(bytes).unwrap();
+    // An image past the decoded limit keeps a valid component contract, so its
+    // regions stay decodable.
+    info.image_width = u32::MAX;
+    assert!(validate_component_contract(&info).is_ok());
+    let width = 1 << 16;
+    let height = u32::try_from(MAX_DECODED_IMAGE_BYTES / 3 / u64::from(width)).unwrap();
+    assert!(validate_decoded_size(width, height).is_ok());
+    assert!(matches!(
+        validate_decoded_size(width, height + 1),
+        Err(WsiError::ResourceLimit { .. })
+    ));
+}

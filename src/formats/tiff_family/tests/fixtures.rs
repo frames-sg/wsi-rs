@@ -1,7 +1,10 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-use crate::formats::tiff_family::test_support::encode_test_jpeg;
+use crate::formats::tiff_family::container::tags;
+use crate::formats::tiff_family::test_support::{
+    build_tiff_tree, encode_test_jpeg, SyntheticIfd, SyntheticTag,
+};
 
 /// Build a synthetic NDPI TIFF file with embedded JPEG data.
 /// Each entry is (width, height, source_lens).
@@ -519,4 +522,99 @@ pub(super) fn build_min_is_white_tiff(width: u32, height: u32) -> NamedTempFile 
     file.write_all(&buf).unwrap();
     file.flush().unwrap();
     file
+}
+
+// ── Strip-only TIFF fixtures ─────────────────────────────────
+
+/// Sample `channel` of pixel `(x, y)` in the strip-only fixtures; a misplaced
+/// row, column or channel changes it.
+pub(super) fn strip_pattern_sample(x: u32, y: u32, channel: u32) -> u8 {
+    (x * 7 + y * 13 + channel * 101) as u8
+}
+
+/// Interleaved pattern samples of the `width` x `height` window at `(x, y)`.
+pub(super) fn strip_pattern_window(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    channels: u32,
+) -> Vec<u8> {
+    (y..y + height)
+        .flat_map(|row| {
+            (x..x + width).flat_map(move |col| {
+                (0..channels).map(move |channel| strip_pattern_sample(col, row, channel))
+            })
+        })
+        .collect()
+}
+
+/// Strip-only 8-bit TIFF of the strip pattern. `encode(index, raw)` stores
+/// strip `index` from its raw interleaved rows; `tags` adds Compression,
+/// PhotometricInterpretation and anything else beyond geometry and strips.
+pub(super) fn build_strip_only_tiff(
+    width: u32,
+    height: u32,
+    samples_per_pixel: u16,
+    rows_per_strip: u32,
+    tags: Vec<SyntheticTag>,
+    encode: impl Fn(usize, &[u8]) -> Vec<u8>,
+) -> NamedTempFile {
+    let strips: Vec<Vec<u8>> = (0..height)
+        .step_by(rows_per_strip as usize)
+        .enumerate()
+        .map(|(index, y)| {
+            let rows = rows_per_strip.min(height - y);
+            let raw = strip_pattern_window(0, y, width, rows, u32::from(samples_per_pixel));
+            encode(index, &raw)
+        })
+        .collect();
+    let byte_counts: Vec<u32> = strips.iter().map(|strip| strip.len() as u32).collect();
+    let mut ifd_tags = vec![
+        SyntheticTag::long(tags::IMAGE_WIDTH, width),
+        SyntheticTag::long(tags::IMAGE_LENGTH, height),
+        SyntheticTag::long_array(
+            tags::BITS_PER_SAMPLE,
+            &vec![8; usize::from(samples_per_pixel)],
+        ),
+        SyntheticTag::short(tags::SAMPLES_PER_PIXEL, samples_per_pixel),
+        SyntheticTag::long(tags::ROWS_PER_STRIP, rows_per_strip),
+        SyntheticTag::blob_offsets(tags::STRIP_OFFSETS, strips),
+        SyntheticTag::long_array(tags::STRIP_BYTE_COUNTS, &byte_counts),
+    ];
+    ifd_tags.extend(tags);
+    build_tiff_tree(&[SyntheticIfd {
+        tags: ifd_tags,
+        sub_ifds: Vec::new(),
+    }])
+}
+
+/// TIFF horizontal differencing (Predictor 2) of 8-bit interleaved rows.
+pub(super) fn horizontal_difference(raw: &[u8], width: u32, samples_per_pixel: u16) -> Vec<u8> {
+    let samples = usize::from(samples_per_pixel);
+    raw.chunks(width as usize * samples)
+        .flat_map(|row| {
+            (0..row.len()).map(move |index| match index.checked_sub(samples) {
+                Some(prior) => row[index].wrapping_sub(row[prior]),
+                None => row[index],
+            })
+        })
+        .collect()
+}
+
+pub(super) fn tiff_lzw(raw: &[u8]) -> Vec<u8> {
+    weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+        .encode(raw)
+        .unwrap()
+}
+
+pub(super) fn tiff_deflate(raw: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(raw).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// Baseline JPEG of a `width` x `height` image filled with `rgb`.
+pub(super) fn solid_rgb_jpeg(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    encode_test_jpeg(&image::RgbImage::from_pixel(width, height, image::Rgb(rgb)))
 }

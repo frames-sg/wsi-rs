@@ -1,6 +1,6 @@
 use super::*;
 use crate::formats::tiff_family::container::TiffContainer;
-use crate::formats::tiff_family::test_support::{build_bigtiff, SyntheticTag};
+use crate::formats::tiff_family::test_support::{build_bigtiff, build_tiff, SyntheticTag};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -467,4 +467,300 @@ fn compression_mapping() {
     assert_eq!(compression_from_tag(33005), Compression::Jp2kYcbcr);
     assert_eq!(compression_from_tag(33004), Compression::Jp2kRgb);
     assert_eq!(compression_from_tag(999), Compression::Other(999));
+}
+
+// ── Strip-only detection ─────────────────────────────────────────
+
+/// Tags of a strip-only image. The strip table points at nothing; detection
+/// and layout never read strip data.
+#[derive(Clone, Copy)]
+struct StripImage {
+    width: u32,
+    height: u32,
+    rows_per_strip: Option<u32>,
+    samples: u16,
+    bits: u16,
+    compression: u16,
+    photometric: u16,
+    predictor: u16,
+    planar: u16,
+    orientation: u16,
+}
+
+impl StripImage {
+    const RGB: Self = Self {
+        width: 300,
+        height: 200,
+        rows_per_strip: Some(16),
+        samples: 3,
+        bits: 8,
+        compression: 1,
+        photometric: 2,
+        predictor: 1,
+        planar: 1,
+        orientation: 1,
+    };
+    const GRAY: Self = Self {
+        samples: 1,
+        photometric: 1,
+        ..Self::RGB
+    };
+
+    fn size(self, width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            ..self
+        }
+    }
+    fn rows_per_strip(self, rows_per_strip: Option<u32>) -> Self {
+        Self {
+            rows_per_strip,
+            ..self
+        }
+    }
+    fn samples(self, samples: u16) -> Self {
+        Self { samples, ..self }
+    }
+    fn bits(self, bits: u16) -> Self {
+        Self { bits, ..self }
+    }
+    fn compression(self, compression: u16) -> Self {
+        Self {
+            compression,
+            ..self
+        }
+    }
+    fn photometric(self, photometric: u16) -> Self {
+        Self {
+            photometric,
+            ..self
+        }
+    }
+    fn predictor(self, predictor: u16) -> Self {
+        Self { predictor, ..self }
+    }
+    fn planar(self, planar: u16) -> Self {
+        Self { planar, ..self }
+    }
+    fn orientation(self, orientation: u16) -> Self {
+        Self {
+            orientation,
+            ..self
+        }
+    }
+
+    fn expected_strips(self) -> usize {
+        let rows = self.rows_per_strip.unwrap_or(self.height).min(self.height);
+        let planes = if self.planar == 2 && self.samples == 3 {
+            3
+        } else {
+            1
+        };
+        self.height.div_ceil(rows.max(1)) as usize * planes
+    }
+
+    fn tags(self) -> Vec<SyntheticTag> {
+        self.tags_with_strips(self.expected_strips())
+    }
+
+    fn tags_with_strips(self, strips: usize) -> Vec<SyntheticTag> {
+        let mut tags = vec![
+            SyntheticTag::long(tags::IMAGE_WIDTH, self.width),
+            SyntheticTag::long(tags::IMAGE_LENGTH, self.height),
+            SyntheticTag::long_array(
+                tags::BITS_PER_SAMPLE,
+                &vec![u32::from(self.bits); usize::from(self.samples)],
+            ),
+            SyntheticTag::short(tags::COMPRESSION, self.compression),
+            SyntheticTag::short(tags::PHOTOMETRIC, self.photometric),
+            SyntheticTag::short(tags::ORIENTATION, self.orientation),
+            SyntheticTag::short(tags::SAMPLES_PER_PIXEL, self.samples),
+            SyntheticTag::short(tags::PLANAR_CONFIGURATION, self.planar),
+            SyntheticTag::short(tags::PREDICTOR, self.predictor),
+            SyntheticTag::long_array(tags::STRIP_OFFSETS, &vec![8; strips]),
+            SyntheticTag::long_array(tags::STRIP_BYTE_COUNTS, &vec![1; strips]),
+        ];
+        if let Some(rows) = self.rows_per_strip {
+            tags.push(SyntheticTag::long(tags::ROWS_PER_STRIP, rows));
+        }
+        tags
+    }
+}
+
+fn detects(ifds: &[Vec<SyntheticTag>]) -> bool {
+    let file = build_tiff(ifds);
+    GenericTiffInterpreter.detect(&TiffContainer::open(file.path()).unwrap())
+}
+
+#[test]
+fn detects_strip_only_images_the_stripped_reader_decodes() {
+    let rgb = StripImage::RGB;
+    let gray = StripImage::GRAY;
+    let cases = [
+        ("uncompressed RGB", rgb),
+        ("uncompressed planar RGB", rgb.planar(2)),
+        ("LZW RGB with predictor", rgb.compression(5).predictor(2)),
+        ("Deflate grayscale", gray.compression(8)),
+        ("Adobe Deflate grayscale", gray.compression(32946)),
+        ("Zstd RGB", rgb.compression(50000)),
+        ("MinIsWhite LZW", gray.compression(5).photometric(0)),
+        ("JPEG YCbCr", rgb.compression(7).photometric(6)),
+        ("JPEG RGB", rgb.compression(7)),
+        ("JPEG grayscale", gray.compression(7)),
+        ("planar tag on one sample", gray.compression(5).planar(2)),
+        // Uncompressed tiles read only their own rows, so one strip may hold
+        // more than the decoded-image limit.
+        (
+            "uncompressed single strip over the decoded-image limit",
+            rgb.size(40_000, 40_000).rows_per_strip(None),
+        ),
+        (
+            "RowsPerStrip beyond the image height",
+            rgb.compression(5).rows_per_strip(Some(u32::MAX)),
+        ),
+    ];
+    for (name, image) in cases {
+        assert!(detects(&[image.tags()]), "{name} should be detected");
+    }
+}
+
+#[test]
+fn declines_strip_only_images_the_stripped_reader_cannot_decode() {
+    let rgb = StripImage::RGB;
+    let gray = StripImage::GRAY;
+    let cases = [
+        ("16-bit grayscale", gray.bits(16)),
+        ("palette", gray.photometric(3)),
+        ("RGBA", rgb.samples(4)),
+        ("CMYK", rgb.samples(4).photometric(5)),
+        ("uncompressed YCbCr", rgb.photometric(6)),
+        ("MinIsWhite JPEG", gray.compression(7).photometric(0)),
+        ("predictor without compression", rgb.predictor(2)),
+        ("floating-point predictor", rgb.compression(5).predictor(3)),
+        ("old-style JPEG", rgb.compression(6).photometric(6)),
+        ("unknown compression", rgb.compression(34712)),
+        ("planar LZW", rgb.compression(5).planar(2)),
+        ("rotated", rgb.orientation(3)),
+        ("zero RowsPerStrip", rgb.rows_per_strip(Some(0))),
+        (
+            "JPEG wider than one frame",
+            rgb.compression(7).photometric(6).size(70_000, 200),
+        ),
+        (
+            "compressed strip over the decoded-image limit",
+            rgb.compression(5).size(40_000, 40_000).rows_per_strip(None),
+        ),
+    ];
+    for (name, image) in cases {
+        assert!(!detects(&[image.tags()]), "{name} should be declined");
+    }
+
+    let short_table = rgb.tags_with_strips(rgb.expected_strips() - 1);
+    assert!(
+        !detects(&[short_table]),
+        "short strip table should be declined"
+    );
+
+    let mut text_rows = rgb.rows_per_strip(None).tags();
+    text_rows.push(SyntheticTag::ascii(tags::ROWS_PER_STRIP, "16"));
+    assert!(
+        !detects(&[text_rows]),
+        "unreadable RowsPerStrip should be declined"
+    );
+}
+
+#[test]
+fn strip_only_tiff_opens_its_largest_image_as_the_level() {
+    let thumbnail = StripImage::RGB.size(64, 48);
+    let main = StripImage::RGB.compression(5);
+    let same_size_page = StripImage::RGB.compression(8);
+    let file = build_tiff(&[thumbnail.tags(), main.tags(), same_size_page.tags()]);
+    let container = TiffContainer::open(file.path()).unwrap();
+    assert!(GenericTiffInterpreter.detect(&container));
+
+    let layout = GenericTiffInterpreter.interpret(&container).unwrap();
+
+    let levels = &layout.dataset.scenes[0].series[0].levels;
+    assert_eq!(levels.len(), 1);
+    assert_eq!(levels[0].dimensions, (300, 200));
+    match &layout.tile_sources[&TileSourceKey::plane0(0)] {
+        TileSource::StrippedLevel {
+            ifd_id,
+            compression,
+            ..
+        } => {
+            // The first of the two equally large images wins.
+            assert_eq!(*ifd_id, container.top_ifds()[1]);
+            assert_eq!(*compression, Compression::Lzw);
+        }
+        other => panic!("expected StrippedLevel, got: {other:?}"),
+    }
+    let mut associated: Vec<_> = layout.dataset.associated_images.keys().collect();
+    associated.sort();
+    assert_eq!(associated, ["image_0", "image_2"]);
+}
+
+#[test]
+fn strip_only_tiff_with_unsupported_largest_image_is_declined() {
+    // Opening the supported thumbnail would pass it off as the slide.
+    let thumbnail = StripImage::RGB.size(64, 48);
+    let main = StripImage::GRAY.bits(16);
+    let file = build_tiff(&[thumbnail.tags(), main.tags()]);
+    let container = TiffContainer::open(file.path()).unwrap();
+
+    assert!(!GenericTiffInterpreter.detect(&container));
+    let err = GenericTiffInterpreter.interpret(&container).unwrap_err();
+    assert!(err.to_string().contains("No tiled IFDs"), "{err}");
+}
+
+#[test]
+fn stripped_level_records_clamped_rows_per_strip_and_jpeg_tables() {
+    let tables = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x02, 0xFF, 0xD9];
+    let mut jpeg = StripImage::RGB
+        .compression(7)
+        .photometric(6)
+        .rows_per_strip(Some(u32::MAX))
+        .tags();
+    jpeg.push(SyntheticTag::bytes(tags::JPEG_TABLES, tables.clone()));
+    let without_rows = StripImage::GRAY.rows_per_strip(None).tags();
+
+    for (ifd, expected_tables) in [(jpeg, Some(tables)), (without_rows, None)] {
+        let file = build_tiff(&[ifd]);
+        let container = TiffContainer::open(file.path()).unwrap();
+        let layout = GenericTiffInterpreter.interpret(&container).unwrap();
+        match &layout.tile_sources[&TileSourceKey::plane0(0)] {
+            TileSource::StrippedLevel {
+                rows_per_strip,
+                jpeg_tables,
+                ..
+            } => {
+                assert_eq!(*rows_per_strip, 200);
+                assert_eq!(jpeg_tables, &expected_tables);
+            }
+            other => panic!("expected StrippedLevel, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn strip_only_olympus_vsi_is_declined() {
+    // A VSI file reaches the TIFF backend only without its companion folder;
+    // its strip-based overview is not the slide.
+    let source = build_tiff(&[StripImage::RGB.tags()]);
+    let dir = tempfile::tempdir().unwrap();
+    for (name, detected) in [
+        ("slide.tif", true),
+        ("slide.vsi", false),
+        ("slide.VSI", false),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::copy(source.path(), &path).unwrap();
+        let container = TiffContainer::open(&path).unwrap();
+        assert_eq!(
+            GenericTiffInterpreter.detect(&container),
+            detected,
+            "{name}"
+        );
+    }
 }

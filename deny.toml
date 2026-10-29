@@ -42,5 +42,6 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
-# Exact revisions are pinned in Cargo.toml and reviewed in supply-chain/audits.toml.
-allow-git = ["https://github.com/frames-sg/j2k"]
+# First-party J2K and JXR follow their main branches; `cargo latest` takes their
+# newest commits. See SUPPLY_CHAIN.md.
+allow-git = ["https://github.com/frames-sg/j2k", "https://github.com/frames-sg/jxr"]

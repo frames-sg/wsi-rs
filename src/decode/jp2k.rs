@@ -36,17 +36,19 @@ pub(crate) use prepared_batch::PreparedJp2kBatch;
 
 pub(crate) use batch::decode_batch_jp2k;
 pub(crate) use cpu::{
-    decode_jp2k_reduced_to_sample_buffer, decode_jp2k_to_sample_buffer,
+    decode_jp2k_region_to_sample_buffer, decode_jp2k_to_sample_buffer,
     jp2k_decodable_reduction_levels, reduced_jp2k_dimensions,
 };
 #[cfg(feature = "cuda")]
 pub(crate) use device::decode_batch_jp2k_cuda;
 #[cfg(feature = "metal")]
-pub(crate) use device::decode_batch_jp2k_metal;
+pub(crate) use device::{decode_batch_jp2k_metal, decode_region_batch_jp2k_metal};
 #[cfg(any(feature = "metal", feature = "cuda"))]
 pub(crate) use device::{
     device_window_bytes, map_tile_results, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
 };
+#[cfg(feature = "metal")]
+pub(crate) use prepare::device_downscale;
 
 #[cfg(test)]
 #[path = "jp2k/tests.rs"]

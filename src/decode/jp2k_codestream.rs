@@ -33,11 +33,18 @@ pub(crate) fn codestream_header_from_view(
     })
 }
 
-/// The WSI adapter promises unsigned RGB8 output. Coding styles, quantization,
-/// packet organization, and tile parts are validated by j2k itself.
+/// The WSI adapter promises unsigned RGB8 output of the whole image. Coding
+/// styles, quantization, packet organization, and tile parts are validated by
+/// j2k itself.
 pub(crate) fn validate_pixel_contract(info: &Jp2kCodestreamInfo) -> Result<(), WsiError> {
-    let decoded_bytes = u64::from(info.image_width)
-        .checked_mul(u64::from(info.image_height))
+    validate_decoded_size(info.image_width, info.image_height)?;
+    validate_component_contract(info)
+}
+
+/// Bounds the RGB8 output of one decode: the whole image, or a region of it.
+pub(crate) fn validate_decoded_size(width: u32, height: u32) -> Result<(), WsiError> {
+    let decoded_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
         .and_then(|n| n.checked_mul(3))
         .unwrap_or(u64::MAX);
     if decoded_bytes > MAX_DECODED_IMAGE_BYTES {
@@ -47,6 +54,11 @@ pub(crate) fn validate_pixel_contract(info: &Jp2kCodestreamInfo) -> Result<(), W
             limit: MAX_DECODED_IMAGE_BYTES,
         });
     }
+    Ok(())
+}
+
+/// Three unsigned 8-bit components, whatever extent is decoded.
+pub(crate) fn validate_component_contract(info: &Jp2kCodestreamInfo) -> Result<(), WsiError> {
     if info.components.len() != 3 || info.components.iter().any(|c| c.bit_depth != 8 || c.signed) {
         return Err(WsiError::Jp2k(
             "WSI JP2K output requires three unsigned 8-bit components".into(),

@@ -196,9 +196,16 @@ pub(crate) enum TileSource {
     },
 
     /// Generic strip-based TIFF exposed as a synthetic regular tile grid.
+    ///
+    /// A tile read decodes only the strips its rows fall in. Planar images
+    /// store `strip_offsets.len() / 3` strips per sample plane, plane by plane.
     StrippedLevel {
         ifd_id: IfdId,
         compression: Compression,
+        /// JPEG tables from JPEGTables tag (tag 347), if present.
+        jpeg_tables: Option<Vec<u8>>,
+        /// Rows in every strip but the last, clamped to the image height.
+        rows_per_strip: u32,
         strip_offsets: Vec<u64>,
         strip_byte_counts: Vec<u64>,
     },
