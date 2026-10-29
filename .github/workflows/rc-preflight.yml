@@ -79,6 +79,9 @@ jobs:
         with:
           toolchain: "1.99.0"
           components: rustfmt,clippy,llvm-tools-preview
+      - name: Take the latest J2K and JXR main
+        working-directory: wsi-rs
+        run: cargo latest
       - uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2
         with:
           tool: cargo-nextest@0.9.136,cargo-hack@0.6.44,cargo-public-api@0.52.0,cargo-semver-checks@0.51.0,cargo-fuzz@0.13.1,cargo-deny@0.19.4,cargo-machete@0.9.2,cargo-llvm-cov@0.8.7
@@ -218,6 +221,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned 2026-07-11
         with:
           toolchain: "1.99.0"
+      - name: Take the latest J2K and JXR main
+        working-directory: wsi-rs
+        run: cargo latest
       - uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4.1.0
         if: runner.os == 'Windows'
         with:

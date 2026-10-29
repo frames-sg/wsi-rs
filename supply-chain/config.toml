@@ -14,60 +14,76 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
 [policy.j2k]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-codec-math]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-core]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-cuda]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-cuda-build-support]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-cuda-j2k-engine]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-cuda-runtime]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-jpeg]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-metal]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-metal-support]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-native]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-profile]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-tilecodec]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
 
 [policy.j2k-types]
-audit-as-crates-io = true
-notes = "Require an audit for the exact Git revision used by the source release."
+audit-as-crates-io = false
+notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
+
+[policy.jxr]
+audit-as-crates-io = false
+notes = "First-party (frames-sg/jxr), followed on its main branch and reviewed there."
+
+[policy.jxr-core]
+audit-as-crates-io = false
+notes = "First-party (frames-sg/jxr), followed on its main branch and reviewed there."
+
+[policy.jxr-math]
+audit-as-crates-io = false
+notes = "First-party (frames-sg/jxr), followed on its main branch and reviewed there."
+
+[policy.jxr-native]
+audit-as-crates-io = false
+notes = "First-party (frames-sg/jxr), followed on its main branch and reviewed there."
 
 [policy.wsi-rs]
 audit-as-crates-io = false

@@ -16,11 +16,26 @@
   strip-only `.vsi` file without its companion folder is not opened as a
   plain TIFF.
 
+### Changed
+
+- J2K dependencies follow the J2K `main` branch instead of the 0.8.1
+  maintenance revision. Main carries the CUDA packet-header fix along with
+  later decoder fixes and speedups.
+- JXR follows its `main` branch, which builds on J2K `main`, so wsi-rs compiles
+  one J2K instead of also J2K 0.12 for JXR.
+- Builds take the newest J2K and JXR `main` commits: `cargo latest` updates
+  them, and every CI job runs it before building. cargo-vet treats J2K and JXR
+  as first-party code, reviewed in their own repositories, instead of
+  requiring an audit for each revision.
+
 ### Fixed
 
 - A tile read from an uncompressed strip-based RGB TIFF reads only the rows it
   covers. It read the whole image, and read it again for every tile when the
   image was larger than the format cache.
+- Some complete LZW-compressed TIFF tiles and strips failed to decode as
+  truncated: J2K's LZW decoder stopped when the input ran out, before reading
+  the end code in its last bytes. J2K `main` reads to the end code.
 
 ## [0.8.1] - 2026-10-27
 

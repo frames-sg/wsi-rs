@@ -1,3 +1,7 @@
 [alias]
 xtask = "run --locked --package xtask --target-dir target/xtask --"
 run-checks = "xtask validate"
+# First-party J2K and JXR follow their main branches. This moves Cargo.lock to
+# their newest commits and leaves every other dependency as locked; CI runs it
+# before every build. For the fuzz workspace, add `--manifest-path fuzz/Cargo.toml`.
+latest = "update -p j2k -p jxr"
