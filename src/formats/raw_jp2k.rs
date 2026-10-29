@@ -17,12 +17,15 @@ use crate::core::types::{
     SampleType, Scene, Series, TileCodecKind, TileLayout, TileRequest, TileViewRequest,
 };
 use crate::decode::jp2k::{
-    decode_jp2k_reduced_to_sample_buffer, decode_jp2k_to_sample_buffer,
+    decode_jp2k_region_to_sample_buffer, decode_jp2k_to_sample_buffer,
     jp2k_decodable_reduction_levels, reduced_jp2k_dimensions, Jp2kColorSpace,
 };
-use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_pixel_contract};
+use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_component_contract};
 use crate::error::WsiError;
 use crate::properties::Properties;
+use j2k::CpuDecodeParallelism;
+use j2k_core::Rect;
+use rayon::prelude::*;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +33,43 @@ mod tests;
 const MARKER_SOC_BYTES: [u8; 2] = [0xFF, 0x4F];
 /// Probe vendor and `openslide.vendor`; also salts the dataset quickhash.
 const VENDOR: &str = "raw-jp2k";
+
+/// How the reader divides levels into tiles.
+#[derive(Debug, Clone, Copy)]
+struct LevelGrid {
+    /// A level with no side longer than this decodes whole, as one tile.
+    whole_level_max_side: u32,
+    /// Tile side for larger levels, each tile a region decode.
+    tile_side: u32,
+}
+
+impl LevelGrid {
+    /// On an 18000x12000 codestream, a whole 2250x1500 level decodes faster
+    /// than its tiles and a whole 4500x3000 level no faster; whole levels from
+    /// 9000x6000 up exceed J2K's decoder allocation cap. A viewport's 1024 px
+    /// tiles decode in one parallel round.
+    const DEFAULT: Self = Self {
+        whole_level_max_side: 4096,
+        tile_side: 1024,
+    };
+
+    fn tile_layout(self, (width, height): (u32, u32)) -> TileLayout {
+        if width.max(height) <= self.whole_level_max_side {
+            return TileLayout::Regular {
+                tile_width: width,
+                tile_height: height,
+                tiles_across: 1,
+                tiles_down: 1,
+            };
+        }
+        TileLayout::Regular {
+            tile_width: self.tile_side,
+            tile_height: self.tile_side,
+            tiles_across: u64::from(width.div_ceil(self.tile_side)),
+            tiles_down: u64::from(height.div_ceil(self.tile_side)),
+        }
+    }
+}
 
 pub(crate) struct RawJp2kBackend;
 
@@ -70,58 +110,71 @@ impl ConfiguredDatasetReader for RawJp2kBackend {
         path: &Path,
         config: BackendOpenConfig,
     ) -> Result<Box<dyn ManagedSlideReader>, WsiError> {
-        let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
-        let max_input = MAX_COMPRESSED_INPUT_BYTES.min(config.limits.encoded_unit_bytes());
-        let declared_len = file
-            .metadata()
-            .map_err(|source| WsiError::io_with_path(path, source))?
-            .len();
-        if declared_len > max_input {
-            return Err(WsiError::ResourceLimit {
-                resource: "encoded tile/frame unit",
-                requested: declared_len,
-                limit: max_input,
-            });
-        }
-        let data = read_to_end_bounded(file, max_input, "raw JP2K input")
-            .map_err(|source| WsiError::io_with_path(path, source))?;
-        let view = j2k::J2kView::parse(&data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
-        if let Some(layout) = &view.info().tile_layout {
-            // Every tile needs at least one 12-byte SOT segment and a 2-byte
-            // SOD marker. Bound the declared grid before reduction probing or
-            // decoding can allocate and process metadata for absent tiles.
-            let tile_count = u64::from(layout.tiles_x) * u64::from(layout.tiles_y);
-            if tile_count > data.len() as u64 / 14 {
-                return Err(WsiError::Jp2k(
-                    "raw JP2K input is too short for its declared tile grid".into(),
-                ));
-            }
-        }
-        let header = codestream_header_from_view(&view)?;
-        validate_pixel_contract(&header)?;
-        let dimensions = (header.image_width, header.image_height);
-        let reader = RawJp2kReader {
-            dataset: dataset_for_codestream(
-                path,
-                &data,
-                dimensions,
-                jp2k_decodable_reduction_levels(&data)?,
-            )?,
-            data,
-            width: header.image_width,
-            height: header.image_height,
-        };
-        Ok(Box::new(reader))
+        Ok(Box::new(open_raw_jp2k(path, config, LevelGrid::DEFAULT)?))
     }
 }
 
+fn open_raw_jp2k(
+    path: &Path,
+    config: BackendOpenConfig,
+    grid: LevelGrid,
+) -> Result<RawJp2kReader, WsiError> {
+    let file = File::open(path).map_err(|source| WsiError::io_with_path(path, source))?;
+    let max_input = MAX_COMPRESSED_INPUT_BYTES.min(config.limits.encoded_unit_bytes());
+    let declared_len = file
+        .metadata()
+        .map_err(|source| WsiError::io_with_path(path, source))?
+        .len();
+    if declared_len > max_input {
+        return Err(WsiError::ResourceLimit {
+            resource: "encoded tile/frame unit",
+            requested: declared_len,
+            limit: max_input,
+        });
+    }
+    let data = read_to_end_bounded(file, max_input, "raw JP2K input")
+        .map_err(|source| WsiError::io_with_path(path, source))?;
+    let view = j2k::J2kView::parse(&data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
+    if let Some(layout) = &view.info().tile_layout {
+        // Every tile needs at least one 12-byte SOT segment and a 2-byte
+        // SOD marker. Bound the declared grid before reduction probing or
+        // decoding can allocate and process metadata for absent tiles.
+        let tile_count = u64::from(layout.tiles_x) * u64::from(layout.tiles_y);
+        if tile_count > data.len() as u64 / 14 {
+            return Err(WsiError::Jp2k(
+                "raw JP2K input is too short for its declared tile grid".into(),
+            ));
+        }
+    }
+    let header = codestream_header_from_view(&view)?;
+    // Each tile's decode bounds its own output, so the whole image may exceed
+    // the decoded-image limit.
+    validate_component_contract(&header)?;
+    let dimensions = (header.image_width, header.image_height);
+    Ok(RawJp2kReader {
+        dataset: dataset_for_codestream(
+            path,
+            &data,
+            dimensions,
+            jp2k_decodable_reduction_levels(&data)?,
+            grid,
+        )?,
+        data,
+        width: header.image_width,
+        height: header.image_height,
+    })
+}
+
 /// Each decodable wavelet reduction is exposed as a pyramid level. Reduced
-/// levels are decoded from the codestream's lower resolutions on demand.
+/// levels are decoded from the codestream's lower resolutions on demand. Levels
+/// larger than `grid` allows are tiled, each tile a region decode, so a read
+/// decodes only the tiles it covers.
 fn dataset_for_codestream(
     path: &Path,
     data: &[u8],
     dimensions: (u32, u32),
     reduction_levels: u8,
+    grid: LevelGrid,
 ) -> Result<Dataset, WsiError> {
     let levels = (0..=reduction_levels)
         .map(|reduction| {
@@ -131,12 +184,7 @@ fn dataset_for_codestream(
                 // Reduced pixels cover exact 2^k source blocks, so this is not
                 // the rounded width ratio.
                 downsample: f64::from(1_u32 << reduction),
-                tile_layout: TileLayout::Regular {
-                    tile_width: width,
-                    tile_height: height,
-                    tiles_across: 1,
-                    tiles_down: 1,
-                },
+                tile_layout: grid.tile_layout((width, height)),
             })
         })
         .collect::<Result<Vec<_>, WsiError>>()?;
@@ -199,6 +247,17 @@ fn rgb_channels() -> Vec<ChannelInfo> {
     ]
 }
 
+fn is_one_tile(level: &Level) -> bool {
+    matches!(
+        level.tile_layout,
+        TileLayout::Regular {
+            tiles_across: 1,
+            tiles_down: 1,
+            ..
+        }
+    )
+}
+
 struct RawJp2kReader {
     dataset: Dataset,
     data: Vec<u8>,
@@ -206,9 +265,77 @@ struct RawJp2kReader {
     height: u32,
 }
 
+/// One tile's decode: a codestream region, in full-resolution coordinates, at
+/// a reduction.
+#[derive(Debug, Clone, Copy)]
+struct TileDecode {
+    reduction: u8,
+    region: Rect,
+    /// The tile is its whole level.
+    whole_level: bool,
+}
+
 impl RawJp2kReader {
     fn level_count(&self) -> usize {
         self.dataset.scenes[0].series[0].levels.len()
+    }
+
+    fn levels(&self) -> &[Level] {
+        &self.dataset.scenes[0].series[0].levels
+    }
+
+    fn tile_decode(&self, req: &TileRequest) -> Result<TileDecode, WsiError> {
+        self.validate_request(req)?;
+        let level = &self.levels()[req.level.get() as usize];
+        let reduction = u8::try_from(req.level.get()).map_err(|_| {
+            WsiError::tile_read(
+                req,
+                "raw JP2K reduction level exceeds the codestream ladder",
+            )
+        })?;
+        let tile = level
+            .regular_tile(req)?
+            .ok_or_else(|| WsiError::tile_read(req, "raw JP2K levels are regular grids"))?;
+        // A level pixel covers 2^reduction source pixels; the last row and
+        // column of tiles end at the image edge.
+        let to_source = |start: u64, len: u32, full: u32| {
+            let end = (start + u64::from(len)) << reduction;
+            let start = start << reduction;
+            Some((
+                u32::try_from(start).ok()?,
+                u32::try_from(end.min(u64::from(full)) - start).ok()?,
+            ))
+        };
+        let ((x, w), (y, h)) = to_source(tile.x, tile.width, self.width)
+            .zip(to_source(tile.y, tile.height, self.height))
+            .ok_or_else(|| WsiError::tile_read(req, "raw JP2K tile lies outside the image"))?;
+        Ok(TileDecode {
+            reduction,
+            region: Rect { x, y, w, h },
+            whole_level: is_one_tile(level),
+        })
+    }
+
+    fn decode_tile(
+        &self,
+        tile: TileDecode,
+        parallelism: CpuDecodeParallelism,
+    ) -> Result<CpuTile, WsiError> {
+        if tile.whole_level && tile.reduction == 0 {
+            return decode_jp2k_to_sample_buffer(
+                &self.data,
+                self.width,
+                self.height,
+                Jp2kColorSpace::Rgb,
+            );
+        }
+        decode_jp2k_region_to_sample_buffer(
+            &self.data,
+            tile.region,
+            tile.reduction,
+            parallelism,
+            Jp2kColorSpace::Rgb,
+        )
     }
 
     fn validate_request(&self, req: &TileRequest) -> Result<(), WsiError> {
@@ -229,27 +356,29 @@ impl RawJp2kReader {
                 reason: "raw JP2K source has only the default plane".into(),
             });
         }
-        if req.col != 0 || req.row != 0 {
-            return Err(WsiError::tile_read(
-                req,
-                "raw JP2K source has exactly one tile at (0, 0)",
-            ));
-        }
         Ok(())
     }
 
-    /// Only full resolution is stored as a codestream; reduced levels are
-    /// decoded from it on the CPU.
+    /// Only full resolution is stored as a codestream, and only a full
+    /// resolution that is one tile is that codestream. Reduced levels and the
+    /// tiles of a larger image are decoded from it on the CPU.
     fn validate_full_resolution_request(
         &self,
         req: &TileRequest,
         operation: &str,
     ) -> Result<(), WsiError> {
-        self.validate_request(req)?;
-        if req.level.get() != 0 {
+        let tile = self.tile_decode(req)?;
+        if tile.reduction != 0 {
             return Err(WsiError::Unsupported {
                 reason: format!(
                     "raw JP2K {operation} is available at full resolution only; reduced levels are decoded on the CPU"
+                ),
+            });
+        }
+        if !tile.whole_level {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "raw JP2K {operation} needs the full resolution as one tile; its tiles are region decodes on the CPU"
                 ),
             });
         }
@@ -282,18 +411,33 @@ impl SlideReader for RawJp2kReader {
     }
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
-        self.validate_request(req)?;
-        let reduction = u8::try_from(req.level.get()).map_err(|_| {
-            WsiError::tile_read(
-                req,
-                "raw JP2K reduction level exceeds the codestream ladder",
-            )
-        })?;
-        if reduction == 0 {
-            decode_jp2k_to_sample_buffer(&self.data, self.width, self.height, Jp2kColorSpace::Rgb)
-        } else {
-            decode_jp2k_reduced_to_sample_buffer(&self.data, reduction, Jp2kColorSpace::Rgb)
+        // One tile alone decodes fastest with the codec's own parallelism.
+        self.decode_tile(self.tile_decode(req)?, CpuDecodeParallelism::Auto)
+    }
+
+    fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
+        if reqs.len() <= 1 {
+            return reqs.iter().map(|req| self.read_tile_cpu(req)).collect();
         }
+        let tiles = reqs
+            .iter()
+            .map(|req| self.tile_decode(req))
+            .collect::<Result<Vec<_>, WsiError>>()?;
+        // Grid tiles decode serially side by side, so J2K streams each tile's
+        // Tier-1 in bands; a whole level keeps the codec's own parallelism.
+        crate::core::batch::install_codec_cpu(|| {
+            tiles
+                .par_iter()
+                .map(|&tile| {
+                    let parallelism = if tile.whole_level {
+                        CpuDecodeParallelism::Auto
+                    } else {
+                        CpuDecodeParallelism::Serial
+                    };
+                    self.decode_tile(tile, parallelism)
+                })
+                .collect()
+        })
     }
 
     #[cfg(feature = "metal")]
@@ -302,16 +446,24 @@ impl SlideReader for RawJp2kReader {
         reqs: &[TileRequest],
         sessions: &crate::output::metal::MetalBackendSessions,
     ) -> Result<Vec<crate::output::metal::MetalDeviceTile>, WsiError> {
-        for request in reqs {
-            self.validate_full_resolution_request(request, "device decode")?;
-        }
-        let jobs = reqs
+        // Every tile is a region of the one codestream, so a batch decodes as
+        // one Metal batch sharing its bytes.
+        let regions = reqs
             .iter()
-            .map(|_| self.jp2k_job(j2k_core::BackendRequest::Metal))
-            .collect::<Vec<_>>();
-        crate::decode::jp2k::decode_batch_jp2k_metal(&jobs, sessions)
-            .into_iter()
-            .collect()
+            .map(|req| {
+                let tile = self.tile_decode(req)?;
+                if crate::decode::jp2k::device_downscale(tile.reduction).is_none() {
+                    return Err(WsiError::Unsupported {
+                        reason: "raw JP2K Metal decode reduces at most 3 levels; deeper levels are decoded on the CPU".into(),
+                    });
+                }
+                Ok((tile.region, tile.reduction))
+            })
+            .collect::<Result<Vec<_>, WsiError>>()?;
+        crate::decode::jp2k::map_tile_results(
+            crate::decode::jp2k::decode_region_batch_jp2k_metal(&self.data, &regions, sessions),
+            reqs,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -352,8 +504,9 @@ impl ManagedSlideReader for RawJp2kReader {
         workers: usize,
         control: Option<&crate::ReadControl>,
     ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        // Device routes decode the stored full-resolution codestream only.
-        if reqs.iter().any(|req| req.level.get() != 0) {
+        // Device routes decode the stored full-resolution codestream only, as
+        // one tile.
+        if !is_one_tile(&self.levels()[0]) || reqs.iter().any(|req| req.level.get() != 0) {
             return None;
         }
         Some((|| {
@@ -361,7 +514,7 @@ impl ManagedSlideReader for RawJp2kReader {
                 .iter()
                 .map(|req| {
                     crate::core::read_control::check_cancelled_opt(control)?;
-                    self.validate_request(req)?;
+                    self.tile_decode(req)?;
                     Ok(self.jp2k_job(j2k_core::BackendRequest::Cpu))
                 })
                 .collect::<Result<Vec<_>, WsiError>>()?;

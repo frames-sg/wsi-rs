@@ -31,21 +31,36 @@ pub(super) fn decode_jobs_bounded(
     sessions: &MetalBackendSessions,
     output_target: u64,
 ) -> Vec<TileResult> {
+    decode_prepared_bounded(
+        jobs.iter().map(prepare_jp2k_job).collect(),
+        sessions,
+        output_target,
+    )
+}
+
+/// Decodes prepared jobs in device windows of at most `output_target` decoded
+/// bytes, keeping job order.
+pub(super) fn decode_prepared_bounded(
+    jobs: Vec<Result<PreparedJp2kJob<'_>, WsiError>>,
+    sessions: &MetalBackendSessions,
+    output_target: u64,
+) -> Vec<TileResult> {
     let mut metadata = Vec::with_capacity(jobs.len());
     let mut output = Vec::with_capacity(jobs.len());
     let mut inputs = Vec::new();
     let mut slots = Vec::new();
     // Duplicate requests sharing immutable input bytes share their owned codec
-    // input too. Pointer identity is valid only within this borrowing operation.
+    // input too, as do regions of one codestream. Pointer identity is valid
+    // only within this borrowing operation.
     let mut owned = HashMap::new();
-    for (slot, job) in jobs.iter().enumerate() {
-        match prepare_jp2k_job(job) {
+    for (slot, job) in jobs.into_iter().enumerate() {
+        match job {
             Ok(prepared) => {
                 let key = (prepared.input.as_ptr(), prepared.input.len());
                 let bytes = owned
                     .entry(key)
                     .or_insert_with(|| Arc::<[u8]>::from(prepared.input));
-                inputs.push(EncodedImage::full(bytes.clone()));
+                inputs.push(EncodedImage::new(bytes.clone(), prepared.request));
                 slots.push(slot);
                 metadata.push(Some(prepared));
                 output.push(None);

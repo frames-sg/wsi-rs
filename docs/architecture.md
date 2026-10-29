@@ -190,7 +190,14 @@ The C shim converts to 8-bit the way OpenSlide does (`sample >> 4`).
 
 **Raw JPEG 2000** files have one image. Each wavelet resolution becomes a
 level with a downsample of 2, 4, 8 and so on, decoded at that resolution rather
-than by shrinking the full image.
+than by shrinking the full image. A level with a side over 4096 pixels is read
+as virtual 1024 x 1024 tiles, each a region decode of the codestream, so a read
+decodes only the tiles it covers and the decoded-image limit applies per tile.
+A batch decodes its tiles serially side by side, which lets J2K decode Tier-1
+in bands as the inverse DWT reads them. Smaller levels decode whole. Metal
+decodes a batch of tiles at reductions up to 3 as one batch of regions sharing
+the codestream's bytes; deeper levels are decoded on the CPU. CUDA decoding and
+compressed passthrough need the full resolution as one tile.
 
 ## The OpenSlide shim
 

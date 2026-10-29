@@ -27,9 +27,21 @@
   them, and every CI job runs it before building. cargo-vet treats J2K and JXR
   as first-party code, reviewed in their own repositories, instead of
   requiring an audit for each revision.
+- Raw `.j2k` and `.j2c` levels with a side over 4096 pixels are read as
+  1024 x 1024 tiles, each a region decode, instead of one tile covering the
+  level, so a read decodes only the tiles it covers. A tile batch decodes its
+  tiles serially side by side, where J2K decodes Tier-1 in bands as the inverse
+  DWT reads them. Smaller levels still decode whole. Metal decodes tile batches
+  at reductions up to 3 as one batch of regions sharing the codestream's bytes;
+  deeper levels decode on the CPU. CUDA decoding and compressed passthrough are
+  offered only when the full resolution is one tile.
 
 ### Fixed
 
+- Raw `.j2k` and `.j2c` files whose decoded image exceeds 128 MiB, about 44.7
+  megapixels of RGB, open. The decoded-image limit now bounds each decoded
+  tile; it rejected the whole image at open. Reduced levels of such files
+  decode, where they failed against the full-resolution size.
 - A tile read from an uncompressed strip-based RGB TIFF reads only the rows it
   covers. It read the whole image, and read it again for every tile when the
   image was larger than the format cache.

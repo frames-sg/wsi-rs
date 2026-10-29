@@ -7,7 +7,9 @@ use super::Jp2kColorSpace;
 use super::Jp2kDecodeJob;
 use crate::core::types::CpuTile;
 use crate::decode::jp2k_backend::effective_output_colorspace;
-use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_pixel_contract};
+use crate::decode::jp2k_codestream::{
+    codestream_header_from_view, validate_component_contract, validate_decoded_size,
+};
 use crate::error::WsiError;
 
 pub(crate) fn decode_jp2k_to_sample_buffer(
@@ -25,33 +27,39 @@ pub(crate) fn decode_jp2k_to_sample_buffer(
     )
 }
 
-/// Decodes the codestream's own reduced-resolution image. Each reduction level
-/// discards one wavelet level; nothing is resampled from a full decode.
-pub(crate) fn decode_jp2k_reduced_to_sample_buffer(
+/// Decodes `region`, in full-resolution coordinates, from the codestream's own
+/// reduced-resolution image. Each reduction level discards one wavelet level;
+/// nothing is resampled from a full decode. Only the region's output is
+/// bounded, so this reads regions of codestreams too large to decode whole. A
+/// `Serial` decode runs Tier-1 in bands as the inverse DWT reads them, holding
+/// one band of coefficients per sub-band.
+pub(crate) fn decode_jp2k_region_to_sample_buffer(
     data: &[u8],
+    region: Rect,
     reduction_levels: u8,
+    parallelism: CpuDecodeParallelism,
     colorspace: Jp2kColorSpace,
 ) -> Result<CpuTile, WsiError> {
     let view = J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
     let header = codestream_header_from_view(&view)?;
-    validate_pixel_contract(&header)?;
-    let full = (header.image_width, header.image_height);
-    let (width, height) = reduced_jp2k_dimensions(full, reduction_levels)?;
+    validate_component_contract(&header)?;
+    let (width, height) = reduced_jp2k_region_dimensions(region, reduction_levels)?;
+    validate_decoded_size(width, height)?;
     let row_bytes = width as usize * J2kPixelFormat::Rgb8.bytes_per_pixel();
     let mut rgb = vec![0; row_bytes * height as usize];
     let mut decoder =
         J2kJp2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
-    decoder.set_cpu_decode_parallelism(CpuDecodeParallelism::Auto);
+    decoder.set_cpu_decode_parallelism(parallelism);
     decoder
         .decode_region_scaled_pow2_into(
             &mut J2kScratchPool::default(),
             &mut rgb,
             row_bytes,
             J2kPixelFormat::Rgb8,
-            Rect::full(full),
+            region,
             reduction_levels,
         )
-        .map_err(|err| WsiError::Jp2k(format!("j2k JP2K reduced decode failed: {err}")))?;
+        .map_err(|err| WsiError::Jp2k(format!("j2k JP2K region decode failed: {err}")))?;
     sample_buffer_from_rgb8_bytes(
         rgb,
         width,
@@ -62,17 +70,35 @@ pub(crate) fn decode_jp2k_reduced_to_sample_buffer(
     )
 }
 
+fn reduction_denominator(reduction_levels: u8) -> Result<u32, WsiError> {
+    1_u32
+        .checked_shl(u32::from(reduction_levels))
+        .ok_or_else(|| WsiError::Jp2k(format!("unrepresentable JP2K reduction {reduction_levels}")))
+}
+
 /// Reduced dimensions follow the codestream grid: each level rounds up.
 pub(crate) fn reduced_jp2k_dimensions(
     (width, height): (u32, u32),
     reduction_levels: u8,
 ) -> Result<(u32, u32), WsiError> {
-    let denominator = 1_u32
-        .checked_shl(u32::from(reduction_levels))
-        .ok_or_else(|| {
-            WsiError::Jp2k(format!("unrepresentable JP2K reduction {reduction_levels}"))
-        })?;
+    let denominator = reduction_denominator(reduction_levels)?;
     Ok((width.div_ceil(denominator), height.div_ceil(denominator)))
+}
+
+/// The reduced grid cells a region covers, as j2k decodes them: its start
+/// rounds down and its end rounds up.
+pub(super) fn reduced_jp2k_region_dimensions(
+    region: Rect,
+    reduction_levels: u8,
+) -> Result<(u32, u32), WsiError> {
+    let denominator = reduction_denominator(reduction_levels)?;
+    let span = |start: u32, len: u32| {
+        start
+            .checked_add(len)
+            .map(|end| end.div_ceil(denominator) - start / denominator)
+            .ok_or_else(|| WsiError::Jp2k("JP2K region extends past u32 coordinates".into()))
+    };
+    Ok((span(region.x, region.w)?, span(region.y, region.h)?))
 }
 
 /// The deepest reduction this codestream decodes. The main header advertises a

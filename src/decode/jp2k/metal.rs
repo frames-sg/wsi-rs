@@ -1,3 +1,4 @@
+use j2k::DecodeRequest;
 use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelFormat};
 use j2k_metal::{J2kDecoder as J2kMetalJp2kDecoder, MetalDecodeRequest};
 
@@ -16,10 +17,7 @@ pub(super) fn decode_prepared_jp2k_metal(
         1,
     );
     let surface = decoder
-        .decode_request_to_device_with_session(
-            MetalDecodeRequest::full(J2kPixelFormat::Rgb8, J2kBackendRequest::Metal),
-            sessions.j2k(),
-        )
+        .decode_request_to_device_with_session(metal_request(job.request)?, sessions.j2k())
         .map_err(|err| WsiError::Jp2k(format!("strict JP2K Metal decode failed: {err}")))?;
     #[cfg(feature = "route-telemetry")]
     crate::core::execution_telemetry::record_metal_pools(sessions);
@@ -31,6 +29,23 @@ pub(super) fn decode_prepared_jp2k_metal(
         sessions,
     )
     .and_then(|tile| sessions.retain_readback_queue(tile))
+}
+
+fn metal_request(request: DecodeRequest) -> Result<MetalDecodeRequest, WsiError> {
+    let (fmt, backend) = (J2kPixelFormat::Rgb8, J2kBackendRequest::Metal);
+    Ok(match request {
+        DecodeRequest::Full => MetalDecodeRequest::full(fmt, backend),
+        DecodeRequest::Region { roi } => MetalDecodeRequest::region(fmt, roi, backend),
+        DecodeRequest::Reduced { scale } => MetalDecodeRequest::scaled(fmt, scale, backend),
+        DecodeRequest::RegionReduced { roi, scale } => {
+            MetalDecodeRequest::region_scaled(fmt, roi, scale, backend)
+        }
+        other => {
+            return Err(WsiError::Unsupported {
+                reason: format!("no JP2K Metal decode for {other:?}"),
+            })
+        }
+    })
 }
 
 fn metal_tile_from_jp2k_surface(

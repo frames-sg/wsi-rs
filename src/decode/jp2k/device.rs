@@ -23,6 +23,40 @@ pub(crate) fn decode_batch_jp2k_metal(
         .collect()
 }
 
+/// Decodes regions of one codestream on Metal, each `(region, reduction)` in
+/// full-resolution coordinates, as one batch sharing the codestream's bytes.
+#[cfg(feature = "metal")]
+pub(crate) fn decode_region_batch_jp2k_metal(
+    data: &[u8],
+    regions: &[(j2k_core::Rect, u8)],
+    sessions: &crate::output::metal::MetalBackendSessions,
+) -> Vec<Result<crate::output::metal::MetalDeviceTile, WsiError>> {
+    let jobs = regions
+        .iter()
+        .map(|&(region, reduction)| {
+            super::prepare::prepare_jp2k_region_job(
+                data,
+                region,
+                reduction,
+                j2k_core::BackendRequest::Metal,
+            )
+        })
+        .collect::<Vec<_>>();
+    #[cfg(target_os = "macos")]
+    if jobs.len() > 1 {
+        return super::metal_batch::decode_prepared_bounded(
+            jobs,
+            sessions,
+            DEVICE_WINDOW_TARGET_BYTES,
+        );
+    }
+    jobs.into_iter()
+        .map(|job| {
+            job.and_then(|job| super::metal_backend::decode_prepared_jp2k_metal(&job, sessions))
+        })
+        .collect()
+}
+
 #[cfg(feature = "cuda")]
 pub(crate) fn decode_batch_jp2k_cuda(
     jobs: &[Jp2kDecodeJob<'_>],
