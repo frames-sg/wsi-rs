@@ -173,9 +173,8 @@ fn crop_rgb(pixels: &[u8], width: u32, (x, y, w, h): (u32, u32, u32, u32)) -> Ve
     out
 }
 
-/// The crop's `tile_region` decodes to the source's pixels at `rect`:
-/// exactly with this crate's decoder, and within one level with an
-/// independent one.
+/// The crop's `tile_region` decodes to the source's pixels at `rect`, with
+/// both this crate's decoder and an independent one.
 fn assert_crop_pixels(source: &[u8], crop: &LosslessJpeg, rect: (u32, u32, u32, u32)) {
     let (src_width, src_pixels) = decode_rgb(source);
     let (crop_width, crop_pixels) = decode_rgb(&crop.data);
@@ -209,21 +208,10 @@ fn assert_crop_pixels(source: &[u8], crop: &LosslessJpeg, rect: (u32, u32, u32, 
             })
             .collect::<Vec<_>>()
     };
-    // jpeg-decoder's x86 SIMD color conversion rounds by where a pixel falls
-    // in its line, which a crop moves, so its samples may differ by one; the
-    // exact check above uses wsi-rs's decoder.
-    let crop_window = window(&crop_pixels, crop_width, (x, y, w, h));
-    let source_window = window(&src_pixels, src_width, requested);
-    assert_eq!(crop_window.len(), source_window.len(), "{rect:?}");
-    let max_delta = crop_window
-        .iter()
-        .zip(&source_window)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0);
-    assert!(
-        max_delta <= 1,
-        "independent decoder {rect:?}: max delta {max_delta}"
+    assert_eq!(
+        window(&crop_pixels, crop_width, (x, y, w, h)),
+        window(&src_pixels, src_width, requested),
+        "independent decoder {rect:?}"
     );
 }
 

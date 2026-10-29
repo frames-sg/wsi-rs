@@ -108,7 +108,9 @@ sha2 = { version = "0.10", features = ["asm"] }
 flate2 = "1"
 weezl = "0.1.12"
 image = { version = "0.25", default-features = false, features = ["pnm"] }
-jpeg-decoder = "0.3.2"
+# Scalar code only: its x86 SIMD color conversion rounds by where a pixel
+# falls in its line, so exact crop-versus-source checks differ by platform.
+jpeg-decoder = { version = "0.3.2", features = ["platform_independent"] }
 jpeg-encoder = "0.6"
 tempfile = { workspace = true }
 toml = "0.8"
