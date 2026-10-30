@@ -548,7 +548,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "j2k"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k-core",
  "j2k-native",
@@ -560,7 +560,7 @@ dependencies = [
 [[package]]
 name = "j2k-codec-math"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k-types",
 ]
@@ -568,7 +568,7 @@ dependencies = [
 [[package]]
 name = "j2k-core"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "libc",
  "thiserror",
@@ -578,7 +578,7 @@ dependencies = [
 [[package]]
 name = "j2k-cuda"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k",
  "j2k-core",
@@ -593,12 +593,12 @@ dependencies = [
 [[package]]
 name = "j2k-cuda-build-support"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 
 [[package]]
 name = "j2k-cuda-j2k-engine"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k-codec-math",
  "j2k-core",
@@ -610,7 +610,7 @@ dependencies = [
 [[package]]
 name = "j2k-cuda-runtime"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k-codec-math",
  "j2k-core",
@@ -622,7 +622,7 @@ dependencies = [
 [[package]]
 name = "j2k-jpeg"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -636,7 +636,7 @@ dependencies = [
 [[package]]
 name = "j2k-metal"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "cc",
  "j2k",
@@ -656,7 +656,7 @@ dependencies = [
 [[package]]
 name = "j2k-metal-support"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "j2k-core",
  "log",
@@ -668,7 +668,7 @@ dependencies = [
 [[package]]
 name = "j2k-native"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "fearless_simd",
  "j2k-codec-math",
@@ -681,12 +681,12 @@ dependencies = [
 [[package]]
 name = "j2k-profile"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 
 [[package]]
 name = "j2k-tilecodec"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 dependencies = [
  "flate2",
  "j2k-core",
@@ -698,7 +698,7 @@ dependencies = [
 [[package]]
 name = "j2k-types"
 version = "0.13.1"
-source = "git+https://github.com/frames-sg/j2k?branch=main#49b513c9d31b46d9e52aca5afbd2a9aeeb567343"
+source = "git+https://github.com/frames-sg/j2k?branch=main#0c6b6e474d2d96e911df94727787b9b0fb0db300"
 
 [[package]]
 name = "jobserver"
@@ -738,8 +738,8 @@ dependencies = [
 
 [[package]]
 name = "jxr"
-version = "0.3.1"
-source = "git+https://github.com/frames-sg/jxr?branch=main#8fde984c501cb2b7df2b4eca0f5e79e53c4f865f"
+version = "0.4.0"
+source = "git+https://github.com/frames-sg/jxr?branch=main#7e69e29226609ce5e75cc947c7d5b41df98c039c"
 dependencies = [
  "jxr-core",
  "jxr-native",
@@ -749,21 +749,21 @@ dependencies = [
 
 [[package]]
 name = "jxr-core"
-version = "0.3.0"
-source = "git+https://github.com/frames-sg/jxr?branch=main#8fde984c501cb2b7df2b4eca0f5e79e53c4f865f"
+version = "0.4.0"
+source = "git+https://github.com/frames-sg/jxr?branch=main#7e69e29226609ce5e75cc947c7d5b41df98c039c"
 dependencies = [
  "j2k-core",
 ]
 
 [[package]]
 name = "jxr-math"
-version = "0.1.1"
-source = "git+https://github.com/frames-sg/jxr?branch=main#8fde984c501cb2b7df2b4eca0f5e79e53c4f865f"
+version = "0.2.0"
+source = "git+https://github.com/frames-sg/jxr?branch=main#7e69e29226609ce5e75cc947c7d5b41df98c039c"
 
 [[package]]
 name = "jxr-native"
-version = "0.3.1"
-source = "git+https://github.com/frames-sg/jxr?branch=main#8fde984c501cb2b7df2b4eca0f5e79e53c4f865f"
+version = "0.4.0"
+source = "git+https://github.com/frames-sg/jxr?branch=main#7e69e29226609ce5e75cc947c7d5b41df98c039c"
 dependencies = [
  "fearless_simd",
  "jxr-core",

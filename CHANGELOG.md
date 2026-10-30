@@ -85,7 +85,8 @@
   maintenance revision. Main carries the CUDA packet-header fix along with
   later decoder fixes and speedups.
 - JXR follows its `main` branch, which builds on J2K `main`, so wsi-rs compiles
-  one J2K instead of also J2K 0.12 for JXR.
+  one J2K instead of also J2K 0.12 for JXR. It requires JXR 0.4, the release
+  line built on J2K 0.13.
 - Builds take the newest J2K and JXR `main` commits: `cargo latest` updates
   them, and every CI job but packaging runs it before building; packaging
   checks the committed `Cargo.lock`. cargo-vet treats J2K and JXR
