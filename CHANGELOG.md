@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
+wsi-rs is on crates.io again, built on J2K 0.13.1 and JXR 0.4, and the Python
+bindings are on PyPI as `wsi-rs`.
+
 ### Added
 
 - Opens TIFFs stored in strips when the largest image is 8-bit grayscale or
