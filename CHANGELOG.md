@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-01
+
+Fixes to the tile locations and lossless raw reads added in 0.9.0. No API
+changes.
+
+### Fixed
+
+- Raw reads of clipped right and bottom edge tiles now report the stored
+  tile's size, with `RawCompressedTile::tile_region` locating the tile inside
+  it, as `tile_location` does, for TIFF JPEG XR tiles and NDPI tiles read
+  through restart markers. JPEG XR edge tiles reported the clipped size for a
+  codestream holding the whole tile, and NDPI edge tiles reported no region.
+- A raw read cut from a baseline or progressive JPEG that the lossless crop
+  cannot cut, such as a single component sampled 2x2, now returns the whole
+  stored JPEG with `tile_region` locating the tile, as a crop over its memory
+  limit does, instead of failing. A crop source that breaks the JPEG
+  standard (a zero quantizer, repeated component IDs, sampling factors
+  outside 1 to 4 or more than 10 blocks per MCU) now fails with
+  `WsiError::Jpeg` rather than `WsiError::Unsupported`.
+- `EncodedUnit::assemble` and TIFF JPEG raw reads merge `JPEGTables` into a
+  tile whenever the tile references a quantization or Huffman table it does
+  not define. Before, a tile carrying any table of each kind was returned
+  unchanged, so a tile with its own table 0 that needed table 1 from
+  `JPEGTables` could not be decoded on its own. Tables the tile defines still
+  take precedence.
+- DICOM `tile_location` now checks that the file is the one opened, as tile
+  reads do, and returns the "source changed" error for a replaced file
+  instead of byte ranges computed against the old one.
+
 ## [0.9.0] - 2026-10-29
 
 wsi-rs is on crates.io again, built on J2K 0.13.1 and JXR 0.4, and the Python
@@ -547,7 +576,9 @@ Speed and memory:
 
 - First public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/frames-sg/wsi-rs/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
