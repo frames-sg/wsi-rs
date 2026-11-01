@@ -2,21 +2,6 @@
 
 # Changelog
 
-## [Unreleased]
-
-### Fixed
-
-- `tile_location` reports the size a TIFF JPEG or JPEG 2000 edge tile is
-  encoded at when a writer stored it at its clipped size, or larger, rather
-  than at the full tile size, as `read_raw_compressed_tile` does; before, it
-  reported the tile tag size. Only tiles clipped by the right or bottom edge
-  read their stream headers for this, at most 64 KiB, and parse them the way
-  raw reads do; interior tiles add no reads. A stream whose headers run
-  longer keeps the tile tag size.
-- A Metal calibration test no longer fails under heavy CPU load, when
-  calibration correctly picks Metal partway through a read; the test now
-  checks that the calling thread submits only the tiles routed to Metal.
-
 ## [0.9.2] - 2026-11-01
 
 Internal cleanup of the tile-location and lossless raw-read code added in
@@ -604,7 +589,6 @@ Speed and memory:
 
 - First public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.9.2...HEAD
 [0.9.2]: https://github.com/frames-sg/wsi-rs/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/frames-sg/wsi-rs/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...v0.9.0
