@@ -448,14 +448,21 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
         let mut probes = Vec::new();
         for call in 0..5 {
             let submissions = test_count(Event::MetalBatchSubmissions);
+            let device_tiles = test_count(Event::RouteDeviceTiles);
             let started = runtime.background_calibrations_started();
             let actual = read(&slide);
             assert_eq!(actual.len(), expected.len());
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.as_u8(), expected.as_u8());
             }
-            // Device probes run on the background thread, never this one.
-            assert_eq!(test_count(Event::MetalBatchSubmissions), submissions);
+            // Calibration can select Metal before this read's later chunks.
+            // Each selected one-tile decode submits once on this thread; probes
+            // run in the background and must not add any caller submissions.
+            assert_eq!(
+                test_count(Event::MetalBatchSubmissions) - submissions,
+                test_count(Event::RouteDeviceTiles) - device_tiles,
+                "caller submissions must only decode selected Metal tiles, call={call}, region={region}"
+            );
             runtime.wait_for_background_calibration();
             probes.push(runtime.background_calibrations_started() - started);
             assert!(probes[call] <= 1, "public read {call}, region={region}");
