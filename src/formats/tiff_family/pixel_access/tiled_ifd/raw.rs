@@ -11,8 +11,8 @@ impl TiffPixelReader {
     /// JPEG XR tiles, and bare payloads that [`RawCompressedTile`] fully
     /// describes (no predictor, chunky samples in this machine's byte order,
     /// YCbCr only without subsampling), are returned exactly as stored, which
-    /// is what assembling the tile's location yields. A bare payload keeps
-    /// the stored tile size, padding included; at a clipped edge
+    /// is what assembling the tile's location yields. Both keep the stored
+    /// tile size, padding included; at a clipped edge
     /// [`RawCompressedTile::tile_region`] marks the tile inside it. Other
     /// lossless payloads (a predictor, big-endian samples, separate 8-bit RGB
     /// sample planes) are decoded and returned as `Compression::None` samples
@@ -93,8 +93,10 @@ impl TiffPixelReader {
             .photometric_interpretation(codec.photometric_interpretation())
             .data(data);
         let builder = match unit.tiled {
-            // A bare payload has no size of its own: report the stored tile.
-            Some(tiled) if compression != Compression::JpegXr => {
+            // Report the stored tile: a bare payload has no size of its own,
+            // and a JPEG XR tile is encoded at the full tile size, as
+            // `decode_jpegxr_tile` decodes it.
+            Some(tiled) => {
                 let builder = builder.dimensions(tiled.tile_width, tiled.tile_height);
                 if (span.width, span.height) == (tiled.tile_width, tiled.tile_height) {
                     builder

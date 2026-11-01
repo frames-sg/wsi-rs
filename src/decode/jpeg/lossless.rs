@@ -20,7 +20,8 @@ pub(crate) use blocks::{
 };
 
 use super::dct_reemit::{encode_baseline_dct_image_with_markers, DctFrameMarkers};
-use super::frame::JpegFrameInfo;
+use super::frame::{next_jpeg_segment, JpegFrameInfo};
+use super::is_sof_marker;
 use crate::core::types::{
     Compression, EncodedTilePhotometricInterpretation, PixelRect, RawCompressedTile,
 };
@@ -160,15 +161,28 @@ pub(crate) fn lossless_crop_coefficient_budget(
 /// interpretation matches the crop's. A crop larger than `max_output_bytes`,
 /// which the standard Huffman tables it is coded with can make of a source
 /// coded with optimized ones, also returns `standalone` when that fits.
+/// So does an 8-bit gray or 3-component baseline or progressive JPEG the
+/// crop does not cut, such as a single component sampled 2x2; other coding
+/// processes stay unsupported.
 pub(crate) fn lossless_crop_or_whole_jpeg(
     standalone: Vec<u8>,
     rect: (u32, u32, u32, u32),
     max_coefficient_bytes: u64,
     max_output_bytes: u64,
 ) -> Result<LosslessJpeg, WsiError> {
-    let (stack, window) = parse_crop(&[standalone.as_slice()], rect)?;
-    let (width, height) = (stack.width, stack.height);
-    let samples_per_pixel = stack.parts[0].frame.components.len() as u16;
+    check_nonzero_rect(rect)?;
+    let stack = match SourceStack::parse(&[standalone.as_slice()]) {
+        Ok(stack) => stack,
+        Err(crop_err @ WsiError::Unsupported { .. }) => {
+            let info = is_huffman_dct_frame(&standalone)?
+                .then(|| whole_jpeg_info(&standalone))
+                .flatten()
+                .ok_or(crop_err)?;
+            return whole_jpeg(standalone, info, rect);
+        }
+        Err(err) => return Err(err),
+    };
+    let window = CropWindow::new(rect, &stack)?;
     if stack.coefficient_bytes(&window)? <= max_coefficient_bytes {
         let crop = crop_window(stack, &window)?;
         if crop.data.len() as u64 <= max_output_bytes || standalone.len() as u64 > max_output_bytes
@@ -176,27 +190,59 @@ pub(crate) fn lossless_crop_or_whole_jpeg(
             return Ok(crop);
         }
     }
-    let color_space = j2k_jpeg::Decoder::inspect(&standalone)
-        .map_err(|err| {
-            WsiError::Jpeg(format!(
-                "lossless JPEG crop could not inspect the source header: {err}"
-            ))
-        })?
-        .color_space;
-    let (x, y, _, _) = rect;
-    let (_, _, tile_width, tile_height) = window.tile_region;
-    Ok(LosslessJpeg {
-        data: standalone,
+    let info = whole_jpeg_info(&standalone).ok_or_else(|| {
+        WsiError::Jpeg("lossless JPEG crop could not describe the whole source".into())
+    })?;
+    whole_jpeg(standalone, info, rect)
+}
+
+/// Whether `data`'s frame is baseline (SOF0) or progressive (SOF2) Huffman.
+fn is_huffman_dct_frame(data: &[u8]) -> Result<bool, WsiError> {
+    let mut offset = 2;
+    while let Some(segment) = next_jpeg_segment(data, offset)? {
+        if is_sof_marker(segment.marker) {
+            return Ok(matches!(segment.marker, 0xC0 | 0xC2));
+        }
+        offset = segment.end;
+    }
+    Ok(false)
+}
+
+/// `standalone`'s frame from its headers, when it is an 8-bit gray or
+/// 3-component JPEG, as raw JPEG passthrough describes them.
+fn whole_jpeg_info(standalone: &[u8]) -> Option<JpegFrameInfo> {
+    let header = j2k_jpeg::Decoder::inspect(standalone).ok()?;
+    let samples_per_pixel = match (header.bit_depth, header.sampling.len()) {
+        (8, count @ (1 | 3)) => count as u16,
+        _ => return None,
+    };
+    let (width, height) = header.dimensions;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(JpegFrameInfo {
         width,
         height,
-        tile_region: (x, y, tile_width, tile_height),
-        info: JpegFrameInfo {
-            width,
-            height,
-            bits_allocated: 8,
-            samples_per_pixel,
-            photometric_interpretation: crop_photometric(color_space)?,
-        },
+        bits_allocated: 8,
+        samples_per_pixel,
+        photometric_interpretation: crop_photometric(header.color_space).ok()?,
+    })
+}
+
+/// `standalone` unchanged, with `rect` clamped to it as a crop clamps it.
+fn whole_jpeg(
+    standalone: Vec<u8>,
+    info: JpegFrameInfo,
+    rect: (u32, u32, u32, u32),
+) -> Result<LosslessJpeg, WsiError> {
+    let (x, y, _, _) = rect;
+    let (x_end, y_end) = clamp_rect(rect, (info.width, info.height))?;
+    Ok(LosslessJpeg {
+        data: standalone,
+        width: info.width,
+        height: info.height,
+        tile_region: (x, y, x_end - x, y_end - y),
+        info,
     })
 }
 
@@ -233,17 +279,42 @@ fn parse_crop<'a>(
     parts: &[&'a [u8]],
     rect: (u32, u32, u32, u32),
 ) -> Result<(SourceStack<'a>, CropWindow), WsiError> {
-    let (_, _, rect_width, rect_height) = rect;
-    if rect_width == 0 || rect_height == 0 {
-        return Err(WsiError::Unsupported {
-            reason: format!(
-                "lossless JPEG crop requires a nonzero rectangle, got {rect_width}x{rect_height}"
-            ),
-        });
-    }
+    check_nonzero_rect(rect)?;
     let stack = SourceStack::parse(parts)?;
     let window = CropWindow::new(rect, &stack)?;
     Ok((stack, window))
+}
+
+fn check_nonzero_rect((_, _, width, height): (u32, u32, u32, u32)) -> Result<(), WsiError> {
+    if width == 0 || height == 0 {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "lossless JPEG crop requires a nonzero rectangle, got {width}x{height}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The far edges (x_end, y_end) of `rect` clamped to a `width` x `height`
+/// image. Its origin must lie inside the image.
+fn clamp_rect(
+    (x, y, w, h): (u32, u32, u32, u32),
+    (width, height): (u32, u32),
+) -> Result<(u32, u32), WsiError> {
+    if x >= width || y >= height {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "lossless JPEG crop origin ({x}, {y}) lies outside the {width}x{height} image"
+            ),
+        });
+    }
+    let (Some(x_end), Some(y_end)) = (x.checked_add(w), y.checked_add(h)) else {
+        return Err(WsiError::Unsupported {
+            reason: format!("lossless JPEG crop rectangle {w}x{h} at ({x}, {y}) overflows u32"),
+        });
+    };
+    Ok((x_end.min(width), y_end.min(height)))
 }
 
 /// Entropy-decode the parts `window` touches and code its blocks as a new
@@ -300,21 +371,8 @@ struct CropWindow {
 
 impl CropWindow {
     fn new(rect: (u32, u32, u32, u32), stack: &SourceStack<'_>) -> Result<Self, WsiError> {
-        let (x, y, w, h) = rect;
-        let (src_width, src_height) = (stack.width, stack.height);
-        if x >= src_width || y >= src_height {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "lossless JPEG crop origin ({x}, {y}) lies outside the {src_width}x{src_height} image"
-                ),
-            });
-        }
-        let (Some(x_end), Some(y_end)) = (x.checked_add(w), y.checked_add(h)) else {
-            return Err(WsiError::Unsupported {
-                reason: format!("lossless JPEG crop rectangle {w}x{h} at ({x}, {y}) overflows u32"),
-            });
-        };
-        let (x_end, y_end) = (x_end.min(src_width), y_end.min(src_height));
+        let (x, y, _, _) = rect;
+        let (x_end, y_end) = clamp_rect(rect, (stack.width, stack.height))?;
         let x0 = x - x % stack.mcu_width;
         let y0 = y - y % stack.mcu_height;
         let (width, height) = (x_end - x0, y_end - y0);

@@ -232,12 +232,12 @@ fn parse_sof(payload: &[u8], progressive: bool) -> Result<SofHeader, WsiError> {
     let mut components: Vec<SofComponent> = Vec::with_capacity(usize::from(*count));
     for &[id, sampling, quant_slot] in entries.as_chunks::<3>().0 {
         let (h_samp, v_samp) = (sampling >> 4, sampling & 0x0F);
+        // T.81 forbids the cases reported as `WsiError::Jpeg` below: they are
+        // malformed, not merely beyond what the crop handles.
         if !(1..=4).contains(&h_samp) || !(1..=4).contains(&v_samp) {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "lossless JPEG crop requires sampling factors in 1..=4, component {id} has {h_samp}x{v_samp}"
-                ),
-            });
+            return Err(WsiError::Jpeg(format!(
+                "lossless JPEG crop requires sampling factors in 1..=4, component {id} has {h_samp}x{v_samp}"
+            )));
         }
         if quant_slot > 3 {
             return Err(WsiError::Jpeg(format!(
@@ -245,9 +245,9 @@ fn parse_sof(payload: &[u8], progressive: bool) -> Result<SofHeader, WsiError> {
             )));
         }
         if components.iter().any(|other| other.id == id) {
-            return Err(WsiError::Unsupported {
-                reason: format!("lossless JPEG crop requires unique component IDs, {id} repeats"),
-            });
+            return Err(WsiError::Jpeg(format!(
+                "lossless JPEG crop requires unique component IDs, {id} repeats"
+            )));
         }
         components.push(SofComponent {
             id,
@@ -271,11 +271,9 @@ fn parse_sof(payload: &[u8], progressive: bool) -> Result<SofHeader, WsiError> {
         .map(|c| u32::from(c.h_samp) * u32::from(c.v_samp))
         .sum();
     if blocks_per_mcu > MAX_BLOCKS_PER_MCU {
-        return Err(WsiError::Unsupported {
-            reason: format!(
-                "lossless JPEG crop requires at most {MAX_BLOCKS_PER_MCU} blocks per MCU, got {blocks_per_mcu}"
-            ),
-        });
+        return Err(WsiError::Jpeg(format!(
+            "lossless JPEG crop requires at most {MAX_BLOCKS_PER_MCU} blocks per MCU, got {blocks_per_mcu}"
+        )));
     }
     Ok(SofHeader {
         width,
@@ -323,12 +321,14 @@ fn parse_dqt(payload: &[u8], slots: &mut [Option<[u16; 64]>; 4]) -> Result<(), W
 
 fn validate_quant_precision(components: &[SourceComponent]) -> Result<(), WsiError> {
     for component in components {
-        if let Some(value) = component
-            .quant_table
-            .iter()
-            .flatten()
-            .find(|value| **value == 0 || **value > 255)
-        {
+        let mut values = component.quant_table.iter().flatten();
+        if values.clone().any(|value| *value == 0) {
+            return Err(WsiError::Jpeg(format!(
+                "lossless JPEG crop input has a zero quantizer in component {}'s table",
+                component.id
+            )));
+        }
+        if let Some(value) = values.find(|value| **value > 255) {
             return Err(WsiError::Unsupported {
                 reason: format!(
                     "lossless JPEG crop re-emits baseline 8-bit quant tables, component {} has quant value {value}",

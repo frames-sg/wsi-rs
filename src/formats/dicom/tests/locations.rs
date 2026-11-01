@@ -7,6 +7,7 @@ use crate::core::types::{
     ByteOrder, ByteRange, EncodedUnit, PixelRect, PlanarConfiguration, StoredFraming, TileLocation,
 };
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
+use crate::formats::dicom::image::DicomLocationFile;
 
 const RGB_CODESTREAM: &[u8] = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
 
@@ -120,6 +121,37 @@ fn jpeg_frame_locations_assemble_to_raw_tiles_that_decode_like_read_tile() {
             decoded.data.as_u8(),
             slide.read_tile(&req).unwrap().data.as_u8()
         );
+    }
+}
+
+#[test]
+fn jpeg_tile_location_rejects_replaced_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/public_dicom/progressive-sof2.dcm");
+    for cache_location_file in [true, false] {
+        let path = dir
+            .path()
+            .join(format!("replaced-{cache_location_file}.dcm"));
+        std::fs::copy(&fixture, &path).unwrap();
+        let slide = Slide::open(&path).unwrap();
+        if cache_location_file {
+            slide.tile_location(&tile_request(0, 0)).unwrap();
+        }
+
+        std::fs::rename(&path, path.with_extension("original")).unwrap();
+        let mut replacement = std::fs::read(&fixture).unwrap();
+        replacement.extend_from_slice(&[0; 16]);
+        std::fs::write(&path, replacement).unwrap();
+
+        let error = slide
+            .tile_location(&tile_request(0, 0))
+            .expect_err("location tail reads must reject a replacement source");
+        assert!(matches!(
+            error,
+            WsiError::InvalidSlide { message, .. }
+                if message.contains("DICOM source changed after metadata was parsed")
+        ));
     }
 }
 
@@ -530,6 +562,10 @@ fn sparse_reader(bad_frame_len: u32) -> (tempfile::TempDir, DicomReader) {
         uids::JPEG2000_LOSSLESS,
     );
     let mut image = Arc::try_unwrap(image).expect("fresh test image");
+    image.frame_store.location_file = std::sync::OnceLock::from(DicomLocationFile {
+        source_identity: FileIdentity::from_path(&path).unwrap(),
+        file: std::sync::OnceLock::new(),
+    });
     image.frame_store.source_path = Arc::from(path.as_path());
     image.frame_store.path = path;
     image.frame_store.source_len = 10_000;

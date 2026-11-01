@@ -785,6 +785,64 @@ fn crop_over_its_coefficient_budget_returns_the_whole_jpeg_before_decoding() {
 }
 
 #[test]
+fn valid_jpegs_the_crop_cannot_handle_return_whole() {
+    // A lone component's MCU is one block whatever its sampling factors, so
+    // 2x2 codes the same image as 1x1; the crop accepts only 1x1.
+    let mut source = encode(ColorType::Luma, SamplingFactor::F_1_1);
+    let sof = source
+        .windows(2)
+        .position(|marker| marker == [0xFF, 0xC0])
+        .unwrap();
+    assert_eq!(source[sof + 11], 0x11, "Luma SOF samples 1x1");
+    source[sof + 11] = 0x22;
+    let rect = (21, 40, 30, 20);
+
+    let whole = crop_or_whole(source.clone(), rect, BUDGET).unwrap();
+    assert_eq!(whole.data, source);
+    assert_eq!((whole.width, whole.height), (WIDTH, HEIGHT));
+    assert_eq!(whole.tile_region, rect);
+    assert_eq!(
+        (whole.info.bits_allocated, whole.info.samples_per_pixel),
+        (8, 1)
+    );
+    let raw = whole.into_raw_tile((30, 20)).unwrap();
+    assert_eq!(
+        raw.tile_region(),
+        crate::core::types::PixelRect::new(21, 40, 30, 20)
+    );
+    assert_eq!(raw.data(), source.as_slice());
+
+    // Rectangles are still checked against the image.
+    let reason = unsupported_reason(crop_or_whole(source.clone(), (WIDTH, 0, 1, 1), BUDGET));
+    assert!(reason.contains("lies outside the 100x76 image"), "{reason}");
+    let reason = unsupported_reason(crop_or_whole(source, (0, 0, 0, 1), BUDGET));
+    assert!(reason.contains("nonzero rectangle"), "{reason}");
+}
+
+#[test]
+fn malformed_jpegs_are_errors_not_whole_fallbacks() {
+    let source = encode(ColorType::Rgb, SamplingFactor::F_2_2);
+    let mut zero_quantizer = source.clone();
+    let dqt = zero_quantizer
+        .windows(2)
+        .position(|marker| marker == [0xFF, 0xDB])
+        .unwrap();
+    zero_quantizer[dqt + 5] = 0;
+    for (input, expected) in [
+        (zero_quantizer, "zero quantizer"),
+        (with_component_ids(&source, [1, 1, 3]), "1 repeats"),
+    ] {
+        match crop_or_whole(input, (8, 8, 16, 16), BUDGET) {
+            Err(WsiError::Jpeg(reason)) => assert!(reason.contains(expected), "{reason}"),
+            other => panic!(
+                "expected a malformed-JPEG error for {expected}, got {:?}",
+                other.map(|jpeg| jpeg.tile_region)
+            ),
+        }
+    }
+}
+
+#[test]
 fn whole_jpeg_fallback_reports_the_crop_frame_and_color() {
     let samples = encode(ColorType::Ycbcr, SamplingFactor::F_1_1);
     let mut adobe = crate::test_support::jpeg_without_jfif(&samples);

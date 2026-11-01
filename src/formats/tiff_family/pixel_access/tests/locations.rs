@@ -50,6 +50,17 @@ pub(super) fn assert_location_round_trip(
         raw.data(),
         "assembled location of {req:?} differs from the raw tile"
     );
+    // Same bytes, so the raw tile must describe the same image and region.
+    assert_eq!(
+        (raw.width(), raw.height()),
+        unit.stored_size(),
+        "raw tile {req:?} size differs from its stored unit"
+    );
+    assert_eq!(
+        raw.tile_region(),
+        unit.source_region(),
+        "raw tile {req:?} region differs from its location's source region"
+    );
     (unit, raw)
 }
 

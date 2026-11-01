@@ -59,13 +59,18 @@ pub(super) struct DicomFrameStore {
     pub(super) source_path: Arc<Path>,
     /// File size when the metadata was parsed; locations are checked against it.
     pub(super) source_len: u64,
-    /// Opened on the first location request, which reads the last bytes of
-    /// JPEG and JPEG 2000 frames to tell DICOM padding from the stream.
-    pub(super) location_file: OnceLock<PositionedFile>,
+    /// Parsed source identity and its lazily opened handle for location reads.
+    pub(super) location_file: OnceLock<DicomLocationFile>,
     pub(super) encoded_unit_bytes: u64,
     pub(super) native_pixel_data: Option<NativePixelData>,
     pub(super) encapsulated_frames: Mutex<Option<Arc<DicomEncapsulatedFrames>>>,
     pub(super) compressed_frame_cache: Mutex<PrivateCache<u32, Arc<Vec<u8>>>>,
+}
+
+#[derive(Debug)]
+pub(super) struct DicomLocationFile {
+    pub(super) source_identity: FileIdentity,
+    pub(super) file: OnceLock<PositionedFile>,
 }
 
 #[derive(Debug)]
@@ -117,6 +122,10 @@ impl DicomImage {
             DicomGrid::Full
         };
         let source_len = meta.source_identity.length();
+        let location_file = OnceLock::from(DicomLocationFile {
+            source_identity: meta.source_identity.clone(),
+            file: OnceLock::new(),
+        });
         let encapsulated_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
         let decoded_frame_cache = PrivateCache::new(private_cache_budget.allocate_share());
         let native_pixel_data = if transfer_syntax.is_encapsulated() {
@@ -172,7 +181,7 @@ impl DicomImage {
             frame_store: DicomFrameStore {
                 source_path: Arc::from(meta.path.as_path()),
                 source_len,
-                location_file: OnceLock::new(),
+                location_file,
                 path: meta.path,
                 encoded_unit_bytes: open_budget.limits().encoded_unit_bytes(),
                 native_pixel_data,

@@ -54,6 +54,47 @@ fn ndpi_restart_locations_assemble_to_the_raw_tiles() {
 }
 
 #[test]
+fn ndpi_restart_edge_tiles_report_their_clipped_region() {
+    // 124x12 with 8x8 MCUs: 16 MCU columns are two 8-MCU intervals per row,
+    // so restart tiles stay 64x8 but the right and bottom ones are clipped.
+    let image = image::RgbImage::from_pixel(124, 12, image::Rgb([200, 40, 40]));
+    let jpeg = encode_restart_rgb_jpeg(&image, 95, 8);
+    let header_len = find_test_jpeg_bitstream_start(&jpeg).unwrap();
+    let mut starts = test_jpeg_restart_segment_starts(&jpeg);
+    starts.truncate(4);
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&le_u16(42));
+    buf.extend_from_slice(&le_u32(0));
+    buf.extend_from_slice(&jpeg);
+    let file = finish_ndpi_mcu_tiff(buf, 4, 124, 12, 8, jpeg.len() as u32, &starts);
+    let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+    let ifd_id = container.top_ifds()[0];
+    let reader = TiffPixelReader::new(
+        container,
+        build_test_ndpi_layout_from_header(TestNdpiJpegLayout {
+            ifd_id,
+            dimensions: (124, 12),
+            virtual_tile: (64, 8),
+            tile_grid: (2, 2),
+            jpeg_header: jpeg[..header_len].to_vec(),
+            strip_byte_count: jpeg.len() as u64,
+        }),
+    );
+
+    for (col, row, width, height) in [(0, 0, 64, 8), (1, 0, 60, 8), (0, 1, 64, 4), (1, 1, 60, 4)] {
+        let (unit, raw) = assert_location_round_trip(&reader, &level0_request(col, row));
+        assert_eq!(unit.framing(), StoredFraming::Prefixed);
+        assert_eq!((raw.width(), raw.height()), (64, 8));
+        assert_eq!(
+            raw.tile_region(),
+            PixelRect::new(0, 0, width, height),
+            "tile ({col},{row})"
+        );
+    }
+}
+
+#[test]
 fn ndpi_restart_locations_follow_tables_that_point_past_restart_markers() {
     let mut image = image::RgbImage::new(128, 16);
     for (idx, rgb) in TEST_NDPI_RESTART_COLORS.iter().enumerate() {

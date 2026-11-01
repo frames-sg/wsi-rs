@@ -209,5 +209,6 @@ fn sof_marker_classification_covers_every_marker_byte() {
 mod batch;
 mod cpu;
 mod errors;
+mod frame_tables;
 mod input_repair;
 mod lossless;

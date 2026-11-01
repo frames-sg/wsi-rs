@@ -346,12 +346,36 @@ impl TiffPixelReader {
         // Color follows the whole header (Adobe APP14, then SOF component
         // ids and sampling), as the NDPI decoder reads it.
         let photometric = self.tiff_jpeg_raw_photometric(ifd_id, &data, &info)?;
-        Ok(RawCompressedTile::builder(Compression::Jpeg)
+        let builder = RawCompressedTile::builder(Compression::Jpeg)
             .dimensions(info.width, info.height)
             .bits_allocated(info.bits_allocated)
             .samples_per_pixel(info.samples_per_pixel)
             .photometric_interpretation(photometric)
-            .data(data)
-            .build()?)
+            .data(data);
+        // Right and bottom tiles keep the full virtual tile, padding
+        // included; tile_region marks the part inside the level.
+        let clipped = |extent: u64, index: u32, size: u32| {
+            extent
+                .checked_sub(u64::from(index) * u64::from(size))
+                .filter(|&left| left > 0)
+                .map(|left| left.min(u64::from(size)) as u32)
+        };
+        let (Some(width), Some(height)) = (
+            clipped(level_w, col, virtual_tile_width),
+            clipped(level_h, row, virtual_tile_height),
+        ) else {
+            return Err(WsiError::tile_read(
+                req,
+                format!(
+                    "NDPI raw JPEG tile ({col},{row}) lies outside the {level_w}x{level_h} level"
+                ),
+            ));
+        };
+        let builder = if (width, height) == (info.width, info.height) {
+            builder
+        } else {
+            builder.tile_region(PixelRect::new(0, 0, width, height))
+        };
+        Ok(builder.build()?)
     }
 }

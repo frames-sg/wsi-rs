@@ -1,5 +1,6 @@
 //! Where each frame's encoded bytes are stored, from the frame index.
 
+use crate::core::file_identity::FileIdentity;
 use crate::core::positioned_file::PositionedFile;
 use crate::core::types::{
     ByteOrder, ByteRange, EncodedCodec, EncodedUnit, PixelRect, PlanarConfiguration, StoredFraming,
@@ -103,6 +104,9 @@ impl DicomImage {
     /// The value bytes of each fragment of encapsulated frame `frame_index`.
     /// Empty fragments hold no bytes of the stream and are left out.
     fn fragment_segments(&self, frame_index: u32) -> Result<Vec<ByteRange>, WsiError> {
+        let file = (self.transfer_syntax != DicomTransferSyntax::Rle)
+            .then(|| self.location_file())
+            .transpose()?;
         let frames = self.ensure_encapsulated_frames()?;
         let fragments = frames
             .frame_ranges
@@ -122,7 +126,11 @@ impl DicomImage {
             .filter(|fragment| fragment.len > 0)
             .map(|fragment| ByteRange::new(fragment.payload_offset, u64::from(fragment.len)))
             .collect::<Vec<_>>();
-        if self.transfer_syntax != DicomTransferSyntax::Rle && self.ends_with_padding(&segments)? {
+        let padded = match file {
+            Some(file) => self.ends_with_padding(&segments, file)?,
+            None => false,
+        };
+        if padded {
             if let Some(last) = segments.last_mut() {
                 last.length -= 1;
                 if last.length == 0 {
@@ -135,7 +143,11 @@ impl DicomImage {
 
     /// Whether the stream in `segments` ends with the padding byte that
     /// `trim_encapsulated_frame_padding` removes: a zero after `FF D9`.
-    fn ends_with_padding(&self, segments: &[ByteRange]) -> Result<bool, WsiError> {
+    fn ends_with_padding(
+        &self,
+        segments: &[ByteRange],
+        file: &PositionedFile,
+    ) -> Result<bool, WsiError> {
         let mut tail = [0u8; 3];
         let mut needed = tail.len();
         for range in segments.iter().rev() {
@@ -155,8 +167,7 @@ impl DicomImage {
                         ),
                     )
                 })?;
-            self.location_file()?
-                .read_exact_at(&mut tail[needed - take..needed], end - take as u64)
+            file.read_exact_at(&mut tail[needed - take..needed], end - take as u64)
                 .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
             needed -= take;
         }
@@ -164,15 +175,22 @@ impl DicomImage {
     }
 
     fn location_file(&self) -> Result<&PositionedFile, WsiError> {
-        if let Some(file) = self.frame_store.location_file.get() {
+        let source = self.frame_store.location_file.get().ok_or_else(|| {
+            WsiError::invalid_slide(
+                &self.frame_store.path,
+                "DICOM source identity is unavailable",
+            )
+        })?;
+        let message = "DICOM source changed after metadata was parsed";
+        if let Some(file) = source.file.get() {
+            source
+                .source_identity
+                .ensure_matches(&self.frame_store.path, message)?;
             return Ok(file);
         }
-        let file = std::fs::File::open(&self.frame_store.path)
-            .map_err(|source| WsiError::io_with_path(&self.frame_store.path, source))?;
-        Ok(self
-            .frame_store
-            .location_file
-            .get_or_init(|| PositionedFile::new(file)))
+        let file =
+            FileIdentity::open_verified(&self.frame_store.path, &source.source_identity, message)?;
+        Ok(source.file.get_or_init(|| PositionedFile::new(file)))
     }
 
     /// How this image's frames are encoded. Samples in 16-bit words report

@@ -130,39 +130,117 @@ pub(crate) fn standalone_jpeg_frame_owned(
     jpeg_tables: Option<&[u8]>,
 ) -> Result<(Vec<u8>, JpegFrameInfo), WsiError> {
     validate_standalone_jpeg_payload(&tile_data)?;
-    let (has_dqt, has_dht, info) = scan_baseline_jpeg_frame(&tile_data)?;
-    if has_dqt && has_dht {
+    let (has_required_dqt, has_required_dht, info) = scan_baseline_jpeg_frame(&tile_data)?;
+    if has_required_dqt && has_required_dht {
         return Ok((tile_data, info));
     }
-    let frame = rebuild_jpeg_frame_with_tables(&tile_data, jpeg_tables, !has_dqt, !has_dht)?;
+    let frame = rebuild_jpeg_frame_with_tables(
+        &tile_data,
+        jpeg_tables,
+        !has_required_dqt,
+        !has_required_dht,
+    )?;
     Ok((frame, info))
 }
 
-/// `tile` with the DQT/DHT segments it lacks before its first scan merged in
-/// from `tables` (a TIFF `JPEGTables`-style abbreviated stream), without
-/// inspecting its frame. For baseline tiles the bytes equal
-/// [`standalone_jpeg_frame_owned`]'s frame; unlike it, progressive and other
-/// frame types are accepted, for callers that validate the frame themselves.
+/// `tile` with missing referenced DQT/DHT tables before its first scan merged in
+/// from `tables` (a TIFF `JPEGTables`-style abbreviated stream). For baseline
+/// tiles the bytes equal [`standalone_jpeg_frame_owned`]'s frame; unlike it,
+/// progressive and other frame types are accepted, for callers that validate
+/// the frame themselves.
 pub(crate) fn merge_missing_jpeg_tables(
     tile: Vec<u8>,
     tables: Option<&[u8]>,
 ) -> Result<Vec<u8>, WsiError> {
     validate_standalone_jpeg_payload(&tile)?;
-    let (mut has_dqt, mut has_dht) = (false, false);
-    let mut offset = 0usize;
-    while let Some(segment) = next_jpeg_segment(&tile, offset)? {
+    let (need_dqt, need_dht) = missing_jpeg_tables(&tile)?;
+    if !need_dqt && !need_dht {
+        return Ok(tile);
+    }
+    rebuild_jpeg_frame_with_tables(&tile, tables, need_dqt, need_dht)
+}
+
+/// Compare table definitions with SOF selectors and only the first SOS's needs.
+fn missing_jpeg_tables(data: &[u8]) -> Result<(bool, bool), WsiError> {
+    let (mut defined_dqt, mut required_dqt) = (0u16, 0u16);
+    let (mut defined_dht, mut required_dht) = ([0u16; 2], [0u16; 2]);
+    let (mut progressive, mut lossless, mut huffman) = (false, false, true);
+    let invalid = |marker| WsiError::Unsupported {
+        reason: format!("JPEG {marker} table definitions or selectors are invalid or truncated"),
+    };
+    let mut offset = 0;
+    while let Some(segment) = next_jpeg_segment(data, offset)? {
+        let mut payload = segment.payload;
         match segment.marker {
-            0xDB => has_dqt = true,
-            0xC4 => has_dht = true,
-            0xDA => break,
+            0xDB => {
+                while let Some(&selector) = payload.first() {
+                    let precision = selector >> 4;
+                    if precision > 1 {
+                        return Err(invalid("DQT"));
+                    }
+                    let length = 1 + 64 * (usize::from(precision) + 1);
+                    payload = payload.get(length..).ok_or_else(|| invalid("DQT"))?;
+                    defined_dqt |= 1 << (selector & 0x0F);
+                }
+            }
+            0xC4 => {
+                while let Some(&selector) = payload.first() {
+                    let class = usize::from(selector >> 4);
+                    if class > 1 {
+                        return Err(invalid("DHT"));
+                    }
+                    let counts = payload.get(1..17).ok_or_else(|| invalid("DHT"))?;
+                    let length = 17
+                        + counts
+                            .iter()
+                            .map(|&count| usize::from(count))
+                            .sum::<usize>();
+                    payload = payload.get(length..).ok_or_else(|| invalid("DHT"))?;
+                    defined_dht[class] |= 1 << (selector & 0x0F);
+                }
+            }
+            marker if is_sof_marker(marker) => {
+                progressive = matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE);
+                lossless = matches!(marker, 0xC3 | 0xC7 | 0xCB | 0xCF);
+                huffman = marker & 0x08 == 0;
+                let count = usize::from(*payload.get(5).ok_or_else(|| invalid("SOF"))?);
+                let components = payload
+                    .get(6..6 + count * 3)
+                    .ok_or_else(|| invalid("SOF"))?;
+                if !lossless {
+                    for component in components.as_chunks::<3>().0 {
+                        required_dqt |= 1u16
+                            .checked_shl(u32::from(component[2]))
+                            .ok_or_else(|| invalid("SOF"))?;
+                    }
+                }
+            }
+            0xDA => {
+                let count = usize::from(*payload.first().ok_or_else(|| invalid("SOS"))?);
+                let scan = 1 + count * 2;
+                let parameters = payload.get(scan..scan + 3).ok_or_else(|| invalid("SOS"))?;
+                if huffman {
+                    let needs_dc = !progressive || (parameters[0] == 0 && parameters[2] >> 4 == 0);
+                    let needs_ac = !lossless && (!progressive || parameters[0] != 0);
+                    for component in payload[1..scan].as_chunks::<2>().0 {
+                        if needs_dc {
+                            required_dht[0] |= 1 << (component[1] >> 4);
+                        }
+                        if needs_ac {
+                            required_dht[1] |= 1 << (component[1] & 0x0F);
+                        }
+                    }
+                }
+                break;
+            }
             _ => {}
         }
         offset = segment.end;
     }
-    if has_dqt && has_dht {
-        return Ok(tile);
-    }
-    rebuild_jpeg_frame_with_tables(&tile, tables, !has_dqt, !has_dht)
+    Ok((
+        required_dqt & !defined_dqt != 0,
+        required_dht[0] & !defined_dht[0] != 0 || required_dht[1] & !defined_dht[1] != 0,
+    ))
 }
 
 pub(crate) fn validate_standalone_jpeg_payload(tile_data: &[u8]) -> Result<(), WsiError> {
@@ -182,15 +260,11 @@ pub(crate) fn validate_standalone_jpeg_payload(tile_data: &[u8]) -> Result<(), W
 pub(crate) fn scan_baseline_jpeg_frame(
     data: &[u8],
 ) -> Result<(bool, bool, JpegFrameInfo), WsiError> {
-    let mut has_dqt = false;
-    let mut has_dht = false;
     let mut info = None;
     let mut offset = 0usize;
 
     while let Some(segment) = next_jpeg_segment(data, offset)? {
         match segment.marker {
-            0xDB => has_dqt = true,
-            0xC4 => has_dht = true,
             0xC0 => info = Some(parse_sof0_frame_info(segment.payload)?),
             marker if is_sof_marker(marker) => {
                 return Err(WsiError::Unsupported {
@@ -206,7 +280,8 @@ pub(crate) fn scan_baseline_jpeg_frame(
     let info = info.ok_or_else(|| WsiError::Unsupported {
         reason: "JPEG passthrough could not find a Baseline JPEG SOF0 marker".into(),
     })?;
-    Ok((has_dqt, has_dht, info))
+    let (need_dqt, need_dht) = missing_jpeg_tables(data)?;
+    Ok((!need_dqt, !need_dht, info))
 }
 
 pub(crate) fn rebuild_jpeg_frame_with_tables(
@@ -232,6 +307,7 @@ pub(crate) fn rebuild_jpeg_frame_with_tables(
     }
     let mut frame = Vec::with_capacity(tile_data.len() + table_segments.len());
     frame.extend_from_slice(&tile_data[..2]);
+    // Later tile-local DQT/DHT definitions replace shared tables with the same IDs (T.81).
     frame.extend_from_slice(&table_segments);
     frame.extend_from_slice(&tile_data[2..]);
     Ok(frame)
