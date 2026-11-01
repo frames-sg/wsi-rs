@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-01
+
+Internal cleanup of the tile-location and lossless raw-read code added in
+0.9.0. No API or behavior changes.
+
+### Changed
+
+- Readers share one implementation for cutting a raw tile from a stored
+  JPEG, for returning 8-bit RGB samples as an uncompressed raw tile, for
+  finding the stored tile behind a Ventana subtile, and for placing and
+  ordering CZI subblocks, instead of each keeping its own copy.
+- The `tile_locations` example is now a short listing of a level's tile
+  locations that assembles tiles from their byte ranges and checks them
+  against `read_raw_compressed_tile`.
+
 ## [0.9.1] - 2026-11-01
 
 Fixes to the tile locations and lossless raw reads added in 0.9.0. No API
@@ -576,7 +591,8 @@ Speed and memory:
 
 - First public release.
 
-[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/frames-sg/wsi-rs/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/frames-sg/wsi-rs/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/frames-sg/wsi-rs/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...v0.8.1
