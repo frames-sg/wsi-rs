@@ -62,16 +62,7 @@ impl SlideReader for ZeissReader {
         )
     }
 
-    /// A classic-JPEG subblock that is exactly the tile is returned as
-    /// stored; one that covers the tile is cropped losslessly in the
-    /// coefficient domain from the MCU corner at or before the tile, or
-    /// returned whole with the tile region inside it when the crop does not
-    /// fit the lossless-crop limit. A JPEG XR subblock covering the tile is
-    /// returned as its whole stream with the tile region inside it. Tiles
-    /// painted only from uncompressed subblocks are returned as their exact
-    /// uncompressed RGB samples, which is lossless. Other compositions of
-    /// lossy subblocks fail with [`WsiError::Unsupported`]; `tile_location`
-    /// reports their parts.
+    /// See `ZeissSlide::read_raw_tile`.
     fn read_raw_compressed_tile(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
         self.slide
             .read_raw_tile(req, self.slide.limits.lossless_crop_bytes())

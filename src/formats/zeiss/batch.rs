@@ -247,10 +247,7 @@ impl ZeissReader {
             {
                 return Ok(None);
             }
-            let sx = (i64::from(info.rect.x) - i64::from(self.slide.subblock_origin.0))
-                .div_euclid(ratio);
-            let sy = (i64::from(info.rect.y) - i64::from(self.slide.subblock_origin.1))
-                .div_euclid(ratio);
+            let (sx, sy) = info.level_origin(self.slide.subblock_origin, ratio);
             if sx < x + i64::from(width)
                 && sy < y + i64::from(height)
                 && sx + i64::from(info.stored_size.w) > x

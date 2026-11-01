@@ -303,31 +303,11 @@ impl TiffPixelReader {
                 NotAddressableReason::Resampled,
             ));
         }
-        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
-            return Err(tile_error(
-                "Ventana subtile coordinates must be non-negative".into(),
-            ));
-        };
-        if subtiles_per_tile == 0 {
-            return Err(tile_error(
-                "Ventana subtile divisor must be positive".into(),
-            ));
-        }
-        let geometry = self.stored_tile_geometry(ifd_id).map_err(tile_error)?;
-        let per_tile = u64::from(subtiles_per_tile);
-        let (tile_col, tile_row) = (col / per_tile, row / per_tile);
-        if tile_col >= geometry.tiles_across || tile_row >= geometry.tiles_down {
-            return Err(tile_error(format!(
-                "stored tile ({tile_col},{tile_row}) is outside the {}x{} TIFF tile grid",
-                geometry.tiles_across, geometry.tiles_down
-            )));
-        }
-        let clipped = (
-            (geometry.width - tile_col * u64::from(geometry.tile_width))
-                .min(u64::from(geometry.tile_width)),
-            (geometry.height - tile_row * u64::from(geometry.tile_height))
-                .min(u64::from(geometry.tile_height)),
-        );
+        let cell = self.subtile_cell(req, ifd_id, subtiles_per_tile)?;
+        let geometry = &cell.geometry;
+        let per_tile = cell.per_tile;
+        let (col, row) = cell.cell;
+        let clipped = cell.clipped;
         // Without an explicit extent the share is a whole number of pixels.
         let origin = (
             (col % per_tile) * u64::from(geometry.tile_width) / per_tile,
@@ -345,12 +325,6 @@ impl TiffPixelReader {
             u64::from(entry.dimensions.0).min(clipped.0 - origin.0) as u32,
             u64::from(entry.dimensions.1).min(clipped.1 - origin.1) as u32,
         );
-        self.stored_tile_location(
-            req,
-            ifd_id,
-            params,
-            tile_row * geometry.tiles_across + tile_col,
-            source_region,
-        )
+        self.stored_tile_location(req, ifd_id, params, cell.tile_index(), source_region)
     }
 }

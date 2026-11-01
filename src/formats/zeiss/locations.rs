@@ -8,9 +8,7 @@
 
 use super::slide::ZeissSlide;
 use super::*;
-use crate::decode::jpeg::lossless::{
-    lossless_crop_coefficient_budget, lossless_crop_or_whole_jpeg,
-};
+use crate::decode::jpeg::lossless::lossless_crop_raw_tile;
 
 /// One subblock's contribution to a tile.
 struct SubblockPlacement {
@@ -137,7 +135,12 @@ impl ZeissSlide {
         let whole = placement.source == PixelRect::new(0, 0, stored.0, stored.1);
         match info.compression {
             CziCompressionMode::Jpg if whole => self.raw_jpeg_subblock(info),
-            CziCompressionMode::Jpg => self.raw_jpeg_crop(placement, crop_working_set),
+            CziCompressionMode::Jpg => self.within_encoded_unit(lossless_crop_raw_tile(
+                self.read_source_subblock(info)?.data,
+                placement.source,
+                crop_working_set,
+                self.limits.encoded_unit_bytes(),
+            )?),
             CziCompressionMode::JpgXr => {
                 let (codec, _) = subblock_codec(info)?;
                 let raw = self.read_source_subblock(info)?;
@@ -156,33 +159,6 @@ impl ZeissSlide {
                 "lies in a {other} subblock, which has no raw stream"
             ))),
         }
-    }
-
-    /// The tile cut from one JPEG subblock in the coefficient domain:
-    /// quantized coefficients are copied, never decoded to pixels. The output
-    /// starts at the MCU corner at or before the tile.
-    ///
-    /// The subblock bytes, the coefficient planes and the worst-case output
-    /// share `crop_working_set`, which admission reserved for the read. A
-    /// crop needing more coefficients than remain returns the whole subblock
-    /// stream instead, with [`RawCompressedTile::tile_region`] locating the
-    /// tile; this is decided before entropy decoding.
-    fn raw_jpeg_crop(
-        &self,
-        placement: &SubblockPlacement,
-        crop_working_set: u64,
-    ) -> Result<RawCompressedTile, WsiError> {
-        let data = self.read_source_subblock(&placement.info)?.data;
-        let source = placement.source;
-        let crop = (source.width, source.height);
-        let budget = lossless_crop_coefficient_budget(crop_working_set, data.len() as u64, crop);
-        let crop = lossless_crop_or_whole_jpeg(
-            data,
-            (source.x, source.y, source.width, source.height),
-            budget,
-            self.limits.encoded_unit_bytes(),
-        )?;
-        self.within_encoded_unit(crop.into_raw_tile((source.width, source.height))?)
     }
 
     /// Refuses a built raw tile larger than one encoded unit, the admission
@@ -232,23 +208,10 @@ impl ZeissSlide {
             req.col,
             req.row,
         )?;
-        let (width, height) = (tile.width, tile.height);
-        let (3, CpuTileLayout::Interleaved, CpuTileData::U8(samples)) =
-            (tile.channels, tile.layout, tile.data)
-        else {
-            return Err(WsiError::Unsupported {
-                reason: "Zeiss uncompressed tiles must compose to interleaved 8-bit RGB".into(),
-            });
-        };
-        self.within_encoded_unit(
-            RawCompressedTile::builder(Compression::None)
-                .dimensions(width, height)
-                .bits_allocated(8)
-                .samples_per_pixel(3)
-                .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
-                .data(Arc::unwrap_or_clone(samples))
-                .build()?,
-        )
+        self.within_encoded_unit(RawCompressedTile::from_rgb8_samples(
+            tile,
+            "Zeiss uncompressed tiles must compose to interleaved 8-bit RGB",
+        )?)
     }
 
     fn tile_placements(&self, req: &TileRequest) -> Result<TilePlacements, WsiError> {
@@ -282,12 +245,7 @@ impl ZeissSlide {
             }
         }
         drop(czi);
-        placements.sort_by_key(|placement| {
-            (
-                placement.info.m_index.unwrap_or(i32::MIN),
-                placement.info.file_position,
-            )
-        });
+        placements.sort_by_key(|placement| placement.info.paint_order());
         let mut tile = TilePlacements {
             width: tile.width,
             height: tile.height,
@@ -338,10 +296,9 @@ fn placement_in_tile(
     ratio: i64,
     tile: &RegularTile,
 ) -> Option<(PixelRect, PixelRect)> {
-    let left = (i64::from(info.rect.x) - i64::from(origin.0)).div_euclid(ratio)
-        - i64::try_from(tile.x).ok()?;
-    let top = (i64::from(info.rect.y) - i64::from(origin.1)).div_euclid(ratio)
-        - i64::try_from(tile.y).ok()?;
+    let (left, top) = info.level_origin(origin, ratio);
+    let left = left - i64::try_from(tile.x).ok()?;
+    let top = top - i64::try_from(tile.y).ok()?;
     let x0 = left.max(0);
     let y0 = top.max(0);
     let x1 = (left + i64::from(info.stored_size.w)).min(i64::from(tile.width));

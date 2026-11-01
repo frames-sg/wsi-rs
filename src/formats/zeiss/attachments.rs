@@ -163,7 +163,7 @@ fn read_embedded_czi_plane(
             "embedded CZI has no layer-0 subblocks for its default plane".into(),
         ));
     }
-    matching.sort_by_key(|subblock| (subblock.m_index.unwrap_or(i32::MIN), subblock.file_position));
+    matching.sort_by_key(|subblock| subblock.paint_order());
 
     let pixel_type = matching[0].pixel_type;
     if matching

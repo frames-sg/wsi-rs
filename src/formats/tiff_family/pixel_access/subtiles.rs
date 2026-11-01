@@ -57,33 +57,13 @@ impl TiffPixelReader {
     ) -> Result<CpuTile, WsiError> {
         let tile_error = |reason: String| WsiError::tile_read(req, reason);
         let entry = self.subtile_entry(req)?;
-        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
-            return Err(tile_error(
-                "Ventana subtile coordinates must be non-negative".into(),
-            ));
-        };
-        if subtiles_per_tile == 0 {
-            return Err(tile_error(
-                "Ventana subtile divisor must be positive".into(),
-            ));
-        }
-        let geometry = self.stored_tile_geometry(ifd_id).map_err(tile_error)?;
-        let per_tile = u64::from(subtiles_per_tile);
-        let (tile_col, tile_row) = (col / per_tile, row / per_tile);
-        if tile_col >= geometry.tiles_across || tile_row >= geometry.tiles_down {
-            return Err(tile_error(format!(
-                "stored tile ({tile_col},{tile_row}) is outside the {}x{} TIFF tile grid",
-                geometry.tiles_across, geometry.tiles_down
-            )));
-        }
-        let index = usize::try_from(tile_row * geometry.tiles_across + tile_col)
+        let cell = self.subtile_cell(req, ifd_id, subtiles_per_tile)?;
+        let geometry = &cell.geometry;
+        let per_tile = cell.per_tile;
+        let (col, row) = cell.cell;
+        let index = usize::try_from(cell.tile_index())
             .map_err(|_| tile_error("stored tile index overflows usize".into()))?;
-        let clipped = (
-            (geometry.width - tile_col * u64::from(geometry.tile_width))
-                .min(u64::from(geometry.tile_width)) as u32,
-            (geometry.height - tile_row * u64::from(geometry.tile_height))
-                .min(u64::from(geometry.tile_height)) as u32,
-        );
+        let clipped = (cell.clipped.0 as u32, cell.clipped.1 as u32);
         let stored = self.full_decode_cache.get_or_try_insert_with_error(
             FullDecodeKey::StoredTile { ifd_id, index },
             || {
@@ -230,6 +210,49 @@ impl TiffPixelReader {
         })
     }
 
+    /// The stored tile that Ventana cell `req` is a `1 / subtiles_per_tile`
+    /// share of, as decoding and location reporting both find it.
+    pub(super) fn subtile_cell(
+        &self,
+        req: &TileRequest,
+        ifd_id: IfdId,
+        subtiles_per_tile: u32,
+    ) -> Result<SubtileCell, WsiError> {
+        let tile_error = |reason: String| WsiError::tile_read(req, reason);
+        let (Ok(col), Ok(row)) = (u64::try_from(req.col), u64::try_from(req.row)) else {
+            return Err(tile_error(
+                "Ventana subtile coordinates must be non-negative".into(),
+            ));
+        };
+        if subtiles_per_tile == 0 {
+            return Err(tile_error(
+                "Ventana subtile divisor must be positive".into(),
+            ));
+        }
+        let geometry = self.stored_tile_geometry(ifd_id).map_err(tile_error)?;
+        let per_tile = u64::from(subtiles_per_tile);
+        let (tile_col, tile_row) = (col / per_tile, row / per_tile);
+        if tile_col >= geometry.tiles_across || tile_row >= geometry.tiles_down {
+            return Err(tile_error(format!(
+                "stored tile ({tile_col},{tile_row}) is outside the {}x{} TIFF tile grid",
+                geometry.tiles_across, geometry.tiles_down
+            )));
+        }
+        let clipped = (
+            (geometry.width - tile_col * u64::from(geometry.tile_width))
+                .min(u64::from(geometry.tile_width)),
+            (geometry.height - tile_row * u64::from(geometry.tile_height))
+                .min(u64::from(geometry.tile_height)),
+        );
+        Ok(SubtileCell {
+            cell: (col, row),
+            per_tile,
+            stored_tile: (tile_col, tile_row),
+            clipped,
+            geometry,
+        })
+    }
+
     pub(super) fn stored_tile_geometry(&self, ifd_id: IfdId) -> Result<StoredTileGeometry, String> {
         let read_u64 = |tag, name| {
             self.container
@@ -258,6 +281,24 @@ impl TiffPixelReader {
             tiles_across: width.div_ceil(u64::from(tile_width)),
             tiles_down: height.div_ceil(u64::from(tile_height)),
         })
+    }
+}
+
+pub(super) struct SubtileCell {
+    /// The requested cell's (col, row).
+    pub(super) cell: (u64, u64),
+    pub(super) per_tile: u64,
+    /// The stored tile's (col, row) in the TIFF tile grid.
+    pub(super) stored_tile: (u64, u64),
+    /// The stored tile's size clipped to the image.
+    pub(super) clipped: (u64, u64),
+    pub(super) geometry: StoredTileGeometry,
+}
+
+impl SubtileCell {
+    /// Row-major index of the stored tile in the TIFF tile grid.
+    pub(super) fn tile_index(&self) -> u64 {
+        self.stored_tile.1 * self.geometry.tiles_across + self.stored_tile.0
     }
 }
 

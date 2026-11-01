@@ -1,3 +1,4 @@
+use crate::test_support::locations::assembled;
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 
@@ -6,21 +7,8 @@ use super::super::*;
 use super::fixtures::*;
 use crate::core::registry::Slide;
 
-fn assembled(unit: &EncodedUnit) -> Vec<u8> {
-    let file = fs::read(unit.path()).expect("read located ZVI file");
-    unit.assemble(
-        unit.segments()
-            .iter()
-            .map(|range| &file[range.offset as usize..][..range.length as usize]),
-    )
-    .expect("assemble located plane payload")
-}
-
 fn stored(slide: &Slide, req: &TileRequest) -> StoredTile {
-    match slide.tile_location(req).expect("ZVI tile location") {
-        TileLocation::Stored(stored) => stored,
-        other => panic!("expected a stored ZVI plane, got {other:?}"),
-    }
+    crate::test_support::locations::stored_tile(&slide.tile_location(req).unwrap()).clone()
 }
 
 fn plane_request(col: i64, c: u32) -> TileRequest {

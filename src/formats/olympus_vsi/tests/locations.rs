@@ -1,16 +1,7 @@
 use super::fixtures::*;
 use super::*;
-use crate::core::types::{ByteRange, EncodedUnit, StoredFraming, TileLocation};
-
-fn assembled(unit: &EncodedUnit) -> Vec<u8> {
-    let file = fs::read(unit.path()).expect("read located ETS file");
-    unit.assemble(
-        unit.segments()
-            .iter()
-            .map(|range| &file[range.offset as usize..][..range.length as usize]),
-    )
-    .expect("assemble located codestream")
-}
+use crate::core::types::{ByteRange, StoredFraming, TileLocation};
+use crate::test_support::locations::assembled;
 
 #[test]
 fn stored_ets_tiles_locate_their_codestream_and_background_tiles_are_absent() {

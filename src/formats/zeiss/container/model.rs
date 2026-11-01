@@ -273,6 +273,25 @@ impl DirectorySubBlockInfo {
             && self.stored_size.w == self.rect.w as u32
             && self.stored_size.h == self.rect.h as u32
     }
+
+    /// Top-left corner in the pixels of a level `ratio` times smaller than
+    /// the scene, measured from the scene's subblock `origin`.
+    pub(in crate::formats::zeiss) fn level_origin(
+        &self,
+        origin: (i32, i32),
+        ratio: i64,
+    ) -> (i64, i64) {
+        (
+            (i64::from(self.rect.x) - i64::from(origin.0)).div_euclid(ratio),
+            (i64::from(self.rect.y) - i64::from(origin.1)).div_euclid(ratio),
+        )
+    }
+
+    /// Composition paints overlapping subblocks in ascending order of this
+    /// key, later ones over earlier ones.
+    pub(in crate::formats::zeiss) fn paint_order(&self) -> (i32, u64) {
+        (self.m_index.unwrap_or(i32::MIN), self.file_position)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,3 +1,5 @@
+pub(crate) mod locations;
+
 use crate::{
     AxesShape, ChannelInfo, CpuTile, Dataset, DatasetId, Level, LevelIdx, PlaneIdx, PlaneSelection,
     RegionRequest, SampleType, Scene, SceneId, Series, SeriesId, TileLayout,

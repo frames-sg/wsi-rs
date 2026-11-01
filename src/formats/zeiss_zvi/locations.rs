@@ -7,9 +7,7 @@
 use super::model::{RawReadWindow, ZviCompression, ZviPlane, ZviSlide, ZviTileSource};
 use super::sectors::CfbSectorMap;
 use super::*;
-use crate::decode::jpeg::lossless::{
-    lossless_crop_coefficient_budget, lossless_crop_or_whole_jpeg,
-};
+use crate::decode::jpeg::lossless::lossless_crop_raw_tile;
 
 impl ZviSlide {
     /// Where the payload of the plane that holds `req` is stored. A tile
@@ -83,22 +81,12 @@ impl ZviSlide {
             (ZviCompression::Jpeg, true) => tile(Compression::Jpeg, plane.width, plane.height)
                 .data(self.read_plane_payload(plane)?),
             (ZviCompression::Jpeg, false) => {
-                // The payload, the coefficient planes and the worst-case
-                // output share the crop working set admission reserved; a
-                // crop that needs more returns the whole payload.
-                let payload = self.read_plane_payload(plane)?;
-                let budget = lossless_crop_coefficient_budget(
+                return lossless_crop_raw_tile(
+                    self.read_plane_payload(plane)?,
+                    window,
                     self.lossless_crop_bytes,
-                    payload.len() as u64,
-                    (window.width, window.height),
-                );
-                let crop = lossless_crop_or_whole_jpeg(
-                    payload,
-                    (window.x, window.y, window.width, window.height),
-                    budget,
                     self.encoded_unit_bytes,
-                )?;
-                return crop.into_raw_tile((window.width, window.height));
+                );
             }
             (ZviCompression::Raw | ZviCompression::Zlib, false) => {
                 let samples = self.plane_window_bytes(

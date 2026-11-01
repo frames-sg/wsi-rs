@@ -881,6 +881,31 @@ impl RawCompressedTile {
     }
 }
 
+impl RawCompressedTile {
+    /// `tile`'s exact samples as an uncompressed raw tile, when they are
+    /// interleaved 8-bit RGB; otherwise `Unsupported` with `reason`.
+    pub(crate) fn from_rgb8_samples(
+        tile: CpuTile,
+        reason: &str,
+    ) -> Result<Self, crate::error::WsiError> {
+        let (width, height) = (tile.width, tile.height);
+        let (3, CpuTileLayout::Interleaved, CpuTileData::U8(samples)) =
+            (tile.channels, tile.layout, tile.data)
+        else {
+            return Err(crate::error::WsiError::Unsupported {
+                reason: reason.into(),
+            });
+        };
+        Ok(Self::builder(Compression::None)
+            .dimensions(width, height)
+            .bits_allocated(8)
+            .samples_per_pixel(3)
+            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
+            .data(std::sync::Arc::unwrap_or_clone(samples))
+            .build()?)
+    }
+}
+
 /// Builder for [`RawCompressedTile`] that names payload metadata fields.
 #[derive(Debug, Clone)]
 #[must_use]

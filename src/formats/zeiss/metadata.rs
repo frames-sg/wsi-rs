@@ -261,8 +261,7 @@ pub(super) fn build_canvas_level_tile_subblocks_with_budget(
             let Some(info) = subblocks.get(index) else {
                 continue;
             };
-            let x = (i64::from(info.rect.x) - i64::from(subblock_origin.0)).div_euclid(level_ratio);
-            let y = (i64::from(info.rect.y) - i64::from(subblock_origin.1)).div_euclid(level_ratio);
+            let (x, y) = info.level_origin(subblock_origin, level_ratio);
             let w = i64::from(info.stored_size.w);
             let h = i64::from(info.stored_size.h);
             if w <= 0 || h <= 0 {

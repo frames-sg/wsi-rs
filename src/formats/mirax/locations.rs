@@ -6,8 +6,7 @@
 
 use super::*;
 use crate::decode::jpeg::lossless::{
-    lossless_crop_coefficient_bound, lossless_crop_coefficient_budget, lossless_crop_or_whole_jpeg,
-    lossless_crop_output_bound,
+    lossless_crop_coefficient_bound, lossless_crop_output_bound, lossless_crop_raw_tile,
 };
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -149,15 +148,8 @@ impl MiraxReader {
         Ok(raw)
     }
 
-    /// A tile cut from a stored JPEG at a whole-pixel offset, cropped in the
-    /// coefficient domain: quantized coefficients are copied, never decoded
-    /// to pixels. The output starts at the MCU corner at or before the tile.
-    ///
-    /// The record, the coefficient planes and the worst-case output share
-    /// `working_set`, which admission reserved for this tile. A crop needing
-    /// more coefficients than remain, such as one of a JPEG larger than the
-    /// slide declares, returns the whole record instead, with `tile_region`
-    /// locating the tile; this is decided before entropy decoding.
+    /// A tile cut from a stored JPEG at a whole-pixel offset; see
+    /// [`lossless_crop_raw_tile`].
     fn raw_jpeg_crop(
         &self,
         tile: &MiraxTile,
@@ -165,12 +157,9 @@ impl MiraxReader {
         working_set: u64,
     ) -> Result<RawCompressedTile, WsiError> {
         let data = self.slide.read_record_bytes(&tile.image.record)?;
-        let budget =
-            lossless_crop_coefficient_budget(working_set, data.len() as u64, (width, height));
         // Non-resampled descriptors hold whole-pixel source offsets.
-        let rect = (tile.src_x as u32, tile.src_y as u32, width, height);
-        lossless_crop_or_whole_jpeg(data, rect, budget, self.slide.encoded_unit_bytes)?
-            .into_raw_tile((width, height))
+        let rect = PixelRect::new(tile.src_x as u32, tile.src_y as u32, width, height);
+        lossless_crop_raw_tile(data, rect, working_set, self.slide.encoded_unit_bytes)
     }
 
     /// A PNG or BMP record returned as stored, once its header confirms the
@@ -212,22 +201,10 @@ impl MiraxReader {
     /// A tile cropped from a PNG or BMP image, as exact interleaved RGB
     /// samples. Both codecs are lossless, so no information is lost.
     fn raw_raster_crop(&self, req: &TileRequest) -> Result<RawCompressedTile, WsiError> {
-        let tile = self.decode_tile(req)?;
-        let (width, height) = (tile.width, tile.height);
-        let (3, CpuTileLayout::Interleaved, CpuTileData::U8(samples)) =
-            (tile.channels, tile.layout, tile.data)
-        else {
-            return Err(WsiError::Unsupported {
-                reason: "MIRAX PNG/BMP tiles must decode to interleaved 8-bit RGB".into(),
-            });
-        };
-        Ok(RawCompressedTile::builder(Compression::None)
-            .dimensions(width, height)
-            .bits_allocated(8)
-            .samples_per_pixel(3)
-            .photometric_interpretation(EncodedTilePhotometricInterpretation::Rgb)
-            .data(Arc::unwrap_or_clone(samples))
-            .build()?)
+        RawCompressedTile::from_rgb8_samples(
+            self.decode_tile(req)?,
+            "MIRAX PNG/BMP tiles must decode to interleaved 8-bit RGB",
+        )
     }
 }
 

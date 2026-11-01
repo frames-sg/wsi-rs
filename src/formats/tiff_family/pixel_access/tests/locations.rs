@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::registry::ManagedSlideReader;
+pub(super) use crate::test_support::locations::{single_unit, stored_tile};
 
 pub(super) fn tile_location(reader: &TiffPixelReader, req: &TileRequest) -> TileLocation {
     reader
@@ -7,32 +8,14 @@ pub(super) fn tile_location(reader: &TiffPixelReader, req: &TileRequest) -> Tile
         .unwrap_or_else(|err| panic!("tile location of {req:?}: {err}"))
 }
 
-pub(super) fn stored_tile(location: &TileLocation) -> &StoredTile {
-    match location {
-        TileLocation::Stored(stored) => stored,
-        other => panic!("expected a stored tile, got {other:?}"),
-    }
-}
-
-pub(super) fn single_unit(location: &TileLocation) -> &EncodedUnit {
-    stored_tile(location)
-        .single_unit()
-        .expect("tile is stored in one unit")
-}
-
-/// The standalone stream of `unit`, from its segments read out of the file.
+/// The standalone stream, using the reader's still-open fixture file.
 pub(super) fn assemble_unit(reader: &TiffPixelReader, unit: &EncodedUnit) -> Vec<u8> {
-    let segments: Vec<Vec<u8>> = unit
-        .segments()
-        .iter()
-        .map(|segment| {
-            reader
-                .container
-                .pread(segment.offset, segment.length)
-                .unwrap()
-        })
-        .collect();
-    unit.assemble(segments.iter().map(Vec::as_slice)).unwrap()
+    crate::test_support::locations::assemble_with(unit, |segment| {
+        reader
+            .container
+            .pread(segment.offset, segment.length)
+            .unwrap()
+    })
 }
 
 /// Asserts that `req`'s single unit assembles to the raw compressed tile.
@@ -81,113 +64,6 @@ fn inflate(bytes: &[u8]) -> Vec<u8> {
         .read_to_end(&mut decoded)
         .unwrap();
     decoded
-}
-
-/// A one-IFD 8-bit tiled TIFF.
-struct TiledTiffSpec {
-    width: u32,
-    height: u32,
-    tile: (u32, u32),
-    compression: u16,
-    samples: u16,
-    photometric: u16,
-    extra_tags: Vec<(u16, u16, u32, [u8; 4])>,
-    /// Replaces the TileByteCounts values, for malformed files.
-    byte_counts: Option<Vec<u32>>,
-}
-
-impl TiledTiffSpec {
-    fn new(width: u32, height: u32, tile: (u32, u32), compression: u16) -> Self {
-        Self {
-            width,
-            height,
-            tile,
-            compression,
-            samples: 1,
-            photometric: 1,
-            extra_tags: Vec::new(),
-            byte_counts: None,
-        }
-    }
-
-    fn rgb(mut self) -> Self {
-        self.samples = 3;
-        self.photometric = 2;
-        self
-    }
-
-    fn tag(mut self, tag: u16, value: u16) -> Self {
-        self.extra_tags.push((tag, 3, 1, short_in_u32(value)));
-        self
-    }
-
-    fn write(&self, tiles: &[Vec<u8>]) -> NamedTempFile {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"II");
-        buf.extend_from_slice(&le_u16(42));
-        let first_ifd_pos = buf.len();
-        buf.extend_from_slice(&le_u32(0));
-        let mut offsets = Vec::new();
-        let mut byte_counts = Vec::new();
-        for tile in tiles {
-            offsets.push(buf.len() as u32);
-            byte_counts.push(tile.len() as u32);
-            buf.extend_from_slice(tile);
-        }
-        let byte_counts = self.byte_counts.clone().unwrap_or(byte_counts);
-        let offsets_array = append_optional_u32_array(&mut buf, &offsets);
-        let byte_counts_array = append_optional_u32_array(&mut buf, &byte_counts);
-        let ifd_offset = buf.len() as u32;
-        buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
-        let mut tags = vec![
-            (256u16, 4u16, 1u32, le_u32(self.width)),
-            (257, 4, 1, le_u32(self.height)),
-            (258, 3, 1, short_in_u32(8)),
-            (259, 3, 1, short_in_u32(self.compression)),
-            (262, 3, 1, short_in_u32(self.photometric)),
-            (277, 3, 1, short_in_u32(self.samples)),
-            (322, 4, 1, le_u32(self.tile.0)),
-            (323, 4, 1, le_u32(self.tile.1)),
-            (
-                324,
-                4,
-                offsets.len() as u32,
-                u32_array_offset_or_inline_value(&offsets, offsets_array),
-            ),
-            (
-                325,
-                4,
-                byte_counts.len() as u32,
-                u32_array_offset_or_inline_value(&byte_counts, byte_counts_array),
-            ),
-        ];
-        tags.extend(self.extra_tags.iter().copied());
-        append_ifd_tags(&mut buf, tags);
-        temp_tiff_from_buffer(&buf)
-    }
-
-    fn reader(&self, file: &NamedTempFile, compression: Compression) -> TiffPixelReader {
-        let container = Arc::new(TiffContainer::open(file.path()).unwrap());
-        let ifd_id = container.top_ifds()[0];
-        let layout = single_series_layout(
-            DatasetId::new(51),
-            vec![regular_level(
-                self.width,
-                self.height,
-                self.tile.0,
-                self.tile.1,
-            )],
-            HashMap::from([(
-                tile_source_key(0),
-                TileSource::TiledIfd {
-                    ifd_id,
-                    jpeg_tables: None,
-                    compression,
-                },
-            )]),
-        );
-        TiffPixelReader::new(container, layout)
-    }
 }
 
 fn gray_ramp(width: u32, height: u32, seed: u8) -> Vec<u8> {

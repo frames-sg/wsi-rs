@@ -81,53 +81,128 @@ pub(in super::super) fn build_tiled_encoded_tiff(
     samples_per_pixel: u16,
     photometric: u16,
 ) -> NamedTempFile {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"II");
-    buf.extend_from_slice(&le_u16(42));
-    let first_ifd_pos = buf.len();
-    buf.extend_from_slice(&le_u32(0));
+    TiledTiffSpec {
+        samples: samples_per_pixel,
+        photometric,
+        ..TiledTiffSpec::new(width, height, (tile_width, tile_height), compression_tag)
+    }
+    .write(tiles)
+}
 
-    let mut tile_offsets = Vec::with_capacity(tiles.len());
-    let mut tile_byte_counts = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        tile_offsets.push(buf.len() as u32);
-        tile_byte_counts.push(tile.len() as u32);
-        buf.extend_from_slice(tile);
+/// A one-IFD 8-bit tiled TIFF.
+pub(in super::super) struct TiledTiffSpec {
+    width: u32,
+    height: u32,
+    tile: (u32, u32),
+    compression: u16,
+    pub(in super::super) samples: u16,
+    pub(in super::super) photometric: u16,
+    pub(in super::super) extra_tags: Vec<TiffTagForTest>,
+    /// Replaces the TileByteCounts values, for malformed files.
+    pub(in super::super) byte_counts: Option<Vec<u32>>,
+}
+
+impl TiledTiffSpec {
+    pub(in super::super) fn new(
+        width: u32,
+        height: u32,
+        tile: (u32, u32),
+        compression: u16,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            tile,
+            compression,
+            samples: 1,
+            photometric: 1,
+            extra_tags: Vec::new(),
+            byte_counts: None,
+        }
     }
 
-    let tile_offsets_array_offset = append_optional_u32_array(&mut buf, &tile_offsets);
-    let tile_byte_counts_array_offset = append_optional_u32_array(&mut buf, &tile_byte_counts);
+    pub(in super::super) fn rgb(mut self) -> Self {
+        self.samples = 3;
+        self.photometric = 2;
+        self
+    }
 
-    let ifd_offset = buf.len() as u32;
-    buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
+    pub(in super::super) fn tag(mut self, tag: u16, value: u16) -> Self {
+        self.extra_tags.push((tag, 3, 1, short_in_u32(value)));
+        self
+    }
 
-    append_ifd_tags(
-        &mut buf,
-        vec![
-            (256u16, 4u16, 1u32, le_u32(width)),
-            (257u16, 4u16, 1u32, le_u32(height)),
-            (258u16, 3u16, 1u32, short_in_u32(8)),
-            (259u16, 3u16, 1u32, short_in_u32(compression_tag)),
-            (262u16, 3u16, 1u32, short_in_u32(photometric)),
-            (277u16, 3u16, 1u32, short_in_u32(samples_per_pixel)),
-            (322u16, 4u16, 1u32, le_u32(tile_width)),
-            (323u16, 4u16, 1u32, le_u32(tile_height)),
+    pub(in super::super) fn write(&self, tiles: &[Vec<u8>]) -> NamedTempFile {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"II");
+        buf.extend_from_slice(&le_u16(42));
+        let first_ifd_pos = buf.len();
+        buf.extend_from_slice(&le_u32(0));
+        let mut offsets = Vec::new();
+        let mut byte_counts = Vec::new();
+        for tile in tiles {
+            offsets.push(buf.len() as u32);
+            byte_counts.push(tile.len() as u32);
+            buf.extend_from_slice(tile);
+        }
+        let byte_counts = self.byte_counts.clone().unwrap_or(byte_counts);
+        let offsets_array = append_optional_u32_array(&mut buf, &offsets);
+        let byte_counts_array = append_optional_u32_array(&mut buf, &byte_counts);
+        let ifd_offset = buf.len() as u32;
+        buf[first_ifd_pos..first_ifd_pos + 4].copy_from_slice(&le_u32(ifd_offset));
+        let mut tags = vec![
+            (256u16, 4u16, 1u32, le_u32(self.width)),
+            (257, 4, 1, le_u32(self.height)),
+            (258, 3, 1, short_in_u32(8)),
+            (259, 3, 1, short_in_u32(self.compression)),
+            (262, 3, 1, short_in_u32(self.photometric)),
+            (277, 3, 1, short_in_u32(self.samples)),
+            (322, 4, 1, le_u32(self.tile.0)),
+            (323, 4, 1, le_u32(self.tile.1)),
             (
-                324u16,
-                4u16,
-                tile_offsets.len() as u32,
-                u32_array_offset_or_inline_value(&tile_offsets, tile_offsets_array_offset),
+                324,
+                4,
+                offsets.len() as u32,
+                u32_array_offset_or_inline_value(&offsets, offsets_array),
             ),
             (
-                325u16,
-                4u16,
-                tile_byte_counts.len() as u32,
-                u32_array_offset_or_inline_value(&tile_byte_counts, tile_byte_counts_array_offset),
+                325,
+                4,
+                byte_counts.len() as u32,
+                u32_array_offset_or_inline_value(&byte_counts, byte_counts_array),
             ),
-        ],
-    );
+        ];
+        tags.extend(self.extra_tags.iter().copied());
+        append_ifd_tags(&mut buf, tags);
+        temp_tiff_from_buffer(&buf)
+    }
 
-    temp_tiff_from_buffer(&buf)
+    pub(in super::super) fn reader(
+        &self,
+        file: &NamedTempFile,
+        compression: Compression,
+    ) -> TiffPixelReader {
+        let container = Arc::new(TiffContainer::open(file.path()).unwrap());
+        let ifd_id = container.top_ifds()[0];
+        let layout = single_series_layout(
+            DatasetId::new(51),
+            vec![regular_level(
+                self.width,
+                self.height,
+                self.tile.0,
+                self.tile.1,
+            )],
+            HashMap::from([(
+                tile_source_key(0),
+                TileSource::TiledIfd {
+                    ifd_id,
+                    jpeg_tables: None,
+                    compression,
+                },
+            )]),
+        );
+        TiffPixelReader::new(container, layout)
+    }
 }
 
 pub(in super::super) fn build_stripped_jpeg_tiff(

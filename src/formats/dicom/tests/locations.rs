@@ -4,34 +4,13 @@ use super::runtime::{
 };
 use super::*;
 use crate::core::types::{
-    ByteOrder, ByteRange, EncodedUnit, PixelRect, PlanarConfiguration, StoredFraming, TileLocation,
+    ByteOrder, ByteRange, PixelRect, PlanarConfiguration, StoredFraming, TileLocation,
 };
 use crate::decode::jp2k::{decode_batch_jp2k, Jp2kDecodeJob};
 use crate::formats::dicom::image::DicomLocationFile;
+use crate::test_support::locations::{assembled, single_unit};
 
 const RGB_CODESTREAM: &[u8] = include_bytes!("../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
-
-/// The bytes at each of `unit`'s segments, read from its file.
-fn segment_bytes(unit: &EncodedUnit) -> Vec<Vec<u8>> {
-    let file = std::fs::read(unit.path()).expect("read located DICOM file");
-    unit.segments()
-        .iter()
-        .map(|range| file[range.offset as usize..][..range.length as usize].to_vec())
-        .collect()
-}
-
-fn assembled(unit: &EncodedUnit) -> Vec<u8> {
-    let bytes = segment_bytes(unit);
-    unit.assemble(bytes.iter().map(Vec::as_slice))
-        .expect("assemble located frame")
-}
-
-fn single_unit(location: TileLocation) -> EncodedUnit {
-    match location {
-        TileLocation::Stored(stored) => stored.single_unit().expect("one frame").clone(),
-        other => panic!("expected a stored frame, got {other:?}"),
-    }
-}
 
 /// A JPEG with an even byte count, so its DICOM fragment needs no padding.
 fn even_length_jpeg(width: u16, height: u16, seed: u8) -> Vec<u8> {
@@ -212,7 +191,7 @@ fn multi_fragment_frames_list_each_fragment_value_in_order() {
 
     for col in 0..2 {
         let req = tile_request(col, 0);
-        let unit = single_unit(slide.tile_location(&req).unwrap());
+        let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
         assert_eq!(unit.segments().len(), 3);
         assert_eq!(unit.codec().compression(), Compression::Jp2kRgb);
         for (range, fragment) in unit.segments().iter().zip(split(RGB_CODESTREAM)) {
@@ -279,7 +258,7 @@ fn odd_length_frames_leave_out_the_dicom_padding_byte_like_raw_reads() {
     for (path, lengths) in [(&single, vec![5]), (&fragmented, vec![4, 1])] {
         let slide = Slide::open(path).unwrap();
         let req = tile_request(0, 0);
-        let unit = single_unit(slide.tile_location(&req).unwrap());
+        let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
         assert_eq!(
             unit.segments()
                 .iter()
@@ -314,7 +293,7 @@ fn native_frames_are_bare_payload_ranges_of_the_pixel_data() {
 
     for col in 0..2 {
         let req = tile_request(col, 0);
-        let unit = single_unit(slide.tile_location(&req).unwrap());
+        let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
         assert_eq!(unit.framing(), StoredFraming::BarePayload);
         assert_eq!(unit.codec().compression(), Compression::None);
         assert_eq!(unit.codec().byte_order(), None);
@@ -364,7 +343,7 @@ fn native_sixteen_bit_and_planar_frames_state_their_stored_layout() {
         (&big, ByteOrder::BigEndian),
     ] {
         let slide = Slide::open(path).unwrap();
-        let unit = single_unit(slide.tile_location(&tile_request(0, 0)).unwrap());
+        let unit = single_unit(&slide.tile_location(&tile_request(0, 0)).unwrap()).clone();
         assert_eq!(unit.codec().bits_per_sample(), 16);
         assert_eq!(unit.codec().byte_order(), Some(order));
         let stored = match order {
@@ -386,7 +365,7 @@ fn native_sixteen_bit_and_planar_frames_state_their_stored_layout() {
     options.planar_configuration = Some(1);
     write_test_dicom(&planar, options);
     let slide = Slide::open(&planar).unwrap();
-    let unit = single_unit(slide.tile_location(&tile_request(0, 0)).unwrap());
+    let unit = single_unit(&slide.tile_location(&tile_request(0, 0)).unwrap()).clone();
     assert_eq!(
         unit.codec().planar_configuration(),
         PlanarConfiguration::Planar
@@ -425,7 +404,7 @@ fn native_twelve_bit_raw_samples_clear_the_bits_the_codec_marks_insignificant() 
     let slide = Slide::open(&path).unwrap();
     let req = tile_request(0, 0);
 
-    let unit = single_unit(slide.tile_location(&req).unwrap());
+    let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
     assert_eq!(unit.codec().bits_per_sample(), 16);
     assert_eq!(unit.codec().significant_bits(), Some(12));
     assert_eq!(
@@ -450,7 +429,7 @@ fn native_twelve_bit_raw_samples_clear_the_bits_the_codec_marks_insignificant() 
     let eight_bit = dir.path().join("native8.dcm");
     write_test_dicom(&eight_bit, TestDicomOptions::native(test_rgb_pixel_data()));
     let eight_bit = Slide::open(&eight_bit).unwrap();
-    let unit = single_unit(eight_bit.tile_location(&req).unwrap());
+    let unit = single_unit(&eight_bit.tile_location(&req).unwrap()).clone();
     assert_eq!(unit.codec().significant_bits(), None);
     assert_eq!(
         eight_bit
@@ -481,7 +460,7 @@ fn twelve_bit_rle_raw_frames_keep_stored_words_and_report_significant_bits() {
     let slide = Slide::open(&path).unwrap();
     let req = tile_request(0, 0);
 
-    let unit = single_unit(slide.tile_location(&req).unwrap());
+    let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
     assert_eq!(unit.codec().significant_bits(), Some(12));
     let raw = slide.read_raw_compressed_tile(&req).unwrap();
     assert_eq!(raw.compression(), Compression::Rle);
@@ -533,7 +512,7 @@ fn rle_frames_pass_through_as_bare_payloads_with_their_padding() {
     let slide = Slide::open(&path).unwrap();
     let req = tile_request(0, 0);
 
-    let unit = single_unit(slide.tile_location(&req).unwrap());
+    let unit = single_unit(&slide.tile_location(&req).unwrap()).clone();
     assert_eq!(unit.framing(), StoredFraming::BarePayload);
     assert_eq!(unit.codec().compression(), Compression::Rle);
     assert_eq!(assembled(&unit), stored);
@@ -598,7 +577,7 @@ fn sparse_reader(bad_frame_len: u32) -> (tempfile::TempDir, DicomReader) {
 #[test]
 fn sparse_grid_gaps_are_absent_and_stored_frames_keep_their_fragments() {
     let (dir, reader) = sparse_reader(100);
-    let unit = single_unit(reader.tile_location(&tile_request(0, 0)).unwrap());
+    let unit = single_unit(&reader.tile_location(&tile_request(0, 0)).unwrap()).clone();
     assert_eq!(
         unit.segments(),
         [ByteRange::new(108, 400), ByteRange::new(516, 300)]

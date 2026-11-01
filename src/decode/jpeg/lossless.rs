@@ -139,6 +139,28 @@ pub(crate) fn lossless_crop_coefficient_budget(
     )
 }
 
+/// The raw tile `rect` of the standalone JPEG `data`: a lossless crop, or
+/// `data` whole with `tile_region` locating `rect` when the crop does not
+/// fit. `working_set` is what admission reserved for `data`, the
+/// coefficients and the output together; `max_output_bytes` bounds the
+/// crop, as in [`lossless_crop_or_whole_jpeg`].
+pub(crate) fn lossless_crop_raw_tile(
+    data: Vec<u8>,
+    rect: PixelRect,
+    working_set: u64,
+    max_output_bytes: u64,
+) -> Result<RawCompressedTile, WsiError> {
+    let tile = (rect.width, rect.height);
+    let budget = lossless_crop_coefficient_budget(working_set, data.len() as u64, tile);
+    lossless_crop_or_whole_jpeg(
+        data,
+        (rect.x, rect.y, rect.width, rect.height),
+        budget,
+        max_output_bytes,
+    )?
+    .into_raw_tile(tile)
+}
+
 /// Crop `rect = (x, y, w, h)` out of one standalone JPEG without changing
 /// quantized coefficients, or return the JPEG unchanged when the crop does
 /// not fit `max_coefficient_bytes`.

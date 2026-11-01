@@ -56,17 +56,15 @@ impl ZeissSlide {
         let mut rgb = if rgb_output { vec![0; len] } else { Vec::new() };
         // Holding the file seek lock only for I/O lets decoding run independently.
         let mut ordered: Vec<_> = subblocks.iter().collect();
-        ordered.sort_by_key(|info| (info.m_index.unwrap_or(i32::MIN), info.file_position));
+        ordered.sort_by_key(|info| info.paint_order());
         for info in ordered {
-            let offset = |value: i32, base: i32, tile: i32| {
-                i32::try_from(
-                    (i64::from(value) - i64::from(base)).div_euclid(i64::from(ratio))
-                        - i64::from(tile),
-                )
-                .map_err(|_| WsiError::DisplayConversion("CZI subblock offset overflow".into()))
+            let (left, top) = info.level_origin(self.subblock_origin, i64::from(ratio));
+            let offset = |level: i64, tile: i32| {
+                i32::try_from(level - i64::from(tile))
+                    .map_err(|_| WsiError::DisplayConversion("CZI subblock offset overflow".into()))
             };
-            let x = offset(info.rect.x, self.subblock_origin.0, origin.0)?;
-            let y = offset(info.rect.y, self.subblock_origin.1, origin.1)?;
+            let x = offset(left, origin.0)?;
+            let y = offset(top, origin.1)?;
             if let Some(destination) = &mut destination {
                 let raw = self.read_source_subblock(info)?;
                 self.probe.record_decode();

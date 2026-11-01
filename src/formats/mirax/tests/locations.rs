@@ -1,30 +1,12 @@
 use super::super::*;
 use super::fixtures::MiraxFixture;
 use crate::core::registry::Slide;
+use crate::test_support::locations::assembled;
 
 fn stored_unit(slide: &Slide, req: &TileRequest) -> (StoredTile, EncodedUnit) {
-    let TileLocation::Stored(stored) = slide.tile_location(req).expect("MIRAX tile location")
-    else {
-        panic!("MIRAX tile {req:?} must be stored");
-    };
-    let unit = stored
-        .single_unit()
-        .expect("MIRAX tiles come from one record")
-        .clone();
-    (stored, unit)
-}
-
-fn segment_bytes(unit: &EncodedUnit) -> Vec<Vec<u8>> {
-    let file = std::fs::read(unit.path()).expect("read MIRAX data file");
-    unit.segments()
-        .iter()
-        .map(|range| file[range.offset as usize..range.end().unwrap() as usize].to_vec())
-        .collect()
-}
-
-fn assembled(unit: &EncodedUnit) -> Vec<u8> {
-    unit.assemble(segment_bytes(unit).iter().map(Vec::as_slice))
-        .expect("assemble MIRAX record")
+    let location = slide.tile_location(req).expect("MIRAX tile location");
+    let stored = crate::test_support::locations::stored_tile(&location);
+    (stored.clone(), stored.single_unit().unwrap().clone())
 }
 
 #[test]

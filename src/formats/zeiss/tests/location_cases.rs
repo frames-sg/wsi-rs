@@ -2,28 +2,16 @@ use super::fixtures::{jpeg_rgb, main_fixture, metadata_xml, write_fixture, Subbl
 use crate::core::registry::Slide;
 use crate::core::types::*;
 use crate::formats::zeiss::slide::{ZeissReader, ZeissSlide};
+use crate::test_support::locations::{assembled, stored_tile};
 use crate::{SlideReader, WsiError};
 use std::sync::Arc;
 
 const JXR: &[u8] = include_bytes!("../../../../tests/fixtures/jxr/rgb.jxr");
 
 fn stored_units(location: TileLocation) -> (StoredTile, Vec<EncodedUnit>) {
-    let TileLocation::Stored(stored) = location else {
-        panic!("expected a stored CZI tile, got {location:?}");
-    };
+    let stored = stored_tile(&location).clone();
     let units = stored.units().to_vec();
     (stored, units)
-}
-
-fn segment_bytes<'a>(file: &'a [u8], unit: &EncodedUnit) -> Vec<&'a [u8]> {
-    unit.segments()
-        .iter()
-        .map(|range| &file[range.offset as usize..range.end().unwrap() as usize])
-        .collect()
-}
-
-fn assembled(file: &[u8], unit: &EncodedUnit) -> Vec<u8> {
-    unit.assemble(segment_bytes(file, unit)).unwrap()
 }
 
 fn unsupported_reason(error: WsiError) -> String {
@@ -62,8 +50,7 @@ fn jpeg_subblock_location_is_its_data_part_and_round_trips() {
     assert_eq!(unit.source_region(), PixelRect::new(0, 0, 8, 8));
     assert_eq!(unit.tile_region(), PixelRect::new(0, 0, 8, 8));
 
-    let file = std::fs::read(fixture.path()).unwrap();
-    assert_eq!(assembled(&file, unit), jpeg, "header and metadata excluded");
+    assert_eq!(assembled(unit), jpeg, "header and metadata excluded");
     let raw = slide.read_raw_compressed_tile(&req).unwrap();
     assert_eq!(raw.data(), jpeg);
     let decoded = crate::decode::jpeg::decode_standalone_jpeg(raw.data()).unwrap();
@@ -89,8 +76,7 @@ fn whole_jpegxr_subblock_passes_through_unchanged() {
     assert_eq!(raw.compression(), Compression::JpegXr);
     assert_eq!((raw.width(), raw.height()), (16, 16));
     assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 16, 16));
-    let file = std::fs::read(fixture.path()).unwrap();
-    assert_eq!(assembled(&file, unit), raw.data());
+    assert_eq!(assembled(unit), raw.data());
     assert_eq!(raw.data(), JXR);
 }
 
@@ -215,7 +201,6 @@ fn tile_inside_part_of_a_jpeg_subblock_is_cropped_losslessly() {
 fn uncompressed_tiles_locate_bgr_payloads_and_return_exact_rgb_samples() {
     let fixture = main_fixture();
     let slide = Slide::open(fixture.path()).unwrap();
-    let file = std::fs::read(fixture.path()).unwrap();
     let req = TileRequest::new(0, 0, 0, 0, 0);
 
     let (stored, units) = stored_units(slide.tile_location(&req).unwrap());
@@ -234,7 +219,7 @@ fn uncompressed_tiles_locate_bgr_payloads_and_return_exact_rgb_samples() {
         assert_eq!(unit.codec().channel_order(), ChannelOrder::Bgr);
         assert_eq!(unit.stored_size(), (2, 2));
         assert_eq!(unit.tile_region(), PixelRect::new(x, 0, 2, 2));
-        assert_eq!(assembled(&file, unit), bgr);
+        assert_eq!(assembled(unit), bgr);
     }
 
     let raw = slide.read_raw_compressed_tile(&req).unwrap();
@@ -249,7 +234,7 @@ fn uncompressed_tiles_locate_bgr_payloads_and_return_exact_rgb_samples() {
     let [unit] = units.as_slice() else {
         panic!("one reduced subblock paints the level-1 tile");
     };
-    assert_eq!(assembled(&file, unit), vec![30, 29, 28, 33, 32, 31]);
+    assert_eq!(assembled(unit), vec![30, 29, 28, 33, 32, 31]);
     let raw = slide.read_raw_compressed_tile(&reduced).unwrap();
     assert_eq!(raw.data(), [28, 29, 30, 31, 32, 33]);
 }
@@ -270,8 +255,7 @@ fn hidden_subblocks_are_left_out_in_paint_order() {
     let [unit] = units.as_slice() else {
         panic!("the lower subblock is hidden");
     };
-    let file = std::fs::read(fixture.path()).unwrap();
-    assert_eq!(assembled(&file, unit), vec![30, 20, 10]);
+    assert_eq!(assembled(unit), vec![30, 20, 10]);
 }
 
 #[test]
@@ -360,11 +344,10 @@ fn jpeg_crops_over_the_lossless_crop_limit_return_the_whole_subblock() {
     let [unit] = units.as_slice() else {
         panic!("one subblock paints the tile");
     };
-    let file = std::fs::read(fixture.path()).unwrap();
 
     let raw = slide.read_raw_compressed_tile(&req).unwrap();
     assert_eq!(raw.compression(), Compression::Jpeg);
-    assert_eq!(raw.data(), assembled(&file, unit));
+    assert_eq!(raw.data(), assembled(unit));
     assert_eq!(raw.data(), jpeg);
     assert_eq!((raw.width(), raw.height()), (48, 16));
     assert_eq!(raw.tile_region(), unit.source_region());
