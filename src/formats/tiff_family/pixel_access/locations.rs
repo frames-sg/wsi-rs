@@ -11,6 +11,7 @@ use std::path::Path;
 
 use super::stripped_level::StrippedLevelSource;
 use super::*;
+use crate::decode::jpeg::frame::{next_jpeg_segment, scan_baseline_jpeg_frame};
 
 mod codec;
 mod ndpi;
@@ -57,6 +58,82 @@ impl TiffLocations {
     }
 }
 
+/// Leading bytes of a stored JPEG or J2K stream read to find its size:
+/// the headers before the first scan or tile-part, which real tiles keep
+/// within the first bound. A second, larger read covers long headers.
+const STREAM_HEADER_READ_BYTES: [u64; 2] = [4 * 1024, 64 * 1024];
+
+/// The (width, height) raw reads take from a JPEG, from its leading bytes:
+/// the raw scanner stops at the first scan, so the headers decide it. A
+/// `head` that is not the `complete` stream decides only once it reaches
+/// that scan; before it, a later SOF could still replace the size.
+fn jpeg_header_size(head: &[u8], complete: bool) -> Option<(u32, u32)> {
+    if !head.starts_with(&[0xFF, 0xD8]) || !(complete || reaches_first_scan(head)) {
+        return None;
+    }
+    scan_baseline_jpeg_frame(head)
+        .ok()
+        .map(|(_, _, info)| (info.width, info.height))
+}
+
+/// Whether the JPEG segments in `head` reach a whole SOS header.
+fn reaches_first_scan(head: &[u8]) -> bool {
+    let mut offset = 0;
+    while let Ok(Some(segment)) = next_jpeg_segment(head, offset) {
+        if segment.marker == 0xDA {
+            return true;
+        }
+        offset = segment.end;
+    }
+    false
+}
+
+/// The (width, height) raw reads take from a J2K stream or JP2/JPH file,
+/// from its leading bytes. JPEG 2000 inspection needs only the main header,
+/// but in a file it needs whole boxes, so a partial file is inspected
+/// through the start of its codestream box.
+fn j2k_header_size(head: &[u8], complete: bool) -> Option<(u32, u32)> {
+    let input = if complete {
+        head
+    } else {
+        jp2_codestream_start(head).unwrap_or(head)
+    };
+    j2k::J2kDecoder::inspect(input)
+        .ok()
+        .map(|info| info.dimensions)
+}
+
+/// The payload of the first `jp2c` box in a JP2/JPH file prefix, as far as
+/// `head` holds it; `None` for a bare codestream or a box not reached.
+fn jp2_codestream_start(head: &[u8]) -> Option<&[u8]> {
+    const SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
+    if !head.starts_with(&SIGNATURE) {
+        return None;
+    }
+    let mut at = 0usize;
+    loop {
+        let header = head.get(at..at.checked_add(8)?)?;
+        let declared = u32::from_be_bytes(header[..4].try_into().ok()?);
+        let (header_len, box_len) = match declared {
+            1 => {
+                let extended = head.get(at + 8..at + 16)?;
+                (16, u64::from_be_bytes(extended.try_into().ok()?))
+            }
+            0 => (8, u64::MAX),
+            len => (8, u64::from(len)),
+        };
+        if box_len < header_len as u64 {
+            return None;
+        }
+        let box_len = usize::try_from(box_len).unwrap_or(usize::MAX);
+        if &header[4..] == b"jp2c" {
+            let end = at.saturating_add(box_len).min(head.len());
+            return head.get(at + header_len..end);
+        }
+        at = at.checked_add(box_len)?;
+    }
+}
+
 /// What every tile of one plane source shares.
 enum SourceParams {
     /// Stored TIFF tiles or strips.
@@ -76,7 +153,14 @@ impl TiffPixelReader {
                 let (tile_idx, width, height) =
                     self.tiled_ifd_tile_index_and_dimensions(req, *ifd_id)?;
                 let region = PixelRect::new(0, 0, width, height);
-                self.stored_tile_location(req, *ifd_id, &codec, tile_idx as u64, region)
+                self.stored_tile_location(
+                    req,
+                    *ifd_id,
+                    &codec,
+                    tile_idx as u64,
+                    region,
+                    (width, height),
+                )
             }
             TileSource::TiledIfdSubtiles {
                 ifd_id,
@@ -189,7 +273,8 @@ impl TiffPixelReader {
 
     /// The units of stored TIFF tile `tile_idx` (one per sample plane), or
     /// `Absent` when the file stores no bytes for it. `source_region` is the
-    /// part of the stored tile the requested tile shows.
+    /// part of the stored tile the requested tile shows, and `clipped` the
+    /// stored tile's size inside the image.
     fn stored_tile_location(
         &self,
         req: &TileRequest,
@@ -197,6 +282,7 @@ impl TiffPixelReader {
         params: &SourceParams,
         tile_idx: u64,
         source_region: PixelRect,
+        clipped: (u32, u32),
     ) -> Result<TileLocation, WsiError> {
         let SourceParams::Units(codec) = params else {
             return Err(WsiError::tile_read(
@@ -232,14 +318,10 @@ impl TiffPixelReader {
                 empty_planes += 1;
                 continue;
             }
-            units.push(self.stored_unit(
-                req,
-                codec,
-                (tiled.tile_width, tiled.tile_height),
-                ByteRange::new(offset, byte_count),
-                source_region,
-                tile_region,
-            )?);
+            let range = ByteRange::new(offset, byte_count);
+            let tile = (tiled.tile_width, tiled.tile_height);
+            let stored = self.stored_tile_size(codec, tile, clipped, range)?;
+            units.push(self.stored_unit(req, codec, stored, range, source_region, tile_region)?);
         }
         if units.is_empty() {
             return Ok(TileLocation::Absent);
@@ -255,6 +337,53 @@ impl TiffPixelReader {
             source_region.height,
             units,
         )?))
+    }
+
+    /// The size a stored tile at `range` is encoded at. TIFF stores every
+    /// tile at the full `tile` size, but some writers encode JPEG and J2K
+    /// tiles clipped by the right or bottom edge at their `clipped` size, or
+    /// larger. Raw reads report the size in the stream's own header, so a
+    /// clipped tile's headers are read and parsed here with the same
+    /// functions; interior tiles add no reads. A stream whose size cannot be
+    /// read, or that raw reads would refuse as too small, keeps `tile`.
+    fn stored_tile_size(
+        &self,
+        codec: &UnitCodec,
+        tile: (u32, u32),
+        clipped: (u32, u32),
+        range: ByteRange,
+    ) -> Result<(u32, u32), WsiError> {
+        let compression = codec.codec.compression();
+        let has_header = matches!(
+            compression,
+            Compression::Jpeg | Compression::Jp2kRgb | Compression::Jp2kYcbcr
+        );
+        let in_file = range
+            .end()
+            .is_some_and(|end| end <= self.locations.file_len);
+        if clipped == tile || !has_header || !in_file {
+            return Ok(tile);
+        }
+        for limit in STREAM_HEADER_READ_BYTES {
+            let len = range.length.min(limit);
+            let head = self
+                .container
+                .pread(range.offset, len)
+                .map_err(|err| err.into_wsi_error(self.container.path()))?;
+            let complete = len == range.length;
+            let size = if compression == Compression::Jpeg {
+                jpeg_header_size(&head, complete)
+            } else {
+                j2k_header_size(&head, complete)
+            };
+            if size.is_some() || complete {
+                // Raw reads refuse a stream smaller than the clipped tile.
+                return Ok(size
+                    .filter(|&(width, height)| width >= clipped.0 && height >= clipped.1)
+                    .unwrap_or(tile));
+            }
+        }
+        Ok(tile)
     }
 
     /// One unit of `codec` holding `range`, with the codec of its own color
@@ -325,6 +454,14 @@ impl TiffPixelReader {
             u64::from(entry.dimensions.0).min(clipped.0 - origin.0) as u32,
             u64::from(entry.dimensions.1).min(clipped.1 - origin.1) as u32,
         );
-        self.stored_tile_location(req, ifd_id, params, cell.tile_index(), source_region)
+        let clipped_tile = (clipped.0 as u32, clipped.1 as u32);
+        self.stored_tile_location(
+            req,
+            ifd_id,
+            params,
+            cell.tile_index(),
+            source_region,
+            clipped_tile,
+        )
     }
 }

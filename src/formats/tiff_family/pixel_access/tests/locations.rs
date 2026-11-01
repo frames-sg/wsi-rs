@@ -93,6 +93,169 @@ fn tiled_jpeg_locations_assemble_to_the_raw_tiles() {
 }
 
 #[test]
+fn edge_tiles_report_the_size_their_stream_is_encoded_at() {
+    // Some writers encode a right or bottom edge tile at its clipped size
+    // instead of the full tile size; the stream's own header says which.
+    let clipped_jpeg = encode_solid_rgb_jpeg(12, 10, [200, 10, 30]);
+    let reader =
+        build_tiled_encoded_reader(12, 10, 16, 16, &[clipped_jpeg], Compression::Jpeg, 7, 3, 6);
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (12, 10));
+
+    let codestream = include_bytes!("../../../../../tests/fixtures/jp2k/rgb_nomct.j2k").to_vec();
+    let reader = build_tiled_encoded_reader(
+        16,
+        12,
+        32,
+        16,
+        &[codestream],
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (16, 12));
+
+    // A full-size edge stream keeps the tile size, padding included.
+    let padded_jpeg = encode_solid_rgb_jpeg(16, 16, [10, 200, 30]);
+    let reader =
+        build_tiled_encoded_reader(12, 10, 16, 16, &[padded_jpeg], Compression::Jpeg, 7, 3, 6);
+    let (unit, raw) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (16, 16));
+    assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 12, 10));
+
+    // Raw reads also accept an edge stream larger than the tile tags.
+    let oversized_jpeg = encode_solid_rgb_jpeg(20, 18, [30, 30, 200]);
+    let reader = build_tiled_encoded_reader(
+        12,
+        10,
+        16,
+        16,
+        &[oversized_jpeg],
+        Compression::Jpeg,
+        7,
+        3,
+        6,
+    );
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (20, 18));
+
+    // A stray byte between markers, which the raw JPEG scanner skips.
+    let mut padded_markers = encode_solid_rgb_jpeg(12, 10, [90, 90, 90]);
+    padded_markers.insert(2, 0x00);
+    let reader = build_tiled_encoded_reader(
+        12,
+        10,
+        16,
+        16,
+        &[padded_markers],
+        Compression::Jpeg,
+        7,
+        3,
+        6,
+    );
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (12, 10));
+
+    // A J2K tile wrapped in a JP2 file, which raw reads inspect through.
+    let codestream = include_bytes!("../../../../../tests/fixtures/jp2k/rgb_nomct.j2k");
+    let reader = build_tiled_encoded_reader(
+        16,
+        12,
+        32,
+        16,
+        &[jp2_wrapped(codestream, (16, 12), 3)],
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (16, 12));
+
+    // Headers longer than the first read are found by the second.
+    let mut long_headers = encode_solid_rgb_jpeg(12, 10, [60, 120, 180]);
+    let mut app15 = vec![0xFF, 0xEF];
+    app15.extend_from_slice(&6002u16.to_be_bytes());
+    app15.resize(app15.len() + 6000, 0);
+    long_headers.splice(2..2, app15);
+    let reader =
+        build_tiled_encoded_reader(12, 10, 16, 16, &[long_headers], Compression::Jpeg, 7, 3, 6);
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (12, 10));
+
+    // A first read that ends on a marker's FF byte before the first scan
+    // does not decide: the later SOF0, which raw reads take, follows it.
+    let real = encode_solid_rgb_jpeg(12, 10, [20, 160, 60]);
+    let sof = real.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    let sof_len = usize::from(u16::from_be_bytes([real[sof + 2], real[sof + 3]]));
+    let mut early_sof = real[sof..sof + 2 + sof_len].to_vec();
+    early_sof[5..9].copy_from_slice(&[0, 32, 0, 32]);
+    let payload = 4095 - 2 - early_sof.len() - 4;
+    let mut padding = vec![0xFF, 0xEF];
+    padding.extend_from_slice(&((payload + 2) as u16).to_be_bytes());
+    padding.resize(padding.len() + payload, 0);
+    let mut double_sof = real.clone();
+    double_sof.splice(2..2, [early_sof, padding].concat());
+    assert_eq!(double_sof[4095], 0xFF);
+    let reader =
+        build_tiled_encoded_reader(12, 10, 16, 16, &[double_sof], Compression::Jpeg, 7, 3, 6);
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (12, 10));
+
+    // A JP2 file longer than the bounded reads, here through a trailing
+    // free box, is inspected through its codestream box.
+    let mut long_jp2 = jp2_wrapped(codestream, (16, 12), 3);
+    long_jp2.extend_from_slice(&(8u32 + 70_000).to_be_bytes());
+    long_jp2.extend_from_slice(b"free");
+    long_jp2.resize(long_jp2.len() + 70_000, 0);
+    let reader = build_tiled_encoded_reader(
+        16,
+        12,
+        32,
+        16,
+        &[long_jp2],
+        Compression::Jp2kRgb,
+        33004,
+        3,
+        2,
+    );
+    let (unit, _) = assert_location_round_trip(&reader, &request(0, 0));
+    assert_eq!(unit.stored_size(), (16, 12));
+
+    // A stream whose size cannot be read keeps the tile tag size.
+    let reader =
+        build_tiled_encoded_reader(12, 10, 16, 16, &[vec![7; 64]], Compression::Jpeg, 7, 3, 6);
+    let location = tile_location(&reader, &request(0, 0));
+    assert_eq!(single_unit(&location).stored_size(), (16, 16));
+}
+
+/// `codestream` inside a minimal JP2 file: signature, file type, a header
+/// with the image size and sRGB color, then the codestream box.
+fn jp2_wrapped(codestream: &[u8], (width, height): (u32, u32), components: u16) -> Vec<u8> {
+    let boxed = |kind: &[u8; 4], payload: &[u8]| {
+        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    };
+    let mut ihdr = height.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&components.to_be_bytes());
+    ihdr.extend_from_slice(&[7, 7, 0, 0]); // 8-bit unsigned, J2K, known color, no IPR
+    let colr = [1, 0, 0, 0, 0, 0, 16]; // enumerated sRGB
+    let header = [boxed(b"ihdr", &ihdr), boxed(b"colr", &colr)].concat();
+    [
+        boxed(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]),
+        boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        boxed(b"jp2h", &header),
+        boxed(b"jp2c", codestream),
+    ]
+    .concat()
+}
+
+#[test]
 fn tiled_jpeg_tables_locations_share_the_tables_and_assemble_to_the_raw_tiles() {
     let (first, tables) = split_test_jpeg_tables(&encode_solid_rgb_jpeg(8, 8, [40, 180, 90]));
     let (second, _) = split_test_jpeg_tables(&encode_solid_rgb_jpeg(8, 8, [180, 40, 90]));
