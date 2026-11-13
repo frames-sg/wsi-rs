@@ -26,7 +26,7 @@ use crate::decode::jp2k::{
 use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_component_contract};
 use crate::error::WsiError;
 use crate::properties::Properties;
-use j2k::CpuDecodeParallelism;
+use j2k::{CpuDecodeParallelism, J2kReferenceGrid};
 use j2k_core::Rect;
 use rayon::prelude::*;
 
@@ -153,12 +153,12 @@ fn open_raw_jp2k(
     // Each tile's decode bounds its own output, so the whole image may exceed
     // the decoded-image limit.
     validate_component_contract(&header)?;
-    let dimensions = (header.image_width, header.image_height);
+    let reference_grid = view.reference_grid();
     Ok(RawJp2kReader {
         dataset: dataset_for_codestream(
             path,
             &data,
-            dimensions,
+            &reference_grid,
             jp2k_decodable_reduction_levels(&data)?,
             grid,
         )?,
@@ -176,13 +176,13 @@ fn open_raw_jp2k(
 fn dataset_for_codestream(
     path: &Path,
     data: &[u8],
-    dimensions: (u32, u32),
+    reference_grid: &J2kReferenceGrid,
     reduction_levels: u8,
     grid: LevelGrid,
 ) -> Result<Dataset, WsiError> {
     let levels = (0..=reduction_levels)
         .map(|reduction| {
-            let (width, height) = reduced_jp2k_dimensions(dimensions, reduction)?;
+            let (width, height) = reduced_jp2k_dimensions(reference_grid, reduction)?;
             Ok(Level {
                 dimensions: (u64::from(width), u64::from(height)),
                 // Reduced pixels cover exact 2^k source blocks, so this is not

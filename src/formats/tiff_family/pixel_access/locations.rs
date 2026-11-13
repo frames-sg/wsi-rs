@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::stripped_level::StrippedLevelSource;
 use super::*;
-use crate::decode::jpeg::frame::{next_jpeg_segment, scan_baseline_jpeg_frame};
+use crate::decode::jpeg::frame::jpeg_header_reaches_scan;
 
 mod codec;
 mod ndpi;
@@ -68,24 +68,12 @@ const STREAM_HEADER_READ_BYTES: [u64; 2] = [4 * 1024, 64 * 1024];
 /// `head` that is not the `complete` stream decides only once it reaches
 /// that scan; before it, a later SOF could still replace the size.
 fn jpeg_header_size(head: &[u8], complete: bool) -> Option<(u32, u32)> {
-    if !head.starts_with(&[0xFF, 0xD8]) || !(complete || reaches_first_scan(head)) {
+    if !head.starts_with(&[0xFF, 0xD8]) || !(complete || jpeg_header_reaches_scan(head)) {
         return None;
     }
-    scan_baseline_jpeg_frame(head)
+    parse_baseline_jpeg_frame_info(head)
         .ok()
-        .map(|(_, _, info)| (info.width, info.height))
-}
-
-/// Whether the JPEG segments in `head` reach a whole SOS header.
-fn reaches_first_scan(head: &[u8]) -> bool {
-    let mut offset = 0;
-    while let Ok(Some(segment)) = next_jpeg_segment(head, offset) {
-        if segment.marker == 0xDA {
-            return true;
-        }
-        offset = segment.end;
-    }
-    false
+        .map(|info| (info.width, info.height))
 }
 
 /// The (width, height) raw reads take from a J2K stream or JP2/JPH file,

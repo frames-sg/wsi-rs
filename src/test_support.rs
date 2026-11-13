@@ -16,6 +16,38 @@ pub(crate) fn jpeg_without_jfif(jpeg: &[u8]) -> Vec<u8> {
     output
 }
 
+/// One marker segment of a test JPEG and the bytes it occupies.
+pub(crate) struct JpegTestSegment<'a> {
+    pub(crate) marker: u8,
+    /// Offset of the marker's `0xFF` prefix.
+    pub(crate) start: usize,
+    /// Offset of the byte after the segment.
+    pub(crate) end: usize,
+    pub(crate) payload: &'a [u8],
+}
+
+/// The marker segments of a well-formed test JPEG after its SOI, through its
+/// first SOS (or its EOI when it has no scan), as j2k-jpeg walks them.
+pub(crate) fn jpeg_segments_through_first_scan(jpeg: &[u8]) -> Vec<JpegTestSegment<'_>> {
+    let mut segments = Vec::new();
+    for segment in j2k_jpeg::iter_segments(jpeg) {
+        let segment = segment.expect("test JPEG marker segments are well formed");
+        if segment.marker == 0xD8 {
+            continue;
+        }
+        segments.push(JpegTestSegment {
+            marker: segment.marker,
+            start: segment.marker_offset,
+            end: segment.payload_offset + segment.payload.len(),
+            payload: segment.payload,
+        });
+        if segment.marker == 0xDA {
+            break;
+        }
+    }
+    segments
+}
+
 pub(crate) struct RegularLevelForTest {
     pub(crate) dimensions: (u64, u64),
     pub(crate) tile_width: u32,

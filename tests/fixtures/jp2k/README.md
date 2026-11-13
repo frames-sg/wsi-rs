@@ -30,9 +30,15 @@ never regenerated during tests.
 ## Reduced-resolution references
 
 `{stem}.r1.ppm` and `{stem}.r2.ppm` are OpenJPEG 2.5.4 `opj_decompress -r 1`
-and `-r 2` decodes of the committed `rgb_nomct`, `rgb_mct`, `rgb_rct`, and
-`openjph_rgb_u8_53` codestreams. They are independent references for raw JP2K
-pyramid levels. Regenerate only these, without re-encoding any codestream, with:
+and `-r 2` decodes of the committed `rgb_nomct`, `rgb_mct`, `rgb_rct`,
+`openjph_rgb_u8_53`, and `openjpeg_rgb_75x56_origin5x3_53` codestreams. They
+are independent references for raw JP2K pyramid levels.
+
+`openjpeg_rgb_75x56_origin5x3_53.j2k` is copied unchanged from j2k's
+`crates/j2k-native/fixtures/image_origin`, whose README gives its synthetic
+samples and `opj_compress` command. Its reference-grid origin (5, 3) makes
+reduced levels `ceil((origin + size) / 2^r) - ceil(origin / 2^r)` wide
+(37 x 28 and 18 x 14), not `ceil(size / 2^r)` (38 x 28 and 19 x 14). Regenerate only these, without re-encoding any codestream, with:
 
 ```sh
 ./.venv/bin/python tests/fixtures/jp2k/generate.py --reduced-only

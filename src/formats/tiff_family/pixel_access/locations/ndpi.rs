@@ -3,8 +3,7 @@
 
 use super::super::ndpi_core::ndpi_restart_segments_align_to_rows;
 use super::*;
-use crate::decode::jpeg::frame::{next_jpeg_segment, JpegFrameInfo};
-use crate::decode::jpeg::is_sof_marker;
+use crate::decode::jpeg::frame::{jpeg_sof_dimensions, jpeg_sof_segment, JpegFrameInfo};
 
 const EOI: [u8; 2] = [0xFF, 0xD9];
 
@@ -393,27 +392,13 @@ impl TiffPixelReader {
 
 /// The SOF0 frame size of a JPEG header, zero sizes included.
 fn sof0_dimensions(header: &[u8]) -> Result<(u32, u32), String> {
-    let mut offset = 0;
-    while let Some(segment) = next_jpeg_segment(header, offset).map_err(|err| err.to_string())? {
-        if segment.marker == 0xC0 {
-            let payload = segment.payload;
-            if payload.len() < 5 {
-                return Err("NDPI JPEG SOF0 segment is truncated".into());
-            }
-            return Ok((
-                u32::from(u16::from_be_bytes([payload[3], payload[4]])),
-                u32::from(u16::from_be_bytes([payload[1], payload[2]])),
-            ));
-        }
-        if is_sof_marker(segment.marker) {
-            return Err("NDPI tile locations need a Baseline JPEG SOF0 frame".into());
-        }
-        if segment.marker == 0xDA {
-            break;
-        }
-        offset = segment.end;
+    let Some(sof) = jpeg_sof_segment(header) else {
+        return Err("NDPI JPEG header has no SOF0 frame".into());
+    };
+    if sof.marker != 0xC0 {
+        return Err("NDPI tile locations need a Baseline JPEG SOF0 frame".into());
     }
-    Err("NDPI JPEG header has no SOF0 frame".into())
+    jpeg_sof_dimensions(sof.payload).ok_or_else(|| "NDPI JPEG SOF0 segment is truncated".into())
 }
 
 fn jpeg_frame_codec(

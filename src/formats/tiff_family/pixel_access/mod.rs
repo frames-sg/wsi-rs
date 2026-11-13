@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
 
 use j2k_core::BackendRequest;
-use j2k_jpeg::transcode::{extract_dct_blocks, DctExtractOptions, JpegDctCodingMode, JpegDctImage};
+use j2k_jpeg::transcode::{
+    extract_dct_windows, DctExtractOptions, JpegDctCodingMode, JpegDctImage, McuRect,
+};
 use j2k_jpeg::{
     ColorTransform as J2kColorTransform, DecodeOptions as J2kDecodeOptions,
     DecodeRequest as J2kJpegDecodeRequest, Decoder as J2kJpegDecoder, Downscale as J2kDownscale,

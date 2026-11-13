@@ -292,10 +292,22 @@ fn crop_of_a_declared_size_jpeg_with_large_marker_segments_fits_its_reservation(
 #[test]
 fn crop_of_a_jpeg_larger_than_declared_returns_the_whole_record() {
     let fixture = MiraxFixture::with_formats(["JPEG", "JPEG", "JPEG"]);
-    // Point the first level-1 record at a 512x512 JPEG while Slidedat.ini
-    // still declares 16x16 images, so its coefficients outgrow the bytes
+    // Point the first level-1 record at a progressive 512x512 JPEG while
+    // Slidedat.ini still declares 16x16 images. A progressive crop
+    // accumulates the whole image's coefficients, which outgrow the bytes
     // admission reserves for the tile.
-    let large = super::fixtures::encode_jpeg(512, 512, 7);
+    let mut large = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut large, 95);
+    encoder.set_progressive(true);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+    encoder
+        .encode(
+            &super::fixtures::patterned_pixels(512, 512, 7),
+            512,
+            512,
+            jpeg_encoder::ColorType::Rgb,
+        )
+        .unwrap();
     replace_first_level1_record(&fixture, &large);
 
     let slide = Slide::open(&fixture.path).unwrap();
@@ -314,6 +326,33 @@ fn crop_of_a_jpeg_larger_than_declared_returns_the_whole_record() {
         .unwrap();
     assert_eq!(raw.compression(), Compression::Jpeg);
     assert_eq!((raw.width(), raw.height()), (8, 8));
+}
+
+#[test]
+fn crop_of_a_baseline_jpeg_larger_than_declared_holds_only_its_window() {
+    let fixture = MiraxFixture::with_formats(["JPEG", "JPEG", "JPEG"]);
+    // A single-scan baseline record is entropy-decoded to the tile's MCU
+    // window alone, so the reservation for a 16x16 image covers the crop of
+    // a 512x512 one.
+    let large = super::fixtures::encode_jpeg(512, 512, 7);
+    replace_first_level1_record(&fixture, &large);
+
+    let slide = Slide::open(&fixture.path).unwrap();
+    let req = TileRequest::new(0, 0, 1, 1, 1);
+    let (_, unit) = stored_unit(&slide, &req);
+    assert_eq!(unit.source_region(), PixelRect::new(8, 8, 8, 8));
+    let raw = slide.read_raw_compressed_tile(&req).unwrap();
+    assert_eq!(raw.compression(), Compression::Jpeg);
+    assert_eq!((raw.width(), raw.height()), (8, 8));
+    assert_eq!(raw.tile_region(), PixelRect::new(0, 0, 8, 8));
+
+    let stored = crate::decode::jpeg::decode_standalone_jpeg(&large).unwrap();
+    let stored = stored.as_u8().unwrap();
+    let expected: Vec<u8> = (8..16)
+        .flat_map(|y| stored[(y * 512 + 8) * 3..(y * 512 + 16) * 3].to_vec())
+        .collect();
+    let decoded = crate::decode::jpeg::decode_standalone_jpeg(raw.data()).unwrap();
+    assert_eq!(decoded.as_u8(), Some(expected.as_slice()));
 }
 
 #[test]

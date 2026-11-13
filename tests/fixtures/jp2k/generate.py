@@ -130,8 +130,17 @@ def build_fixture(
 
 
 # Codestreams whose reduced-resolution decodes are independent references for
-# wsi-rs raw JP2K pyramid levels. All have three resolution levels.
-REDUCED_REFERENCE_STEMS = ("rgb_nomct", "rgb_mct", "rgb_rct", "openjph_rgb_u8_53")
+# wsi-rs raw JP2K pyramid levels. The first four have three resolution levels.
+# openjpeg_rgb_75x56_origin5x3_53 is copied unchanged from j2k's
+# crates/j2k-native/fixtures/image_origin; its odd reference-grid origin (5, 3)
+# makes reduced widths differ from ceil(width / 2^r).
+REDUCED_REFERENCE_STEMS = (
+    "rgb_nomct",
+    "rgb_mct",
+    "rgb_rct",
+    "openjph_rgb_u8_53",
+    "openjpeg_rgb_75x56_origin5x3_53",
+)
 REDUCTIONS = (1, 2)
 
 

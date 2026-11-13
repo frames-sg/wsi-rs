@@ -1,4 +1,6 @@
-//! Block-grid helpers shared by coefficient-domain JPEG crops and retiles.
+//! Block-grid helpers shared by coefficient-domain JPEG crops and retiles:
+//! matching the coding profiles of j2k-jpeg's extracted windows and assembling
+//! their blocks into one image for re-emission.
 
 use j2k_jpeg::transcode::{JpegDctCodingMode, JpegDctComponent, JpegDctImage};
 
@@ -22,40 +24,6 @@ pub(crate) fn dct_mcu_dimensions(image: &JpegDctImage) -> Option<(u32, u32)> {
     let mcu_width = u32::from(max_h) * 8;
     let mcu_height = u32::from(max_v) * 8;
     (mcu_width != 0 && mcu_height != 0).then_some((mcu_width, mcu_height))
-}
-
-/// A block window that does not lie inside the component's block grid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DctWindowOutOfRange;
-
-/// Append the `cols` x `rows` window of `component`'s quantized blocks whose
-/// top-left block is (`block_x`, `block_y`) to `dst`, row by row. `dst` is
-/// left unchanged when the window leaves the component's block grid.
-pub(crate) fn append_quantized_block_window(
-    component: &JpegDctComponent,
-    block_x: u32,
-    block_y: u32,
-    cols: u32,
-    rows: u32,
-    dst: &mut Vec<[i16; 64]>,
-) -> Result<(), DctWindowOutOfRange> {
-    let x_end = block_x.checked_add(cols).ok_or(DctWindowOutOfRange)?;
-    let y_end = block_y.checked_add(rows).ok_or(DctWindowOutOfRange)?;
-    let grid_blocks = (component.block_cols as usize)
-        .checked_mul(component.block_rows as usize)
-        .ok_or(DctWindowOutOfRange)?;
-    if x_end > component.block_cols
-        || y_end > component.block_rows
-        || component.quantized_blocks.len() != grid_blocks
-    {
-        return Err(DctWindowOutOfRange);
-    }
-    let stride = component.block_cols as usize;
-    for row in block_y as usize..y_end as usize {
-        let start = row * stride + block_x as usize;
-        dst.extend_from_slice(&component.quantized_blocks[start..start + cols as usize]);
-    }
-    Ok(())
 }
 
 /// How a candidate DCT image's coding profile differs from a reference.
