@@ -320,7 +320,8 @@ compiler.
 
 To capture the results:
 
-1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine, and
+1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine. To
+   build the current shim with a GPU feature, also set
    `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda`.
 2. Set `WSI_RS_BENCH_PREVIOUS_LIBRARY` to the previous release's shim, then run
    `cargo xtask perf-capture-pair <label>`. This interleaves all three libraries
@@ -334,7 +335,9 @@ To capture the results:
 4. Point `WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE` and
    `WSI_RS_RC_CURRENT_CAPTURE` at the three capture files.
 
-The gate fails if the current code is slower than allowed or if its pixels
-differ from OpenSlide beyond the corpus color tolerances.
+The gate fails if the current code is slower than allowed, if its pixels
+differ from OpenSlide beyond the corpus color tolerances, or if any wsi-rs
+cell decoded on a GPU: every run must report `device_decode` counters, and
+all of them must be zero.
 The gate rejects captures made by different worker versions, so capture all
 three in one run.
