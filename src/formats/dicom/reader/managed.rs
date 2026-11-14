@@ -43,21 +43,6 @@ impl ManagedSlideReader for DicomReader {
         self.read_metal_admitted(reqs, session, context)
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn prepare_adaptive_jp2k(
-        &self,
-        reqs: &[TileRequest],
-        workers: usize,
-        control: Option<&crate::ReadControl>,
-    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        Some((|| {
-            // Strict planning deliberately bypasses decoded-frame cache entries.
-            let frames = self.strict_jp2k_frames(reqs, control)?;
-            let jobs = super::device::jp2k_jobs(&frames, BackendRequest::Cpu);
-            crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
-        })())
-    }
-
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
         Ok(self
             .known_frame_encoded_bytes(req)

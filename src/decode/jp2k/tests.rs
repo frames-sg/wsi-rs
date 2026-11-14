@@ -81,3 +81,5 @@ mod cpu;
 mod device;
 #[path = "tests/errors.rs"]
 mod errors;
+#[path = "tests/prepared_performance.rs"]
+mod performance;

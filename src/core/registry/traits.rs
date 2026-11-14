@@ -319,16 +319,6 @@ pub(crate) trait ManagedSlideReader: SlideReader {
         }
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn prepare_adaptive_jp2k(
-        &self,
-        _reqs: &[TileRequest],
-        _workers: usize,
-        _control: Option<&crate::ReadControl>,
-    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        None
-    }
-
     #[cfg(feature = "metal")]
     fn read_metal_with_context(
         &self,

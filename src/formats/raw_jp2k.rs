@@ -1,4 +1,4 @@
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(feature = "cuda")]
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -394,7 +394,7 @@ impl RawJp2kReader {
     }
 
     /// One decode job for the stored full-resolution codestream.
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     fn jp2k_job(
         &self,
         backend: j2k_core::BackendRequest,
@@ -549,32 +549,6 @@ impl SlideReader for RawJp2kReader {
 }
 
 impl ManagedSlideReader for RawJp2kReader {
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn prepare_adaptive_jp2k(
-        &self,
-        reqs: &[TileRequest],
-        workers: usize,
-        control: Option<&crate::ReadControl>,
-    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        // Device routes decode the stored full-resolution codestream only, as
-        // one tile.
-        if !is_one_tile(&self.levels()[0]) || reqs.iter().any(|req| req.level.get() != 0) {
-            return None;
-        }
-        Some((|| {
-            let jobs = reqs
-                .iter()
-                .map(|req| {
-                    crate::core::read_control::check_cancelled_opt(control)?;
-                    self.tile_decode(req)?;
-                    Ok(self.jp2k_job(j2k_core::BackendRequest::Cpu))
-                })
-                .collect::<Result<Vec<_>, WsiError>>()?;
-            crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
-                .map(|prepared| prepared.with_sequential_cpu_images())
-        })())
-    }
-
     fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
         Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
     }

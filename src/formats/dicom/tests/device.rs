@@ -301,8 +301,7 @@ fn concurrent_admission_charges_actual_dicom_frame_copies() {
     let ordinary = admission
         .reserve(128 * 1024 * 1024 + 2 * 2 * 16 * 12 * 4, None)
         .unwrap();
-    let calibration = std::sync::atomic::AtomicBool::new(false);
-    let context = ReadExecutionContext::new(&ordinary, 384 * 1024 * 1024, None, &calibration);
+    let context = ReadExecutionContext::new(&ordinary, 384 * 1024 * 1024, None);
     let before = test_count(Event::MetalBatchGroups);
     let actual = reader
         .read_metal_with_context(&reqs, &sessions, &context)
@@ -317,53 +316,15 @@ fn concurrent_admission_charges_actual_dicom_frame_copies() {
     }
 }
 
+/// With Metal compiled in, automatic reads still decode every chunk on the
+/// CPU, whether or not a device is present.
 #[cfg(feature = "metal")]
 #[test]
-fn cancelled_adaptive_preparation_does_not_publish_a_dicom_index() {
-    use crate::core::registry::ManagedSlideReader;
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("cancelled-native-prepare.dcm");
-    let mut options = TestDicomOptions::native(Vec::new());
-    options.transfer_syntax = uids::JPEG2000_LOSSLESS;
-    options.rows = 12;
-    options.columns = 16;
-    options.total_pixel_matrix_rows = 12;
-    options.total_pixel_matrix_columns = 16;
-    options.pixel_data = TestPixelData::EncapsulatedFrames(vec![include_bytes!(
-        "../../../../tests/fixtures/jp2k/rgb_nomct.j2k"
-    )
-    .to_vec()]);
-    write_test_dicom(&path, options);
-    let reader = DicomReader {
-        slide: Arc::new(DicomSlide::parse(&path).unwrap()),
-    };
-    let token = crate::ReadCancellationToken::new();
-    token.cancel();
-    let control = crate::ReadControl::new(token);
-    assert!(matches!(
-        reader
-            .prepare_adaptive_jp2k(&[tile_request(0, 0)], 1, Some(&control))
-            .unwrap(),
-        Err(WsiError::Cancelled)
-    ));
-    assert!(reader.slide.levels[0].parts[0]
-        .frame_store
-        .encapsulated_frames
-        .lock()
-        .unwrap()
-        .is_none());
-}
-
-#[cfg(feature = "metal")]
-#[test]
-fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read() {
+fn automatic_region_and_chunked_batch_reads_stay_on_the_cpu() {
     use crate::core::execution_telemetry::{test_count, Event};
-    let Some(_sessions) = test_device_sessions() else {
-        return;
-    };
     let directory = tempfile::tempdir().unwrap();
     for region in [true, false] {
-        let path = directory.path().join(format!("deferred-{region}.dcm"));
+        let path = directory.path().join(format!("automatic-{region}.dcm"));
         let mut options = TestDicomOptions::native(Vec::new());
         options.series_instance_uid = if region {
             "1.2.826.0.1.3680043.10.777.995"
@@ -414,20 +375,9 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
         );
         let slide =
             Slide::open_with_options_and_runtime(&path, open(), Arc::clone(&runtime)).unwrap();
-        // Index the frames before the measured reads so their encoded bounds
-        // stay fixed throughout calibration.
-        slide
-            .prepare_level_controlled(
-                SceneId::new(0),
-                SeriesId::new(0),
-                LevelIdx::new(0),
-                &crate::ReadControl::default(),
-            )
-            .unwrap();
         let read = |slide: &Slide| {
-            // Keep every streamed batch at one tile. Borrowing idle cores can
-            // otherwise create different batch sizes (and route keys) depending
-            // on the host and concurrent reads, each needing its own warmup.
+            // Keep every streamed batch at one tile, whatever the host's idle
+            // cores, so every admitted chunk is a separate decode.
             crate::core::test_hooks::with_idle_cores(0, || {
                 if region {
                     vec![slide
@@ -445,35 +395,17 @@ fn automatic_region_and_chunked_batch_advance_calibration_once_per_public_read()
             })
         };
         let expected = read(&cpu);
-        let mut probes = Vec::new();
-        for call in 0..5 {
-            let submissions = test_count(Event::MetalBatchSubmissions);
-            let device_tiles = test_count(Event::RouteDeviceTiles);
-            let started = runtime.background_calibrations_started();
+        for call in 0..3 {
+            let device =
+                || test_count(Event::MetalBatchSubmissions) + test_count(Event::MetalSingleDecodes);
+            let before = device();
             let actual = read(&slide);
             assert_eq!(actual.len(), expected.len());
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.as_u8(), expected.as_u8());
             }
-            // Calibration can select Metal before this read's later chunks.
-            // Each selected one-tile decode submits once on this thread; probes
-            // run in the background and must not add any caller submissions.
-            assert_eq!(
-                test_count(Event::MetalBatchSubmissions) - submissions,
-                test_count(Event::RouteDeviceTiles) - device_tiles,
-                "caller submissions must only decode selected Metal tiles, call={call}, region={region}"
-            );
-            runtime.wait_for_background_calibration();
-            probes.push(runtime.background_calibrations_started() - started);
-            assert!(probes[call] <= 1, "public read {call}, region={region}");
+            assert_eq!(device(), before, "call={call}, region={region}");
         }
-        // Slow warmup completes a CPU decision immediately; other routes need
-        // all three measured comparisons. Neither path probes multiple chunks
-        // during one public read or starts a device probe on the first read.
-        assert!(
-            probes == [0, 1, 0, 0, 0] || probes == [0, 1, 1, 1, 1],
-            "unexpected calibration sequence {probes:?}, region={region}"
-        );
     }
 }
 

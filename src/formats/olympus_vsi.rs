@@ -306,18 +306,6 @@ fn tile_key(req: &TileRequest) -> EtsTileKey {
 }
 
 impl ManagedSlideReader for OlympusVsiReader {
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn prepare_adaptive_jp2k(
-        &self,
-        reqs: &[TileRequest],
-        workers: usize,
-        control: Option<&crate::ReadControl>,
-    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        Some(self.stored_jp2k_tiles(reqs, control).and_then(|stored| {
-            crate::decode::jp2k::PreparedJp2kBatch::new(&stored.jobs(BackendRequest::Cpu), workers)
-        }))
-    }
-
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
         Ok(self
             .tile_for_request(req)?

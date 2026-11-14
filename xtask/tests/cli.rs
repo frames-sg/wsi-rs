@@ -516,12 +516,6 @@ EOF
                 true,
             ),
             (
-                "prepared_cpu_performance",
-                "--lib",
-                "route-telemetry",
-                false,
-            ),
-            (
                 "pooled_cpu_scheduling_performance",
                 "--lib",
                 "route-telemetry",

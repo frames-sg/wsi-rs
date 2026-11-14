@@ -1,15 +1,10 @@
 //! Optional work may use only immediately available operation and slide headroom.
 use super::*;
-use std::sync::atomic::AtomicBool;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-use std::sync::atomic::Ordering;
 
 pub(crate) struct ReadExecutionContext<'a> {
     reservation: &'a TransientReservation,
     operation_limit: u64,
     extra: Mutex<u64>,
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    calibration: &'a AtomicBool,
     pub(crate) control: Option<&'a ReadControl>,
 }
 
@@ -18,25 +13,13 @@ impl<'a> ReadExecutionContext<'a> {
         reservation: &'a TransientReservation,
         operation_limit: u64,
         control: Option<&'a ReadControl>,
-        calibration: &'a AtomicBool,
     ) -> Self {
-        let _ = calibration;
         Self {
             reservation,
             operation_limit,
             extra: Mutex::new(0),
-            #[cfg(any(feature = "metal", feature = "cuda"))]
-            calibration,
             control,
         }
-    }
-
-    // Every context belonging to one public read borrows the same flag, including
-    // contexts with different chunk reservations. Calibration can advance once;
-    // selected routes remain free to execute every admitted batch.
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    pub(crate) fn claim_calibration(&self) -> bool {
-        !self.calibration.swap(true, Ordering::Relaxed)
     }
 
     pub(crate) fn try_extra(&self, bytes: u64) -> Result<Option<OptionalWork<'_>>, WsiError> {
@@ -57,8 +40,8 @@ impl<'a> ReadExecutionContext<'a> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         advance_abandoned(&mut state);
-        // Calibration never jumps an existing FIFO waiter and never waits while
-        // holding the operation's ordinary reservation.
+        // Optional work never jumps an existing FIFO waiter and never waits
+        // while holding the operation's ordinary reservation.
         if state.next_ticket != state.serving_ticket
             || state
                 .in_flight

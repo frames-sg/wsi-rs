@@ -205,8 +205,13 @@ fn internal_route_telemetry_property_is_dynamic_but_not_advertised() {
     // across the second query above.
     let value = unsafe { std::ffi::CStr::from_ptr(value) };
     let value = value.to_str().unwrap();
-    assert!(value.contains("\"metal\""));
-    assert!(value.contains("\"cuda\""));
-    assert_eq!(value.matches("\"device_attempt_tiles\"").count(), 2);
+    assert!(value.starts_with("{\"execution\":{"), "{value}");
+    for counter in [
+        "metal_batch_submissions",
+        "metal_single_decodes",
+        "cuda_decode_jobs",
+    ] {
+        assert!(value.contains(&format!("\"{counter}\":")), "{counter}");
+    }
     assert!(!handle.properties.contains_key(ROUTE_TELEMETRY_PROPERTY));
 }

@@ -1544,7 +1544,6 @@ dependencies = [
  "j2k",
  "j2k-core",
  "j2k-cuda",
- "j2k-cuda-runtime",
  "j2k-jpeg",
  "j2k-metal",
  "j2k-metal-support",

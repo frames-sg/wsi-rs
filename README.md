@@ -38,8 +38,9 @@ uses for this. wsi-rs does the same job, and:
   [SECURITY.md](SECURITY.md).
 - **Reports decode failures.** If a tile can't be decoded correctly, you get an
   error rather than a black or half-drawn tile.
-- **Can decode on the GPU.** With the `metal` or `cuda` feature, JPEG 2000 tiles
-  decode on the GPU when that is faster on your hardware.
+- **Can decode into GPU memory.** With the `metal` or `cuda` feature, JPEG 2000
+  and HTJ2K tiles can decode straight into GPU memory for renderers, encoders
+  and models that use them there.
 - **Works with existing OpenSlide programs.** The included
   [OpenSlide-compatible C library](wsi-rs-openslide-shim/README.md) lets
   software built on OpenSlide use wsi-rs without code changes.
@@ -328,22 +329,21 @@ a `SlideLimits` to `SlideOpenOptions::with_limits`.
 | `metal` | Apple GPUs on macOS |
 | `cuda` | NVIDIA GPUs |
 
-Both features accelerate JPEG 2000 and HTJ2K tiles. The normal read methods
-still return tiles in CPU memory. Behind the scenes, wsi-rs times the GPU and
-the CPU on the first few reads of each kind of tile and uses the GPU only if it
-is at least 15% faster. If the GPU fails, the read uses the CPU. To turn this
-off, open the slide with:
+These features add GPU-resident reads. They don't speed up the normal read
+methods, which return tiles in CPU memory and decode on the CPU in every
+build: for slide tiles, the multithreaded CPU decoder is faster than a GPU
+once the GPU's output has been copied back (measurements are in
+[docs/architecture.md](docs/architecture.md#gpu-decoding)).
 
-```rust,ignore
-SlideOpenOptions::default().with_decode_execution_options(
-    DecodeExecutionOptions::default().with_acceleration(DecodeAcceleration::CpuOnly),
-)
-```
-
-To keep decoded tiles in GPU memory, call `read_tile_metal`, `read_tiles_metal`,
+To decode into GPU memory, call `read_tile_metal`, `read_tiles_metal`,
 `read_tile_cuda` or `read_tiles_cuda`. These only handle JPEG 2000 and HTJ2K
 tiles and return an error for anything else. They never fall back to the CPU.
 Call `download_cpu()` on the result to copy a tile to CPU memory.
+
+`DecodeAcceleration::CpuOnly` guarantees CPU decoding for normal reads in
+later releases too. The default, `DecodeAcceleration::Auto`, also decodes on
+the CPU today, but a later minor release may move a codec to the GPU where
+measurements show a win.
 
 ## Pre-decoded cache files
 
@@ -456,7 +456,7 @@ These timing runs are outside ordinary correctness counts.
 | Experiment name | Required environment |
 | --- | --- |
 | `metal_window_performance`, `metal_cooperative_performance` | macOS Metal, `WSI_RS_PREPARE_PATH`, `WSI_RS_PREPARE_OUTPUT` |
-| `prepared_cpu_performance`, `pooled_cpu_scheduling_performance` | `WSI_RS_PREPARE_PATH`, `WSI_RS_PREPARE_OUTPUT` |
+| `pooled_cpu_scheduling_performance` | `WSI_RS_PREPARE_PATH`, `WSI_RS_PREPARE_OUTPUT` |
 | `ycbcr_selected_u32_stays_within_five_percent_of_reference` | macOS Metal; controlled five-run address-width gate |
 | `composition_performance` | `WSI_RS_COMPOSITION_OUTPUT` |
 | `native_decode_matrix` | `WSI_RS_DECODE_PATH`, `WSI_RS_DECODE_OUTPUT`; optional CPU/automatic/device modes documented in the test |

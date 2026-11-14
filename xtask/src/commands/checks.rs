@@ -391,9 +391,9 @@ pub(super) fn perf_experiment(arguments: Vec<String>) -> Result<(), String> {
         | "local_htj2k_dicom_level_preparation_meets_interactive_budget" => {
             (&["--lib"], "metal,route-telemetry")
         }
-        "prepared_cpu_performance"
-        | "pooled_cpu_scheduling_performance"
-        | "composition_performance" => (&["--lib"], "route-telemetry"),
+        "pooled_cpu_scheduling_performance" | "composition_performance" => {
+            (&["--lib"], "route-telemetry")
+        }
         "native_decode_matrix" | "native_decode_revisits" | "native_decode_fresh_readers" => {
             (&["--test", "decode_performance"], "metal,route-telemetry")
         }

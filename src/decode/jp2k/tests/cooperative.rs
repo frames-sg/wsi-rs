@@ -84,10 +84,9 @@ fn assert_results(
 }
 
 #[test]
-fn cooperative_metal_preserves_pixels_crops_errors_and_prepared_reuse() {
+fn cooperative_metal_preserves_pixels_crops_and_errors() {
     let sessions = sessions();
     let jobs = distinct_jobs();
-    let expected = cpu_results(&jobs);
     let mut with_error = jobs.clone();
     let mut invalid = jobs[0].clone();
     invalid.data = Cow::Borrowed(b"invalid codestream");
@@ -101,25 +100,6 @@ fn cooperative_metal_preserves_pixels_crops_errors_and_prepared_reuse() {
         test_count(Event::MetalCpuTier1Images) > before,
         "must exercise CPU entropy decoding"
     );
-
-    let prepared = PreparedJp2kBatch::new(&jobs, 4).unwrap();
-    for _ in 0..2 {
-        let before = test_count(Event::MetalCpuTier1Images);
-        let actual = prepared.read_metal(&sessions).unwrap();
-        assert!(
-            test_count(Event::MetalCpuTier1Images) > before,
-            "prepared reads must cooperate too"
-        );
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(&expected) {
-            let expected = expected.as_ref().unwrap();
-            assert_eq!(
-                (actual.width(), actual.height()),
-                (expected.width(), expected.height())
-            );
-            assert_eq!(actual.as_u8(), expected.as_u8());
-        }
-    }
 }
 
 #[test]

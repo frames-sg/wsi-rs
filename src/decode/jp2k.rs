@@ -29,10 +29,6 @@ mod metal_backend;
 mod metal_batch;
 mod output;
 mod prepare;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-mod prepared_batch;
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(crate) use prepared_batch::PreparedJp2kBatch;
 
 pub(crate) use batch::decode_batch_jp2k;
 pub(crate) use cpu::{
@@ -41,12 +37,10 @@ pub(crate) use cpu::{
 };
 #[cfg(feature = "cuda")]
 pub(crate) use device::decode_batch_jp2k_cuda;
+#[cfg(any(feature = "metal", feature = "cuda"))]
+pub(crate) use device::map_tile_results;
 #[cfg(feature = "metal")]
 pub(crate) use device::{decode_batch_jp2k_metal, decode_region_batch_jp2k_metal};
-#[cfg(any(feature = "metal", feature = "cuda"))]
-pub(crate) use device::{
-    device_window_bytes, map_tile_results, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
-};
 #[cfg(feature = "metal")]
 pub(crate) use prepare::device_downscale;
 

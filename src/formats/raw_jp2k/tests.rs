@@ -478,7 +478,7 @@ fn default_grid_tiles_levels_over_4096_px_in_1024_px_tiles() {
 }
 
 #[test]
-fn tiled_full_resolution_passes_the_whole_codestream_through_without_an_adaptive_route() {
+fn tiled_full_resolution_passes_the_whole_codestream_through() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let reader = open_with_grid(&fixture.path, SMALL_GRID);
     let first = TileRequest::new(0, 0, 0, 0, 0);
@@ -493,10 +493,6 @@ fn tiled_full_resolution_passes_the_whole_codestream_through_without_an_adaptive
         reader.tile_location(&first).unwrap(),
         TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
     );
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    assert!(reader
-        .prepare_adaptive_jp2k(std::slice::from_ref(&first), 2, None)
-        .is_none());
     // 16x12 in 4 px tiles has columns 0 to 3 and rows 0 to 2.
     for outside in [
         TileRequest::new(0, 0, 0, 4, 0),
@@ -548,7 +544,7 @@ fn exposed_levels_follow_the_codestream_decomposition_count() {
 }
 
 #[test]
-fn reduced_levels_have_no_passthrough_or_adaptive_route() {
+fn reduced_levels_have_no_passthrough() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let managed = RawJp2kBackend
         .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
@@ -563,10 +559,6 @@ fn reduced_levels_have_no_passthrough_or_adaptive_route() {
         managed.tile_location(&reduced).unwrap(),
         TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
     );
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    assert!(managed
-        .prepare_adaptive_jp2k(std::slice::from_ref(&reduced), 2, None)
-        .is_none());
     let slide = crate::Slide::open(&fixture.path).unwrap();
     let tile = slide.read_tile(&reduced).unwrap();
     assert_eq!((tile.width(), tile.height()), (8, 6));

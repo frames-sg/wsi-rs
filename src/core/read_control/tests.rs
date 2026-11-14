@@ -30,31 +30,19 @@ fn diagnostic_sink_is_opt_in_and_receives_typed_index_events() {
 }
 
 #[test]
-fn cancellation_controls_recover_a_poisoned_publication_gate() {
+fn cancellation_controls_observe_their_token() {
     let cancellation = ReadCancellationToken::new();
     let control = ReadControl::new(cancellation.clone());
     assert!(!control.cancellation().is_cancelled());
+    assert!(control.check_cancelled().is_ok());
     assert!(format!("{control:?}").contains("diagnostics_enabled: false"));
-
-    let poisoned_state = Arc::clone(&cancellation.state);
-    let _ = std::thread::spawn(move || {
-        let _guard = poisoned_state.publication_gate.lock().unwrap();
-        panic!("poison publication gate");
-    })
-    .join();
 
     cancellation.cancel();
     assert!(control.cancellation().is_cancelled());
-
-    let active = ReadCancellationToken::new();
-    let poisoned_state = Arc::clone(&active.state);
-    let _ = std::thread::spawn(move || {
-        let _guard = poisoned_state.publication_gate.lock().unwrap();
-        panic!("poison active publication gate");
-    })
-    .join();
-    let active_control = ReadControl::new(active);
-    assert_eq!(active_control.publish_if_active(|| 17).unwrap(), 17);
+    assert!(matches!(
+        control.check_cancelled(),
+        Err(crate::WsiError::Cancelled)
+    ));
 }
 
 #[test]

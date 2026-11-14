@@ -174,61 +174,23 @@ fn bounded_metal_groups_keep_duplicate_crops_errors_and_one_color_pass() {
             .collect::<Vec<_>>(),
     );
     let target = u64::from(full.expected_width) * u64::from(full.expected_height) * 4 * 2;
-    for reuse_prepared in [false, true] {
-        let groups = test_count(Event::MetalBatchGroups);
-        let colors = test_count(Event::ColorSubmissions);
-        let actual = if reuse_prepared {
-            let mut options = j2k::BatchDecodeOptions::default();
-            options.layout = j2k::BatchLayout::Nhwc;
-            let prepared = j2k::prepare_batch(
-                jobs.iter()
-                    .map(|job| j2k::EncodedImage::full(std::sync::Arc::from(job.data.as_ref())))
-                    .collect(),
-                options,
-            )
-            .unwrap();
-            let metadata = jobs
-                .iter()
-                .map(|job| super::super::prepare::prepare_jp2k_job(job).ok())
-                .collect::<Vec<_>>();
-            let slots = (0..jobs.len()).collect::<Vec<_>>();
-            let mut output = (0..jobs.len()).map(|_| None).collect::<Vec<_>>();
-            super::super::metal_batch::execute_prepared_bounded(
-                &prepared,
-                &slots,
-                &metadata,
-                &mut output,
-                &sessions,
-                target,
-            )
-            .unwrap();
-            super::super::metal_batch::convert_outputs(&metadata, &mut output, &sessions);
-            output
-                .into_iter()
-                .map(|result| result.expect("source slot resolved"))
-                .collect()
-        } else {
-            super::super::metal_batch::decode_jobs_bounded(&jobs, &sessions, target)
-        };
-        assert_eq!(
-            test_count(Event::MetalBatchGroups) - groups,
-            2,
-            "prepared={reuse_prepared}"
-        );
-        assert_eq!(test_count(Event::ColorSubmissions) - colors, 1);
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.into_iter().zip(&expected) {
-            match (actual, expected) {
-                (Ok(actual), Ok(expected)) => {
-                    assert_eq!(
-                        (actual.width, actual.height),
-                        (expected.width(), expected.height())
-                    );
-                    assert_eq!(actual.download_cpu().unwrap().as_u8(), expected.as_u8());
-                }
-                (Err(_), Err(_)) => {}
-                (actual, expected) => panic!("source slot changed: {actual:?} / {expected:?}"),
+    let groups = test_count(Event::MetalBatchGroups);
+    let colors = test_count(Event::ColorSubmissions);
+    let actual = super::super::metal_batch::decode_jobs_bounded(&jobs, &sessions, target);
+    assert_eq!(test_count(Event::MetalBatchGroups) - groups, 2);
+    assert_eq!(test_count(Event::ColorSubmissions) - colors, 1);
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.into_iter().zip(&expected) {
+        match (actual, expected) {
+            (Ok(actual), Ok(expected)) => {
+                assert_eq!(
+                    (actual.width, actual.height),
+                    (expected.width(), expected.height())
+                );
+                assert_eq!(actual.download_cpu().unwrap().as_u8(), expected.as_u8());
             }
+            (Err(_), Err(_)) => {}
+            (actual, expected) => panic!("source slot changed: {actual:?} / {expected:?}"),
         }
     }
 }
@@ -346,48 +308,6 @@ fn strict_cuda_batch_preserves_order_crops_errors_and_pixels() {
             (actual, expected) => panic!("CUDA source slot changed: {actual:?} / {expected:?}"),
         }
     }
-    jobs.remove(17);
-    let prepared = super::super::PreparedJp2kBatch::new(&jobs, 2).unwrap();
-    let actual = prepared.read_cuda(&sessions).unwrap();
-    let expected = prepared.read_cpu().unwrap();
-    assert_eq!(actual.len(), expected.len());
-    for (actual, expected) in actual.iter().zip(expected) {
-        assert_eq!(
-            (actual.width(), actual.height()),
-            (expected.width(), expected.height())
-        );
-        assert_eq!(actual.as_u8(), expected.as_u8());
-    }
-}
-
-#[cfg(feature = "metal")]
-#[test]
-fn prepared_cpu_and_metal_reuse_inputs_with_duplicate_mixed_crops() {
-    let Some(sessions) = metal_sessions() else {
-        return;
-    };
-    let mut a = rgb_job(J2kBackendRequest::Cpu);
-    a.rgb_color_space = false;
-    let mut b = a.clone();
-    b.expected_width -= 1;
-    b.expected_height -= 2;
-    let jobs = [b.clone(), a, b];
-    let oracle = decode_batch_jp2k(&jobs);
-    let prepared = crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, 2).unwrap();
-    for actual in [
-        prepared.read_cpu().unwrap(),
-        prepared.read_metal(&sessions).unwrap(),
-        prepared.read_cpu().unwrap(),
-    ] {
-        for (actual, oracle) in actual.iter().zip(&oracle) {
-            let oracle = oracle.as_ref().unwrap();
-            assert_eq!(
-                (actual.width(), actual.height()),
-                (oracle.width(), oracle.height())
-            );
-            assert_eq!(actual.as_u8(), oracle.as_u8());
-        }
-    }
 }
 
 #[cfg(feature = "metal")]
@@ -423,29 +343,18 @@ fn native_metal_windows_bound_image_count_as_well_as_output_bytes() {
     let mut cpu_job = jobs[0].clone();
     cpu_job.backend = J2kBackendRequest::Cpu;
     let expected = decode_batch_jp2k(&[cpu_job]).pop().unwrap().unwrap();
-    let mut group_counts = Vec::new();
-    for prepared in [false, true] {
-        let before = test_count(Event::MetalBatchGroups);
-        let actual = if prepared {
-            super::super::PreparedJp2kBatch::new(&jobs, 1)
-                .unwrap()
-                .read_metal(&sessions)
-                .unwrap()
-        } else {
-            decode_batch_jp2k_metal(&jobs, &sessions)
-                .into_iter()
-                .map(|tile| tile.unwrap().download_cpu().unwrap())
-                .collect()
-        };
-        group_counts.push(test_count(Event::MetalBatchGroups) - before);
-        assert_eq!(actual.len(), jobs.len());
-        for tile in actual {
-            assert_eq!(tile.as_u8(), expected.as_u8());
-        }
-    }
+    let before = test_count(Event::MetalBatchGroups);
+    let actual = decode_batch_jp2k_metal(&jobs, &sessions)
+        .into_iter()
+        .map(|tile| tile.unwrap().download_cpu().unwrap())
+        .collect::<Vec<_>>();
     assert_eq!(
-        group_counts,
-        vec![2, 2],
-        "both native entry points must bound image count"
+        test_count(Event::MetalBatchGroups) - before,
+        2,
+        "native Metal batches must bound image count"
     );
+    assert_eq!(actual.len(), jobs.len());
+    for tile in actual {
+        assert_eq!(tile.as_u8(), expected.as_u8());
+    }
 }

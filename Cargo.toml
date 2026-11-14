@@ -46,7 +46,6 @@ metal = [
 ]
 cuda = [
     "dep:j2k-cuda",
-    "dep:j2k-cuda-runtime",
     "j2k-cuda/cuda-runtime",
 ]
 
@@ -73,7 +72,6 @@ jxr = { version = "0.5", git = "https://github.com/frames-sg/jxr", branch = "mai
 j2k-metal = { version = "0.14.0", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 j2k-metal-support = { version = "0.14.0", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 j2k-cuda = { version = "0.14.0", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true, default-features = false }
-j2k-cuda-runtime = { version = "0.14.0", git = "https://github.com/frames-sg/j2k", branch = "main", optional = true }
 objc2 = { version = "=0.6.4", optional = true, default-features = false, features = ["std"] }
 objc2-metal = { version = "=0.3.2", optional = true, default-features = false, features = [
     "std",

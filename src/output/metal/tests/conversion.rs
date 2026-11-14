@@ -92,15 +92,13 @@ fn ycbcr_to_rgb8_converter_is_cached_per_backend_sessions() {
 }
 
 #[test]
-fn backend_sessions_identify_the_device_and_keep_converter_debug_opaque() {
+fn backend_sessions_keep_converter_debug_opaque() {
     let Some(device) = test_device() else {
-        eprintln!("skipping Metal session identity test: no Metal device");
+        eprintln!("skipping Metal session converter test: no Metal device");
         return;
     };
-    let expected_identity = format!("metal:{}:{}", device.registryID(), device.name());
     let sessions = MetalBackendSessions::new(device);
 
-    assert_eq!(sessions.device_identity(), expected_identity);
     let converter = sessions.ycbcr_to_rgb8_converter().expect("YCbCr converter");
     assert_eq!(format!("{converter:?}"), "YcbcrToRgb8Converter { .. }");
 }

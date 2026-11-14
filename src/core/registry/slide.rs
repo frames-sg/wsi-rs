@@ -9,7 +9,6 @@ use crate::core::limits::ReadExecutionContext;
 use crate::core::read_control::check_cancelled_opt;
 use budget::{check_subpixel_offset, checked_rgba_bytes};
 use execution::AdmittedReader;
-use std::sync::atomic::AtomicBool;
 
 // ── Slide ──────────────────────────────────────────────────
 
@@ -91,7 +90,7 @@ impl Slide {
     }
 
     /// Opens `path` like [`Self::open_with_options`] on the given decode
-    /// runtime; tests pass their own so calibrations stay isolated.
+    /// runtime; tests pass their own so device sessions stay isolated.
     pub(crate) fn open_with_options_and_runtime(
         path: impl AsRef<Path>,
         options: SlideOpenOptions,
@@ -244,7 +243,7 @@ impl Slide {
         let output_bytes = self.estimate_tile_output_bytes(req)?;
         let transient =
             self.ordinary_work_bytes(self.source.tile_encoded_upper_bound(req)?, output_bytes)?;
-        self.with_admission(transient, None, &AtomicBool::new(false), |context| {
+        self.with_admission(transient, None, |context| {
             let tile = crate::core::batch::exactly_one(
                 self.source
                     .read_tiles_with_context(std::slice::from_ref(req), context)?,
@@ -255,13 +254,11 @@ impl Slide {
         })
     }
 
-    /// Runs `read` under a reservation of `bytes` transient work. Every
-    /// context of one public read shares its `calibration` flag.
+    /// Runs `read` under a reservation of `bytes` transient work.
     fn with_admission<R>(
         &self,
         bytes: u64,
         control: Option<&crate::ReadControl>,
-        calibration: &AtomicBool,
         read: impl FnOnce(&ReadExecutionContext<'_>) -> Result<R, WsiError>,
     ) -> Result<R, WsiError> {
         let reservation = self.admission.reserve(bytes, control)?;
@@ -269,7 +266,6 @@ impl Slide {
             &reservation,
             self.limits.operation_transient_bytes(),
             control,
-            calibration,
         );
         read(&context)
     }
@@ -438,7 +434,7 @@ impl Slide {
         allow_fastpath: bool,
     ) -> Result<CpuTile, WsiError> {
         let work_bytes = planned.work_bytes;
-        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+        self.with_admission(work_bytes, None, |execution| {
             let cache = self.shared_tile_cache();
             if allow_fastpath {
                 let mut ctx =
@@ -521,7 +517,7 @@ impl Slide {
         self.check_output_limit(output_bytes, "decoded tile/associated output")?;
         let encoded = self.source.display_tile_encoded_upper_bound(req)?;
         let work_bytes = self.ordinary_work_bytes(encoded, output_bytes)?;
-        self.with_admission(work_bytes, None, &AtomicBool::new(false), |execution| {
+        self.with_admission(work_bytes, None, |execution| {
             self.read_admitted_display_tile(req, execution)
         })
     }
@@ -617,7 +613,6 @@ impl Slide {
             .min(self.limits.operation_transient_bytes())
             .min(self.limits.slide_transient_bytes());
         let mut output = Vec::with_capacity(reqs.len());
-        let calibration = AtomicBool::new(false);
         let mut start = 0;
         while start < reqs.len() {
             check_cancelled_opt(control)?;
@@ -625,7 +620,7 @@ impl Slide {
                 self.tile_chunk_len(&reqs[start..], &estimates[start..], target)?;
             let end = start + len;
 
-            let chunk = self.with_admission(chunk_bytes, control, &calibration, |execution| {
+            let chunk = self.with_admission(chunk_bytes, control, |execution| {
                 let chunk = decode(&reqs[start..end], execution)?;
                 if chunk.len() != end - start {
                     return Err(WsiError::BackendContract {

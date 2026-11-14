@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     DecodeAcceleration, DecodeExecutionOptions, Slide, SlideOpenOptions, TileLayout, TileRequest,
 };
+use j2k_core::BackendRequest;
 
 #[cfg(all(feature = "metal", target_os = "macos"))]
 #[test]
@@ -164,73 +165,6 @@ fn metal_cooperative_performance() {
         .open(std::env::var_os("WSI_RS_PREPARE_OUTPUT").expect("capture path"))
         .expect("capture path must be new");
     serde_json::to_writer_pretty(output, &report).unwrap();
-}
-
-#[test]
-#[ignore = "explicit release benchmark using WSI_RS_PREPARE_PATH and WSI_RS_PREPARE_OUTPUT"]
-fn prepared_cpu_performance() {
-    let raw = cpu_corpus_tiles(64);
-    let jobs = raw
-        .iter()
-        .map(|raw| Jp2kDecodeJob {
-            data: std::borrow::Cow::Borrowed(raw.data()),
-            expected_width: raw.width(),
-            expected_height: raw.height(),
-            rgb_color_space: raw.photometric_interpretation()
-                == crate::EncodedTilePhotometricInterpretation::Rgb,
-            backend: BackendRequest::Cpu,
-        })
-        .collect::<Vec<_>>();
-    let mut results = Vec::new();
-    crate::core::batch::install_codec_cpu(|| {
-        for count in [1, 4, 8, 16, 64] {
-            let jobs = &jobs[..count];
-            let expected = super::super::batch::decode_batch_jp2k(jobs)
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let prepared =
-                PreparedJp2kBatch::new(jobs, crate::core::batch::cpu_worker_count()).unwrap();
-            let actual = prepared.read_cpu().unwrap();
-            assert_eq!(actual.len(), expected.len());
-            for (a, b) in actual.iter().zip(&expected) {
-                assert!(
-                    a.as_u8() == b.as_u8(),
-                    "prepared CPU output differs from established CPU bytes"
-                );
-            }
-            for pair in 0..5 {
-                for candidate in [pair % 2 == 1, pair % 2 == 0] {
-                    let start = std::time::Instant::now();
-                    let output = if candidate {
-                        PreparedJp2kBatch::new(jobs, crate::core::batch::cpu_worker_count())
-                            .unwrap()
-                            .read_cpu()
-                            .unwrap()
-                    } else {
-                        super::super::batch::decode_batch_jp2k(jobs)
-                            .into_iter()
-                            .collect::<Result<Vec<_>, _>>()
-                            .unwrap()
-                    };
-                    let elapsed = start.elapsed();
-                    assert_eq!(output.len(), expected.len());
-                    for (a, b) in output.iter().zip(&expected) {
-                        assert!(
-                            a.as_u8() == b.as_u8(),
-                            "prepared CPU output differs from established CPU bytes"
-                        );
-                    }
-                    results.push(serde_json::json!({"batch":count,"pair":pair,"candidate":candidate,"elapsed_ns":elapsed.as_nanos()}));
-                }
-            }
-        }
-    });
-    std::fs::write(
-        std::env::var_os("WSI_RS_PREPARE_OUTPUT").expect("capture path"),
-        serde_json::to_vec_pretty(&results).unwrap(),
-    )
-    .unwrap();
 }
 
 fn cpu_corpus_tiles(count: u64) -> Vec<crate::RawCompressedTile> {
