@@ -63,7 +63,8 @@ pub(super) fn prepare_jp2k_region_job(
     let view = j2k::J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
     let header = codestream_header_from_view(&view)?;
     validate_component_contract(&header)?;
-    let (width, height) = reduced_jp2k_region_dimensions(region, reduction)?;
+    let (width, height) =
+        reduced_jp2k_region_dimensions(&view.reference_grid(), region, reduction)?;
     validate_decoded_size(width, height)?;
     let row_bytes = width as usize * PixelFormat::Rgb8.bytes_per_pixel();
     let whole = region.x == 0

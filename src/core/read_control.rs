@@ -57,7 +57,6 @@ pub type ReadDiagnosticSink = dyn Fn(DicomIndexDiagnostic) + Send + Sync;
 #[derive(Debug, Default)]
 struct ReadCancellationState {
     cancelled: AtomicBool,
-    publication_gate: Mutex<()>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -72,11 +71,6 @@ impl ReadCancellationToken {
     }
 
     pub fn cancel(&self) {
-        let _publication = self
-            .state
-            .publication_gate
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
         self.state.cancelled.store(true, Ordering::Release);
     }
 
@@ -204,18 +198,6 @@ impl ReadControl {
         } else {
             Ok(())
         }
-    }
-
-    #[cfg(any(test, feature = "metal", feature = "cuda"))]
-    pub(crate) fn publish_if_active<T>(&self, publish: impl FnOnce() -> T) -> Result<T, WsiError> {
-        let _publication = self
-            .cancellation
-            .state
-            .publication_gate
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        self.check_cancelled()?;
-        Ok(publish())
     }
 }
 

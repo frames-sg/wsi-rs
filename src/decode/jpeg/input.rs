@@ -9,9 +9,8 @@ use j2k_jpeg::{
     JpegError as J2kJpegError, JpegView, PixelFormat as J2kPixelFormat, SofKind as J2kSofKind,
 };
 
-use super::{
-    is_sof_marker, DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES,
-};
+use super::frame::jpeg_sof_segment;
+use super::{DecodedJpegRgb, ScaledJpegDecode, JPEG_MAX_DIMENSION, MAX_JPEG_DECODE_BYTES};
 
 thread_local! {
     static JPEG_TILE_SCRATCH: RefCell<j2k_jpeg::ScratchPool> =
@@ -110,14 +109,11 @@ fn try_prepared_jpeg_buffer(capacity: usize) -> Result<Vec<u8>, WsiError> {
     Ok(bytes)
 }
 
-/// Offset of the first SOF marker's `0xFF` prefix. Walks marker segments up to
-/// the first scan, so `FF Cx` bytes inside an APPn, DQT or COM payload never
-/// match, and ignores a SOF too short to hold its dimensions.
+/// Offset of the first SOF marker's `0xFF` prefix. j2k-jpeg walks the marker
+/// segments up to the first scan, so `FF Cx` bytes inside an APPn, DQT or COM
+/// payload never match. A SOF too short to hold its dimensions is ignored.
 fn find_sof_position(input: &[u8]) -> Option<usize> {
-    j2k_jpeg::iter_segments(input)
-        .map_while(Result::ok)
-        .take_while(|segment| segment.marker != 0xDA)
-        .find(|segment| is_sof_marker(segment.marker))
+    jpeg_sof_segment(input)
         .filter(|segment| segment.payload.len() >= 5)
         .map(|segment| segment.marker_offset)
 }

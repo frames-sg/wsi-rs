@@ -2,10 +2,7 @@
 //! strip-level tiles and NDPI whole-level JPEGs.
 
 use super::*;
-use crate::decode::jpeg::frame::{
-    merge_missing_jpeg_tables, next_jpeg_segment, parse_sof0_frame_info, JpegFrameInfo,
-};
-use crate::decode::jpeg::is_sof_marker;
+use crate::decode::jpeg::frame::{merge_missing_jpeg_tables, parse_jpeg_frame_info, JpegFrameInfo};
 use crate::decode::jpeg::lossless::{
     lossless_crop_coefficient_budget, lossless_crop_jpeg_stack, lossless_crop_or_whole_jpeg,
     lossless_crop_output_bound,
@@ -35,7 +32,7 @@ impl TiffPixelReader {
         ) -> Result<EncodedTilePhotometricInterpretation, WsiError>,
     ) -> Result<RawCompressedTile, WsiError> {
         let whole_part = match parts.as_slice() {
-            [part] if rect.x == 0 && rect.y == 0 => jpeg_frame_info(part)
+            [part] if rect.x == 0 && rect.y == 0 => parse_jpeg_frame_info(part)
                 .filter(|info| (info.width, info.height) == (rect.width, rect.height)),
             _ => None,
         };
@@ -326,18 +323,4 @@ fn framed_stream(unit: &EncodedUnit, bytes: Vec<u8>) -> Result<Vec<u8>, WsiError
         return Ok(bytes);
     }
     unit.assemble([bytes.as_slice()])
-}
-
-/// The frame of `data`'s first SOF marker of any frame type, when it states
-/// a nonzero 8-bit size with one or three components.
-fn jpeg_frame_info(data: &[u8]) -> Option<JpegFrameInfo> {
-    let mut offset = 0;
-    while let Some(segment) = next_jpeg_segment(data, offset).ok()? {
-        match segment.marker {
-            0xDA => return None,
-            marker if is_sof_marker(marker) => return parse_sof0_frame_info(segment.payload).ok(),
-            _ => offset = segment.end,
-        }
-    }
-    None
 }

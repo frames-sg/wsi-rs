@@ -1,14 +1,54 @@
 use super::*;
 use crate::decode::jpeg::lossless::{
-    append_quantized_block_window, assemble_baseline_dct_image, compare_dct_coding_profile,
-    dct_mcu_dimensions, DctProfileMismatch,
+    assemble_baseline_dct_image, compare_dct_coding_profile, dct_mcu_dimensions, DctProfileMismatch,
 };
 
+/// The quantized blocks one native NDPI tile contributes to a retiled frame.
 pub(super) struct NdpiDctRetileSegment {
     pub(super) native_row: u32,
-    pub(super) crop_start_mcu: u32,
-    pub(super) crop_mcus: u32,
+    /// The frame's MCU columns of the native tile, every MCU row of it.
     pub(super) image: JpegDctImage,
+}
+
+/// The quantized blocks one native tile `jpeg` contributes to a frame whose
+/// origin is `frame_origin`: the `crop_width` pixels starting `crop_start_x`
+/// into the tile, every MCU row of it. j2k-jpeg retains only that MCU
+/// window. The frame origin and the crop start must lie on the MCU grid.
+pub(super) fn extract_ndpi_retile_window(
+    jpeg: &[u8],
+    frame_origin: (u32, u32),
+    crop_start_x: u32,
+    crop_width: u32,
+) -> Result<JpegDctImage, WsiError> {
+    let mcu = J2kJpegDecoder::inspect(jpeg)
+        .map_err(|err| WsiError::Jpeg(format!("NDPI raw JPEG retile inspect failed: {err}")))?
+        .mcu_geometry;
+    if !frame_origin.0.is_multiple_of(mcu.width)
+        || !frame_origin.1.is_multiple_of(mcu.height)
+        || !crop_start_x.is_multiple_of(mcu.width)
+    {
+        return Err(WsiError::Unsupported {
+            reason: format!(
+                "NDPI raw JPEG retile requires MCU-aligned frame origins (mcu {}x{})",
+                mcu.width, mcu.height
+            ),
+        });
+    }
+    let window = McuRect {
+        x: crop_start_x / mcu.width,
+        y: 0,
+        width: crop_width.div_ceil(mcu.width),
+        height: mcu.rows,
+    };
+    extract_dct_windows(jpeg, &[window], DctExtractOptions::quantized_only())
+        .map_err(|err| match err {
+            j2k_jpeg::JpegError::DctWindowOutOfBounds { .. } => WsiError::Unsupported {
+                reason: format!("NDPI raw JPEG retile crop exceeds its source segment: {err}"),
+            },
+            err => WsiError::Jpeg(format!("NDPI raw JPEG retile DCT extract failed: {err}")),
+        })?
+        .pop()
+        .ok_or_else(|| WsiError::Jpeg("NDPI raw JPEG retile DCT extract returned no window".into()))
 }
 
 /// MCU width and height in pixels: 8 times the largest component sampling factor.
@@ -103,27 +143,16 @@ pub(super) fn build_ndpi_retiled_dct_image(
                             ),
                         });
                     }
-                    let (Some(block_x), Some(block_count)) = (
-                        segment.crop_start_mcu.checked_mul(h),
-                        segment.crop_mcus.checked_mul(h),
-                    ) else {
+                    let stride = component.block_cols as usize;
+                    let start = block_y as usize * stride;
+                    let Some(row) = component.quantized_blocks.get(start..start + stride) else {
                         return Err(WsiError::Unsupported {
-                            reason: "NDPI raw JPEG retile block range overflow".into(),
+                            reason: format!(
+                                "NDPI raw JPEG retile source segment holds fewer blocks than component {component_idx}'s grid"
+                            ),
                         });
                     };
-                    append_quantized_block_window(
-                        component,
-                        block_x,
-                        block_y,
-                        block_count,
-                        1,
-                        blocks,
-                    )
-                    .map_err(|_| WsiError::Unsupported {
-                        reason: format!(
-                            "NDPI raw JPEG retile crop exceeds component {component_idx} block grid"
-                        ),
-                    })?;
+                    blocks.extend_from_slice(row);
                 }
                 let copied = blocks.len() - row_start_len;
                 let expected = (output_mcu_cols * h) as usize;

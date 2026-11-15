@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use std::{num::NonZeroUsize, sync::MutexGuard};
 
 use crate::error::WsiError;
-use objc2_metal::MTLDevice;
 
 use super::MetalDeviceTile;
 use super::{MetalDevice, YcbcrToRgb8Converter};
@@ -53,8 +52,7 @@ impl MetalBackendSessions {
     /// Existing batch size and memory limits still apply.
     ///
     /// This mode is disabled by default and is not guaranteed to reduce
-    /// latency. It applies to reads using this session; automatic slide
-    /// acceleration keeps its own default session and calibration policy.
+    /// latency. It applies to reads using this session.
     #[cfg(target_os = "macos")]
     pub fn with_cooperative_cpu_workers(mut self, workers: NonZeroUsize) -> Self {
         self.cooperative_cpu_workers = Some(workers);
@@ -99,21 +97,6 @@ impl MetalBackendSessions {
         &self.j2k
     }
 
-    pub(crate) fn device_identity(&self) -> String {
-        #[cfg(target_os = "macos")]
-        {
-            format!(
-                "metal:{}:{}",
-                self.j2k.device().registryID(),
-                self.j2k.device().name()
-            )
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            "metal".to_string()
-        }
-    }
-
     pub(crate) fn ycbcr_to_rgb8_converter(&self) -> Result<Arc<YcbcrToRgb8Converter>, WsiError> {
         let mut cached = self
             .ycbcr_to_rgb8
@@ -146,6 +129,9 @@ impl MetalBackendSessions {
         Ok(tile)
     }
 
+    /// Reads several resident tiles back in one submission, for tests and
+    /// benchmarks that compare batched readback.
+    #[cfg(test)]
     pub(crate) fn download_cpu_batch(
         &self,
         tiles: &[MetalDeviceTile],

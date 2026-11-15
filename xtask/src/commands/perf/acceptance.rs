@@ -45,7 +45,7 @@ pub(super) fn evaluate_openslide_acceptance(
     validate_comparison_context(openslide, wsi_rs)?;
     validate_paired_run_order(openslide)?;
     validate_paired_run_order(wsi_rs)?;
-    validate_gpu_route_evidence(wsi_rs)?;
+    validate_cpu_decode_evidence(wsi_rs)?;
     validate_cross_capture_checksums(openslide, wsi_rs)?;
     let summaries = comparison_summaries(openslide, wsi_rs)?;
     let mut failures = Vec::new();
@@ -273,103 +273,47 @@ fn validate_paired_run_order(capture: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_gpu_route_evidence(capture: &Value) -> Result<(), String> {
+/// Ordinary reads decode on the CPU in every build, with or without a GPU
+/// feature. Each cell must therefore report zero GPU decodes, and a run that
+/// reports no `device_decode` telemetry at all fails closed.
+fn validate_cpu_decode_evidence(capture: &Value) -> Result<(), String> {
     let capture = CaptureDocument::parse(capture)?;
-    let features = capture
-        .metadata
-        .build
-        .get("features")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            "wsi-rs GPU acceptance capture missing build feature metadata".to_string()
-        })?;
-    let declared_gpu_features = ["metal", "cuda"]
-        .into_iter()
-        .filter(|candidate| {
-            features
-                .iter()
-                .any(|feature| feature.as_str() == Some(candidate))
-        })
-        .collect::<Vec<_>>();
-    if declared_gpu_features.len() != 1 {
-        return Err(format!(
-            "wsi-rs GPU acceptance capture must declare exactly one compiled metal or cuda feature, found {declared_gpu_features:?}"
-        ));
-    }
-    let feature = declared_gpu_features.first().copied().ok_or_else(|| {
-        "wsi-rs GPU acceptance capture must declare compiled metal or cuda support".to_string()
-    })?;
-
-    let host = &capture.metadata.host;
-    let expected_platform = match feature {
-        "metal" => ("macos", "aarch64"),
-        "cuda" => ("linux", "x86_64"),
-        _ => unreachable!("feature selected from fixed allowlist"),
-    };
-    if host.get("os").and_then(Value::as_str) != Some(expected_platform.0)
-        || host.get("arch").and_then(Value::as_str) != Some(expected_platform.1)
-    {
-        return Err(format!(
-            "{feature} performance acceptance requires pinned {}-{} host metadata",
-            expected_platform.0, expected_platform.1
-        ));
-    }
-    if host
-        .get("pinned_host_id")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err("GPU performance acceptance requires nonempty pinned_host_id metadata".into());
-    }
-    if host
-        .get("gpu")
-        .and_then(Value::as_str)
-        .is_none_or(|gpu| gpu.is_empty() || gpu.starts_with("unavailable:"))
-    {
-        return Err("GPU performance acceptance requires available GPU identity metadata".into());
-    }
-
-    // Automatic routing starts each batch shape on CPU, measures the device
-    // with readback, and keeps CPU unless the device wins. A cell may therefore
-    // decode on CPU, or not decode at all when its tiles are cached. Each JP2K
-    // process must instead prove that the device path was live and measured,
-    // and no cell may report a tile that fell back after device failure or
-    // unavailability.
-    for run in capture
-        .runs
-        .iter()
-        .filter(|run| run.benchmark_group() == "aperio/j2k")
-    {
-        let mut device_attempt_tiles = 0_u64;
+    for run in &capture.runs {
+        let mut reported = false;
         for workload in &run.workloads {
-            let Some(route) = workload
+            let Some(device_decode) = workload
                 .diagnostics
                 .as_ref()
-                .and_then(|diagnostics| diagnostics.get("decode_route"))
+                .and_then(|diagnostics| diagnostics.get("device_decode"))
             else {
                 continue;
             };
-            let reported_feature = route.get("feature").and_then(Value::as_str);
-            let fallback_tiles = route.get("fallback_tiles").and_then(Value::as_u64);
-            if reported_feature != Some(feature) || fallback_tiles != Some(0) {
+            let counters = device_decode
+                .as_object()
+                .filter(|counters| !counters.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "wsi-rs cell alias={} workers={} workload={} has malformed device_decode telemetry",
+                        run.alias(),
+                        run.worker_count(),
+                        workload.name,
+                    )
+                })?;
+            if let Some((counter, value)) =
+                counters.iter().find(|(_, value)| value.as_u64() != Some(0))
+            {
                 return Err(format!(
-                    "GPU cell alias={} workers={} workload={} reported {} route fallback_tiles={fallback_tiles:?}; actual {feature} route evidence requires zero fallback",
+                    "wsi-rs cell alias={} workers={} workload={} reported {counter}={value}; ordinary reads must decode on the CPU",
                     run.alias(),
                     run.worker_count(),
                     workload.name,
-                    reported_feature.unwrap_or("no"),
                 ));
             }
-            device_attempt_tiles = device_attempt_tiles.saturating_add(
-                route
-                    .get("device_attempt_tiles")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
+            reported = true;
         }
-        if device_attempt_tiles == 0 {
+        if !reported {
             return Err(format!(
-                "GPU run alias={} workers={} repeat={:?} lacks actual {feature} route evidence: no JP2K batch was decoded on the device",
+                "wsi-rs run alias={} workers={} repeat={:?} lacks device_decode telemetry, so CPU decoding is unproven",
                 run.alias(),
                 run.worker_count(),
                 run.repeat_index,

@@ -1,4 +1,4 @@
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(feature = "cuda")]
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -26,7 +26,7 @@ use crate::decode::jp2k::{
 use crate::decode::jp2k_codestream::{codestream_header_from_view, validate_component_contract};
 use crate::error::WsiError;
 use crate::properties::Properties;
-use j2k::CpuDecodeParallelism;
+use j2k::{CpuDecodeParallelism, J2kReferenceGrid};
 use j2k_core::Rect;
 use rayon::prelude::*;
 
@@ -153,12 +153,12 @@ fn open_raw_jp2k(
     // Each tile's decode bounds its own output, so the whole image may exceed
     // the decoded-image limit.
     validate_component_contract(&header)?;
-    let dimensions = (header.image_width, header.image_height);
+    let reference_grid = view.reference_grid();
     Ok(RawJp2kReader {
         dataset: dataset_for_codestream(
             path,
             &data,
-            dimensions,
+            &reference_grid,
             jp2k_decodable_reduction_levels(&data)?,
             grid,
         )?,
@@ -176,13 +176,13 @@ fn open_raw_jp2k(
 fn dataset_for_codestream(
     path: &Path,
     data: &[u8],
-    dimensions: (u32, u32),
+    reference_grid: &J2kReferenceGrid,
     reduction_levels: u8,
     grid: LevelGrid,
 ) -> Result<Dataset, WsiError> {
     let levels = (0..=reduction_levels)
         .map(|reduction| {
-            let (width, height) = reduced_jp2k_dimensions(dimensions, reduction)?;
+            let (width, height) = reduced_jp2k_dimensions(reference_grid, reduction)?;
             Ok(Level {
                 dimensions: (u64::from(width), u64::from(height)),
                 // Reduced pixels cover exact 2^k source blocks, so this is not
@@ -394,7 +394,7 @@ impl RawJp2kReader {
     }
 
     /// One decode job for the stored full-resolution codestream.
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     fn jp2k_job(
         &self,
         backend: j2k_core::BackendRequest,
@@ -549,32 +549,6 @@ impl SlideReader for RawJp2kReader {
 }
 
 impl ManagedSlideReader for RawJp2kReader {
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    fn prepare_adaptive_jp2k(
-        &self,
-        reqs: &[TileRequest],
-        workers: usize,
-        control: Option<&crate::ReadControl>,
-    ) -> Option<Result<crate::decode::jp2k::PreparedJp2kBatch, WsiError>> {
-        // Device routes decode the stored full-resolution codestream only, as
-        // one tile.
-        if !is_one_tile(&self.levels()[0]) || reqs.iter().any(|req| req.level.get() != 0) {
-            return None;
-        }
-        Some((|| {
-            let jobs = reqs
-                .iter()
-                .map(|req| {
-                    crate::core::read_control::check_cancelled_opt(control)?;
-                    self.tile_decode(req)?;
-                    Ok(self.jp2k_job(j2k_core::BackendRequest::Cpu))
-                })
-                .collect::<Result<Vec<_>, WsiError>>()?;
-            crate::decode::jp2k::PreparedJp2kBatch::new(&jobs, workers)
-                .map(|prepared| prepared.with_sequential_cpu_images())
-        })())
-    }
-
     fn tile_encoded_upper_bound(&self, _req: &TileRequest) -> Result<u64, WsiError> {
         Ok(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
     }

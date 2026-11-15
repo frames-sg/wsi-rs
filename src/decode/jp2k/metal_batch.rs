@@ -7,9 +7,7 @@ use j2k::{
 };
 use j2k_metal::MetalBatchDecoder;
 
-use super::device::{
-    device_window_bytes, DeviceWindow, DEVICE_WINDOW_MAX_IMAGES, DEVICE_WINDOW_TARGET_BYTES,
-};
+use super::device::{DeviceWindow, DEVICE_WINDOW_TARGET_BYTES};
 use super::metal_backend::{decode_prepared_jp2k_metal, resident_metal_jp2k_tile};
 use super::prepare::{prepare_jp2k_job, PreparedJp2kJob};
 use super::{Jp2kColorSpace, Jp2kDecodeJob};
@@ -123,72 +121,6 @@ fn decode_groups(
         .prepare(inputs)
         .map_err(|error| WsiError::Jp2k(error.to_string()))?;
     execute_groups(&prepared, slots, metadata, output, sessions, &mut decoder)
-}
-
-pub(super) fn execute_prepared_bounded(
-    prepared: &j2k::PreparedBatch,
-    slots: &[usize],
-    metadata: &[Option<PreparedJp2kJob<'_>>],
-    output: &mut [Option<TileResult>],
-    sessions: &MetalBackendSessions,
-    output_target: u64,
-) -> Result<(), WsiError> {
-    let total = prepared.groups().iter().fold(0_u64, |sum, group| {
-        let (width, height) = group.info().dimensions;
-        sum.saturating_add(
-            device_window_bytes(width, height).saturating_mul(group.images().len() as u64),
-        )
-    });
-    if total <= output_target && slots.len() <= DEVICE_WINDOW_MAX_IMAGES {
-        let mut decoder = MetalBatchDecoder::with_backend_session_and_options(
-            sessions.j2k().clone(),
-            prepared.options(),
-        );
-        return execute_groups(prepared, slots, metadata, output, sessions, &mut decoder);
-    }
-    // Clone only retained image owners. Regrouping preserves strict validation
-    // and reuses their native offset plans without parsing encoded bytes again.
-    let mut images = prepared
-        .groups()
-        .iter()
-        .flat_map(|group| {
-            group
-                .source_indices()
-                .iter()
-                .copied()
-                .zip(group.images().iter().cloned())
-        })
-        .collect::<Vec<_>>();
-    images.sort_unstable_by_key(|(index, _)| *index);
-    let bounded_slots = images
-        .iter()
-        .map(|(index, _)| slots[*index])
-        .collect::<Vec<_>>();
-    let mut images = images.into_iter().map(|(_, image)| image);
-    let mut start = 0;
-    while start < bounded_slots.len() {
-        let end = bounded_end(metadata, &bounded_slots, start, output_target);
-        let batch = j2k::prepare_batch_from_images(
-            images.by_ref().take(end - start).collect(),
-            prepared.options(),
-        )
-        .map_err(|error| WsiError::Jp2k(error.to_string()))?;
-        let mut decoder = MetalBatchDecoder::with_backend_session_and_options(
-            sessions.j2k().clone(),
-            prepared.options(),
-        );
-        execute_groups(
-            &batch,
-            &bounded_slots[start..end],
-            metadata,
-            output,
-            sessions,
-            &mut decoder,
-        )?;
-        start = end;
-    }
-    apply_indexed_errors(prepared.errors(), slots, metadata, output, sessions);
-    Ok(())
 }
 
 pub(super) fn execute_groups(

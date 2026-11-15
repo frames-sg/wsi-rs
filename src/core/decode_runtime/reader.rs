@@ -9,28 +9,8 @@ impl AdaptiveDecodeReader {
         Self { inner, runtime }
     }
 
-    fn read_tiles_adaptive(
-        &self,
-        reqs: &[TileRequest],
-        control: Option<&crate::ReadControl>,
-        context: Option<&crate::core::limits::ReadExecutionContext<'_>>,
-    ) -> Result<Vec<CpuTile>, WsiError> {
-        check_cancelled_opt(control)?;
-        let _ = context;
-        if reqs.is_empty() || self.runtime.options.acceleration == DecodeAcceleration::CpuOnly {
-            return self.read_inner_cpu(reqs, control);
-        }
-        #[cfg(any(feature = "metal", feature = "cuda"))]
-        {
-            self.read_tiles_adaptive_device(reqs, control, context)
-        }
-        #[cfg(not(any(feature = "metal", feature = "cuda")))]
-        {
-            self.read_inner_cpu(reqs, control)
-        }
-    }
-
-    pub(super) fn read_inner_cpu(
+    /// Every acceleration policy decodes CPU-returning reads on the CPU.
+    fn read_tiles_on_cpu(
         &self,
         reqs: &[TileRequest],
         control: Option<&crate::ReadControl>,
@@ -63,13 +43,13 @@ impl SlideReader for AdaptiveDecodeReader {
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         crate::core::batch::exactly_one(
-            self.read_tiles_adaptive(std::slice::from_ref(req), None, None)?,
+            self.read_tiles_on_cpu(std::slice::from_ref(req), None)?,
             "adaptive single tile read",
         )
     }
 
     fn read_tiles_cpu(&self, reqs: &[TileRequest]) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_adaptive(reqs, None, None)
+        self.read_tiles_on_cpu(reqs, None)
     }
 
     fn read_tiles_cpu_controlled(
@@ -77,7 +57,7 @@ impl SlideReader for AdaptiveDecodeReader {
         reqs: &[TileRequest],
         control: &crate::ReadControl,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_adaptive(reqs, Some(control), None)
+        self.read_tiles_on_cpu(reqs, Some(control))
     }
 
     fn read_region_fastpath(
@@ -118,7 +98,7 @@ impl ManagedSlideReader for AdaptiveDecodeReader {
         reqs: &[TileRequest],
         context: &crate::core::limits::ReadExecutionContext<'_>,
     ) -> Result<Vec<CpuTile>, WsiError> {
-        self.read_tiles_adaptive(reqs, context.control, Some(context))
+        self.read_tiles_on_cpu(reqs, context.control)
     }
 
     fn tile_encoded_upper_bound(&self, req: &TileRequest) -> Result<u64, WsiError> {
@@ -152,92 +132,11 @@ impl ManagedSlideReader for AdaptiveDecodeReader {
     }
 }
 
-pub(super) fn batch_uses_jp2k(reader: &dyn SlideReader, reqs: &[TileRequest]) -> bool {
-    jp2k_tile_count(reader, reqs) != 0
-}
-
-pub(super) fn jp2k_tile_count(reader: &dyn SlideReader, reqs: &[TileRequest]) -> usize {
-    reqs.iter()
-        .filter(|request| {
-            matches!(
-                reader.tile_codec_kind(request),
-                TileCodecKind::Jp2k | TileCodecKind::Htj2k
-            )
-        })
-        .count()
-}
-
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
-pub(super) fn route_key_for_batch(
-    reader: &dyn SlideReader,
-    reqs: &[TileRequest],
-    device_identity: &str,
-) -> Option<DecodeRouteKey> {
-    let first = reqs.first()?;
-    if !reqs.iter().all(|request| {
-        request.scene == first.scene
-            && request.series == first.series
-            && request.level == first.level
-    }) {
-        return None;
-    }
-    let codec_kind = reader.tile_codec_kind(first);
-    if !matches!(codec_kind, TileCodecKind::Jp2k | TileCodecKind::Htj2k)
-        || !reqs
-            .iter()
-            .all(|request| reader.tile_codec_kind(request) == codec_kind)
-    {
-        return None;
-    }
-    let level = reader
-        .dataset()
-        .find_level(first.scene, first.series, first.level)?;
-    let dimensions = reqs
-        .iter()
-        .map(|request| logical_tile_dimensions(level, request))
-        .collect::<Option<Vec<_>>>()?;
-    let sample_geometry = RouteSampleGeometry::from_dimensions(dimensions);
-    Some(DecodeRouteKey {
-        dataset_id: reader.dataset().id.0,
-        scene: first.scene.get(),
-        series: first.series.get(),
-        level: first.level.get(),
-        sample_geometry,
-        codec_kind,
-        device_identity: device_identity.to_owned(),
-        sample_tile_count: reqs.len(),
-        cpu_workers: crate::core::batch::cpu_worker_count(),
+fn batch_uses_jp2k(reader: &dyn SlideReader, reqs: &[TileRequest]) -> bool {
+    reqs.iter().any(|request| {
+        matches!(
+            reader.tile_codec_kind(request),
+            TileCodecKind::Jp2k | TileCodecKind::Htj2k
+        )
     })
-}
-
-#[cfg(any(test, feature = "metal", feature = "cuda"))]
-pub(super) fn logical_tile_dimensions(level: &Level, request: &TileRequest) -> Option<(u32, u32)> {
-    match &level.tile_layout {
-        TileLayout::Regular {
-            tile_width,
-            tile_height,
-            tiles_across,
-            tiles_down,
-        } => {
-            let col = u64::try_from(request.col).ok()?;
-            let row = u64::try_from(request.row).ok()?;
-            if col >= *tiles_across || row >= *tiles_down {
-                return None;
-            }
-            let x = col.checked_mul(u64::from(*tile_width))?;
-            let y = row.checked_mul(u64::from(*tile_height))?;
-            let width = level
-                .dimensions
-                .0
-                .checked_sub(x)?
-                .min(u64::from(*tile_width));
-            let height = level
-                .dimensions
-                .1
-                .checked_sub(y)?
-                .min(u64::from(*tile_height));
-            Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
-        }
-        _ => None,
-    }
 }

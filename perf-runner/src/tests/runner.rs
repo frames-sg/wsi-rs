@@ -17,10 +17,10 @@ fn reader_active_diagnostics_exclude_verification_and_keep_routes() {
             verification_us: 90,
         },
     ];
-    let mut diagnostics = Some(json!({"decode_route": {"feature": "metal"}}));
+    let mut diagnostics = Some(json!({"device_decode": {"metal_batch_submissions": 0}}));
     append_reader_timing(&mut diagnostics, &workers, 3000);
     let diagnostics = diagnostics.unwrap();
-    assert_eq!(diagnostics["decode_route"]["feature"], "metal");
+    assert_eq!(diagnostics["device_decode"]["metal_batch_submissions"], 0);
     assert_eq!(diagnostics["reader_timing"]["active_elapsed_us"], 150);
     assert_eq!(
         diagnostics["reader_timing"]["active_bytes_per_second"],
@@ -177,32 +177,49 @@ fn workload_accounting_covers_cache_shares_buffers_and_checksums() {
     assert!(elapsed_micros(Instant::now()) <= 1_000_000);
 }
 
-#[test]
-fn route_diagnostics_distinguish_device_cpu_choice_and_fallback() {
-    let before = RouteTelemetrySnapshot::default();
-    let after = RouteTelemetrySnapshot {
-        metal: RouteBackendSnapshot {
-            device_attempt_tiles: 12,
-            device_tiles: 8,
-            adaptive_cpu_tiles: 3,
-            fallback_tiles: 1,
-            device_failure_fallback_tiles: 1,
-            unavailable_fallback_tiles: 0,
-        },
-        ..RouteTelemetrySnapshot::default()
-    };
+fn telemetry(counters: &[(&str, u64)]) -> RouteTelemetrySnapshot {
+    RouteTelemetrySnapshot {
+        execution: counters
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), *value))
+            .collect(),
+    }
+}
 
-    let diagnostics = route_diagnostics(Some(before), Some(after))
+#[test]
+fn route_diagnostics_report_every_device_decode_counter_delta() {
+    let before = telemetry(&[
+        ("metal_batch_submissions", 4),
+        ("metal_single_decodes", 1),
+        ("cuda_decode_jobs", 0),
+        ("cpu_jp2k_tiles", 10),
+    ]);
+    let after = telemetry(&[
+        ("metal_batch_submissions", 4),
+        ("metal_single_decodes", 3),
+        ("cuda_decode_jobs", 0),
+        ("cpu_jp2k_tiles", 90),
+    ]);
+
+    let diagnostics = route_diagnostics(Some(before.clone()), Some(after))
         .unwrap()
-        .expect("route activity");
-    assert_eq!(diagnostics["decode_route"]["feature"], "metal");
-    assert_eq!(diagnostics["decode_route"]["device_tiles"], 8);
-    assert_eq!(diagnostics["decode_route"]["adaptive_cpu_tiles"], 3);
-    assert_eq!(diagnostics["decode_route"]["fallback_tiles"], 1);
+        .expect("telemetry present");
     assert_eq!(
-        diagnostics["decode_route"]["device_failure_fallback_tiles"],
-        1
+        diagnostics,
+        json!({"device_decode": {
+            "metal_batch_submissions": 0,
+            "metal_single_decodes": 2,
+            "cuda_decode_jobs": 0,
+        }})
     );
+    assert_eq!(route_diagnostics(None, Some(before)).unwrap(), None);
+}
+
+#[test]
+fn route_diagnostics_fail_closed_when_a_device_counter_is_missing() {
+    let partial = telemetry(&[("metal_batch_submissions", 0)]);
+    let error = route_diagnostics(Some(partial.clone()), Some(partial)).unwrap_err();
+    assert!(error.contains("execution.metal_single_decodes"), "{error}");
 }
 
 #[test]

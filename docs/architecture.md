@@ -11,7 +11,7 @@ the [README](../README.md).
 | `src/core/cache.rs`, `src/core/cache/` | Byte-bounded tile caches and shared in-flight decodes. |
 | `src/core/limits.rs` | `SlideLimits` and checked size arithmetic. |
 | `src/core/batch.rs` | The process-wide CPU thread pool (`process_codec_cpu_pool`, `install_codec_cpu`), idle-core accounting, and sharing a batch's CPU work between the caller and idle pool threads. |
-| `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | Chooses CPU or GPU for JPEG 2000 and runs the measurements. |
+| `src/core/decode_runtime.rs`, `src/core/decode_runtime/` | The decode policy (every CPU-returning read decodes on the CPU) and the reader that runs JPEG 2000 batches on the codec pool. |
 | `src/core/file_identity.rs` | Records a source file's identity and checks it before reads. |
 | `src/core/types` | Public data types: `Dataset`, `Level`, requests, `CpuTile`, and tile byte locations (`locations.rs`). `pixels/ycbcr.rs` converts YCbCr to RGB with OpenSlide 4.0.1's integer lookup tables. |
 | `src/formats/<format>` | One module per file format: parse metadata, locate and read tiles. |
@@ -124,22 +124,41 @@ another reader's tiles.
 
 ## GPU decoding
 
-With the `metal` or `cuda` feature, ordinary reads of JPEG 2000 and HTJ2K tiles
-can decode on the GPU. `core::decode_runtime` decides per *route*: a
-combination of slide, level, codec, tile sizes, batch size, CPU thread count
-and GPU. For each route:
+Reads that return tiles in CPU memory (`read_tile`, `read_tiles`,
+`read_region` and the OpenSlide shim) decode on the CPU in every build,
+whatever GPU features are compiled in. `DecodeAcceleration::Auto` and
+`CpuOnly` currently behave the same; `Auto` leaves room to move a codec to the
+GPU in a later minor release if measurements show a win there.
 
-1. The first read uses the CPU.
-2. A later read starts the GPU and times one CPU decode. If starting the GPU
-   takes longer than four CPU decodes, the route stays on the CPU.
-3. The next three reads each time the CPU and the GPU on the same input,
-   alternating which goes first.
-4. The route uses the GPU if the median GPU time is at most 85% of the CPU
-   time. Otherwise it uses the CPU.
+The CPU wins because most of a JPEG 2000 decode is entropy decoding, which is
+serial within each code-block: about 85% of CPU time on 256×256 slide tiles.
+A GPU can only speed up the rest, and its output must then be read back.
+Measured on an M4 Pro (8 performance and 4 efficiency cores) with
+`svs-jp2k-001`'s densest 256×256 tiles, Metal output read back, in
+milliseconds (2026-11-14):
 
-Up to 1,024 route decisions are kept. A GPU error sends the read to the CPU.
-`read_tile_metal` and `read_tile_cuda` skip all of this: they always use the
-GPU and return an error when they can't.
+| CPU decode threads | 1 tile, CPU / Metal | 16 tiles | 256 tiles |
+| ---: | --- | --- | --- |
+| 1 | 0.7 / 4.7 | 20 / 12 | 340 / 67 |
+| 2 | 0.7 / 4.7 | 13 / 12 | 175 / 67 |
+| 4 | 0.7 / 4.7 | 7.3 / 12 | 91 / 67 |
+| 12 | 0.7 / 4.7 | 3.8 / 12 | 43 / 67 |
+
+The Metal column is one batch. wsi-rs submits device work in the windows
+described below, one after another, so 256 tiles take about 200 ms that way.
+Metal JPEG decoding has to walk each scan's Huffman data on the CPU first
+unless the scan has restart markers, which costs about as much as decoding it
+on the CPU. Earlier versions timed the CPU against the GPU for each route at
+run time and kept the faster one; that gained about 3% over a CPU-only build
+in the OpenSlide comparison and was removed. Making every ordinary JPEG 2000
+and JPEG read Metal-first made the same comparison about 25% slower.
+
+To decode on a GPU, call `read_tile_metal`, `read_tiles_metal`,
+`read_tile_cuda` or `read_tiles_cuda`. They handle JPEG 2000 and HTJ2K, always
+use the GPU and return an error when they can't; `download_cpu()` copies a
+tile to CPU memory. A caller that limits decoding to one or two threads and
+reads large batches may find these plus `download_cpu()` faster than an
+ordinary read, so measure that case.
 
 On Metal, compatible tiles decode together in groups of up to 16 images and
 4 MiB of output, counting 4 bytes per pixel. Color conversion from YCbCr to RGB also runs on the GPU, using
@@ -150,8 +169,7 @@ J2K's cooperative batch decoder. Eligible classic reversible RGB8 batches
 overlap CPU entropy decoding with Metal work; reconstruction remains on Metal.
 The requested CPU width is capped by the WSI pool width. Clones share one
 nonblocking cooperative slot, so overlapping reads use ordinary Metal while
-another cooperative read holds it. The setting does not change automatic
-slide acceleration, which uses its own default session.
+another cooperative read holds it.
 
 The 4 MiB window and 16-image cap remain in force. J2K requires at least eight
 eligible, distinct images, so 512×512 tiles cannot reach that threshold within
@@ -302,7 +320,8 @@ compiler.
 
 To capture the results:
 
-1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine, and
+1. Set `WSI_RS_PERF_PINNED_HOST_ID` to a fixed name for the machine. To
+   build the current shim with a GPU feature, also set
    `WSI_RS_PERF_GPU_FEATURE` to `metal` or `cuda`.
 2. Set `WSI_RS_BENCH_PREVIOUS_LIBRARY` to the previous release's shim, then run
    `cargo xtask perf-capture-pair <label>`. This interleaves all three libraries
@@ -316,7 +335,9 @@ To capture the results:
 4. Point `WSI_RS_RC_OPENSLIDE_CAPTURE`, `WSI_RS_RC_PREVIOUS_CAPTURE` and
    `WSI_RS_RC_CURRENT_CAPTURE` at the three capture files.
 
-The gate fails if the current code is slower than allowed or if its pixels
-differ from OpenSlide beyond the corpus color tolerances.
+The gate fails if the current code is slower than allowed, if its pixels
+differ from OpenSlide beyond the corpus color tolerances, or if any wsi-rs
+cell decoded on a GPU: every run must report `device_decode` counters, and
+all of them must be zero.
 The gate rejects captures made by different worker versions, so capture all
 three in one run.

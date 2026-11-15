@@ -67,20 +67,18 @@ pub struct WorkloadResult {
     pub diagnostics: Option<Value>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-struct RouteBackendSnapshot {
-    device_attempt_tiles: u64,
-    device_tiles: u64,
-    adaptive_cpu_tiles: u64,
-    fallback_tiles: u64,
-    device_failure_fallback_tiles: u64,
-    unavailable_fallback_tiles: u64,
-}
+/// Execution counters that count GPU decodes. Ordinary reads leave them
+/// unchanged; only the GPU-resident read methods decode on a device.
+const DEVICE_DECODE_COUNTERS: [&str; 3] = [
+    "metal_batch_submissions",
+    "metal_single_decodes",
+    "cuda_decode_jobs",
+];
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+/// The wsi-rs decode telemetry property: cumulative process-wide counters.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 struct RouteTelemetrySnapshot {
-    metal: RouteBackendSnapshot,
-    cuda: RouteBackendSnapshot,
+    execution: std::collections::BTreeMap<String, u64>,
 }
 
 pub fn run(config: &WorkerConfig) -> Result<WorkerResult, String> {
@@ -503,6 +501,8 @@ fn read_route_telemetry(
         .map_err(|error| format!("invalid wsi-rs route telemetry property: {error}"))
 }
 
+/// GPU decodes the workload made, per counter. Present whenever the slide
+/// exposes wsi-rs telemetry, so a capture can prove the count was zero.
 fn route_diagnostics(
     before: Option<RouteTelemetrySnapshot>,
     after: Option<RouteTelemetrySnapshot>,
@@ -510,54 +510,16 @@ fn route_diagnostics(
     let (Some(before), Some(after)) = (before, after) else {
         return Ok(None);
     };
-    let metal = route_delta(after.metal, before.metal);
-    let cuda = route_delta(after.cuda, before.cuda);
-    let mut active = [("metal", metal), ("cuda", cuda)]
-        .into_iter()
-        .filter(|(_, counters)| route_activity(*counters));
-    let Some((feature, counters)) = active.next() else {
-        return Ok(None);
-    };
-    if active.next().is_some() {
-        return Err("workload reported route activity from both Metal and CUDA".into());
+    let mut device_decode = serde_json::Map::new();
+    for counter in DEVICE_DECODE_COUNTERS {
+        let (Some(before), Some(after)) =
+            (before.execution.get(counter), after.execution.get(counter))
+        else {
+            return Err(format!("wsi-rs route telemetry lacks execution.{counter}"));
+        };
+        device_decode.insert(counter.to_owned(), after.saturating_sub(*before).into());
     }
-    Ok(Some(json!({
-        "decode_route": {
-            "feature": feature,
-            "device_attempt_tiles": counters.device_attempt_tiles,
-            "device_tiles": counters.device_tiles,
-            "adaptive_cpu_tiles": counters.adaptive_cpu_tiles,
-            "fallback_tiles": counters.fallback_tiles,
-            "device_failure_fallback_tiles": counters.device_failure_fallback_tiles,
-            "unavailable_fallback_tiles": counters.unavailable_fallback_tiles,
-        }
-    })))
-}
-
-fn route_activity(counters: RouteBackendSnapshot) -> bool {
-    counters.device_attempt_tiles != 0
-        || counters.device_tiles != 0
-        || counters.adaptive_cpu_tiles != 0
-        || counters.fallback_tiles != 0
-}
-
-fn route_delta(after: RouteBackendSnapshot, before: RouteBackendSnapshot) -> RouteBackendSnapshot {
-    RouteBackendSnapshot {
-        device_attempt_tiles: after
-            .device_attempt_tiles
-            .saturating_sub(before.device_attempt_tiles),
-        device_tiles: after.device_tiles.saturating_sub(before.device_tiles),
-        adaptive_cpu_tiles: after
-            .adaptive_cpu_tiles
-            .saturating_sub(before.adaptive_cpu_tiles),
-        fallback_tiles: after.fallback_tiles.saturating_sub(before.fallback_tiles),
-        device_failure_fallback_tiles: after
-            .device_failure_fallback_tiles
-            .saturating_sub(before.device_failure_fallback_tiles),
-        unavailable_fallback_tiles: after
-            .unavailable_fallback_tiles
-            .saturating_sub(before.unavailable_fallback_tiles),
-    }
+    Ok(Some(json!({ "device_decode": device_decode })))
 }
 
 fn elapsed_micros(started: Instant) -> u64 {

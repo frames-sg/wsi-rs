@@ -403,31 +403,6 @@ fn vsi_codestream_reads_run_on_the_jp2k_decode_pool() {
     assert_eq!(test_count(Event::CpuPoolDispatches) - before, 1);
 }
 
-#[cfg(any(feature = "metal", feature = "cuda"))]
-#[test]
-fn adaptive_vsi_preparation_matches_ordinary_reads_and_rejects_sparse_tiles() {
-    let fixture = write_vsi_fixture(&[("scene", EtsSpec::default())]);
-    let managed = OlympusVsiBackend
-        .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
-        .unwrap();
-    let stored = TileRequest::new(0, 0, 0, 1, 0);
-    let expected = managed.read_tile_cpu(&stored).unwrap();
-    let prepared = managed
-        .prepare_adaptive_jp2k(&[stored.clone(), stored.clone()], 2, None)
-        .expect("VSI participates in adaptive JP2K routing")
-        .unwrap();
-    let actual = prepared.read_cpu().unwrap();
-    assert_eq!(actual.len(), 2);
-    for tile in &actual {
-        assert_eq!(tile.as_u8(), expected.as_u8());
-    }
-    let sparse = TileRequest::new(0, 0, 0, 0, 0);
-    assert!(matches!(
-        managed.prepare_adaptive_jp2k(&[stored, sparse], 2, None),
-        Some(Err(WsiError::Unsupported { .. }))
-    ));
-}
-
 #[cfg(feature = "metal")]
 #[test]
 fn vsi_metal_reads_match_cpu_pixels_and_reject_sparse_tiles() {

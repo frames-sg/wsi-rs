@@ -86,6 +86,107 @@ fn lenient_probe_rejects_scan_before_frame_geometry() {
         .contains("NDPI JPEG header missing SOF marker"));
 }
 
+/// The synthetic header with a zero frame size, which only the lenient
+/// probe reads, and the offset of its SOF0 marker.
+fn zero_sof_header() -> (Vec<u8>, usize) {
+    let mut header = synthetic_dri_420_jpeg_header();
+    let sof = header
+        .windows(2)
+        .position(|bytes| bytes == [0xFF, 0xC0])
+        .expect("synthetic header has SOF0");
+    header[sof + 5..sof + 9].fill(0);
+    (header, sof)
+}
+
+#[test]
+fn lenient_probe_reads_the_header_through_its_scan_header() {
+    let (mut header, _) = zero_sof_header();
+    let through_sos = header.len();
+    // Entropy-coded bytes after the scan header are not part of the header,
+    // whatever they look like.
+    header.extend_from_slice(&[0x12, 0xFF, 0x00, 0xFF, 0xDD, 0x00, 0x04, 0x00, 0x63, 0xFF]);
+
+    let probe = probe_jpeg_geometry_bytes_lenient(&header).unwrap();
+    assert_eq!(probe.header, header[..through_sos]);
+    assert_eq!(probe.dimensions, (0, 0));
+    assert_eq!(probe.restart_interval, 10);
+    assert_eq!((probe.mcu_w, probe.mcu_h), (16, 16));
+    assert_eq!(jpeg_header_prefix(&header).unwrap(), &header[..through_sos]);
+
+    // A zero restart interval, or none, means no restart markers.
+    let mut no_interval = header.clone();
+    no_interval[6..8].fill(0);
+    assert_eq!(
+        probe_jpeg_geometry_bytes_lenient(&no_interval)
+            .unwrap()
+            .restart_interval,
+        0
+    );
+    no_interval.drain(2..8);
+    assert_eq!(
+        probe_jpeg_geometry_bytes_lenient(&no_interval)
+            .unwrap()
+            .restart_interval,
+        0
+    );
+}
+
+#[test]
+fn lenient_probe_rejects_malformed_headers() {
+    let (header, sof) = zero_sof_header();
+    let sos = header
+        .windows(2)
+        .position(|bytes| bytes == [0xFF, 0xDA])
+        .unwrap();
+    let patched = |edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut header = header.clone();
+        edit(&mut header);
+        header
+    };
+    let cases: [(Vec<u8>, &str); 8] = [
+        (
+            patched(&|header| header.insert(2, 0x00)),
+            "NDPI JPEG marker expected at byte 2",
+        ),
+        (
+            patched(&|header| header[5] = 5),
+            "NDPI JPEG DRI segment is malformed",
+        ),
+        (
+            patched(&|header| header[sof + 3] = 6),
+            "NDPI JPEG SOF segment too short",
+        ),
+        (
+            patched(&|header| header[sof + 9] = 4),
+            "NDPI JPEG SOF component table too short",
+        ),
+        (
+            patched(&|header| header[sof + 11] = 0x02),
+            "NDPI JPEG invalid sampling 0x2",
+        ),
+        (
+            patched(&|header| header.truncate(sos)),
+            "NDPI JPEG header is malformed",
+        ),
+        (
+            patched(&|header| header[sos + 1] = 0xD9),
+            "NDPI JPEG header missing SOS marker",
+        ),
+        (header[2..].to_vec(), "NDPI JPEG header missing SOI"),
+    ];
+    for (input, expected) in cases {
+        let error = match probe_jpeg_geometry_bytes_lenient(&input) {
+            Ok(_) => panic!("{expected}: the header should be rejected"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+    assert!(jpeg_header_prefix(&header[..sos])
+        .unwrap_err()
+        .to_string()
+        .contains("NDPI JPEG header missing SOS marker"));
+}
+
 #[test]
 fn ndpi_power_of_two_factor_requires_exact_power_of_two_dimensions() {
     assert_eq!(

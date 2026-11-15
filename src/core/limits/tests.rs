@@ -147,8 +147,7 @@ fn admission_recovers_from_a_poisoned_state_mutex() {
 fn optional_work_respects_operation_and_slide_headroom_without_waiting() {
     let admission = SlideAdmission::new(100);
     let held = admission.reserve(60, None).unwrap();
-    let calibration = std::sync::atomic::AtomicBool::new(false);
-    let context = super::ReadExecutionContext::new(&held, 80, None, &calibration);
+    let context = super::ReadExecutionContext::new(&held, 80, None);
     assert!(context.try_extra(21).unwrap().is_none());
     let extra = context.try_extra(20).unwrap().unwrap();
     assert!(context.try_extra(1).unwrap().is_none());
@@ -161,7 +160,7 @@ fn optional_work_respects_operation_and_slide_headroom_without_waiting() {
     let token = crate::ReadCancellationToken::new();
     token.cancel();
     let control = crate::ReadControl::new(token);
-    let cancelled = super::ReadExecutionContext::new(&held, 80, Some(&control), &calibration);
+    let cancelled = super::ReadExecutionContext::new(&held, 80, Some(&control));
     assert!(matches!(cancelled.try_extra(1), Err(WsiError::Cancelled)));
     assert!(context.try_extra(20).unwrap().is_some());
 }

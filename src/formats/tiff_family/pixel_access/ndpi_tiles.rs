@@ -211,26 +211,14 @@ impl TiffPixelReader {
                     strip_offset,
                     strip_byte_count,
                 )?;
-                let image = extract_dct_blocks(raw.data(), DctExtractOptions::default()).map_err(
-                    |err| WsiError::Jpeg(format!("NDPI raw JPEG retile DCT extract failed: {err}")),
-                )?;
-                let (mcu_width, mcu_height) = ndpi_dct_mcu_dimensions(&image)?;
-                if !(tile_origin_x as u32).is_multiple_of(mcu_width)
-                    || !(tile_origin_y as u32).is_multiple_of(mcu_height)
-                    || !crop_start_x.is_multiple_of(mcu_width)
-                {
-                    return Err(WsiError::Unsupported {
-                        reason: format!(
-                            "NDPI raw JPEG retile requires MCU-aligned frame origins (mcu {}x{})",
-                            mcu_width, mcu_height
-                        ),
-                    });
-                }
                 segments.push(NdpiDctRetileSegment {
                     native_row,
-                    crop_start_mcu: crop_start_x / mcu_width,
-                    crop_mcus: crop_width.div_ceil(mcu_width),
-                    image,
+                    image: extract_ndpi_retile_window(
+                        raw.data(),
+                        (tile_origin_x as u32, tile_origin_y as u32),
+                        crop_start_x,
+                        crop_width,
+                    )?,
                 });
             }
         }

@@ -3,46 +3,15 @@ use crate::{ColorSpace, CpuTileData, CpuTileLayout};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[test]
-fn backend_sessions_expose_identity_and_jp2k_session() {
+fn backend_sessions_expose_the_jp2k_session() {
     let sessions = CudaBackendSessions::default();
 
-    assert_eq!(sessions.device_identity(), "cuda:auto");
     assert_eq!(
         sessions
             .with_j2k(|session| Ok(session.submissions()))
             .unwrap(),
         0
     );
-}
-
-#[test]
-fn backend_sessions_preserve_injected_device_ordinal_identity() {
-    let sessions =
-        CudaBackendSessions::from_session_for_device(j2k_cuda::CudaSession::default(), 7);
-
-    assert_eq!(sessions.device_identity(), "cuda:7");
-}
-
-#[test]
-fn system_default_sessions_dynamically_fall_back_without_a_cuda_runtime() {
-    match CudaBackendSessions::system_default() {
-        Ok(sessions) => {
-            let ordinal = sessions
-                .device_identity()
-                .strip_prefix("cuda:")
-                .expect("CUDA identity prefix")
-                .parse::<usize>()
-                .expect("CUDA identity ordinal");
-            assert_eq!(sessions.device_identity(), format!("cuda:{ordinal}"));
-        }
-        Err(WsiError::Unsupported { reason }) => {
-            assert!(
-                reason.contains("CUDA JP2K acceleration unavailable"),
-                "{reason}"
-            );
-        }
-        Err(error) => panic!("unexpected CUDA initialization error: {error}"),
-    }
 }
 
 #[test]

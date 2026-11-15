@@ -1,28 +1,18 @@
 //! Stacked lossless-crop sources: per-part header validation, coefficient
-//! budgeting, and part-by-part block extraction.
+//! budgeting from j2k-jpeg's estimates, and part-by-part windowed extraction.
 
-use j2k_jpeg::transcode::{extract_dct_blocks, DctExtractOptions, JpegDctImage};
-
-use super::blocks::{
-    append_quantized_block_window, compare_dct_coding_profile, DctProfileMismatch,
-    DctWindowOutOfRange,
+use j2k_jpeg::transcode::{
+    estimate_dct_windows, extract_dct_windows, DctExtractOptions, JpegDctImage, McuRect,
 };
+use j2k_jpeg::JpegError;
+
+use super::blocks::{compare_dct_coding_profile, DctProfileMismatch};
 use super::source::SourceFrame;
-use super::CropWindow;
+use super::CropFailure;
 use crate::error::WsiError;
 
 /// Bytes of one 8x8 block of `i16` coefficients.
 const BLOCK_BYTES: u64 = 64 * 2;
-
-/// Keep an extracted image's coding profile, releasing its coefficients.
-fn without_coefficients(mut image: JpegDctImage) -> JpegDctImage {
-    for component in &mut image.components {
-        component.quantized_blocks = Vec::new();
-        component.dequantized_blocks = Vec::new();
-    }
-    image.restart_index = None;
-    image
-}
 
 /// The cropped window's quantized blocks, gathered from the stack.
 pub(super) struct WindowBlocks {
@@ -37,6 +27,17 @@ pub(super) struct StackPart<'a> {
     pub(super) frame: SourceFrame,
     /// First image row the part covers.
     pub(super) y: u32,
+}
+
+/// A part the crop window touches.
+pub(super) struct TouchedPart {
+    /// Position of the part in the stack.
+    pub(super) index: usize,
+    /// The crop window's MCUs inside the part.
+    pub(super) window: McuRect,
+    /// j2k-jpeg's peak working set for extracting `window`, estimated from
+    /// the part's headers.
+    pub(super) peak_bytes: u64,
 }
 
 /// Validated headers of the stacked parts.
@@ -66,13 +67,13 @@ impl<'a> SourceStack<'a> {
             let frame = SourceFrame::parse(data).map_err(|err| in_part(err, idx, parts.len()))?;
             if idx == 0 {
                 (stack.mcu_width, stack.mcu_height) = frame.mcu_dimensions();
-                stack.width = frame.width;
+                stack.width = frame.width();
             } else {
                 validate_part_matches(idx, &frame, &stack.parts[0].frame)?;
             }
             let y = stack.height;
             stack.height = y
-                .checked_add(frame.height)
+                .checked_add(frame.height())
                 .ok_or_else(|| WsiError::Unsupported {
                     reason: "lossless JPEG crop stack height overflows u32".into(),
                 })?;
@@ -80,11 +81,12 @@ impl<'a> SourceStack<'a> {
         }
         let last = stack.parts.len() - 1;
         for (idx, part) in stack.parts[..last].iter().enumerate() {
-            if !part.frame.height.is_multiple_of(stack.mcu_height) {
+            if !part.frame.height().is_multiple_of(stack.mcu_height) {
                 return Err(WsiError::Unsupported {
                     reason: format!(
                         "lossless JPEG crop stack part {idx} is {} rows tall, not a multiple of the {}-row MCU height",
-                        part.frame.height, stack.mcu_height
+                        part.frame.height(),
+                        stack.mcu_height
                     ),
                 });
             }
@@ -92,161 +94,117 @@ impl<'a> SourceStack<'a> {
         Ok(stack)
     }
 
-    fn part_label(&self, idx: usize) -> String {
-        if self.parts.len() > 1 {
-            format!(" in stack part {idx}")
-        } else {
-            String::new()
-        }
+    /// A codec error about part `idx`, sorted as the crop sorts it.
+    fn part_error(&self, idx: usize, err: JpegError) -> WsiError {
+        in_part(
+            CropFailure::from_decode(err).into_error(),
+            idx,
+            self.parts.len(),
+        )
     }
 
-    /// Entropy-decode each part the window touches, one at a time, and
-    /// collect the window's quantized blocks per component.
-    pub(super) fn window_blocks(&self, window: &CropWindow) -> Result<WindowBlocks, WsiError> {
-        let mut blocks = self.parts[0]
-            .frame
-            .components
-            .iter()
-            .map(|component| {
-                Vec::with_capacity(
-                    window.mcu_cols as usize
-                        * window.mcu_rows as usize
-                        * usize::from(component.h_samp)
-                        * usize::from(component.v_samp),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut profile: Option<JpegDctImage> = None;
-        for (idx, part) in self.parts.iter().enumerate() {
-            let Some(rows) = window.part_mcu_rows(part, self.mcu_height) else {
+    /// The parts `window` touches, each with its MCU window and j2k-jpeg's
+    /// estimate of extracting it. Only headers are read.
+    pub(super) fn touched_parts(&self, window: &CropWindow) -> Result<Vec<TouchedPart>, WsiError> {
+        let mut touched = Vec::new();
+        for (index, part) in self.parts.iter().enumerate() {
+            let Some((first_row, row_count)) = window.part_mcu_rows(part, self.mcu_height) else {
                 continue;
             };
-            let image =
-                extract_dct_blocks(part.data, DctExtractOptions::default()).map_err(|err| {
-                    WsiError::Jpeg(format!(
-                        "lossless JPEG crop DCT extraction failed{}: {err}",
-                        self.part_label(idx)
-                    ))
-                })?;
-            self.validate_extracted(idx, &image, profile.as_ref())?;
-            self.append_part_window(idx, &image, window, rows, &mut blocks)?;
-            if profile.is_none() {
-                profile = Some(without_coefficients(image));
-            }
+            let part_window = McuRect {
+                x: window.mcu_col,
+                y: first_row,
+                width: window.mcu_cols,
+                height: row_count,
+            };
+            let estimate = estimate_dct_windows(
+                part.data,
+                &[part_window],
+                DctExtractOptions::quantized_only(),
+            )
+            .map_err(|err| self.part_error(index, err))?;
+            touched.push(TouchedPart {
+                index,
+                window: part_window,
+                peak_bytes: estimate.peak_bytes as u64,
+            });
         }
-        let profile = profile.ok_or_else(|| {
+        Ok(touched)
+    }
+
+    /// Blocks of each component in the crop window.
+    fn window_block_counts<'s>(&'s self, window: &CropWindow) -> impl Iterator<Item = usize> + 's {
+        let mcus = window.mcu_cols as usize * window.mcu_rows as usize;
+        self.parts[0]
+            .frame
+            .mcu_blocks()
+            .map(move |blocks| mcus * blocks)
+    }
+
+    /// Coefficient bytes held at peak: the cropped window's quantized blocks
+    /// plus the largest working set of extracting one touched part.
+    pub(super) fn coefficient_bytes(&self, window: &CropWindow, touched: &[TouchedPart]) -> u64 {
+        let largest_part = touched.iter().map(|part| part.peak_bytes).max();
+        let window_blocks: usize = self.window_block_counts(window).sum();
+        (window_blocks as u64 * BLOCK_BYTES).saturating_add(largest_part.unwrap_or(0))
+    }
+
+    /// Entropy-decode the window of each touched part, one part at a time,
+    /// and collect the crop window's quantized blocks per component. Parts
+    /// must share the first touched part's coding profile.
+    pub(super) fn window_blocks(
+        &self,
+        window: &CropWindow,
+        touched: &[TouchedPart],
+    ) -> Result<WindowBlocks, WsiError> {
+        let mut blocks = self
+            .window_block_counts(window)
+            .map(Vec::with_capacity)
+            .collect::<Vec<_>>();
+        let mut profile: Option<(usize, JpegDctImage)> = None;
+        for part in touched {
+            let idx = part.index;
+            let mut image = extract_dct_windows(
+                self.parts[idx].data,
+                &[part.window],
+                DctExtractOptions::quantized_only(),
+            )
+            .map_err(|err| self.part_error(idx, err))?
+            .pop()
+            .ok_or_else(|| {
+                WsiError::Jpeg("lossless JPEG crop extraction returned no window".into())
+            })?;
+            if let Some((first, profile)) = &profile {
+                compare_dct_coding_profile(profile, &image)
+                    .map_err(|mismatch| profile_mismatch(idx, *first, mismatch))?;
+            }
+            for (component, dst) in image.components.iter_mut().zip(blocks.iter_mut()) {
+                // Taken, so the part's window is released once it is copied.
+                dst.extend(std::mem::take(&mut component.quantized_blocks));
+            }
+            profile.get_or_insert((idx, image));
+        }
+        let (_, profile) = profile.ok_or_else(|| {
             WsiError::Jpeg("lossless JPEG crop window touches no stack part".into())
         })?;
         Ok(WindowBlocks { profile, blocks })
     }
+}
 
-    /// Append the window's MCU columns of `rows = (first, count)` part MCU
-    /// rows to each component's blocks.
-    fn append_part_window(
-        &self,
-        idx: usize,
-        image: &JpegDctImage,
-        window: &CropWindow,
-        (first_row, row_count): (u32, u32),
-        blocks: &mut [Vec<[i16; 64]>],
-    ) -> Result<(), WsiError> {
-        for (component_idx, (component, dst)) in
-            image.components.iter().zip(blocks.iter_mut()).enumerate()
-        {
-            let h = u32::from(component.h_samp);
-            let v = u32::from(component.v_samp);
-            let appended = match (
-                window.mcu_col.checked_mul(h),
-                first_row.checked_mul(v),
-                window.mcu_cols.checked_mul(h),
-                row_count.checked_mul(v),
-            ) {
-                (Some(block_x), Some(block_y), Some(cols), Some(rows)) => {
-                    append_quantized_block_window(component, block_x, block_y, cols, rows, dst)
-                }
-                _ => Err(DctWindowOutOfRange),
-            };
-            if appended.is_err() {
-                return Err(WsiError::Jpeg(format!(
-                    "lossless JPEG crop window exceeds the block grid of component {component_idx}{}",
-                    self.part_label(idx)
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Coefficient bytes held at peak: the largest touched part's
-    /// extraction plus the cropped window's quantized blocks.
-    pub(super) fn coefficient_bytes(&self, window: &CropWindow) -> Result<u64, WsiError> {
-        let overflow = || WsiError::Unsupported {
-            reason: "lossless JPEG crop coefficient size overflows u64".into(),
-        };
-        let mut largest_part = 0u64;
-        for part in &self.parts {
-            if window.part_mcu_rows(part, self.mcu_height).is_some() {
-                largest_part =
-                    largest_part.max(part.frame.extraction_bytes().ok_or_else(overflow)?);
-            }
-        }
-        let window_bytes = u64::from(window.mcu_cols)
-            .checked_mul(u64::from(window.mcu_rows))
-            .and_then(|mcus| mcus.checked_mul(u64::from(self.parts[0].frame.blocks_per_mcu())))
-            .and_then(|blocks| blocks.checked_mul(BLOCK_BYTES))
-            .ok_or_else(overflow)?;
-        largest_part.checked_add(window_bytes).ok_or_else(overflow)
-    }
-
-    /// Check an extracted part against its header and the first touched part.
-    fn validate_extracted(
-        &self,
-        idx: usize,
-        image: &JpegDctImage,
-        profile: Option<&JpegDctImage>,
-    ) -> Result<(), WsiError> {
-        let frame = &self.parts[idx].frame;
-        let label = self.part_label(idx);
-        if (image.width, image.height) != (frame.width, frame.height)
-            || image.components.len() != frame.components.len()
-        {
-            return Err(WsiError::Jpeg(format!(
-                "lossless JPEG crop extraction disagrees with the SOF header{label}"
-            )));
-        }
-        let (mcu_width, mcu_height) = frame.mcu_dimensions();
-        let mcu_cols = frame.width.div_ceil(mcu_width);
-        let mcu_rows = frame.height.div_ceil(mcu_height);
-        for (component_idx, (component, header)) in
-            image.components.iter().zip(&frame.components).enumerate()
-        {
-            let h = u32::from(header.h_samp);
-            let v = u32::from(header.v_samp);
-            if (component.h_samp, component.v_samp) != (header.h_samp, header.v_samp)
-                || component.block_cols != mcu_cols * h
-                || component.block_rows != mcu_rows * v
-            {
-                return Err(WsiError::Jpeg(format!(
-                    "lossless JPEG crop component {component_idx} block grid disagrees with the SOF header{label}"
-                )));
-            }
-        }
-        let Some(profile) = profile else {
-            return Ok(());
-        };
-        compare_dct_coding_profile(profile, image).map_err(|mismatch| WsiError::Unsupported {
-            reason: match mismatch {
-                DctProfileMismatch::ColorProfile => format!(
-                    "lossless JPEG crop stack part {idx} decodes to a different color space than the first part"
-                ),
-                DctProfileMismatch::Component(component_idx) => format!(
-                    "lossless JPEG crop stack part {idx} component {component_idx} uses different sampling or quant tables than the first part"
-                ),
-            },
-        })
+fn profile_mismatch(idx: usize, first: usize, mismatch: DctProfileMismatch) -> WsiError {
+    WsiError::Unsupported {
+        reason: match mismatch {
+            DctProfileMismatch::ColorProfile => format!(
+                "lossless JPEG crop stack part {idx} decodes to a different color space than part {first}"
+            ),
+            DctProfileMismatch::Component(component) => format!(
+                "lossless JPEG crop stack part {idx} component {component} uses a different quant table or sampling than part {first}"
+            ),
+        },
     }
 }
 
-/// Prefix a part's parse error with its stack position.
+/// Prefix a part's error with its stack position.
 fn in_part(err: WsiError, idx: usize, count: usize) -> WsiError {
     if count <= 1 {
         return err;
@@ -260,52 +218,92 @@ fn in_part(err: WsiError, idx: usize, count: usize) -> WsiError {
     }
 }
 
+/// Refuses a part whose header cannot share a frame with part 0's. Quant
+/// tables are matched when parts are extracted.
 fn validate_part_matches(
     idx: usize,
     frame: &SourceFrame,
     first: &SourceFrame,
 ) -> Result<(), WsiError> {
-    let mismatch = |what: String| {
-        Err(WsiError::Unsupported {
-            reason: format!("lossless JPEG crop stack part {idx} {what}"),
-        })
-    };
-    if frame.width != first.width {
-        return mismatch(format!(
+    let (sof, first_sof) = (&frame.sof, &first.sof);
+    let sampling = sof.sampling.components().iter();
+    let differing = sampling
+        .zip(first_sof.sampling.components())
+        .enumerate()
+        .find(|(_, (actual, expected))| actual != expected);
+    let what = if frame.width() != first.width() {
+        format!(
             "is {} pixels wide, part 0 is {}",
-            frame.width, first.width
-        ));
-    }
-    if frame.components.len() != first.components.len() {
-        return mismatch(format!(
-            "has {} components, part 0 has {}",
-            frame.components.len(),
-            first.components.len()
-        ));
-    }
-    for (component_idx, (actual, expected)) in
-        frame.components.iter().zip(&first.components).enumerate()
-    {
-        if (actual.h_samp, actual.v_samp) != (expected.h_samp, expected.v_samp) {
-            return mismatch(format!(
-                "component {component_idx} samples {}x{}, part 0 samples {}x{}",
-                actual.h_samp, actual.v_samp, expected.h_samp, expected.v_samp
-            ));
+            frame.width(),
+            first.width()
+        )
+    } else if sof.component_ids != first_sof.component_ids {
+        format!(
+            "has components {:?}, part 0 has {:?}",
+            sof.component_ids, first_sof.component_ids
+        )
+    } else if let Some((component, (actual, expected))) = differing {
+        format!(
+            "component {component} samples {}x{}, part 0 samples {}x{}",
+            actual.0, actual.1, expected.0, expected.1
+        )
+    } else if frame.color != first.color {
+        "signals color with different JFIF/Adobe markers than part 0".into()
+    } else {
+        return Ok(());
+    };
+    Err(WsiError::Unsupported {
+        reason: format!("lossless JPEG crop stack part {idx} {what}"),
+    })
+}
+
+/// The cropped image in source coordinates and its MCU window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CropWindow {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    mcu_col: u32,
+    mcu_cols: u32,
+    mcu_row: u32,
+    mcu_rows: u32,
+    pub(super) tile_region: (u32, u32, u32, u32),
+}
+
+impl CropWindow {
+    pub(super) fn new(
+        rect: (u32, u32, u32, u32),
+        stack: &SourceStack<'_>,
+    ) -> Result<Self, WsiError> {
+        let (x, y, _, _) = rect;
+        let (x_end, y_end) = super::clamp_rect(rect, (stack.width, stack.height))?;
+        let x0 = x - x % stack.mcu_width;
+        let y0 = y - y % stack.mcu_height;
+        let (width, height) = (x_end - x0, y_end - y0);
+        if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+            return Err(WsiError::Unsupported {
+                reason: format!(
+                    "lossless JPEG crop of {width}x{height} exceeds the 65535-pixel JPEG SOF limit"
+                ),
+            });
         }
-        if actual.quant_table != expected.quant_table {
-            return mismatch(format!(
-                "component {component_idx} uses a different quant table than part 0"
-            ));
-        }
-        if actual.id != expected.id {
-            return mismatch(format!(
-                "component {component_idx} has ID {}, part 0 has ID {}",
-                actual.id, expected.id
-            ));
-        }
+        Ok(Self {
+            width,
+            height,
+            mcu_col: x0 / stack.mcu_width,
+            mcu_cols: width.div_ceil(stack.mcu_width),
+            mcu_row: y0 / stack.mcu_height,
+            mcu_rows: height.div_ceil(stack.mcu_height),
+            tile_region: (x - x0, y - y0, x_end - x, y_end - y),
+        })
     }
-    if frame.color != first.color {
-        return mismatch("signals color with different JFIF/Adobe markers than part 0".into());
+
+    /// The window's MCU rows inside `part`, as (first row within the part,
+    /// row count); `None` when the window does not touch the part.
+    fn part_mcu_rows(&self, part: &StackPart<'_>, mcu_height: u32) -> Option<(u32, u32)> {
+        let part_first = part.y / mcu_height;
+        let part_end = part_first + part.frame.height().div_ceil(mcu_height);
+        let first = self.mcu_row.max(part_first);
+        let end = (self.mcu_row + self.mcu_rows).min(part_end);
+        (first < end).then(|| (first - part_first, end - first))
     }
-    Ok(())
 }

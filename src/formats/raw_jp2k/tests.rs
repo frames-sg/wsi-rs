@@ -302,6 +302,53 @@ fn reduced_levels_match_openjpeg_reduced_decodes_exactly() {
     }
 }
 
+/// An image area at an odd reference-grid origin reduces to
+/// `ceil((origin + size) / 2^r) - ceil(origin / 2^r)` samples (ITU-T T.800
+/// B.5), not `ceil(size / 2^r)`: 37 x 28 and 18 x 14 here, where the image's
+/// own size alone gives 38 x 28 and 19 x 14. Levels and pixels must match
+/// OpenJPEG's reduced decodes.
+#[test]
+fn reduced_levels_follow_the_reference_grid_origin() {
+    let fixture = write_fixture(
+        "j2k",
+        include_bytes!("../../../tests/fixtures/jp2k/openjpeg_rgb_75x56_origin5x3_53.j2k"),
+    );
+    let reader = RawJp2kBackend
+        .open(&fixture.path)
+        .expect("open origin fixture");
+    let levels = &reader.dataset().scenes[0].series[0].levels;
+    assert_eq!(levels.len(), 5, "four decompositions expose five levels");
+    assert_eq!(levels[0].dimensions, (75, 56));
+    for (level, reference) in [
+        (
+            1_u32,
+            include_bytes!("../../../tests/fixtures/jp2k/openjpeg_rgb_75x56_origin5x3_53.r1.ppm")
+                .as_slice(),
+        ),
+        (
+            2,
+            include_bytes!("../../../tests/fixtures/jp2k/openjpeg_rgb_75x56_origin5x3_53.r2.ppm")
+                .as_slice(),
+        ),
+    ] {
+        let expected = load_ppm(reference);
+        assert_eq!(
+            levels[level as usize].dimensions,
+            (u64::from(expected.width()), u64::from(expected.height())),
+            "level {level}"
+        );
+        let tile = reader
+            .read_tile_cpu(&TileRequest::new(0, 0, level, 0, 0))
+            .expect("reduced tile");
+        assert_eq!((tile.width(), tile.height()), expected.dimensions());
+        assert_eq!(
+            tile.as_u8(),
+            Some(expected.as_raw().as_slice()),
+            "level {level}"
+        );
+    }
+}
+
 /// Small enough to tile the 16x12 fixtures: a level wider or taller than 4 px
 /// becomes 4 px tiles.
 const SMALL_GRID: LevelGrid = LevelGrid {
@@ -431,7 +478,7 @@ fn default_grid_tiles_levels_over_4096_px_in_1024_px_tiles() {
 }
 
 #[test]
-fn tiled_full_resolution_passes_the_whole_codestream_through_without_an_adaptive_route() {
+fn tiled_full_resolution_passes_the_whole_codestream_through() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let reader = open_with_grid(&fixture.path, SMALL_GRID);
     let first = TileRequest::new(0, 0, 0, 0, 0);
@@ -446,10 +493,6 @@ fn tiled_full_resolution_passes_the_whole_codestream_through_without_an_adaptive
         reader.tile_location(&first).unwrap(),
         TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
     );
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    assert!(reader
-        .prepare_adaptive_jp2k(std::slice::from_ref(&first), 2, None)
-        .is_none());
     // 16x12 in 4 px tiles has columns 0 to 3 and rows 0 to 2.
     for outside in [
         TileRequest::new(0, 0, 0, 4, 0),
@@ -501,7 +544,7 @@ fn exposed_levels_follow_the_codestream_decomposition_count() {
 }
 
 #[test]
-fn reduced_levels_have_no_passthrough_or_adaptive_route() {
+fn reduced_levels_have_no_passthrough() {
     let fixture = write_fixture("j2k", RGB_CODESTREAM);
     let managed = RawJp2kBackend
         .open_with_config(&fixture.path, BackendOpenConfig::deterministic())
@@ -516,10 +559,6 @@ fn reduced_levels_have_no_passthrough_or_adaptive_route() {
         managed.tile_location(&reduced).unwrap(),
         TileLocation::NotAddressable(NotAddressableReason::CodestreamWindow)
     );
-    #[cfg(any(feature = "metal", feature = "cuda"))]
-    assert!(managed
-        .prepare_adaptive_jp2k(std::slice::from_ref(&reduced), 2, None)
-        .is_none());
     let slide = crate::Slide::open(&fixture.path).unwrap();
     let tile = slide.read_tile(&reduced).unwrap();
     assert_eq!((tile.width(), tile.height()), (8, 6));

@@ -1,33 +1,44 @@
 //! Lossless, coefficient-domain JPEG cropping.
 //!
-//! A crop entropy-decodes the source to quantized DCT blocks, keeps an
-//! MCU-aligned window of blocks, and entropy-codes that window as a new
-//! baseline JPEG, as `jpegtran -crop` does. Quantized coefficients and quant
-//! tables never change, so the crop decodes to the source's samples. Pixels of
+//! A crop entropy-decodes an MCU-aligned window of the source to quantized
+//! DCT blocks and entropy-codes that window as a new baseline JPEG, as
+//! `jpegtran -crop` does. Quantized coefficients and quant tables never
+//! change, so the crop decodes to the source's samples. Pixels of
 //! unsubsampled components match exactly; subsampled chroma can differ along
 //! the crop's edges, because fancy upsampling reads neighbouring blocks.
-//! A single-JPEG crop whose coefficients do not fit its budget returns the
-//! whole JPEG with the tile located in it, as JPEG 2000 and JPEG XR raw
-//! tiles cut from a larger image do.
+//!
+//! j2k-jpeg does the cropping: [`j2k_jpeg::transcode::lossless_crop`] for one
+//! stored JPEG, and windowed coefficient extraction for JPEGs stacked into
+//! one image, which this module assembles and re-emits. What stays here is
+//! WSI policy: a single-JPEG crop that is not available returns the whole
+//! JPEG with the tile located in it, as JPEG 2000 and JPEG XR raw tiles cut
+//! from a larger image do.
 
 mod blocks;
 mod source;
 mod stack;
 
 pub(crate) use blocks::{
-    append_quantized_block_window, assemble_baseline_dct_image, compare_dct_coding_profile,
-    dct_mcu_dimensions, DctProfileMismatch,
+    assemble_baseline_dct_image, compare_dct_coding_profile, dct_mcu_dimensions, DctProfileMismatch,
 };
 
+use j2k_jpeg::transcode::{lossless_crop, LosslessCropError, LosslessCropOptions};
+use j2k_jpeg::{JpegEncodeError, JpegError, SofKind};
+
 use super::dct_reemit::{encode_baseline_dct_image_with_markers, DctFrameMarkers};
-use super::frame::{next_jpeg_segment, JpegFrameInfo};
-use super::is_sof_marker;
+use super::frame::JpegFrameInfo;
 use crate::core::types::{
     Compression, EncodedTilePhotometricInterpretation, PixelRect, RawCompressedTile,
 };
 use crate::error::WsiError;
 use source::SourceFrame;
-use stack::{SourceStack, StackPart, WindowBlocks};
+use stack::{CropWindow, SourceStack, TouchedPart, WindowBlocks};
+
+/// The resources a crop's coefficient working set and output are charged to.
+const COEFFICIENT_RESOURCE: &str = "lossless JPEG crop DCT coefficients";
+const OUTPUT_RESOURCE: &str = "lossless JPEG crop output";
+/// JPEG's limit on the 8x8 blocks of one MCU (T.81 B.2.3).
+const MAX_BLOCKS_PER_MCU: u32 = 10;
 
 /// Result of a lossless JPEG crop: the cropped window, or the whole source
 /// when the crop does not fit its limits.
@@ -87,8 +98,10 @@ impl LosslessJpeg {
 const MAX_CROP_BLOCK_BYTES: u64 = 416;
 /// Quantization and Huffman tables, frame and scan headers of a crop.
 const CROP_HEADER_BYTES: u64 = 1024;
-/// Peak coefficient bytes per extracted source block: quantized and
-/// dequantized `i16` planes plus the progressive `i32` accumulation plane.
+/// Reserved coefficient bytes per source block. j2k-jpeg extracts one
+/// quantized `i16` plane (128 bytes a block) and, for progressive and
+/// multi-scan sources, accumulates a whole-image `i32` plane (256 more);
+/// the rest covers its restart index and result metadata.
 const MAX_EXTRACTED_BLOCK_BYTES: u64 = 2 * 64 * 2 + 64 * 4;
 /// Coefficient bytes per block of the cropped window.
 const WINDOW_BLOCK_BYTES: u64 = 64 * 2;
@@ -110,9 +123,12 @@ pub(crate) fn lossless_crop_output_bound(source_len: u64, width: u32, height: u3
         .saturating_add(max_blocks(width, height).saturating_mul(MAX_CROP_BLOCK_BYTES))
 }
 
-/// Upper bound on the coefficient bytes a crop of a `crop` (width, height)
-/// rectangle holds when its source JPEG is at most `source` (width, height):
-/// the whole source extracted, plus the cropped window.
+/// Upper bound on the coefficient working set of a crop of a `crop` (width,
+/// height) rectangle when its source JPEG is at most `source` (width,
+/// height): the whole source extracted, plus the cropped window. Admission
+/// reserves it before the source is read; it is never below the peak
+/// j2k-jpeg estimates from the source's headers
+/// ([`j2k_jpeg::transcode::estimate_dct_windows`]), which gates the crop.
 pub(crate) fn lossless_crop_coefficient_bound(source: (u32, u32), crop: (u32, u32)) -> u64 {
     max_blocks(source.0, source.1)
         .saturating_mul(MAX_EXTRACTED_BLOCK_BYTES)
@@ -124,9 +140,10 @@ pub(crate) fn lossless_crop_coefficient_bound(source: (u32, u32), crop: (u32, u3
 /// `source_len` source bytes held, the JFIF/Adobe segments the crop copies
 /// out of them (at most `source_len` more) and the worst-case output are set
 /// aside.
-/// A single-JPEG crop that needs more returns the whole JPEG instead
-/// ([`lossless_crop_or_whole_jpeg`]); a stacked crop fails with
-/// [`WsiError::ResourceLimit`]. Either is decided before any entropy decoding.
+/// A single-JPEG crop whose extraction j2k-jpeg estimates above it returns
+/// the whole JPEG instead ([`lossless_crop_or_whole_jpeg`]); a stacked crop
+/// fails with [`WsiError::ResourceLimit`]. Either is decided before any
+/// entropy decoding.
 pub(crate) fn lossless_crop_coefficient_budget(
     reservation: u64,
     source_len: u64,
@@ -161,31 +178,141 @@ pub(crate) fn lossless_crop_raw_tile(
     .into_raw_tile(tile)
 }
 
+/// A crop j2k-jpeg did not make. Every codec error is sorted by variant.
+#[derive(Debug)]
+pub(super) enum CropFailure {
+    /// The stream is intact as far as it was read, but its crop is not
+    /// available: it needs more working storage than admitted, or j2k-jpeg
+    /// does not cut its coding. A single stored JPEG that raw passthrough
+    /// can describe is returned whole instead; otherwise this error stands.
+    Unavailable(WsiError),
+    /// The request or the stream is invalid. Nothing stands in for the crop.
+    Invalid(WsiError),
+}
+
+impl CropFailure {
+    /// The error of a crop that has no whole JPEG to return instead.
+    pub(super) fn into_error(self) -> WsiError {
+        match self {
+            Self::Unavailable(err) | Self::Invalid(err) => err,
+        }
+    }
+
+    /// Sorts a header-parse or coefficient-extraction error.
+    pub(super) fn from_decode(err: JpegError) -> Self {
+        match err {
+            // Working storage beyond what was admitted, which j2k-jpeg
+            // decides from the headers, before any entropy decoding.
+            JpegError::MemoryCapExceeded { requested, cap } => {
+                Self::Unavailable(WsiError::ResourceLimit {
+                    resource: COEFFICIENT_RESOURCE,
+                    requested: requested as u64,
+                    limit: cap as u64,
+                })
+            }
+            // Valid JPEG the crop does not cut.
+            JpegError::NotImplemented { .. }
+            | JpegError::UnsupportedSof { .. }
+            | JpegError::UnsupportedPredictor { .. }
+            | JpegError::UnsupportedBitDepth { .. }
+            | JpegError::UnsupportedComponentCount { .. }
+            | JpegError::UnsupportedColorSpace { .. }
+            | JpegError::ZeroDimension { .. }
+            | JpegError::DimensionOverflow { .. } => Self::Unavailable(WsiError::Unsupported {
+                reason: format!("lossless JPEG crop does not cut this JPEG: {err}"),
+            }),
+            JpegError::RectOutOfBounds {
+                rect,
+                width,
+                height,
+            } => Self::Invalid(
+                clamp_rect((rect.x, rect.y, rect.w, rect.h), (width, height))
+                    .err()
+                    .unwrap_or_else(|| WsiError::Unsupported {
+                        reason: format!("lossless JPEG crop rectangle is invalid: {err}"),
+                    }),
+            ),
+            // Everything else is a malformed or corrupt stream, or a codec
+            // failure. `JpegError` is non-exhaustive: a variant added later
+            // is an error too, never a silent whole-JPEG answer.
+            err => Self::Invalid(WsiError::Jpeg(format!(
+                "lossless JPEG crop could not read its source: {err}"
+            ))),
+        }
+    }
+}
+
+impl From<LosslessCropError> for CropFailure {
+    fn from(err: LosslessCropError) -> Self {
+        match err {
+            LosslessCropError::Decode(err) => Self::from_decode(err),
+            // The coefficients are valid but baseline JPEG cannot hold them:
+            // 16-bit quantization values, a lone component sampled 2x2, or
+            // magnitudes beyond the baseline Huffman categories.
+            LosslessCropError::Encode(JpegEncodeError::InvalidDctImage { reason }) => {
+                Self::Unavailable(WsiError::Unsupported {
+                    reason: format!(
+                        "lossless JPEG crop cannot re-emit its source as baseline JPEG: {reason}"
+                    ),
+                })
+            }
+            // The crop is larger than j2k-jpeg emits.
+            LosslessCropError::Encode(JpegEncodeError::MemoryCapExceeded { requested, cap }) => {
+                Self::Unavailable(WsiError::ResourceLimit {
+                    resource: OUTPUT_RESOURCE,
+                    requested: requested as u64,
+                    limit: cap as u64,
+                })
+            }
+            LosslessCropError::Encode(err) => Self::Invalid(WsiError::Jpeg(format!(
+                "lossless JPEG crop re-emission failed: {err}"
+            ))),
+        }
+    }
+}
+
+/// Refuses a multi-component frame whose `sampling` factors (h, v) put more
+/// blocks in an MCU than JPEG allows. j2k-jpeg parses such a header, so a
+/// stream that breaks the standard this way would otherwise be handed on
+/// whole when its crop is unavailable.
+fn check_blocks_per_mcu(sampling: &[(u8, u8)]) -> Result<(), WsiError> {
+    let blocks: u32 = sampling
+        .iter()
+        .map(|&(h, v)| u32::from(h) * u32::from(v))
+        .sum();
+    if sampling.len() > 1 && blocks > MAX_BLOCKS_PER_MCU {
+        return Err(WsiError::Jpeg(format!(
+            "lossless JPEG crop requires at most {MAX_BLOCKS_PER_MCU} blocks per MCU, got {blocks}"
+        )));
+    }
+    Ok(())
+}
+
 /// Crop `rect = (x, y, w, h)` out of one standalone JPEG without changing
-/// quantized coefficients, or return the JPEG unchanged when the crop does
-/// not fit `max_coefficient_bytes`.
+/// quantized coefficients, or return the JPEG unchanged when the crop is not
+/// available.
 ///
-/// The crop starts at the MCU-grid corner at or above-left of (x, y) and
-/// ends at the requested far edges clamped to the source, so an aligned
-/// origin yields exactly the requested tile and `tile_region` locates the
-/// request otherwise. The origin must lie inside the source. Baseline and
-/// progressive Huffman sources with 1 or 3 8-bit components are supported;
-/// the output is baseline sequential, keeps the source's JFIF/Adobe markers,
-/// component IDs and quant tables, and has no restart interval.
+/// The crop is [`j2k_jpeg::transcode::lossless_crop`]'s: it starts at the
+/// MCU-grid corner at or above-left of (x, y) and ends at the requested far
+/// edges clamped to the source, so an aligned origin yields exactly the
+/// requested tile and `tile_region` locates the request otherwise. Baseline
+/// and progressive Huffman sources with 1 or 3 8-bit components are
+/// supported; the output is baseline sequential, keeps the source's
+/// JFIF/Adobe markers, component IDs and quant tables, and has no restart
+/// interval.
 ///
-/// `max_coefficient_bytes` bounds the coefficient planes held at once: the
-/// whole source's extraction plus the cropped window. The headers decide,
-/// before any entropy decoding: when that estimate exceeds the budget, the
-/// result is `standalone` itself, still lossless and needing no coefficient
-/// memory, with `tile_region` locating the clamped request in the whole
-/// image as a crop would (a caller can cut it with `jpegtran -crop`). Its
-/// frame description comes from the same headers, so the photometric
-/// interpretation matches the crop's. A crop larger than `max_output_bytes`,
-/// which the standard Huffman tables it is coded with can make of a source
-/// coded with optimized ones, also returns `standalone` when that fits.
-/// So does an 8-bit gray or 3-component baseline or progressive JPEG the
-/// crop does not cut, such as a single component sampled 2x2; other coding
-/// processes stay unsupported.
+/// `max_coefficient_bytes` bounds the extraction's working set as j2k-jpeg
+/// estimates it from the headers: the window's quantized blocks for a
+/// single-scan baseline source, the whole image's accumulation for a
+/// progressive or multi-scan one. When the estimate exceeds the budget,
+/// nothing is entropy-decoded and the result is `standalone` itself, with
+/// `tile_region` locating the clamped request in the whole image as a crop
+/// would. A crop larger than `max_output_bytes`, which the standard Huffman
+/// tables it is coded with can make of a source coded with optimized ones,
+/// also returns `standalone` when that fits. So does an 8-bit gray or
+/// 3-component baseline or progressive JPEG the crop does not cut, such as a
+/// single component sampled 2x2. Other coding processes stay unsupported,
+/// and a malformed or corrupt stream is always an error ([`CropFailure`]).
 pub(crate) fn lossless_crop_or_whole_jpeg(
     standalone: Vec<u8>,
     rect: (u32, u32, u32, u32),
@@ -193,71 +320,40 @@ pub(crate) fn lossless_crop_or_whole_jpeg(
     max_output_bytes: u64,
 ) -> Result<LosslessJpeg, WsiError> {
     check_nonzero_rect(rect)?;
-    let stack = match SourceStack::parse(&[standalone.as_slice()]) {
-        Ok(stack) => stack,
-        Err(crop_err @ WsiError::Unsupported { .. }) => {
-            let info = is_huffman_dct_frame(&standalone)?
-                .then(|| whole_jpeg_info(&standalone))
-                .flatten()
-                .ok_or(crop_err)?;
-            return whole_jpeg(standalone, info, rect);
-        }
-        Err(err) => return Err(err),
-    };
-    let window = CropWindow::new(rect, &stack)?;
-    if stack.coefficient_bytes(&window)? <= max_coefficient_bytes {
-        let crop = crop_window(stack, &window)?;
-        if crop.data.len() as u64 <= max_output_bytes || standalone.len() as u64 > max_output_bytes
+    let (x, y, w, h) = rect;
+    let mut options = LosslessCropOptions::default();
+    options.max_working_bytes = usize::try_from(max_coefficient_bytes).unwrap_or(usize::MAX);
+    let unavailable = match lossless_crop(&standalone, j2k_jpeg::Rect { x, y, w, h }, options) {
+        Ok(crop)
+            if crop.data.len() as u64 <= max_output_bytes
+                || standalone.len() as u64 > max_output_bytes =>
         {
-            return Ok(crop);
+            let source = whole_jpeg_info(&standalone)?.ok_or_else(|| {
+                WsiError::Jpeg("lossless JPEG crop could not describe its source".into())
+            })?;
+            return Ok(LosslessJpeg {
+                data: crop.data,
+                width: crop.width,
+                height: crop.height,
+                tile_region: (crop.region.x, crop.region.y, crop.region.w, crop.region.h),
+                info: JpegFrameInfo {
+                    width: crop.width,
+                    height: crop.height,
+                    ..source
+                },
+            });
         }
-    }
-    let info = whole_jpeg_info(&standalone).ok_or_else(|| {
-        WsiError::Jpeg("lossless JPEG crop could not describe the whole source".into())
-    })?;
-    whole_jpeg(standalone, info, rect)
-}
-
-/// Whether `data`'s frame is baseline (SOF0) or progressive (SOF2) Huffman.
-fn is_huffman_dct_frame(data: &[u8]) -> Result<bool, WsiError> {
-    let mut offset = 2;
-    while let Some(segment) = next_jpeg_segment(data, offset)? {
-        if is_sof_marker(segment.marker) {
-            return Ok(matches!(segment.marker, 0xC0 | 0xC2));
-        }
-        offset = segment.end;
-    }
-    Ok(false)
-}
-
-/// `standalone`'s frame from its headers, when it is an 8-bit gray or
-/// 3-component JPEG, as raw JPEG passthrough describes them.
-fn whole_jpeg_info(standalone: &[u8]) -> Option<JpegFrameInfo> {
-    let header = j2k_jpeg::Decoder::inspect(standalone).ok()?;
-    let samples_per_pixel = match (header.bit_depth, header.sampling.len()) {
-        (8, count @ (1 | 3)) => count as u16,
-        _ => return None,
+        Ok(crop) => WsiError::ResourceLimit {
+            resource: OUTPUT_RESOURCE,
+            requested: crop.data.len() as u64,
+            limit: max_output_bytes,
+        },
+        Err(err) => match CropFailure::from(err) {
+            CropFailure::Unavailable(err) => err,
+            CropFailure::Invalid(err) => return Err(err),
+        },
     };
-    let (width, height) = header.dimensions;
-    if width == 0 || height == 0 {
-        return None;
-    }
-    Some(JpegFrameInfo {
-        width,
-        height,
-        bits_allocated: 8,
-        samples_per_pixel,
-        photometric_interpretation: crop_photometric(header.color_space).ok()?,
-    })
-}
-
-/// `standalone` unchanged, with `rect` clamped to it as a crop clamps it.
-fn whole_jpeg(
-    standalone: Vec<u8>,
-    info: JpegFrameInfo,
-    rect: (u32, u32, u32, u32),
-) -> Result<LosslessJpeg, WsiError> {
-    let (x, y, _, _) = rect;
+    let info = whole_jpeg_info(&standalone)?.ok_or(unavailable)?;
     let (x_end, y_end) = clamp_rect(rect, (info.width, info.height))?;
     Ok(LosslessJpeg {
         data: standalone,
@@ -268,43 +364,69 @@ fn whole_jpeg(
     })
 }
 
+/// `standalone`'s frame from its headers, when it is an 8-bit gray or
+/// 3-component baseline or progressive Huffman JPEG, as raw JPEG passthrough
+/// describes them. A header j2k-jpeg parses but that breaks the JPEG
+/// standard is an error: such a stream is never handed on whole.
+fn whole_jpeg_info(standalone: &[u8]) -> Result<Option<JpegFrameInfo>, WsiError> {
+    let Ok(header) = j2k_jpeg::Decoder::inspect(standalone) else {
+        return Ok(None);
+    };
+    let photometric_interpretation = match header.color_space {
+        j2k_jpeg::ColorSpace::Grayscale => EncodedTilePhotometricInterpretation::Monochrome2,
+        j2k_jpeg::ColorSpace::Rgb => EncodedTilePhotometricInterpretation::Rgb,
+        j2k_jpeg::ColorSpace::YCbCr => EncodedTilePhotometricInterpretation::YbrFull422,
+        _ => return Ok(None),
+    };
+    let (width, height) = header.dimensions;
+    if !matches!(header.sof_kind, SofKind::Baseline8 | SofKind::Progressive8)
+        || !matches!(header.sampling.len(), 1 | 3)
+        || width == 0
+        || height == 0
+    {
+        return Ok(None);
+    }
+    check_blocks_per_mcu(header.sampling.components())?;
+    Ok(Some(JpegFrameInfo {
+        width,
+        height,
+        bits_allocated: 8,
+        samples_per_pixel: header.sampling.len() as u16,
+        photometric_interpretation,
+    }))
+}
+
 /// [`lossless_crop_or_whole_jpeg`]'s crop for an image stored as standalone
 /// JPEGs stacked top to bottom, such as TIFF strips. `parts[i]` covers the
 /// rows starting at the sum of the previous parts' heights.
 ///
-/// Every part must share width, components, sampling factors, quant tables
-/// and color signalling, and every part but the last must be a whole number
-/// of MCU rows tall. Only the parts the crop touches are entropy-decoded, one
-/// at a time; `max_coefficient_bytes` bounds the largest touched part's
-/// extraction plus the cropped window. No single stored JPEG holds the
-/// stack, so exceeding it returns [`WsiError::ResourceLimit`] before any
-/// entropy decoding.
+/// j2k-jpeg crops one JPEG, so the stack is assembled here from its windowed
+/// extraction of each part. Every part must share width, components,
+/// sampling factors and color signalling, every part the crop touches the
+/// same quant tables, and every part but the last must be a whole number of
+/// MCU rows tall. Only the MCU windows of the touched parts are
+/// entropy-decoded, one part at a time; `max_coefficient_bytes` bounds the
+/// cropped window's blocks plus the largest working set j2k-jpeg estimates
+/// for one touched part. No single stored JPEG holds the stack, so exceeding
+/// it returns [`WsiError::ResourceLimit`] before any entropy decoding.
 pub(crate) fn lossless_crop_jpeg_stack(
     parts: &[&[u8]],
     rect: (u32, u32, u32, u32),
     max_coefficient_bytes: u64,
 ) -> Result<LosslessJpeg, WsiError> {
-    let (stack, window) = parse_crop(parts, rect)?;
-    let requested = stack.coefficient_bytes(&window)?;
+    check_nonzero_rect(rect)?;
+    let stack = SourceStack::parse(parts)?;
+    let window = CropWindow::new(rect, &stack)?;
+    let touched = stack.touched_parts(&window)?;
+    let requested = stack.coefficient_bytes(&window, &touched);
     if requested > max_coefficient_bytes {
         return Err(WsiError::ResourceLimit {
-            resource: "lossless JPEG crop DCT coefficients",
+            resource: COEFFICIENT_RESOURCE,
             requested,
             limit: max_coefficient_bytes,
         });
     }
-    crop_window(stack, &window)
-}
-
-/// The validated headers of `parts` and the MCU window of `rect` in them.
-fn parse_crop<'a>(
-    parts: &[&'a [u8]],
-    rect: (u32, u32, u32, u32),
-) -> Result<(SourceStack<'a>, CropWindow), WsiError> {
-    check_nonzero_rect(rect)?;
-    let stack = SourceStack::parse(parts)?;
-    let window = CropWindow::new(rect, &stack)?;
-    Ok((stack, window))
+    crop_window(&stack, &window, &touched)
 }
 
 fn check_nonzero_rect((_, _, width, height): (u32, u32, u32, u32)) -> Result<(), WsiError> {
@@ -339,90 +461,28 @@ fn clamp_rect(
     Ok((x_end.min(width), y_end.min(height)))
 }
 
-/// Entropy-decode the parts `window` touches and code its blocks as a new
-/// baseline JPEG.
-fn crop_window(stack: SourceStack<'_>, window: &CropWindow) -> Result<LosslessJpeg, WsiError> {
-    let WindowBlocks { profile, blocks } = stack.window_blocks(window)?;
+/// Entropy-decode `window` in the parts it touches and code its blocks as a
+/// new baseline JPEG.
+fn crop_window(
+    stack: &SourceStack<'_>,
+    window: &CropWindow,
+    touched: &[TouchedPart],
+) -> Result<LosslessJpeg, WsiError> {
+    let WindowBlocks { profile, blocks } = stack.window_blocks(window, touched)?;
     let image = assemble_baseline_dct_image(&profile, window.width, window.height, blocks)?;
     let reference = &stack.parts[0];
     let markers = DctFrameMarkers {
         app_segments: SourceFrame::color_app_segments(reference.data)?,
-        component_ids: reference.frame.components.iter().map(|c| c.id).collect(),
+        component_ids: reference.frame.sof.component_ids.clone(),
     };
     let data = encode_baseline_dct_image_with_markers(&image, &markers)?;
+    let info = whole_jpeg_info(&data)?
+        .ok_or_else(|| WsiError::Jpeg("lossless JPEG crop could not describe its output".into()))?;
     Ok(LosslessJpeg {
         data,
         width: window.width,
         height: window.height,
         tile_region: window.tile_region,
-        info: JpegFrameInfo {
-            width: window.width,
-            height: window.height,
-            bits_allocated: 8,
-            samples_per_pixel: image.components.len() as u16,
-            photometric_interpretation: crop_photometric(profile.color_space)?,
-        },
+        info,
     })
-}
-
-/// The photometric interpretation a crop of a `color_space` JPEG reports.
-fn crop_photometric(
-    color_space: j2k_jpeg::ColorSpace,
-) -> Result<EncodedTilePhotometricInterpretation, WsiError> {
-    match color_space {
-        j2k_jpeg::ColorSpace::Grayscale => Ok(EncodedTilePhotometricInterpretation::Monochrome2),
-        j2k_jpeg::ColorSpace::Rgb => Ok(EncodedTilePhotometricInterpretation::Rgb),
-        j2k_jpeg::ColorSpace::YCbCr => Ok(EncodedTilePhotometricInterpretation::YbrFull422),
-        other => Err(WsiError::Unsupported {
-            reason: format!("lossless JPEG crop does not support {other:?} JPEG"),
-        }),
-    }
-}
-
-/// The cropped image in source coordinates and its MCU window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CropWindow {
-    width: u32,
-    height: u32,
-    mcu_col: u32,
-    mcu_cols: u32,
-    mcu_row: u32,
-    mcu_rows: u32,
-    tile_region: (u32, u32, u32, u32),
-}
-
-impl CropWindow {
-    fn new(rect: (u32, u32, u32, u32), stack: &SourceStack<'_>) -> Result<Self, WsiError> {
-        let (x, y, _, _) = rect;
-        let (x_end, y_end) = clamp_rect(rect, (stack.width, stack.height))?;
-        let x0 = x - x % stack.mcu_width;
-        let y0 = y - y % stack.mcu_height;
-        let (width, height) = (x_end - x0, y_end - y0);
-        if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
-            return Err(WsiError::Unsupported {
-                reason: format!(
-                    "lossless JPEG crop of {width}x{height} exceeds the 65535-pixel JPEG SOF limit"
-                ),
-            });
-        }
-        Ok(Self {
-            width,
-            height,
-            mcu_col: x0 / stack.mcu_width,
-            mcu_cols: width.div_ceil(stack.mcu_width),
-            mcu_row: y0 / stack.mcu_height,
-            mcu_rows: height.div_ceil(stack.mcu_height),
-            tile_region: (x - x0, y - y0, x_end - x, y_end - y),
-        })
-    }
-
-    /// The window's MCU rows inside `part`, as (first row within the part,
-    /// row count); `None` when the window does not touch the part.
-    fn part_mcu_rows(&self, part: &StackPart<'_>, mcu_height: u32) -> Option<(u32, u32)> {
-        let part_first = part.y / mcu_height;
-        let part_end = part_first + part.frame.height.div_ceil(mcu_height);
-        let first = self.mcu_row.max(part_first);
-        let end = (self.mcu_row + self.mcu_rows).min(part_end);
-        (first < end).then(|| (first - part_first, end - first))
-    }
 }

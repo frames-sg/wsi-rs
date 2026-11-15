@@ -8,12 +8,13 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::core::types::*;
+use crate::decode::jpeg::frame::jpeg_sof_dimensions;
 use crate::decode::jpeg::is_sof_marker;
 use crate::formats::tiff_family::container::tags;
 use crate::formats::tiff_family::container::TiffContainer;
 use crate::formats::tiff_family::error::{IfdId, TiffParseError};
 use crate::properties::Properties;
-use j2k_jpeg::Decoder as J2kJpegDecoder;
+use j2k_jpeg::{Decoder as J2kJpegDecoder, JpegError};
 
 use super::common::{
     add_tiff_resolution_properties, associated_channels, compression_from_tag, level_area,
@@ -63,146 +64,81 @@ fn probe_jpeg_geometry_bytes_via_j2k(header: Vec<u8>) -> Result<JpegGeometryProb
     }
 }
 
+/// Geometry of a JPEG header j2k-jpeg does not inspect, such as one stating
+/// the zero frame size NDPI writes for levels past the JPEG size limit.
+/// j2k-jpeg still walks its marker segments and parses its restart interval;
+/// the frame header's size and sampling factors are read as stored.
 fn probe_jpeg_geometry_bytes_lenient(header: &[u8]) -> Result<JpegGeometryProbe, TiffParseError> {
-    if header.len() < 2 || header[0..2] != [0xFF, 0xD8] {
-        return Err(TiffParseError::Structure(
-            "NDPI JPEG header missing SOI".into(),
-        ));
+    let structure = |message: String| TiffParseError::Structure(message);
+    if !header.starts_with(&[0xFF, 0xD8]) {
+        return Err(structure("NDPI JPEG header missing SOI".into()));
     }
 
     let mut restart_interval = 0;
-    let mut dimensions = None;
-    let mut mcu_w = None;
-    let mut mcu_h = None;
-    let mut i = 2usize;
-
-    while i + 1 < header.len() {
-        if header[i] != 0xFF {
-            return Err(TiffParseError::Structure(format!(
-                "NDPI JPEG marker expected at byte {i}"
-            )));
-        }
-        while i < header.len() && header[i] == 0xFF {
-            i += 1;
-        }
-        if i >= header.len() {
-            break;
-        }
-        let marker = header[i];
-        i += 1;
-
-        match marker {
+    let mut frame = None;
+    for segment in j2k_jpeg::iter_segments(header) {
+        let segment = segment.map_err(|err| match err {
+            JpegError::InvalidMarker { offset, .. } => {
+                structure(format!("NDPI JPEG marker expected at byte {offset}"))
+            }
+            err => structure(format!("NDPI JPEG header is malformed: {err}")),
+        })?;
+        match segment.marker {
             0xD9 => break,
             0xDA => {
-                let prefix = jpeg_header_prefix(header)?;
-                let mcu_w = mcu_w.ok_or_else(|| {
-                    TiffParseError::Structure("NDPI JPEG header missing SOF marker".into())
-                })?;
-                let mcu_h = mcu_h.ok_or_else(|| {
-                    TiffParseError::Structure("NDPI JPEG header missing SOF marker".into())
-                })?;
+                let (dimensions, mcu_w, mcu_h) =
+                    frame.ok_or_else(|| structure("NDPI JPEG header missing SOF marker".into()))?;
                 return Ok(JpegGeometryProbe {
-                    header: prefix.to_vec(),
-                    dimensions: dimensions.unwrap_or((0, 0)),
+                    header: header[..segment.payload_offset + segment.payload.len()].to_vec(),
+                    dimensions,
                     restart_interval,
                     mcu_w,
                     mcu_h,
                 });
             }
-            0x00 | 0xD0..=0xD7 => continue,
+            0xDD => {
+                restart_interval = j2k_jpeg::parse_dri(segment.payload)
+                    .map_err(|err| structure(format!("NDPI JPEG DRI segment is malformed: {err}")))?
+                    .unwrap_or(0);
+            }
+            marker if is_sof_marker(marker) => frame = Some(sof_geometry(segment.payload)?),
             _ => {}
         }
-
-        if i + 1 >= header.len() {
-            return Err(TiffParseError::Structure(format!(
-                "NDPI JPEG marker FF{marker:02X} has truncated length"
-            )));
-        }
-        let seg_len = u16::from_be_bytes([header[i], header[i + 1]]) as usize;
-        if seg_len < 2 || i + seg_len > header.len() {
-            return Err(TiffParseError::Structure(format!(
-                "NDPI JPEG marker FF{marker:02X} has invalid length {seg_len}"
-            )));
-        }
-        let payload = &header[i + 2..i + seg_len];
-        if is_sof_marker(marker) {
-            if payload.len() < 6 {
-                return Err(TiffParseError::Structure(
-                    "NDPI JPEG SOF segment too short".into(),
-                ));
-            }
-            let component_count = payload[5] as usize;
-            dimensions = Some((
-                u32::from(u16::from_be_bytes([payload[3], payload[4]])),
-                u32::from(u16::from_be_bytes([payload[1], payload[2]])),
-            ));
-            let components = &payload[6..];
-            if components.len() < component_count * 3 {
-                return Err(TiffParseError::Structure(
-                    "NDPI JPEG SOF component table too short".into(),
-                ));
-            }
-            let mut max_h = 1u8;
-            let mut max_v = 1u8;
-            for component in components.as_chunks::<3>().0.iter().take(component_count) {
-                let sampling = component[1];
-                let h = sampling >> 4;
-                let v = sampling & 0x0F;
-                if h == 0 || v == 0 {
-                    return Err(TiffParseError::Structure(format!(
-                        "NDPI JPEG invalid sampling {h}x{v}"
-                    )));
-                }
-                max_h = max_h.max(h);
-                max_v = max_v.max(v);
-            }
-            mcu_w = Some(u32::from(max_h) * 8);
-            mcu_h = Some(u32::from(max_v) * 8);
-        } else if marker == 0xDD {
-            if payload.len() < 2 {
-                return Err(TiffParseError::Structure(
-                    "NDPI JPEG DRI segment too short".into(),
-                ));
-            }
-            restart_interval = u16::from_be_bytes([payload[0], payload[1]]);
-        }
-        i += seg_len;
     }
 
-    Err(TiffParseError::Structure(
-        "NDPI JPEG header missing SOS marker".into(),
-    ))
+    Err(structure("NDPI JPEG header missing SOS marker".into()))
 }
 
-fn jpeg_header_prefix(header: &[u8]) -> Result<&[u8], TiffParseError> {
-    let mut i = 0usize;
-    while i + 1 < header.len() {
-        if header[i] != 0xFF {
-            i += 1;
-            continue;
+/// The (width, height), zero sizes included, and the MCU width and height a
+/// SOF payload states.
+fn sof_geometry(payload: &[u8]) -> Result<((u32, u32), u32, u32), TiffParseError> {
+    let structure = |message: String| TiffParseError::Structure(message);
+    let (Some(dimensions), Some(&component_count)) = (jpeg_sof_dimensions(payload), payload.get(5))
+    else {
+        return Err(structure("NDPI JPEG SOF segment too short".into()));
+    };
+    let components = payload[6..]
+        .get(..usize::from(component_count) * 3)
+        .ok_or_else(|| structure("NDPI JPEG SOF component table too short".into()))?;
+    let (mut max_h, mut max_v) = (1u8, 1u8);
+    for component in components.as_chunks::<3>().0 {
+        let (h, v) = (component[1] >> 4, component[1] & 0x0F);
+        if h == 0 || v == 0 {
+            return Err(structure(format!("NDPI JPEG invalid sampling {h}x{v}")));
         }
-        let marker = header[i + 1];
-        if marker == 0xD8 || marker == 0x00 || (0xD0..=0xD7).contains(&marker) {
-            i += 2;
-            continue;
-        }
-        if i + 3 >= header.len() {
-            break;
-        }
-        let seg_len = u16::from_be_bytes([header[i + 2], header[i + 3]]) as usize;
-        if seg_len < 2 || i + 2 + seg_len > header.len() {
-            return Err(TiffParseError::Structure(format!(
-                "NDPI JPEG marker FF{marker:02X} has invalid length {seg_len}"
-            )));
-        }
-        if marker == 0xDA {
-            return Ok(&header[..i + 2 + seg_len]);
-        }
-        i += 2 + seg_len;
+        max_h = max_h.max(h);
+        max_v = max_v.max(v);
     }
-    Err(TiffParseError::Structure(
-        "NDPI JPEG header missing SOS marker".into(),
-    ))
+    Ok((dimensions, u32::from(max_h) * 8, u32::from(max_v) * 8))
+}
+
+/// The bytes of `header` through its first SOS header, as j2k-jpeg walks them.
+fn jpeg_header_prefix(header: &[u8]) -> Result<&[u8], TiffParseError> {
+    j2k_jpeg::iter_segments(header)
+        .map_while(Result::ok)
+        .find(|segment| segment.marker == 0xDA)
+        .map(|sos| &header[..sos.payload_offset + sos.payload.len()])
+        .ok_or_else(|| TiffParseError::Structure("NDPI JPEG header missing SOS marker".into()))
 }
 
 // ── NdpiInterpreter ───────────────────────────────────────────────

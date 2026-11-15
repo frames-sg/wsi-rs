@@ -10,41 +10,12 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone)]
 pub struct CudaBackendSessions {
     j2k: Arc<Mutex<j2k_cuda::CudaSession>>,
-    device_identity: Arc<str>,
 }
 
 impl CudaBackendSessions {
     pub fn new() -> Self {
-        Self::from_session_with_identity(j2k_cuda::CudaSession::default(), "cuda:auto")
-    }
-
-    pub(crate) fn system_default() -> Result<Self, WsiError> {
-        let context = j2k_cuda_runtime::CudaContext::system_default().map_err(|source| {
-            WsiError::Unsupported {
-                reason: format!("CUDA JP2K acceleration unavailable: {source}"),
-            }
-        })?;
-        let device_ordinal = context.device_ordinal();
-        Ok(Self::from_session_for_device(
-            j2k_cuda::CudaSession::with_context(context),
-            device_ordinal,
-        ))
-    }
-
-    pub(crate) fn from_session_for_device(
-        j2k: j2k_cuda::CudaSession,
-        device_ordinal: usize,
-    ) -> Self {
-        Self::from_session_with_identity(j2k, format!("cuda:{device_ordinal}"))
-    }
-
-    fn from_session_with_identity(
-        j2k: j2k_cuda::CudaSession,
-        device_identity: impl Into<Arc<str>>,
-    ) -> Self {
         Self {
-            j2k: Arc::new(Mutex::new(j2k)),
-            device_identity: device_identity.into(),
+            j2k: Arc::new(Mutex::new(j2k_cuda::CudaSession::default())),
         }
     }
 
@@ -56,10 +27,6 @@ impl CudaBackendSessions {
             reason: "CUDA J2K session lock is poisoned".into(),
         })?;
         decode(&mut session)
-    }
-
-    pub(crate) fn device_identity(&self) -> &str {
-        &self.device_identity
     }
 }
 

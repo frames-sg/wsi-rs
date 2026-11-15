@@ -11,6 +11,10 @@ pub(super) fn decode_prepared_jobs(
     jobs: Vec<Result<PreparedJp2kJob<'_>, WsiError>>,
     sessions: &crate::output::cuda::CudaBackendSessions,
 ) -> Vec<TileResult> {
+    crate::core::execution_telemetry::record(
+        crate::core::execution_telemetry::Event::CudaDecodeJobs,
+        jobs.iter().filter(|job| job.is_ok()).count(),
+    );
     let mut output = Vec::with_capacity(jobs.len());
     let mut jobs = jobs.into_iter().peekable();
     while let Some(job) = jobs.next() {

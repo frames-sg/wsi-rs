@@ -1,4 +1,6 @@
-use j2k::{CpuDecodeParallelism, J2kDecoder as J2kJp2kDecoder, J2kScratchPool, J2kView};
+use j2k::{
+    CpuDecodeParallelism, J2kDecoder as J2kJp2kDecoder, J2kReferenceGrid, J2kScratchPool, J2kView,
+};
 use j2k_core::{BackendRequest as J2kBackendRequest, PixelFormat as J2kPixelFormat, Rect};
 
 use super::output::sample_buffer_from_rgb8_bytes;
@@ -43,7 +45,8 @@ pub(crate) fn decode_jp2k_region_to_sample_buffer(
     let view = J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
     let header = codestream_header_from_view(&view)?;
     validate_component_contract(&header)?;
-    let (width, height) = reduced_jp2k_region_dimensions(region, reduction_levels)?;
+    let (width, height) =
+        reduced_jp2k_region_dimensions(&view.reference_grid(), region, reduction_levels)?;
     validate_decoded_size(width, height)?;
     let row_bytes = width as usize * J2kPixelFormat::Rgb8.bytes_per_pixel();
     let mut rgb = vec![0; row_bytes * height as usize];
@@ -70,84 +73,76 @@ pub(crate) fn decode_jp2k_region_to_sample_buffer(
     )
 }
 
-fn reduction_denominator(reduction_levels: u8) -> Result<u32, WsiError> {
-    1_u32
-        .checked_shl(u32::from(reduction_levels))
-        .ok_or_else(|| WsiError::Jp2k(format!("unrepresentable JP2K reduction {reduction_levels}")))
-}
-
-/// Reduced dimensions follow the codestream grid: each level rounds up.
+/// Dimensions of the whole image at `reduction_levels`, on the codestream's
+/// reference grid, image origin included.
 pub(crate) fn reduced_jp2k_dimensions(
-    (width, height): (u32, u32),
+    grid: &J2kReferenceGrid,
     reduction_levels: u8,
 ) -> Result<(u32, u32), WsiError> {
-    let denominator = reduction_denominator(reduction_levels)?;
-    Ok((width.div_ceil(denominator), height.div_ceil(denominator)))
+    let (w, h) = grid.image_size;
+    reduced_jp2k_region_dimensions(grid, Rect { x: 0, y: 0, w, h }, reduction_levels)
 }
 
-/// The reduced grid cells a region covers, as j2k decodes them: its start
-/// rounds down and its end rounds up.
+/// The reduced samples a decode of `region`, in full-resolution coordinates,
+/// covers at `reduction_levels`, as j2k decodes it.
 pub(super) fn reduced_jp2k_region_dimensions(
+    grid: &J2kReferenceGrid,
     region: Rect,
     reduction_levels: u8,
 ) -> Result<(u32, u32), WsiError> {
-    let denominator = reduction_denominator(reduction_levels)?;
-    let span = |start: u32, len: u32| {
-        start
-            .checked_add(len)
-            .map(|end| end.div_ceil(denominator) - start / denominator)
-            .ok_or_else(|| WsiError::Jp2k("JP2K region extends past u32 coordinates".into()))
-    };
-    Ok((span(region.x, region.w)?, span(region.y, region.h)?))
+    grid.reduced_region(region, reduction_levels)
+        .map(|reduced| (reduced.w, reduced.h))
+        .ok_or_else(|| {
+            WsiError::Jp2k(format!(
+                "JP2K region {}x{} at ({}, {}) is empty, leaves the {}x{} image, or has unrepresentable reduction {reduction_levels}",
+                region.w, region.h, region.x, region.y, grid.image_size.0, grid.image_size.1,
+            ))
+        })
 }
 
-/// The deepest reduction this codestream decodes. The main header advertises a
-/// resolution ladder that component overrides may shorten, so each candidate
-/// depth is proven with a one-pixel decode before it is offered.
+/// The deepest reduction every component and tile of this codestream decodes.
+/// j2k reports the ladder after tile and component coding-style overrides
+/// shorten the main header's. A level whose reduced image holds no samples,
+/// which a small image at an odd reference-grid origin can reach, is not
+/// offered. The top-left reduced sample is then decoded at that depth, so a
+/// codestream whose packets cannot be read fails when it is opened.
 pub(crate) fn jp2k_decodable_reduction_levels(data: &[u8]) -> Result<u8, WsiError> {
-    let view = J2kView::parse(data).map_err(|error| WsiError::Jp2k(error.to_string()))?;
-    let advertised = view.info().resolution_levels.saturating_sub(1);
-    let mut decoder =
-        J2kJp2kDecoder::from_view(view).map_err(|error| WsiError::Jp2k(error.to_string()))?;
-    decoder.set_cpu_decode_parallelism(CpuDecodeParallelism::Serial);
-    let mut pool = J2kScratchPool::default();
-    let mut pixel = [0_u8; 3];
-    let stride = pixel.len();
-    let origin = Rect {
+    let probe_error =
+        |error: j2k::J2kError| WsiError::Jp2k(format!("j2k JP2K reduction probe failed: {error}"));
+    let mut decoder = J2kJp2kDecoder::new(data).map_err(probe_error)?;
+    let grid = decoder.reference_grid();
+    let mut levels = decoder.max_reduction_levels().map_err(probe_error)?;
+    while levels > 0 && matches!(reduced_jp2k_dimensions(&grid, levels)?, (0, _) | (_, 0)) {
+        levels -= 1;
+    }
+    if levels == 0 {
+        return Ok(0);
+    }
+    // One full-resolution block of 2^levels per side, clamped to the image,
+    // spans exactly one reduced sample whatever the origin; a single pixel
+    // at (0, 0) covers none when the origin is not a multiple of 2^levels.
+    let side = 1_u32 << levels;
+    let probe = Rect {
         x: 0,
         y: 0,
-        w: 1,
-        h: 1,
+        w: grid.image_size.0.min(side),
+        h: grid.image_size.1.min(side),
     };
-    for levels in (1..=advertised).rev() {
-        match decoder.decode_region_scaled_pow2_into(
-            &mut pool,
-            &mut pixel,
-            stride,
+    let (width, height) = reduced_jp2k_region_dimensions(&grid, probe, levels)?;
+    let row_bytes = width as usize * J2kPixelFormat::Rgb8.bytes_per_pixel();
+    let mut pixels = vec![0_u8; row_bytes * height as usize];
+    decoder.set_cpu_decode_parallelism(CpuDecodeParallelism::Serial);
+    decoder
+        .decode_region_scaled_pow2_into(
+            &mut J2kScratchPool::default(),
+            &mut pixels,
+            row_bytes,
             J2kPixelFormat::Rgb8,
-            origin,
+            probe,
             levels,
-        ) {
-            Ok(_) => return Ok(levels),
-            Err(j2k::J2kError::Unsupported(j2k_core::Unsupported { what }))
-                if matches!(
-                    what,
-                    "requested reduction exceeds the codestream resolution ladder"
-                        | "tile coding style has fewer levels than the requested reduction"
-                        | "requested reduction exceeds supported image geometry"
-                        | "native backend did not honor the requested reduction level"
-                ) =>
-            {
-                tracing::debug!(what, levels, "JP2K reduction is not decodable");
-            }
-            Err(error) => {
-                return Err(WsiError::Jp2k(format!(
-                    "j2k JP2K reduction probe failed: {error}"
-                )));
-            }
-        }
-    }
-    Ok(0)
+        )
+        .map_err(probe_error)?;
+    Ok(levels)
 }
 
 fn decode_jp2k_to_sample_buffer_with_backend(
