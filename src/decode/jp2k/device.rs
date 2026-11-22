@@ -89,7 +89,7 @@ pub(crate) const DEVICE_WINDOW_MAX_IMAGES: usize = 16;
 pub(crate) const DEVICE_WINDOW_TARGET_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Bytes one decoded image counts against a device window: 4 per pixel for
-/// every backend, so Metal, CUDA and the adaptive router size windows alike.
+/// every backend, so Metal and CUDA size windows alike.
 pub(crate) fn device_window_bytes(width: u32, height: u32) -> u64 {
     u64::from(width)
         .saturating_mul(u64::from(height))

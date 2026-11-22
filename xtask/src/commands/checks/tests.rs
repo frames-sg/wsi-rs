@@ -308,18 +308,142 @@ fn fuzz_campaigns_pass_the_budget_to_libfuzzer() {
     );
 }
 
-#[test]
-fn corpus_runs_name_tests_that_exist_in_their_targets() {
-    for run in CORPUS_RUNS {
-        let ["--test", target] = run.target else {
-            continue;
-        };
-        let source = repo_file(&format!("tests/{target}.rs"));
-        let name = match run.tests {
-            CorpusTests::Exact(name) => format!("fn {name}()"),
-            CorpusTests::Prefix(prefix) => format!("fn {prefix}"),
-            CorpusTests::AllIgnored => "#[ignore".to_string(),
-        };
-        assert!(source.contains(&name), "tests/{target}.rs has no `{name}`");
+/// Every `#[ignore]` test of the wsi-rs crate, with the cargo target arguments
+/// that select its test binary.
+fn ignored_tests() -> Vec<(Vec<String>, String)> {
+    fn rust_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
     }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
+    let mut tests = Vec::new();
+    for file in files {
+        let relative = file.strip_prefix(&root).unwrap();
+        let source = fs::read_to_string(&file).unwrap();
+        let mut lines = source.lines();
+        while let Some(line) = lines.next() {
+            if !line.trim_start().starts_with("#[ignore") {
+                continue;
+            }
+            let name = lines
+                .by_ref()
+                .find_map(|line| line.split_once("fn "))
+                .and_then(|(_, rest)| rest.split(['(', '<']).next())
+                .unwrap_or_else(|| panic!("{}: #[ignore] without a test", relative.display()));
+            let parts = relative
+                .iter()
+                .map(|part| part.to_str().unwrap())
+                .collect::<Vec<_>>();
+            let target = match parts.as_slice() {
+                ["src", ..] => vec!["--lib".to_string()],
+                ["tests", file] => {
+                    vec![
+                        "--test".to_string(),
+                        file.strip_suffix(".rs").unwrap().to_string(),
+                    ]
+                }
+                _ => panic!(
+                    "{}: map this file's ignored tests to their test target",
+                    relative.display()
+                ),
+            };
+            tests.push((target, name.to_string()));
+        }
+    }
+    tests
+}
+
+/// Every ignored-test run of `parity-corpus-test`, `conformance-test` and
+/// `perf-experiment`.
+fn lane_runs() -> Vec<IgnoredRun> {
+    let experiments = PERF_EXPERIMENTS.iter().flat_map(|experiments| {
+        experiments.names.iter().map(|name| IgnoredRun {
+            target: experiments.target,
+            features: Some(experiments.features),
+            tests: IgnoredTests::Exact(name),
+        })
+    });
+    CORPUS_RUNS
+        .iter()
+        .map(|corpus_run| corpus_run.run)
+        .chain(
+            CONFORMANCE_SUITES
+                .iter()
+                .flat_map(|suite| suite.runs.iter().copied()),
+        )
+        .chain(experiments)
+        .collect()
+}
+
+fn run_covers(run: &IgnoredRun, target: &[String], name: &str) -> bool {
+    run.target
+        .iter()
+        .copied()
+        .eq(target.iter().map(String::as_str))
+        && run.tests.selects(name)
+}
+
+#[test]
+fn every_ignored_test_runs_in_a_lane() {
+    let runs = lane_runs();
+    let tests = ignored_tests();
+    assert!(!tests.is_empty());
+    for (target, name) in tests {
+        assert!(
+            runs.iter().any(|run| run_covers(run, &target, &name)),
+            "`{name}` ({}) is ignored, but no parity-corpus-test, conformance-test or \
+             perf-experiment lane runs it",
+            target.join(" ")
+        );
+    }
+}
+
+#[test]
+fn every_lane_run_selects_an_ignored_test() {
+    let tests = ignored_tests();
+    for run in lane_runs() {
+        assert!(
+            tests
+                .iter()
+                .any(|(target, name)| run_covers(&run, target, name)),
+            "{run:?} selects no ignored test"
+        );
+    }
+}
+
+#[test]
+fn ignored_selections_match_the_last_path_segment() {
+    let listing = "formats::tests::opens_slide: test\n\
+                   formats::tests::opens_slide_twice: test\n\
+                   \n\
+                   2 tests, 0 benchmarks\n";
+    let selected = |tests| {
+        selected_ignored_tests(
+            listing,
+            &IgnoredRun {
+                target: LIB,
+                features: None,
+                tests,
+            },
+        )
+    };
+    assert_eq!(
+        selected(IgnoredTests::Exact("opens_slide")),
+        ["formats::tests::opens_slide"]
+    );
+    assert!(selected(IgnoredTests::Exact("tests::opens_slide")).is_empty());
+    assert!(selected(IgnoredTests::Exact("opens")).is_empty());
+    assert_eq!(selected(IgnoredTests::Prefix("opens_slide_")).len(), 1);
+    assert_eq!(selected(IgnoredTests::All).len(), 2);
 }

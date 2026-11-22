@@ -163,24 +163,46 @@ const COVERAGE_STEP: &[&str] = &[
     "--locked",
 ];
 
+const LIB: &[&str] = &["--lib"];
+
+/// Which ignored tests of one test target a run selects, by the last segment
+/// of each test's path.
+#[derive(Clone, Copy, Debug)]
+enum IgnoredTests {
+    /// The ignored test with this name.
+    Exact(&'static str),
+    /// Every ignored test whose name starts with this prefix.
+    Prefix(&'static str),
+    /// Every ignored test in the target.
+    All,
+}
+
+impl IgnoredTests {
+    fn selects(self, path: &str) -> bool {
+        let name = path.rsplit("::").next().unwrap_or(path);
+        match self {
+            Self::Exact(exact) => name == exact,
+            Self::Prefix(prefix) => name.starts_with(prefix),
+            Self::All => true,
+        }
+    }
+}
+
+/// Ignored tests in one cargo test target, built with `features`.
+#[derive(Clone, Copy, Debug)]
+struct IgnoredRun {
+    target: &'static [&'static str],
+    features: Option<&'static str>,
+    tests: IgnoredTests,
+}
+
 /// One corpus-backed ignored-test run. `parity-corpus-test` and the corpus
 /// part of `coverage` both run every selected entry of [`CORPUS_RUNS`].
 struct CorpusRun {
-    target: &'static [&'static str],
-    features: Option<&'static str>,
-    tests: CorpusTests,
+    run: IgnoredRun,
     /// The run is skipped unless one of these aliases is selected. Empty
     /// means it runs whenever the corpus does.
     aliases: &'static [&'static str],
-}
-
-enum CorpusTests {
-    /// The ignored test with this exact name.
-    Exact(&'static str),
-    /// Every ignored test in the target.
-    AllIgnored,
-    /// Each ignored test whose name starts with this prefix, one at a time.
-    Prefix(&'static str),
 }
 
 impl CorpusRun {
@@ -193,87 +215,111 @@ impl CorpusRun {
     }
 }
 
-const VENDOR_REFERENCE_RUN: CorpusRun = CorpusRun {
+const VENDOR_REFERENCE_RUN: IgnoredRun = IgnoredRun {
     target: &["--test", "vendor_reference"],
     features: None,
-    tests: CorpusTests::Prefix("vendor_native_pixels_"),
-    aliases: &["olympus-vsi-001", "zeiss-zvi-001"],
+    tests: IgnoredTests::Prefix("vendor_native_pixels_"),
 };
 
 const CORPUS_RUNS: &[CorpusRun] = &[
     CorpusRun {
-        target: &["--test", "color_regression"],
-        features: None,
-        tests: CorpusTests::Exact("public_brightfield_color_sanity_svs_ndpi_dicom"),
+        run: IgnoredRun {
+            target: &["--test", "color_regression"],
+            features: None,
+            tests: IgnoredTests::Exact("public_brightfield_color_sanity_svs_ndpi_dicom"),
+        },
         aliases: &["svs-001", "ndpi-001", "dicom-jp2k-001"],
     },
     CorpusRun {
-        target: &["--test", "color_regression"],
-        features: Some("parity-openslide"),
-        tests: CorpusTests::Exact("svs_and_ndpi_overview_color_matches_openslide"),
+        run: IgnoredRun {
+            target: &["--test", "color_regression"],
+            features: Some("parity-openslide"),
+            tests: IgnoredTests::Exact("svs_and_ndpi_overview_color_matches_openslide"),
+        },
         aliases: &["svs-001", "ndpi-001"],
     },
     CorpusRun {
-        target: &["--test", "argos_huron"],
-        features: None,
-        tests: CorpusTests::Exact(
-            "public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images",
-        ),
+        run: IgnoredRun {
+            target: &["--test", "argos_huron"],
+            features: None,
+            tests: IgnoredTests::Exact(
+                "public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images",
+            ),
+        },
         aliases: &["argos-001", "argos-stacked-001"],
     },
     CorpusRun {
-        target: &["--test", "argos_huron"],
-        features: None,
-        tests: CorpusTests::Exact(
-            "public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images",
-        ),
+        run: IgnoredRun {
+            target: &["--test", "argos_huron"],
+            features: None,
+            tests: IgnoredTests::Exact(
+                "public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images",
+            ),
+        },
         aliases: &["huron-jpeg-001", "huron-uncompressed-001"],
     },
     CorpusRun {
-        target: &["--test", "openslide_parity"],
-        features: Some("parity-openslide"),
-        tests: CorpusTests::Exact("preflight"),
+        run: IgnoredRun {
+            target: &["--test", "openslide_parity"],
+            features: Some("parity-openslide"),
+            tests: IgnoredTests::Exact("preflight"),
+        },
         aliases: &[],
     },
     CorpusRun {
-        target: &["--test", "j2k_parity"],
-        features: None,
-        tests: CorpusTests::Exact("j2k_cpu_vs_reference_within_tolerance"),
+        run: IgnoredRun {
+            target: &["--test", "j2k_parity"],
+            features: None,
+            tests: IgnoredTests::Exact("j2k_cpu_vs_reference_within_tolerance"),
+        },
         aliases: &[],
     },
     CorpusRun {
-        target: &["--test", "dicom_parity"],
-        features: None,
-        tests: CorpusTests::Exact("dicom_public_corpus_decodes_with_wsi_rs"),
+        run: IgnoredRun {
+            target: &["--test", "dicom_parity"],
+            features: None,
+            tests: IgnoredTests::Exact("dicom_public_corpus_decodes_with_wsi_rs"),
+        },
         aliases: &[],
     },
     CorpusRun {
-        target: &["--test", "dicom_parity"],
-        features: Some("parity-openslide"),
-        tests: CorpusTests::Exact("dicom_public_corpus_matches_openslide_within_tolerance"),
+        run: IgnoredRun {
+            target: &["--test", "dicom_parity"],
+            features: Some("parity-openslide"),
+            tests: IgnoredTests::Exact("dicom_public_corpus_matches_openslide_within_tolerance"),
+        },
         aliases: &[],
     },
     CorpusRun {
-        target: &["--test", "real_wsi_behavior"],
-        features: None,
-        tests: CorpusTests::AllIgnored,
+        run: IgnoredRun {
+            target: &["--test", "real_wsi_behavior"],
+            features: None,
+            tests: IgnoredTests::All,
+        },
         aliases: &[],
     },
     CorpusRun {
-        target: &["--lib"],
-        features: None,
-        tests: CorpusTests::Prefix(
-            "opens_public_dicom_folder_and_member_with_matching_levels_when_available",
-        ),
+        run: IgnoredRun {
+            target: LIB,
+            features: None,
+            tests: IgnoredTests::Exact(
+                "opens_public_dicom_folder_and_member_with_matching_levels_when_available",
+            ),
+        },
         aliases: &["dicom-jp2k-001"],
     },
     CorpusRun {
-        target: &["--lib"],
-        features: None,
-        tests: CorpusTests::Prefix("opens_olympus_vsi_when_corpus_is_available"),
+        run: IgnoredRun {
+            target: LIB,
+            features: None,
+            tests: IgnoredTests::Exact("opens_olympus_vsi_when_corpus_is_available"),
+        },
         aliases: &["olympus-vsi-001"],
     },
-    VENDOR_REFERENCE_RUN,
+    CorpusRun {
+        run: VENDOR_REFERENCE_RUN,
+        aliases: &["olympus-vsi-001", "zeiss-zvi-001"],
+    },
 ];
 
 pub(super) fn parity_corpus_test() -> Result<(), String> {
@@ -281,148 +327,255 @@ pub(super) fn parity_corpus_test() -> Result<(), String> {
 }
 
 fn run_selected_corpus(runner: &[&str]) -> Result<(), String> {
-    for run in CORPUS_RUNS.iter().filter(|run| run.is_selected()) {
-        run_corpus(run, runner)?;
+    for corpus_run in CORPUS_RUNS.iter().filter(|run| run.is_selected()) {
+        run_ignored_with(runner, &corpus_run.run, false, &[])?;
     }
     Ok(())
 }
 
-fn run_corpus(run: &CorpusRun, runner: &[&str]) -> Result<(), String> {
-    let mut args = test_command(runner, run.target, run.features, false);
-    match run.tests {
-        CorpusTests::Prefix(prefix) => {
-            return run_ignored_with(runner, run.target, prefix, run.features, false, &[])
-        }
-        CorpusTests::Exact(name) => args.extend(["--", name, "--exact", "--ignored"]),
-        CorpusTests::AllIgnored => args.extend(["--", "--ignored"]),
-    }
-    run_cargo(&args)
+/// An explicit lane for fixtures and hardware excluded from quick correctness
+/// runs.
+struct ConformanceSuite {
+    name: &'static str,
+    runs: &'static [IgnoredRun],
+    /// Set to the release OpenSlide shim, which the suite builds first.
+    shim_library_env: Option<&'static str>,
 }
 
-/// Explicit lanes for fixtures and hardware excluded from quick correctness runs.
-pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
-    let [suite] = arguments.as_slice() else {
-        return Err("usage: cargo xtask conformance-test <czi|vendor|zvi-variants|vmu|openslide|metal-color|metal-edges|local-htj2k|legacy-slides|ome-tiff>".into());
-    };
-    match suite.as_str() {
-        "czi" => {
-            run_ignored(&["--lib"], "uncompressed_sentinel_", None, false)?;
-            run_ignored(&["--test", "zeiss_czi"], "real_jpegxr_czi_", None, false)
-        }
-        "vendor" => run_corpus(&VENDOR_REFERENCE_RUN, CARGO_TEST),
-        "zvi-variants" => run_ignored(
-            &["--test", "zeiss_zvi"],
-            "builtin_registry_opens_zeiss_zvi_",
-            None,
-            false,
-        ),
-        "vmu" => {
-            let shim = super::perf::build_release_shim()?;
-            let shim = shim
-                .to_str()
-                .ok_or_else(|| format!("shim path is not UTF-8: {}", shim.display()))?;
-            run_ignored_with(
-                CARGO_TEST,
-                &["--test", "hamamatsu_vmu"],
-                "vmu_",
-                Some("parity-openslide"),
-                false,
-                &[(VMU_SHIM_LIBRARY_ENV, shim)],
-            )
-        }
-        "openslide" => {
-            run_ignored(
-                &["--test", "openslide_compare"],
-                "compare_against_openslide_",
-                None,
-                false,
-            )?;
-            run_ignored(
-                &["--test", "openslide_compare"],
-                "aperio_jpeg_rgb_pyramid_",
-                None,
-                false,
-            )
-        }
-        "metal-color" => run_ignored(&["--lib"], "all_ycbcr8_values_", Some("metal"), false),
-        "metal-edges" => run_ignored(
-            &["--test", "metal_edge_conformance"],
-            "configured_wsi_edges_",
-            Some("metal"),
-            false,
-        ),
-        "local-htj2k" => run_ignored(
-            &["--lib"],
-            "local_htj2k_device_pixels_match_cpu",
-            Some("metal"),
-            false,
-        ),
-        "legacy-slides" => {
-            for name in [
-                "opens_wrapped_first_ifd_ndpi_when_corpus_is_available",
-                "opens_legacy_wrapped_offset_ndpi_when_corpus_is_available",
-                "opens_dissimilar_leica_scenes_when_corpus_is_available",
-                "opens_fluorescence_leica_channels_when_corpus_is_available",
-                "opens_3dhistech_split_sparse_level_when_corpus_is_available",
-            ] {
-                run_ignored(&["--lib"], name, None, false)?;
-            }
-            Ok(())
-        }
-        "ome-tiff" => run_ignored(
-            &["--lib"],
-            "opens_ome_tiff_sub_ifd_pyramid_when_corpus_is_available",
-            None,
-            false,
-        ),
-        _ => Err(format!("unknown conformance suite `{suite}`")),
+const fn lib_test(features: Option<&'static str>, tests: IgnoredTests) -> IgnoredRun {
+    IgnoredRun {
+        target: LIB,
+        features,
+        tests,
     }
 }
+
+const CONFORMANCE_SUITES: &[ConformanceSuite] = &[
+    ConformanceSuite {
+        name: "czi",
+        runs: &[
+            lib_test(None, IgnoredTests::Prefix("uncompressed_sentinel_")),
+            IgnoredRun {
+                target: &["--test", "zeiss_czi"],
+                features: None,
+                tests: IgnoredTests::Prefix("real_jpegxr_czi_"),
+            },
+        ],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "vendor",
+        runs: &[VENDOR_REFERENCE_RUN],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "zvi-variants",
+        runs: &[IgnoredRun {
+            target: &["--test", "zeiss_zvi"],
+            features: None,
+            tests: IgnoredTests::All,
+        }],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "vmu",
+        runs: &[IgnoredRun {
+            target: &["--test", "hamamatsu_vmu"],
+            features: Some("parity-openslide"),
+            tests: IgnoredTests::Prefix("vmu_"),
+        }],
+        shim_library_env: Some(VMU_SHIM_LIBRARY_ENV),
+    },
+    ConformanceSuite {
+        name: "openslide",
+        runs: &[
+            IgnoredRun {
+                target: &["--test", "openslide_compare"],
+                features: None,
+                tests: IgnoredTests::Prefix("compare_against_openslide_"),
+            },
+            IgnoredRun {
+                target: &["--test", "openslide_compare"],
+                features: None,
+                tests: IgnoredTests::Prefix("aperio_jpeg_rgb_pyramid_"),
+            },
+        ],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "metal-color",
+        runs: &[lib_test(
+            Some("metal"),
+            IgnoredTests::Prefix("all_ycbcr8_values_"),
+        )],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "metal-edges",
+        runs: &[IgnoredRun {
+            target: &["--test", "metal_edge_conformance"],
+            features: Some("metal"),
+            tests: IgnoredTests::Prefix("configured_wsi_edges_"),
+        }],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "local-htj2k",
+        runs: &[lib_test(
+            Some("metal"),
+            IgnoredTests::Exact("local_htj2k_device_pixels_match_cpu"),
+        )],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "legacy-slides",
+        runs: &[
+            lib_test(
+                None,
+                IgnoredTests::Exact("opens_wrapped_first_ifd_ndpi_when_corpus_is_available"),
+            ),
+            lib_test(
+                None,
+                IgnoredTests::Exact("opens_legacy_wrapped_offset_ndpi_when_corpus_is_available"),
+            ),
+            lib_test(
+                None,
+                IgnoredTests::Exact("opens_dissimilar_leica_scenes_when_corpus_is_available"),
+            ),
+            lib_test(
+                None,
+                IgnoredTests::Exact("opens_fluorescence_leica_channels_when_corpus_is_available"),
+            ),
+            lib_test(
+                None,
+                IgnoredTests::Exact("opens_3dhistech_split_sparse_level_when_corpus_is_available"),
+            ),
+        ],
+        shim_library_env: None,
+    },
+    ConformanceSuite {
+        name: "ome-tiff",
+        runs: &[lib_test(
+            None,
+            IgnoredTests::Exact("opens_ome_tiff_sub_ifd_pyramid_when_corpus_is_available"),
+        )],
+        shim_library_env: None,
+    },
+];
+
+pub(super) fn conformance_test(arguments: Vec<String>) -> Result<(), String> {
+    let usage = || {
+        let names = CONFORMANCE_SUITES
+            .iter()
+            .map(|suite| suite.name)
+            .collect::<Vec<_>>();
+        format!("usage: cargo xtask conformance-test <{}>", names.join("|"))
+    };
+    let [name] = arguments.as_slice() else {
+        return Err(usage());
+    };
+    let suite = CONFORMANCE_SUITES
+        .iter()
+        .find(|suite| suite.name == name)
+        .ok_or_else(|| format!("unknown conformance suite `{name}`; {}", usage()))?;
+    let shim = suite
+        .shim_library_env
+        .map(|_| release_shim_path())
+        .transpose()?;
+    let envs = suite
+        .shim_library_env
+        .zip(shim.as_deref())
+        .into_iter()
+        .collect::<Vec<_>>();
+    for run in suite.runs {
+        run_ignored_with(CARGO_TEST, run, false, &envs)?;
+    }
+    Ok(())
+}
+
+/// Builds the release OpenSlide shim and returns its path.
+fn release_shim_path() -> Result<String, String> {
+    let shim = super::perf::build_release_shim()?;
+    shim.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("shim path is not UTF-8: {}", shim.display()))
+}
+
+/// Release benchmarks in one test target, each run by name.
+struct PerfExperiments {
+    target: &'static [&'static str],
+    features: &'static str,
+    names: &'static [&'static str],
+}
+
+const PERF_EXPERIMENTS: &[PerfExperiments] = &[
+    PerfExperiments {
+        target: LIB,
+        features: "metal,route-telemetry",
+        names: &[
+            "metal_window_performance",
+            "metal_cooperative_performance",
+            "ycbcr_selected_u32_stays_within_five_percent_of_reference",
+            "local_htj2k_dicom_level_preparation_meets_interactive_budget",
+        ],
+    },
+    PerfExperiments {
+        target: LIB,
+        features: "route-telemetry",
+        names: &[
+            "pooled_cpu_scheduling_performance",
+            "composition_performance",
+        ],
+    },
+    PerfExperiments {
+        target: &["--test", "decode_performance"],
+        features: "metal,route-telemetry",
+        names: &[
+            "native_decode_matrix",
+            "native_decode_revisits",
+            "native_decode_fresh_readers",
+        ],
+    },
+    PerfExperiments {
+        target: &["--test", "panning_performance"],
+        features: "metal,route-telemetry",
+        names: &["panning_matrix", "warm_region_revisits"],
+    },
+    PerfExperiments {
+        target: &["--test", "czi_performance"],
+        features: "route-telemetry",
+        names: &["czi_reader_workloads"],
+    },
+];
 
 /// Preserve the specialized experiments as maintained release benchmark recipes.
 pub(super) fn perf_experiment(arguments: Vec<String>) -> Result<(), String> {
     let [name] = arguments.as_slice() else {
-        return Err("usage: cargo xtask perf-experiment <test-name>; see README.md".into());
+        return Err("usage: cargo xtask perf-experiment <test-name>; see docs/testing.md".into());
     };
-    let (target, features): (&[&str], &str) = match name.as_str() {
-        "metal_window_performance"
-        | "metal_cooperative_performance"
-        | "ycbcr_selected_u32_stays_within_five_percent_of_reference"
-        | "local_htj2k_dicom_level_preparation_meets_interactive_budget" => {
-            (&["--lib"], "metal,route-telemetry")
-        }
-        "pooled_cpu_scheduling_performance" | "composition_performance" => {
-            (&["--lib"], "route-telemetry")
-        }
-        "native_decode_matrix" | "native_decode_revisits" | "native_decode_fresh_readers" => {
-            (&["--test", "decode_performance"], "metal,route-telemetry")
-        }
-        "panning_matrix" | "warm_region_revisits" => {
-            (&["--test", "panning_performance"], "metal,route-telemetry")
-        }
-        "czi_reader_workloads" => (&["--test", "czi_performance"], "route-telemetry"),
-        _ => {
-            return Err(format!(
-                "unknown performance experiment `{name}`; see README.md"
-            ))
-        }
+    let Some((experiments, name)) = PERF_EXPERIMENTS.iter().find_map(|experiments| {
+        experiments
+            .names
+            .iter()
+            .find(|candidate| *candidate == name)
+            .map(|name| (experiments, *name))
+    }) else {
+        return Err(format!(
+            "unknown performance experiment `{name}`; see docs/testing.md"
+        ));
     };
     // Host-output experiments can run CPU routes on non-Metal hosts.
-    let features = if cfg!(target_os = "macos") || target == ["--lib"] {
-        features
+    let features = if cfg!(target_os = "macos") || experiments.target == LIB {
+        experiments.features
     } else {
         "route-telemetry"
     };
-    run_ignored(target, name, Some(features), true)
-}
-
-fn run_ignored(
-    target: &[&str],
-    filter: &str,
-    features: Option<&str>,
-    release: bool,
-) -> Result<(), String> {
-    run_ignored_with(CARGO_TEST, target, filter, features, release, &[])
+    let run = IgnoredRun {
+        target: experiments.target,
+        features: Some(features),
+        tests: IgnoredTests::Exact(name),
+    };
+    run_ignored_with(CARGO_TEST, &run, true, &[])
 }
 
 /// `runner`, a cargo subcommand with its options, followed by the test
@@ -444,31 +597,40 @@ fn test_command<'a>(
     command
 }
 
+/// The tests `run` selects among the `--ignored --list` output of its target.
+fn selected_ignored_tests<'a>(listing: &'a str, run: &IgnoredRun) -> Vec<&'a str> {
+    listing
+        .lines()
+        .filter_map(|line| line.strip_suffix(": test"))
+        .filter(|name| run.tests.selects(name))
+        .collect()
+}
+
+/// Lists the ignored tests of `run`'s target, fails when its selection matches
+/// none, and runs each selected test alone.
 fn run_ignored_with(
     runner: &[&str],
-    target: &[&str],
-    filter: &str,
-    features: Option<&str>,
+    run: &IgnoredRun,
     release: bool,
     envs: &[(&str, &str)],
 ) -> Result<(), String> {
-    if features.is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
+    if run
+        .features
+        .is_some_and(|features| features.split(',').any(|feature| feature == "metal"))
         && !cfg!(target_os = "macos")
     {
         return Err("this lane requires a macOS Metal runtime".into());
     }
-    let base = test_command(runner, target, features, release);
+    let base = test_command(runner, run.target, run.features, release);
     let mut list = base.clone();
     list.extend(["--", "--ignored", "--list"]);
     let output = run_program_capture(cargo(), &list, envs)?;
-    let names: Vec<_> = output
-        .lines()
-        .filter_map(|line| line.strip_suffix(": test"))
-        .filter(|name| name.rsplit("::").next().unwrap_or(name).starts_with(filter))
-        .collect();
+    let names = selected_ignored_tests(&output, run);
     if names.is_empty() {
         return Err(format!(
-            "ignored test selection `{filter}` matched no tests"
+            "ignored test selection {:?} matched no tests in `{}`",
+            run.tests,
+            run.target.join(" ")
         ));
     }
     for name in names {

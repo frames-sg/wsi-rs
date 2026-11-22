@@ -72,7 +72,9 @@ use changed::{
 #[cfg(test)]
 use lcov::{normalize_lcov_path, parse_lcov, percent, FileCoverage};
 #[cfg(test)]
-use paths::{collect_git_paths, is_coverage_candidate, is_production_coverage_path};
+use paths::{
+    collect_git_paths, is_coverage_candidate, is_production_coverage_path, DEVICE_ONLY_MODULES,
+};
 
 #[cfg(test)]
 mod tests;

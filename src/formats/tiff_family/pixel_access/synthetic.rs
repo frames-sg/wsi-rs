@@ -410,7 +410,10 @@ impl TiffPixelReader {
             );
         }
 
-        let key = CacheKey::from_region_tile(self.layout.dataset.id, req, 0, 0);
+        let key = CacheKey {
+            kind: CacheKeyKind::NdpiSyntheticLevel,
+            ..CacheKey::from_region_tile(self.layout.dataset.id, req, 0, 0)
+        };
         if let Some(cache) = cache {
             if let Some(cached) = cache.get(&key) {
                 return Ok(cached.as_ref().clone());

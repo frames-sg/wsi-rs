@@ -71,11 +71,19 @@
 //! }
 //! ```
 //!
+//! ## Encoded tiles
+//!
+//! [`Slide::read_raw_compressed_tile`] returns a tile's encoded bytes without
+//! decoding its pixels. [`Slide::tile_location`] and
+//! [`Slide::level_tile_locations`] report where those bytes are stored in the
+//! slide's files. See [`RawCompressedTile`] and [`TileLocation`].
+//!
 //! ## Options
 //!
 //! [`Slide::open`] uses default cache sizes and limits. Use
-//! [`Slide::open_with_options`] and [`SlideOpenOptions`] to change cache sizes,
-//! resource limits, CPU or GPU decoding, and `.svcache` lookup.
+//! [`Slide::open_with_options`] and [`SlideOpenOptions`] to change cache sizes
+//! ([`CacheConfig`]), resource limits ([`SlideLimits`]), decode options
+//! ([`DecodeExecutionOptions`]) and `.svcache` lookup ([`SvcachePolicy`]).
 //!
 //! ```rust,no_run
 //! use wsi_rs::{DecodeAcceleration, DecodeExecutionOptions, Slide, SlideOpenOptions};
@@ -89,7 +97,24 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Feature flags
+//!
+//! - `metal`: decode JPEG 2000 and HTJ2K tiles into Metal buffers on macOS
+//!   with `Slide::read_tile_metal` and `Slide::read_tiles_metal`.
+//! - `cuda`: decode JPEG 2000 and HTJ2K tiles into CUDA memory with
+//!   `Slide::read_tile_cuda` and `Slide::read_tiles_cuda`.
+//! - `route-telemetry`: export decode-route counters for benchmarks.
+//! - `fuzzing`, `parity-openslide`, `parity-metal`: fuzzing entry points and
+//!   parity tests.
+//!
+//! Reads that return tiles in CPU memory decode on the CPU in every build.
 #![deny(unsafe_code)]
+
+/// Compiles the README's Rust examples as doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 pub(crate) mod core;
 pub(crate) mod decode;

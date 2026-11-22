@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::read_control::check_cancelled_opt;
 
-impl AdaptiveDecodeReader {
+impl DecodeRuntimeReader {
     pub(crate) fn new_managed(
         inner: Box<dyn ManagedSlideReader>,
         runtime: Arc<DecodeRuntime>,
@@ -33,18 +33,18 @@ impl AdaptiveDecodeReader {
         };
         check_cancelled_opt(control)?;
         result.and_then(|tiles| {
-            crate::core::batch::expect_exact_count(tiles, reqs.len(), "adaptive CPU tile batch")
+            crate::core::batch::expect_exact_count(tiles, reqs.len(), "CPU tile batch")
         })
     }
 }
 
-impl SlideReader for AdaptiveDecodeReader {
+impl SlideReader for DecodeRuntimeReader {
     crate::core::registry::forward_slide_reader_methods!(inner);
 
     fn read_tile_cpu(&self, req: &TileRequest) -> Result<CpuTile, WsiError> {
         crate::core::batch::exactly_one(
             self.read_tiles_on_cpu(std::slice::from_ref(req), None)?,
-            "adaptive single tile read",
+            "single tile read",
         )
     }
 
@@ -82,7 +82,7 @@ impl SlideReader for AdaptiveDecodeReader {
     }
 }
 
-impl ManagedSlideReader for AdaptiveDecodeReader {
+impl ManagedSlideReader for DecodeRuntimeReader {
     #[cfg(feature = "metal")]
     fn read_metal_with_context(
         &self,

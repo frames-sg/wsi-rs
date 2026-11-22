@@ -72,7 +72,7 @@ fn help_text() -> &'static str {
        typos        run typos\n\
        deny         run cargo-deny advisories, bans, licenses, and sources checks\n\
        unused-deps  run cargo-machete for unused dependency checks\n\
-       deps         run deny and unused-deps\n\
+       deps         run deny, unused-deps and cargo-vet\n\
        api-check    run public API and semver stability checks\n\
        fuzz-check   type-check cargo-fuzz targets\n\
        release-fuzz [--seconds N] [--timeout N] run every fuzz target under AddressSanitizer (default 300 s each, 10 s per input)\n\

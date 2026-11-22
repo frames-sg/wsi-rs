@@ -40,7 +40,7 @@ impl Slide {
             limits.encoded_unit_bytes(),
         ));
         Self {
-            source: Box::new(AdaptiveDecodeReader::new_managed(
+            source: Box::new(DecodeRuntimeReader::new_managed(
                 managed,
                 decode_runtime.clone(),
             )),
@@ -59,7 +59,7 @@ impl Slide {
         decode_runtime: Arc<DecodeRuntime>,
     ) -> Self {
         Self {
-            source: Box::new(AdaptiveDecodeReader::new_managed(
+            source: Box::new(DecodeRuntimeReader::new_managed(
                 source,
                 decode_runtime.clone(),
             )),
@@ -400,7 +400,9 @@ impl Slide {
     /// [`RegionRequest::origin_px`] before tile composition. A nonzero offset,
     /// or any read of an irregular tile map, returns RGBA8 when tile coverage
     /// can be partial, so the interpolation and stitching coverage remains
-    /// available to callers that require premultiplied output.
+    /// available to callers that require premultiplied output. Compositing
+    /// with subpixel coverage requires 8-bit samples and returns
+    /// [`WsiError::DisplayConversion`] for wider samples.
     pub fn read_region_subpixel(
         &self,
         req: &RegionRequest,

@@ -16,23 +16,21 @@ pub(super) fn path_matches_root(path: &Path, root: &str) -> bool {
     path.starts_with(root) || path == Path::new(root).with_extension("rs")
 }
 
-pub(super) fn is_production_coverage_path(path: &Path) -> bool {
-    const PORTABLE_EXCLUSIONS: &[&str] = &[
-        // These split modules, like the existing device modules below, are
-        // compiled only with Metal/CUDA and cannot appear in CPU-only LCOV.
-        "src/core/decode_runtime/adaptive",
-        "src/decode/jp2k/prepared_batch",
-        "src/decode/jp2k/metal_batch",
-        "src/decode/jp2k/cuda",
-        "src/decode/jp2k/device",
-        "src/decode/jp2k/metal",
-        "src/formats/dicom/reader/device",
-        "src/output/cuda",
-        "src/output/metal",
-    ];
+/// Modules compiled only with Metal or CUDA, which CPU-only LCOV cannot
+/// cover. Each names a module file without `.rs` or a module folder.
+pub(super) const DEVICE_ONLY_MODULES: &[&str] = &[
+    "src/decode/jp2k/metal_batch",
+    "src/decode/jp2k/cuda",
+    "src/decode/jp2k/device",
+    "src/decode/jp2k/metal",
+    "src/formats/dicom/reader/device",
+    "src/output/cuda",
+    "src/output/metal",
+];
 
+pub(super) fn is_production_coverage_path(path: &Path) -> bool {
     is_workspace_coverage_path(path)
-        && !PORTABLE_EXCLUSIONS
+        && !DEVICE_ONLY_MODULES
             .iter()
             .any(|root| path_matches_root(path, root))
 }

@@ -15,7 +15,7 @@ impl DecodeRuntime {
     }
 }
 
-impl AdaptiveDecodeReader {
+impl DecodeRuntimeReader {
     pub(crate) fn new(inner: Box<dyn SlideReader>, runtime: Arc<DecodeRuntime>) -> Self {
         Self::new_managed(
             Box::new(ConservativeManagedReader::new(
@@ -191,7 +191,7 @@ fn cpu_only_batches_preserve_order_and_cardinality() {
         )
         .unwrap(),
     );
-    let reader = AdaptiveDecodeReader::new(Box::new(source), runtime);
+    let reader = DecodeRuntimeReader::new(Box::new(source), runtime);
     let requests = [7, 2, 9]
         .into_iter()
         .map(|col| TileRequest::new(0usize, 0usize, 0u32, col, 0))
@@ -262,7 +262,7 @@ fn terminal_cancellation_wins_over_a_simultaneous_source_error() {
         )
         .unwrap(),
     );
-    let reader = AdaptiveDecodeReader::new(Box::new(source), runtime);
+    let reader = DecodeRuntimeReader::new(Box::new(source), runtime);
     let request = TileRequest::new(0usize, 0usize, 0u32, 0, 0);
 
     let error = reader
@@ -299,8 +299,8 @@ impl SlideReader for DelegatingSource {
 }
 
 #[test]
-fn adaptive_reader_preserves_non_tile_boundaries() {
-    let reader = AdaptiveDecodeReader::new(
+fn runtime_reader_preserves_non_tile_boundaries() {
+    let reader = DecodeRuntimeReader::new(
         Box::new(DelegatingSource {
             dataset: dataset(77),
         }),

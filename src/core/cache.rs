@@ -263,6 +263,8 @@ pub(crate) struct CacheKey {
 pub(crate) enum CacheKeyKind {
     /// A tile of the level's own tile grid.
     Tile,
+    /// A complete synthetic NDPI level, which can span several virtual tiles.
+    NdpiSyntheticLevel,
     /// A restart-interval strip of an NDPI level decoded with a DCT scale
     /// denominator of 2, 4, or 8; it keys the base level's strip grid.
     NdpiScaledStrip { scale_denom: u32 },

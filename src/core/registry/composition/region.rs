@@ -371,13 +371,19 @@ impl RegionComposer {
                 "planar compositing not supported".into(),
             ));
         }
-        let pixman_compatible = hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
+        let u8_samples = matches!(template.data, CpuTileData::U8(_));
+        if preserve_alpha && !u8_samples {
+            return Err(WsiError::DisplayConversion(
+                "compositing with subpixel coverage requires 8-bit samples".into(),
+            ));
+        }
+        // Ordinary region reads copy wider samples at rounded tile positions.
+        let pixman_compatible = u8_samples && hits.iter().any(|hit| hit.cairo_fixed_dest.is_some());
         let direct_rgba = pixman_compatible
             && preserve_alpha
             && hits.iter().all(|hit| hit.cairo_fixed_dest.is_some())
             && ((template.channels == 3 && template.color_space == ColorSpace::Rgb)
-                || is_alpha_source(template))
-            && matches!(template.data, CpuTileData::U8(_));
+                || is_alpha_source(template));
         // An alpha-source template still composes RGB color plus coverage.
         let (channels, color_space) = if direct_rgba {
             (4, ColorSpace::Rgba)

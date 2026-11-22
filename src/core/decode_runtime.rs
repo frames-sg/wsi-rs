@@ -89,7 +89,7 @@ impl DecodeRuntime {
 
 /// Decodes CPU-returning tile reads on the CPU, running JPEG 2000 batches on
 /// the codec pool. Every [`DecodeAcceleration`] currently routes here.
-pub(crate) struct AdaptiveDecodeReader {
+pub(crate) struct DecodeRuntimeReader {
     inner: Box<dyn ManagedSlideReader>,
     runtime: Arc<DecodeRuntime>,
 }

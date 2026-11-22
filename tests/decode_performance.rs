@@ -1,4 +1,4 @@
-//! Explicit native CPU, adaptive, resident-Metal and readback benchmark.
+//! Native decode benchmark: CPU-only, Auto, resident Metal and Metal with readback.
 //! Validation and warmup are outside timed calls. Run this ignored test in release mode.
 use std::{path::Path, time::Instant};
 
@@ -139,7 +139,11 @@ fn native_decode_matrix() {
                         let mut bytes = 0;
                         for (pending, _) in pending {
                             let tiles = pending.into_cpu();
-                            max_error = max_error.max(validate(&tiles, &expected, mode == "cpu"));
+                            max_error = max_error.max(validate(
+                                &tiles,
+                                &expected,
+                                !mode.starts_with("metal"),
+                            ));
                             bytes += tiles
                                 .iter()
                                 .map(|tile| tile.data().byte_size())
@@ -164,7 +168,7 @@ fn native_decode_matrix() {
     let output = std::env::var_os("WSI_RS_DECODE_OUTPUT").expect("benchmark output path");
     std::fs::write(output, serde_json::to_vec_pretty(&json!({"source": path,
         "mode": mode, "threads": rayon::current_num_threads(),
-        "validation": "CPU exact; device uses existing JP2K lossy tolerance; checks outside timing",
+        "validation": "CPU-only and Auto exact; Metal uses the JPEG 2000 lossy tolerance; checks outside timing",
         "os_cache": "uncontrolled; preparation uses a CPU-only reference reader", "results": results})).unwrap()).unwrap();
 }
 
@@ -256,11 +260,7 @@ fn native_decode_revisits() {
         let expected = reference.read_tiles(&requests).unwrap();
         let slide = Slide::open_with_options(path, options(cache, mode == "cpu")).unwrap();
         for _ in 0..7 {
-            validate(
-                &slide.read_tiles(&requests).unwrap(),
-                &expected,
-                mode == "cpu",
-            );
+            validate(&slide.read_tiles(&requests).unwrap(), &expected, true);
         }
         let callers = row["concurrency"].as_u64().unwrap() as usize;
         let cycles = if row["cache"] == "default" {
@@ -307,7 +307,7 @@ fn native_decode_revisits() {
                 };
                 times.push(start.elapsed().as_secs_f64() * 1e6);
                 for tiles in actual {
-                    validate(&tiles, &expected, mode == "cpu");
+                    validate(&tiles, &expected, true);
                 }
             }
             drop(workers);
@@ -358,16 +358,11 @@ fn native_decode_fresh_readers() {
             })
             .collect::<Vec<_>>();
         let expected = reference.read_tiles(&requests).unwrap();
-        // These controls target later fresh readers in the existing matrix,
-        // which may reuse process-wide route decisions. Startup has separate
-        // first-read telemetry and deterministic ownership regressions.
+        // A warmup reader starts the process-wide codec pools, as earlier cells
+        // did for the matrix's later fresh readers.
         let warmup = Slide::open_with_options(path, options(cache, mode == "cpu")).unwrap();
         for _ in 0..7 {
-            validate(
-                &warmup.read_tiles(&requests).unwrap(),
-                &expected,
-                mode == "cpu",
-            );
+            validate(&warmup.read_tiles(&requests).unwrap(), &expected, true);
         }
         drop(warmup);
         let callers = row["concurrency"].as_u64().unwrap() as usize;
@@ -396,7 +391,7 @@ fn native_decode_fresh_readers() {
             };
             times.push(start.elapsed().as_secs_f64() * 1e6);
             for tiles in actual {
-                validate(&tiles, &expected, mode == "cpu");
+                validate(&tiles, &expected, true);
             }
         }
         results.push(json!({"cache":row["cache"],"level":row["level"],"batch":row["batch"],
@@ -406,5 +401,5 @@ fn native_decode_fresh_readers() {
     assert!(!results.is_empty());
     std::fs::write(std::env::var_os("WSI_RS_DECODE_OUTPUT").expect("output"),
         serde_json::to_vec_pretty(&json!({"source":path,"mode":mode,"results":results,
-            "timing":"Fresh readers with process routes warmed; opening and validation excluded; concurrent wall time includes caller startup"})).unwrap()).unwrap();
+            "timing":"Fresh readers after a warmup reader; opening and validation excluded; concurrent wall time includes caller startup"})).unwrap()).unwrap();
 }
