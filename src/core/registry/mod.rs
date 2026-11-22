@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use crate::core::cache::{CacheConfig, CacheKey, TileCache};
-use crate::core::decode_runtime::{AdaptiveDecodeReader, DecodeExecutionOptions, DecodeRuntime};
+use crate::core::decode_runtime::{DecodeExecutionOptions, DecodeRuntime, DecodeRuntimeReader};
 use crate::core::limits::{ReadWork, SlideAdmission};
 use crate::core::types::*;
 use crate::error::WsiError;

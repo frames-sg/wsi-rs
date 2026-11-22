@@ -111,11 +111,24 @@ fn module_wiring_changes_are_declaration_only_even_when_the_file_has_functions()
 }
 
 #[test]
+fn a_doctest_marker_has_no_runtime_lines_but_its_neighbors_still_count() {
+    let source = "#[cfg(doctest)]\nstruct ReadmeDoctests;\nfn decode() {}\n";
+    assert!(changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([1, 2]),
+    ));
+    assert!(!changed_lines_are_declaration_only(
+        source,
+        &BTreeSet::from([2, 3]),
+    ));
+}
+
+#[test]
 fn portable_changed_coverage_candidates_match_the_lcov_surface() {
     for path in [
-        "src/core/decode_runtime/adaptive.rs",
-        "src/decode/jp2k/prepared_batch.rs",
         "src/decode/jp2k/metal_batch.rs",
+        "src/output/metal/session.rs",
+        "src/formats/dicom/reader/device.rs",
     ] {
         assert!(
             !is_production_coverage_path(Path::new(path)),
@@ -222,6 +235,19 @@ fn options_reject_missing_unknown_and_out_of_range_values() {
             ChangedCoverageOptions::parse(arguments.into_iter().map(str::to_string).collect())
                 .unwrap_err()
                 .contains(expected)
+        );
+    }
+}
+
+#[test]
+fn device_only_coverage_exclusions_name_existing_modules() {
+    let root = git_repo_root().unwrap();
+    for module in DEVICE_ONLY_MODULES {
+        let module = root.join(module);
+        assert!(
+            module.is_dir() || module.with_extension("rs").is_file(),
+            "{} names no module",
+            module.display()
         );
     }
 }

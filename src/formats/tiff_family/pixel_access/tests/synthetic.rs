@@ -698,6 +698,33 @@ fn synthetic_ndpi_levels_over_restart_base_match_dct_scaled_decode() {
 }
 
 #[test]
+fn repeated_whole_synthetic_ndpi_region_reads_match_the_scaled_jpeg() {
+    let (mut reader, jpeg) = build_restart_based_synthetic_ndpi_reader();
+    reader.layout.dataset.scenes[0].series[0].levels[1] = whole_level((64, 16), 2.0, (20, 7));
+    let slide = crate::Slide::from_source_with_cache_bytes(Box::new(reader), 64 * 1024);
+    let req = RegionRequest::new(0, 0, 1, (0, 0), (64, 16));
+    let expected =
+        cpu_tile_from_rgb_pixels(64, 16, j2k_scaled_rgb(&jpeg, J2kDownscale::Half)).unwrap();
+
+    for _ in 0..2 {
+        assert_tile_eq(&slide.read_region(&req).unwrap(), &expected);
+    }
+}
+
+#[test]
+fn caching_a_whole_synthetic_level_preserves_subpixel_region_reads() {
+    let mut reader = build_synthetic_ndpi_reader(8, 8, &[(4, 4, 2)]);
+    reader.layout.dataset.scenes[0].series[0].levels[1] = whole_level((4, 4), 2.0, (2, 2));
+    let req = RegionRequest::new(0, 0, 1, (0, 0), (4, 4));
+    let slide = crate::Slide::from_source_with_cache_bytes(Box::new(reader), 64 * 1024);
+    slide.read_region(&req).unwrap();
+    let after_whole = slide.read_region_subpixel(&req, (0.5, 0.5)).unwrap();
+    slide.replace_shared_tile_cache(Arc::new(crate::TileCache::new(0)));
+    let uncached = slide.read_region_subpixel(&req, (0.5, 0.5)).unwrap();
+    assert_tile_eq(&after_whole, &uncached);
+}
+
+#[test]
 fn synthetic_ndpi_scaled_strips_are_shared_through_the_tile_cache() {
     let (reader, jpeg) = build_restart_based_synthetic_ndpi_reader();
     let expected =

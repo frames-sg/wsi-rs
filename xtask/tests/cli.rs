@@ -331,89 +331,111 @@ EOF
 
     #[test]
     fn conformance_suites_select_exact_tests_and_required_features() {
+        // How each run selects among a target's ignored tests.
+        enum Pick {
+            Prefix(&'static str),
+            Exact(&'static str),
+            All,
+        }
         let suites = [
             (
                 "czi",
                 vec![
-                    ("--lib", "uncompressed_sentinel_"),
-                    ("--test zeiss_czi", "real_jpegxr_czi_"),
+                    ("--lib", Pick::Prefix("uncompressed_sentinel_")),
+                    ("--test zeiss_czi", Pick::Prefix("real_jpegxr_czi_")),
                 ],
                 None,
             ),
             (
                 "vendor",
-                vec![("--test vendor_reference", "vendor_native_pixels_")],
+                vec![(
+                    "--test vendor_reference",
+                    Pick::Prefix("vendor_native_pixels_"),
+                )],
                 None,
             ),
-            (
-                "zvi-variants",
-                vec![("--test zeiss_zvi", "builtin_registry_opens_zeiss_zvi_")],
-                None,
-            ),
+            ("zvi-variants", vec![("--test zeiss_zvi", Pick::All)], None),
             (
                 "vmu",
-                vec![("--test hamamatsu_vmu", "vmu_")],
+                vec![("--test hamamatsu_vmu", Pick::Prefix("vmu_"))],
                 Some("parity-openslide"),
             ),
             (
                 "openslide",
                 vec![
-                    ("--test openslide_compare", "compare_against_openslide_"),
-                    ("--test openslide_compare", "aperio_jpeg_rgb_pyramid_"),
+                    (
+                        "--test openslide_compare",
+                        Pick::Prefix("compare_against_openslide_"),
+                    ),
+                    (
+                        "--test openslide_compare",
+                        Pick::Prefix("aperio_jpeg_rgb_pyramid_"),
+                    ),
                 ],
                 None,
             ),
             (
                 "metal-color",
-                vec![("--lib", "all_ycbcr8_values_")],
+                vec![("--lib", Pick::Prefix("all_ycbcr8_values_"))],
                 Some("metal"),
             ),
             (
                 "metal-edges",
-                vec![("--test metal_edge_conformance", "configured_wsi_edges_")],
+                vec![(
+                    "--test metal_edge_conformance",
+                    Pick::Prefix("configured_wsi_edges_"),
+                )],
                 Some("metal"),
             ),
             (
                 "local-htj2k",
-                vec![("--lib", "local_htj2k_device_pixels_match_cpu")],
+                vec![("--lib", Pick::Exact("local_htj2k_device_pixels_match_cpu"))],
                 Some("metal"),
             ),
             (
                 "legacy-slides",
-                vec![
-                    (
-                        "--lib",
-                        "opens_wrapped_first_ifd_ndpi_when_corpus_is_available",
-                    ),
-                    (
-                        "--lib",
-                        "opens_legacy_wrapped_offset_ndpi_when_corpus_is_available",
-                    ),
-                    (
-                        "--lib",
-                        "opens_dissimilar_leica_scenes_when_corpus_is_available",
-                    ),
-                    (
-                        "--lib",
-                        "opens_fluorescence_leica_channels_when_corpus_is_available",
-                    ),
-                    (
-                        "--lib",
-                        "opens_3dhistech_split_sparse_level_when_corpus_is_available",
-                    ),
-                ],
+                [
+                    "opens_wrapped_first_ifd_ndpi_when_corpus_is_available",
+                    "opens_legacy_wrapped_offset_ndpi_when_corpus_is_available",
+                    "opens_dissimilar_leica_scenes_when_corpus_is_available",
+                    "opens_fluorescence_leica_channels_when_corpus_is_available",
+                    "opens_3dhistech_split_sparse_level_when_corpus_is_available",
+                ]
+                .into_iter()
+                .map(|name| ("--lib", Pick::Exact(name)))
+                .collect(),
+                None,
+            ),
+            (
+                "ome-tiff",
+                vec![(
+                    "--lib",
+                    Pick::Exact("opens_ome_tiff_sub_ifd_pyramid_when_corpus_is_available"),
+                )],
                 None,
             ),
         ];
         for (suite, selections, features) in suites {
             let fixture = FakeRepository::new();
-            let listing = selections
+            // Every listing offers each selection a match plus near misses.
+            let mut listed = vec!["unrelated::test".to_string()];
+            for (_, pick) in &selections {
+                match pick {
+                    Pick::Prefix(prefix) => listed.push(format!("fixture::{prefix}probe")),
+                    Pick::Exact(name) => {
+                        listed.push(format!("fixture::{name}"));
+                        listed.push(format!("fixture::{name}_variant"));
+                    }
+                    Pick::All => listed.push("fixture::any_probe".to_string()),
+                }
+            }
+            let listing = listed
                 .iter()
-                .map(|(_, filter)| format!("'fixture::{filter}probe: test'"))
+                .map(|name| format!("'{name}: test'"))
                 .collect::<Vec<_>>()
                 .join(" ");
             let script = format!(
-                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing} 'unrelated::test: test';; esac\n\
+                "{}\ncase \"$*\" in *\"--list\"*) printf '%s\\n' {listing};; esac\n\
                  [ -z \"$WSI_RS_VMU_SHIM_LIBRARY\" ] || printf 'shim %s\\n' \"$WSI_RS_VMU_SHIM_LIBRARY\" >> \"$XTASK_FAKE_LOG\"\n",
                 fs::read_to_string(&fixture.cargo).unwrap()
             );
@@ -465,21 +487,32 @@ EOF
             } else {
                 0
             };
-            assert_eq!(
-                log.lines().count(),
-                selections.len() * 2 + shim_lines,
-                "{suite}: {log}"
-            );
             let features = features.map_or(String::new(), |value| format!(" --features {value}"));
-            for (target, filter) in selections {
+            let mut expected_lines = shim_lines;
+            for (target, pick) in &selections {
                 assert!(
                     log.contains(&format!(
                         "test --locked {target}{features} -- --ignored --list\n"
                     )),
                     "{suite}: {log}"
                 );
-                assert!(log.contains(&format!("test --locked {target}{features} -- fixture::{filter}probe --exact --ignored --test-threads=1\n")), "{suite}: {log}");
+                let runs = match pick {
+                    Pick::Prefix(prefix) => vec![format!("fixture::{prefix}probe")],
+                    Pick::Exact(name) => vec![format!("fixture::{name}")],
+                    Pick::All => listed.clone(),
+                };
+                expected_lines += 1 + runs.len();
+                for name in runs {
+                    assert!(
+                        log.contains(&format!(
+                            "test --locked {target}{features} -- {name} --exact --ignored --test-threads=1\n"
+                        )),
+                        "{suite}: {log}"
+                    );
+                }
             }
+            assert_eq!(log.lines().count(), expected_lines, "{suite}: {log}");
+            assert!(!log.contains("_variant --exact"), "{suite}: {log}");
         }
     }
 
@@ -645,7 +678,8 @@ EOF
             "{script}{}",
             r#"
 case "$*" in
-    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+    *"--test real_wsi_behavior"*"--list"*) printf '%s\n' 'real_slide_probe: test' 'other_real_slide_probe: test';;
+    *"--list"*) printf '%s\n' 'public_brightfield_color_sanity_svs_ndpi_dicom: test' 'svs_and_ndpi_overview_color_matches_openslide: test' 'public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images: test' 'public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images: test' 'preflight: test' 'j2k_cpu_vs_reference_within_tolerance: test' 'dicom_public_corpus_decodes_with_wsi_rs: test' 'dicom_public_corpus_matches_openslide_within_tolerance: test' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
 esac
 "#
         );
@@ -776,7 +810,8 @@ esac
             fs::read_to_string(&fixture.cargo).unwrap(),
             r#"
 case "$*" in
-    *"--list"*) printf '%s\n' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
+    *"--test real_wsi_behavior"*"--list"*) printf '%s\n' 'real_slide_probe: test' 'other_real_slide_probe: test';;
+    *"--list"*) printf '%s\n' 'public_brightfield_color_sanity_svs_ndpi_dicom: test' 'svs_and_ndpi_overview_color_matches_openslide: test' 'public_argos_slides_expose_sparse_pyramids_z_planes_and_associated_images: test' 'public_huron_jpeg_and_uncompressed_slides_decode_with_associated_images: test' 'preflight: test' 'j2k_cpu_vs_reference_within_tolerance: test' 'dicom_public_corpus_decodes_with_wsi_rs: test' 'dicom_public_corpus_matches_openslide_within_tolerance: test' 'fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available: test' 'fixture::opens_olympus_vsi_when_corpus_is_available: test' 'vendor_native_pixels_match_independent_reference: test';;
 esac
 "#
         );
@@ -813,7 +848,9 @@ esac
             "--test argos_huron -- public_argos_",
             "--test argos_huron -- public_huron_",
             "--test openslide_parity --features parity-openslide -- preflight --exact --ignored",
-            "--test real_wsi_behavior -- --ignored",
+            "--test real_wsi_behavior -- --ignored --list",
+            "--test real_wsi_behavior -- real_slide_probe --exact --ignored --test-threads=1",
+            "--test real_wsi_behavior -- other_real_slide_probe --exact --ignored --test-threads=1",
             "--lib -- fixture::opens_public_dicom_folder_and_member_with_matching_levels_when_available --exact --ignored --test-threads=1",
             "--lib -- fixture::opens_olympus_vsi_when_corpus_is_available --exact",
             "--test vendor_reference -- vendor_native_pixels_match_independent_reference --exact",

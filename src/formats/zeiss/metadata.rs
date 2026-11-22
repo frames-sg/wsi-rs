@@ -127,11 +127,10 @@ pub(super) fn canvas_dimensions(
         return Ok((w, h));
     }
 
-    let mut max_x = 0i64;
-    let mut max_y = 0i64;
-    let mut min_x = 0i64;
-    let mut min_y = 0i64;
-    let mut seen = false;
+    let mut max_x = i64::MIN;
+    let mut max_y = i64::MIN;
+    let mut min_x = i64::MAX;
+    let mut min_y = i64::MAX;
     for bounding_boxes in statistics.scene_bounding_boxes.values() {
         let rect = if bounding_boxes.layer0.is_valid() {
             bounding_boxes.layer0
@@ -139,20 +138,14 @@ pub(super) fn canvas_dimensions(
             bounding_boxes.all
         };
         if rect.is_valid() {
-            if !seen {
-                min_x = i64::from(rect.x);
-                min_y = i64::from(rect.y);
-                seen = true;
-            } else {
-                min_x = min_x.min(i64::from(rect.x));
-                min_y = min_y.min(i64::from(rect.y));
-            }
+            min_x = min_x.min(i64::from(rect.x));
+            min_y = min_y.min(i64::from(rect.y));
             max_x = max_x.max(i64::from(rect.x) + i64::from(rect.w));
             max_y = max_y.max(i64::from(rect.y) + i64::from(rect.h));
         }
     }
 
-    if seen && max_x > 0 && max_y > 0 {
+    if max_x > min_x && max_y > min_y {
         return Ok(((max_x - min_x) as u64, (max_y - min_y) as u64));
     }
 

@@ -189,7 +189,7 @@ impl SlideReader for OlympusVsiReader {
     }
 }
 
-/// Stored ETS codestreams for strict device and adaptive reads.
+/// Stored ETS codestreams for device reads.
 #[cfg(any(feature = "metal", feature = "cuda"))]
 struct StoredJp2kTiles<'a> {
     payloads: Vec<Vec<u8>>,

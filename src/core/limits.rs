@@ -89,10 +89,12 @@ impl SlideLimits {
         self.batch_chunk_bytes
     }
     /// Working set of a raw read that crops a tile losslessly out of a larger
-    /// stored JPEG: the stored JPEG, its DCT coefficients (about 12 bytes per
-    /// pixel of a 4:4:4 JPEG, more for progressive ones) and the cropped
-    /// output. A crop that needs more returns the whole stored JPEG instead,
-    /// with [`crate::RawCompressedTile::tile_region`] locating the tile.
+    /// stored JPEG: the stored JPEG, the DCT coefficients the crop extracts
+    /// and the cropped output. A single-scan baseline JPEG extracts only the
+    /// crop window's blocks; a progressive or multi-scan JPEG accumulates the
+    /// whole image's coefficients. A crop that needs more returns the whole
+    /// stored JPEG instead, with [`crate::RawCompressedTile::tile_region`]
+    /// locating the tile.
     ///
     /// Raw reads that may crop reserve this much transient work, so it must
     /// not exceed [`Self::operation_transient_bytes`]; when it does, they

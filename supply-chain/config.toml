@@ -13,6 +13,30 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.dicom-core]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
+[policy.dicom-dictionary-std]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
+[policy.dicom-encoding]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
+[policy.dicom-object]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
+[policy.dicom-parser]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
+[policy.dicom-transfer-syntax-registry]
+audit-as-crates-io = true
+notes = "frames-sg/dicom-rs fork (branch frames/core-0.9.1) of dicom-rs 0.9: upstream code plus the move from Chrono to Jiff. Exempted at the locked fork commit, as the crates.io release was."
+
 [policy.j2k]
 audit-as-crates-io = false
 notes = "First-party (frames-sg/j2k), followed on its main branch and reviewed there."
@@ -133,10 +157,6 @@ criteria = "safe-to-deploy"
 version = "1.0.4"
 criteria = "safe-to-deploy"
 
-[[exemptions.chrono]]
-version = "0.4.45"
-criteria = "safe-to-deploy"
-
 [[exemptions.cpufeatures]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
@@ -162,27 +182,27 @@ version = "0.1.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-core]]
-version = "0.9.1"
+version = "0.9.1@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-dictionary-std]]
-version = "0.9.0"
+version = "0.9.0@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-encoding]]
-version = "0.9.1"
+version = "0.9.1@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-object]]
-version = "0.9.1"
+version = "0.9.1@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-parser]]
-version = "0.9.1"
+version = "0.9.1@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.dicom-transfer-syntax-registry]]
-version = "0.9.1"
+version = "0.9.1@git:493fe0a85bec4d69cce7dd910fd156db17b4809f"
 criteria = "safe-to-deploy"
 
 [[exemptions.digest]]
@@ -230,10 +250,6 @@ version = "2.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.fearless_simd]]
-version = "0.7.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.fearless_simd]]
 version = "1.0.0"
 criteria = "safe-to-deploy"
 
@@ -269,17 +285,9 @@ criteria = "safe-to-deploy"
 version = "0.17.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.iana-time-zone]]
-version = "0.1.65"
-criteria = "safe-to-deploy"
-
 [[exemptions.image]]
 version = "0.25.10"
 criteria = "safe-to-deploy"
-
-[[exemptions.indexmap]]
-version = "2.14.0"
-criteria = "safe-to-run"
 
 [[exemptions.itertools]]
 version = "0.14.0"
@@ -289,77 +297,30 @@ criteria = "safe-to-deploy"
 version = "1.0.18"
 criteria = "safe-to-deploy"
 
-[[exemptions.j2k]]
-version = "0.12.0"
+[[exemptions.jiff]]
+version = "0.2.46"
 criteria = "safe-to-deploy"
+notes = "Arrives with the frames-sg dicom-rs fork's move from Chrono to Jiff. Not audited; Mozilla and the Bytecode Alliance trust its publisher, Andrew Gallant."
 
-[[exemptions.j2k-codec-math]]
-version = "0.12.0"
+[[exemptions.jiff-core]]
+version = "0.1.8"
 criteria = "safe-to-deploy"
+notes = "Arrives with the frames-sg dicom-rs fork's move from Chrono to Jiff. Not audited; Mozilla and the Bytecode Alliance trust its publisher, Andrew Gallant."
 
-[[exemptions.j2k-core]]
-version = "0.10.0"
+[[exemptions.jiff-static]]
+version = "0.2.46"
 criteria = "safe-to-deploy"
+notes = "Arrives with the frames-sg dicom-rs fork's move from Chrono to Jiff. Not audited; Mozilla and the Bytecode Alliance trust its publisher, Andrew Gallant."
 
-[[exemptions.j2k-core]]
-version = "0.12.0"
+[[exemptions.jiff-tzdb]]
+version = "0.1.10"
 criteria = "safe-to-deploy"
+notes = "Arrives with the frames-sg dicom-rs fork's move from Chrono to Jiff. Not audited; Mozilla and the Bytecode Alliance trust its publisher, Andrew Gallant."
 
-[[exemptions.j2k-cuda]]
-version = "0.12.0"
+[[exemptions.jiff-tzdb-platform]]
+version = "0.1.3"
 criteria = "safe-to-deploy"
-
-[[exemptions.j2k-cuda-build-support]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-cuda-j2k-engine]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-cuda-jpeg-engine]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-cuda-runtime]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-jpeg]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-jpeg-cuda]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-jpeg-metal]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-metal]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-metal-support]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-native]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-profile]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-tilecodec]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.j2k-types]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
+notes = "Arrives with the frames-sg dicom-rs fork's move from Chrono to Jiff. Not audited; Mozilla and the Bytecode Alliance trust its publisher, Andrew Gallant."
 
 [[exemptions.jobserver]]
 version = "0.1.35"
@@ -390,7 +351,7 @@ version = "0.2.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.libz-sys]]
-version = "1.1.31"
+version = "1.1.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.linux-raw-sys]]
@@ -415,22 +376,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.objc2]]
 version = "0.6.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-core-foundation]]
-version = "0.3.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-encode]]
-version = "4.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-foundation]]
-version = "0.3.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-metal]]
-version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
@@ -473,10 +418,6 @@ criteria = "safe-to-deploy"
 version = "1.13.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.roxmltree]]
-version = "0.20.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.rustix]]
 version = "1.1.4"
 criteria = "safe-to-deploy"
@@ -513,10 +454,6 @@ criteria = "safe-to-run"
 version = "0.10.9"
 criteria = "safe-to-deploy"
 
-[[exemptions.shlex]]
-version = "2.0.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.simd-adler32]]
 version = "0.3.10"
 criteria = "safe-to-deploy"
@@ -542,15 +479,7 @@ version = "3.27.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror]]
-version = "1.0.69"
-criteria = "safe-to-deploy"
-
-[[exemptions.thiserror]]
 version = "2.0.18"
-criteria = "safe-to-deploy"
-
-[[exemptions.thiserror-impl]]
-version = "1.0.69"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
@@ -579,10 +508,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tracing-attributes]]
 version = "0.1.31"
-criteria = "safe-to-deploy"
-
-[[exemptions.tracing-core]]
-version = "0.1.36"
 criteria = "safe-to-deploy"
 
 [[exemptions.typenum]]
@@ -617,36 +542,12 @@ criteria = "safe-to-deploy"
 version = "0.2.126"
 criteria = "safe-to-deploy"
 
-[[exemptions.web-time]]
-version = "1.1.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.weezl]]
 version = "0.1.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.windows-core]]
-version = "0.62.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-implement]]
-version = "0.60.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-interface]]
-version = "0.59.3"
-criteria = "safe-to-deploy"
-
 [[exemptions.windows-link]]
 version = "0.2.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-result]]
-version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-strings]]
-version = "0.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]

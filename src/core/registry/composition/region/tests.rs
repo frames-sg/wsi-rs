@@ -893,3 +893,40 @@ fn overlapping_irregular_tiles_keep_the_lower_tile_like_openslide() {
         assert_eq!(red_at(2, 5), 200, "lower tile alone, offset_x={offset_x}");
     }
 }
+
+/// A hit with the Pixman destination that irregular layouts give every tile.
+fn pixman_hit(dest_x: i64) -> TileHit {
+    let mut hit = hit(dest_x, dest_x as f64);
+    hit.cairo_fixed_dest = Some((dest_x as f64, 0.0));
+    hit
+}
+
+#[test]
+fn pixman_positioned_u16_tiles_keep_their_samples() {
+    let hits = [pixman_hit(0), pixman_hit(3)];
+    let tiles = [
+        tile(CpuTileData::u16(vec![1000, 2000]), 2),
+        tile(CpuTileData::u16(vec![3000, 4000]), 2),
+    ];
+    let composed = compose_region_tiles(&hits, &tiles, 5, 1, false).unwrap();
+    assert_eq!(composed.channels, 1);
+    assert_eq!(
+        composed.data.as_u16(),
+        Some(&[1000, 2000, 0, 3000, 4000][..])
+    );
+    assert!(matches!(
+        compose_region_tiles(&hits, &tiles, 5, 1, true),
+        Err(WsiError::DisplayConversion(_))
+    ));
+}
+
+#[test]
+fn pixman_positioned_integral_u8_tiles_leave_gaps_empty() {
+    let hits = [pixman_hit(0), pixman_hit(3)];
+    let tiles = [
+        tile(CpuTileData::u8(vec![10, 20]), 2),
+        tile(CpuTileData::u8(vec![30, 40]), 2),
+    ];
+    let composed = compose_region_tiles(&hits, &tiles, 5, 1, false).unwrap();
+    assert_eq!(composed.data.as_u8(), Some(&[10, 20, 0, 30, 40][..]));
+}

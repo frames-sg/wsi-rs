@@ -120,9 +120,10 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
             ));
         }
 
+        let quickhash_ifd = quickhash_dimension(&parsed_images)
+            .and_then(|dimension| top_ifds.get(dimension.ifd_index).copied());
         let mut associated_images = HashMap::new();
         let mut associated_sources = HashMap::new();
-        let mut identity_lowest_ifd = None;
         for image in parsed_images.iter().filter(|image| image.is_macro) {
             let best = image
                 .ifd_levels
@@ -146,14 +147,6 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
                 },
             );
             associated_sources.insert(name, self.associated_source_for_ifd(container, ifd_id)?);
-            identity_lowest_ifd.get_or_insert(
-                image
-                    .ifd_levels
-                    .iter()
-                    .max_by_key(|level| level.r)
-                    .and_then(|level| top_ifds.get(level.ifd_index).copied())
-                    .unwrap_or(ifd_id),
-            );
         }
 
         let main_images = parsed_images
@@ -171,7 +164,9 @@ impl TiffLayoutInterpreter for LeicaInterpreter {
             TiffParseError::Structure("Leica SCN representative image is missing level 0".into())
         })?;
         let representative_level0_ifd = lookup_ifd(top_ifds, representative_ifd0.ifd_index)?;
-        let representative_lowest_ifd = identity_lowest_ifd
+        // OpenSlide opens no slide without a quickhash directory; such slides
+        // hash the representative's lowest level for their dataset identity.
+        let representative_lowest_ifd = quickhash_ifd
             .or_else(|| {
                 representative
                     .ifd_levels
@@ -708,6 +703,32 @@ impl LeicaImageInfo {
         }
         channels
     }
+}
+
+/// The dimension OpenSlide hashes for `openslide.quickhash-1`: with one main
+/// image, which is brightfield, and at most one macro image, the main image's
+/// smallest z-plane-0 level; otherwise the brightfield macro image's.
+fn quickhash_dimension(images: &[LeicaImageInfo]) -> Option<&ParsedDimension> {
+    let is_brightfield =
+        |image: &LeicaImageInfo| image.illumination_source.as_deref() == Some("brightfield");
+    let main_images = images
+        .iter()
+        .filter(|image| !image.is_macro)
+        .collect::<Vec<_>>();
+    let macro_images = images.iter().filter(|image| image.is_macro).count();
+    let image = match main_images.as_slice() {
+        [main] if is_brightfield(main) && macro_images <= 1 => main,
+        _ => images
+            .iter()
+            .find(|image| image.is_macro && is_brightfield(image))?,
+    };
+    // OpenSlide sorts levels widest first and takes the last.
+    image
+        .ifd_levels
+        .iter()
+        .filter(|level| level.z == 0)
+        .rev()
+        .min_by_key(|level| level.width)
 }
 
 fn lookup_ifd(top_ifds: &[IfdId], ifd_index: usize) -> Result<IfdId, TiffParseError> {

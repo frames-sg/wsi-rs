@@ -1,22 +1,21 @@
-# Compressed slide tiles in Python
+# wsi-rs for Python
 
-This optional Rust extension exposes `wsi_rs.Slide`, slide metadata, tile
-geometry, and compressed tile bytes. It does not expose pixel decoding;
-use the separate `j2k` extension for JPEG/JPEG 2000 tensors.
+> Whole-slide image metadata, tile geometry and compressed tile bytes
+
+[![PyPI](https://img.shields.io/pypi/v/wsi-rs.svg)](https://pypi.org/project/wsi-rs/)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-orange.svg)](https://github.com/frames-sg/wsi-rs#license)
+
+`wsi_rs.Slide` opens any slide [wsi-rs](https://github.com/frames-sg/wsi-rs) reads and returns its
+metadata, tile grid and encoded tile bytes. It does not decode pixels: pass the bytes to the
+[`j2k`](https://github.com/frames-sg/j2k) extension for JPEG and JPEG 2000 tensors, or to any
+decoder for the tile's codec. The wheel has no NumPy or PyTorch dependency.
 
 ```sh
 python -m pip install wsi-rs
 ```
 
-Releases publish wheels to PyPI for Python 3.10 and later on Linux x86_64
-and aarch64 (glibc 2.28 or newer), macOS arm64 and x86_64, and Windows x64,
-and attach them to the GitHub release. To build from a checkout instead:
-
-```sh
-uvx maturin build --manifest-path wsi-rs-python/Cargo.toml --release --out target/python-wheels
-python -m pip install --no-deps --no-index --find-links target/python-wheels wsi-rs
-python -m unittest discover -s wsi-rs-python/tests -v
-```
+Wheels cover Python 3.10 and later on Linux x86_64 and aarch64 (glibc 2.28 or newer), macOS arm64
+and x86_64, and Windows x64.
 
 ```python
 import wsi_rs
@@ -31,119 +30,108 @@ requests = [j2k.ImageRequest(tile.data, color_transform=tile.color_transform) fo
 batch = j2k.Decoder(device="cpu").decode_batch(requests)
 ```
 
-`Slide(path)` and `Slide.open(path)` accept strings and path-like objects.
-`metadata` describes scenes, series, `(z,c,t)` axes, channels, levels,
-associated-image dimensions, and properties. `levels(scene=0, series=0)`
-returns independent dictionaries with dimensions, downsample, and tile-grid
-metadata. Regular and virtual grids report tile size and grid size. Irregular
-grids report advance, extra tiles, and tile count.
+Arguments after `*` are keyword-only.
 
-`tiles_for_region((x,y,width,height), level=0, scene=0, series=0)` uses pixels
-at the selected level. Each hit supplies `(column,row)` as `coords` and the
-tile's placement relative to the requested origin as `offset`. Placement may
-be fractional for irregular layouts. The reader's order is preserved. This
-plans coverage only; patch cropping, overlap handling, and assembly remain
-with the application.
+- `Slide(path)`, `Slide.open(path)`: open a slide from a string or path-like object.
+- `metadata`: scenes, series, `(z, c, t)` axes, channels, levels, associated-image sizes and
+  properties.
+- `levels(*, scene=0, series=0)`: each level's dimensions, downsample and tile grid. Regular and
+  virtual grids report tile size and grid size; irregular grids report advance, extra tiles and tile
+  count.
+- `tiles_for_region(region, *, level=0, scene=0, series=0)`: the tiles covering
+  `(x, y, width, height)` in level pixels, in the reader's order. Each hit has `coords`
+  (`(col, row)`) and `offset`, the tile's position relative to the region origin, which is
+  fractional for irregular layouts. Cropping and assembly are left to the caller.
+- `read_tiles_compressed(coords, *, level=0, scene=0, series=0, plane=(0, 0, 0))`: one
+  `CompressedTile` per coordinate, in request order, duplicates included.
+- `tile_location(col, row, *, ...)` and `level_tile_locations(*, ...)`: where tiles' encoded bytes
+  are stored in the slide's files. See [Tile Locations](#tile-locations).
 
-`read_tiles_compressed(coords, level=0, scene=0, series=0, plane=(0,0,0))`
-returns immutable `CompressedTile` objects in caller order, including duplicate
-coordinates. Each has `data` (owned Python bytes), `coords`, `width`, `height`,
-`codec`, `bits_allocated`, `significant_bits` (the low bits of each sample
-that carry it, or `None` when all do), `samples_per_pixel`,
-`photometric_interpretation`, `color_transform`, and `tile_region`. JPEG hints are `auto`, `ycbcr`, or `none`; non-JPEG
-inputs use `auto`. JPEG tables are spliced and supported NDPI tiles are
-re-tiled by the existing Rust reader. Unsupported raw-tile routes raise an
-error. The binding never substitutes decoded RGBA or a black tile.
+## Compressed Tiles
 
-Coordinate sequence length is checked against the metadata budget before
-copying it into Rust. Invalid coordinate items are reported by input index.
+A `CompressedTile` has `data` (bytes), `coords`, `width`, `height`, `codec`, `bits_allocated`,
+`significant_bits` (the low bits of each sample in use, or `None` when all are),
+`samples_per_pixel`, `photometric_interpretation`, `color_transform` and `tile_region`.
 
-`tile_region` is `(x,y,width,height)` of the requested tile inside the encoded
-image. It is smaller than the image when the stored image is larger than the
-tile: an edge tile in a padded TIFF tile or DICOM frame, a tile cut losslessly
-from a larger JPEG whose block (MCU) grid does not start at the tile origin
-(the encoded image then starts at the previous block boundary), or a tile
-inside a whole JPEG 2000 or JPEG XR image that is returned unchanged. A tile
-whose lossless JPEG crop would exceed the reader's crop limit (256 MiB of
-working memory by default) also comes back as the whole stored JPEG, unchanged
-and standalone, with `tile_region` locating the tile; `jpegtran -crop` or a
-decode followed by slicing extracts it.
+TIFF `JPEGTables` are merged into each JPEG tile and NDPI tiles are cut from their level JPEG, so a
+JPEG tile's `data` decodes on its own. `color_transform` is `auto`, `ycbcr` or `none` for JPEG and
+`auto` otherwise.
 
-A tile read failure raises an exception naming the failing input; a failed
-batch never returns a partial list. Reader resource limits still apply. Encoded results
-are additionally capped at the default 256 MiB batch-chunk limit; request
-fewer tiles when needed. Tile planning observes the reader's region and
-metadata limits. Payloads stay valid after the slide object is destroyed.
+`tile_region` is `(x, y, width, height)` of the tile inside the encoded image. It is smaller than
+the image when the stored image is larger than the tile:
 
-Open, compressed reads, location queries and `assemble` release the GIL.
-Open one `Slide` per DataLoader worker and prefer multiprocessing `spawn`;
-inherited handles are rejected after `fork`. There is no NumPy or PyTorch dependency in this reader wheel.
-The Python API is experimental; no wheel publication is part of this change.
+- an edge tile in a padded TIFF tile or DICOM frame;
+- a tile cropped losslessly from a larger JPEG whose block (MCU) grid does not start at the tile
+  origin, so the image starts at the previous block boundary;
+- a tile inside a JPEG 2000 or JPEG XR image, which is returned whole;
+- a tile whose lossless JPEG crop does not fit the crop limit (256 MiB of working memory by
+  default), which is returned as the whole stored JPEG. `jpegtran -crop`, or decoding and slicing,
+  extracts it.
 
-When a local `j2k` wheel and NumPy are installed, the tests also exercise TIFF
-color hints and table splicing through the tensor decoder. With a Metal build
-and PyTorch MPS, they decode a DICOM JPEG 2000 tile directly into an MPS tensor.
-Set `WSI_REQUIRE_J2K=1` to require the optional codec integration tests.
+A failed read raises an exception naming the failing input; a batch never returns a partial list, a
+black tile or decoded pixels in place of an error. The reader's resource limits apply, and one call
+returns at most 256 MiB of encoded data, so request fewer tiles if a batch exceeds it. Payloads stay
+valid after the slide object is deleted.
 
-## Tile byte locations
+## Tile Locations
 
-`tile_location(col, row, level=0, scene=0, series=0, plane=(0,0,0))` reports
-where a tile's encoded bytes are stored, from the file's index, without
-decoding the tile (a few formats read a handful of marker bytes). `level_tile_locations(level=0, scene=0, series=0, plane=(0,0,0))` does
-the same for a whole level in one call and returns `tile_width`,
-`tile_height`, `tiles_across`, `tiles_down`, and `tiles`, a tuple of
-`(col, row, location)` in row-major order. It is bounded by the reader's
-tile-index limit; one unreadable location fails the whole call and names the
-tile. Formats without location support raise `ValueError`.
+`tile_location(col, row, *, level=0, scene=0, series=0, plane=(0, 0, 0))` reports where a tile's
+encoded bytes are stored, from the file's index, without decoding the tile. A few formats read a
+handful of marker bytes to place a range exactly.
+`level_tile_locations(*, level=0, scene=0, series=0, plane=(0, 0, 0))` does this for a whole level
+and returns `tile_width`, `tile_height`, `tiles_across`, `tiles_down` and `tiles`, a tuple of
+`(col, row, location)` in row-major order. It is bounded by the reader's tile-index limit, and one
+unreadable location fails the call with an error naming the tile. Formats without location support
+raise `ValueError`.
 
 A `TileLocation` has a `kind`:
 
-- `stored`: `tile_size` is the tile clipped at the level edge, and `units`
-  lists the stored encoded images it is made from. Most formats use one unit
-  per tile; a tile of a strip-based TIFF lists every strip it covers.
-- `absent`: the file stores no pixels for the tile (a sparse or empty TIFF
-  tile, a missing DICOM frame, VSI background). Readers paint background;
-  Zarr leaves the chunk out and uses `fill_value`.
-- `not_addressable`: no byte range holds the tile's pixels. `reason` is
-  `synthetic_level` (with `base_level` and `factor`), `resampled`,
-  `codestream_window` (a window of one large JPEG 2000 codestream), or
-  `not_stored`.
+- `stored`: `tile_size` is the tile clipped at the level edge, and `units` lists the encoded images
+  it is made from. Most formats use one unit per tile; a tile of a strip-based TIFF lists every
+  strip it covers.
+- `absent`: the file stores no pixels for the tile, such as a sparse or empty TIFF tile, a missing
+  DICOM frame or VSI background. Readers paint background; Zarr omits the chunk and uses
+  `fill_value`.
+- `not_addressable`: no byte range holds the tile's pixels. `reason` is `synthetic_level` (with
+  `base_level` and `factor`), `resampled`, `codestream_window` (a window of one large JPEG 2000
+  codestream) or `not_stored`.
 
-An `EncodedUnit` has `path` (the slide file as the reader opened it),
-`segments` (`(offset, length)` byte ranges in stream order), `framing`,
-`prefix` and `suffix` bytes, `codec`, `stored_size` (including edge padding),
-`source_region` (the part of the stored image the tile uses) and
-`tile_region` (where that part lands in the tile). `codec` is a dictionary
-with `compression` (the same names as `CompressedTile.codec`),
-`bits_per_sample`, `significant_bits` (the low bits of each sample that
-carry it, or `None` when all do), `samples_per_pixel`,
-`photometric_interpretation`,
-`planar_configuration` (`chunky` or `planar`), `channel_order` (`rgb`, or
-`bgr` for CZI's B, G, R samples), `predictor` (`none`,
-`horizontal` or `floating_point`), `byte_order` (`little`, `big` or `None`),
-`chroma_subsampling` and `jpeg_tables` (bytes or `None`).
+An `EncodedUnit` has:
 
-| `framing` | The bytes at `segments` are |
-| --- | --- |
-| `standalone` | A complete stream: a JPEG with its tables, a JPEG 2000 codestream, a JPEG XR image. |
-| `jpeg_tables` | A TIFF abbreviated JPEG from its SOI marker. Its tables are `codec["jpeg_tables"]`; pass them as `tables=` to `imagecodecs.jpeg8_decode` or to the `imagecodecs_jpeg` numcodecs codec. |
-| `bare_payload` | A codec payload without framing, such as TIFF LZW, Deflate, Zstandard or uncompressed data. Decode it with `codec`, including its predictor and byte order. |
-| `prefixed` | Part of a larger JPEG (NDPI). The standalone stream is `prefix`, the segments, then `suffix`. With the usual `suffix` `b"\xff\xd9"`, the `imagecodecs_jpeg` codec's `header=prefix` rebuilds it. |
+- `path`: the slide file as the reader opened it.
+- `segments`: `(offset, length)` byte ranges in stream order.
+- `framing`, `prefix` and `suffix`: how the segments form a stream (table below).
+- `stored_size`: the encoded image size, including edge padding.
+- `source_region`: the part of the stored image the tile uses. `tile_region`: where that part lands
+  in the tile.
+- `codec`: a dictionary with `compression` (the names `CompressedTile.codec` uses),
+  `bits_per_sample`, `significant_bits`, `samples_per_pixel`, `photometric_interpretation`,
+  `planar_configuration` (`chunky` or `planar`), `channel_order` (`rgb`, or `bgr` for CZI),
+  `predictor` (`none`, `horizontal` or `floating_point`), `byte_order` (`little`, `big` or `None`),
+  `chroma_subsampling` and `jpeg_tables` (bytes or `None`).
 
-`unit.assemble(parts)` takes the bytes of each segment, read in order, and
-returns the standalone stream. For a unit that covers its whole tile, that is
-the same data `read_tiles_compressed` returns, with one exception: a
-`CompressedTile` cannot carry a predictor, separate sample planes, a
-non-native byte order, B, G, R sample order or masked high bits, so such bare
-payloads are read as exact `none` samples instead. Subsampled (packed) YCbCr
-payloads have locations but no raw read. `to_dict()` on a level, a
-location or a unit returns plain ints, strings, bytes, lists and dictionaries;
-only the bytes need encoding before `json.dumps`. Values a newer reader adds
-are reported as `unknown`.
+| `framing`      | The bytes at `segments` are                                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `standalone`   | A complete stream: a JPEG with its tables, a JPEG 2000 codestream, a JPEG XR image.                                                                                                    |
+| `jpeg_tables`  | A TIFF abbreviated JPEG from its SOI marker. Its tables are `codec["jpeg_tables"]`; pass them as `tables=` to `imagecodecs.jpeg8_decode` or to the `imagecodecs_jpeg` numcodecs codec. |
+| `bare_payload` | A codec payload without framing, such as TIFF LZW, Deflate, Zstandard or uncompressed data. Decode it with `codec`, including its predictor and byte order.                            |
+| `prefixed`     | Part of a larger JPEG (NDPI). The stream is `prefix`, the segments, then `suffix`. With the usual `suffix` `b"\xff\xd9"`, the `imagecodecs_jpeg` codec's `header=prefix` rebuilds it.  |
 
-A kerchunk-style reference needs one byte range per chunk. This sketch uses
-only the standard library and accepts 8-bit JPEG levels in which every stored
-tile is one byte range holding one full-size encoded tile:
+`unit.assemble(parts)` takes the bytes of each segment, in order, and returns a standalone stream.
+For a unit that covers its whole tile, that is the data `read_tiles_compressed` returns, except for
+bare payloads a `CompressedTile` cannot describe (a predictor, separate sample planes, non-native
+byte order, B, G, R order or masked high bits), which `read_tiles_compressed` returns as decoded
+`none` samples. Subsampled YCbCr payloads have locations but no compressed read.
+
+`to_dict()` on a level, location or unit returns plain ints, strings, bytes, lists and dictionaries;
+only the bytes need encoding before `json.dumps`. Values added by a newer reader are reported as
+`unknown`.
+
+## Kerchunk References
+
+A kerchunk reference maps each Zarr chunk to one byte range. This sketch uses only the standard
+library and handles 8-bit JPEG levels in which every stored tile is one byte range holding one
+full-size tile:
 
 ```python
 import base64
@@ -184,7 +172,29 @@ refs["0/.zarray"] = json.dumps({
 reference = {"version": 1, "refs": refs}
 ```
 
-Edge tiles of tiled TIFFs are stored padded to the full tile size, so they
-map to full chunks. Units cut from a larger image, multi-segment units and
-tiles built from several units need `read_tiles_compressed` or a reader that
-can crop or join them.
+Tiled TIFFs store edge tiles padded to the full tile size, so they map to full chunks. Units cut
+from a larger image, multi-segment units and tiles joined from several units need
+`read_tiles_compressed` or a reader that can crop or join them.
+
+## Threads and Processes
+
+Opening, region planning, compressed reads, location queries and `assemble` release the GIL. Open
+one `Slide` per DataLoader worker and prefer the `spawn` start method; every method of a slide
+inherited across `fork` raises `RuntimeError`.
+
+## Building From Source
+
+```sh
+uvx maturin build --manifest-path wsi-rs-python/Cargo.toml --release --out target/python-wheels
+python -m pip install --no-deps --no-index --find-links target/python-wheels wsi-rs
+python -m unittest discover -s wsi-rs-python/tests -v
+```
+
+With a local `j2k` wheel and NumPy installed, the tests also decode tiles through `j2k`, and with a
+Metal build and PyTorch MPS, they decode a DICOM JPEG 2000 tile into an MPS tensor. Set
+`WSI_REQUIRE_J2K=1` to fail instead of skipping when `j2k` is missing.
+
+---
+
+Part of [wsi-rs](https://github.com/frames-sg/wsi-rs). See the
+[Rust API documentation](https://docs.rs/wsi-rs).

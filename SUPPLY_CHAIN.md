@@ -1,59 +1,54 @@
-# Dependency policy
+# Dependency Policy
 
-`cargo xtask deps` checks every dependency before a release. It runs, with
-locked versions:
+`cargo xtask deps` checks every dependency with locked versions:
 
-- [cargo-deny](https://embarkstudios.github.io/cargo-deny/): known
-  vulnerabilities, licenses and allowed sources.
+- [cargo-deny](https://embarkstudios.github.io/cargo-deny/): known vulnerabilities, licenses and
+  allowed sources.
 - cargo-machete: unused dependencies.
-- [cargo-vet](https://mozilla.github.io/cargo-vet/): every dependency must be
-  audited.
+- [cargo-vet](https://mozilla.github.io/cargo-vet/): every dependency must be audited or exempted.
 
-CI installs pinned versions of all three tools. Git dependencies are limited
-to the first-party repositories listed in `deny.toml`; see
-[First-party Git dependencies](#first-party-git-dependencies).
+CI installs pinned versions of all three tools. Git dependencies are limited to the first-party
+repositories listed in `deny.toml`.
 
 ## Audits
 
-`supply-chain/` holds the cargo-vet data. Most audits are imported from the
-Bytecode Alliance, Google and Mozilla. A crate nobody has audited needs an
-explicit `safe-to-deploy` exemption. Any dependency change must pass
-`cargo vet --locked`, and any new exemption is reviewed in the same change.
+`supply-chain/audits.toml` records local source reviews and the violation for the published
+`j2k-cuda-j2k-engine 0.13.0` CUDA data race. cargo-vet also imports audits from the Bytecode
+Alliance, Google and Mozilla. Versions without a complete audit path need an explicit exemption
+in `supply-chain/config.toml`. Any dependency change must pass `cargo vet --locked`, and a new
+exemption is reviewed in the same change.
 
-Some dependencies are reviewed here for one exact version. Upgrading any of
-them needs a new review:
+On Apple Silicon, `sha2` uses its `asm` feature (locally audited `sha2-asm`) so slide fingerprints
+(dataset IDs and `.svcache` checks) use the CPU's SHA-256 instructions. Tests check that the
+hardware and software paths agree. Building on macOS needs the system C toolchain.
 
-- **Python binding dependencies**: exact-version audits cover PyO3 and its
-  four support packages at 0.30.1, `portable-atomic 1.15.0`,
-  `target-lexicon 0.13.5`, and the `syn 2.0.119 -> 3.0.9` delta. The notes
-  describe the stable-ABI reader integration and review limits.
-- **Zstandard**: delta audits cover `zstd 0.14.3`, `zstd-safe 8.2.0`, and
-  `zstd-sys 2.1.2+zstd.1.5.7`. CZI parsing and its tests use the native
-  reader; there is no external CZI reader dependency.
-- **`sha2-asm` 0.6.4**: on Apple Silicon Macs, `sha2` uses its `asm` feature so
-  slide fingerprints (dataset IDs and `.svcache` checks) use the CPU's SHA-256
-  instructions. The audit in `supply-chain/audits.toml` covers the package's
-  build script and the assembly it compiles. Tests check that the hardware and
-  software paths give the same results. Building on macOS needs the system C
-  toolchain.
+## Git Dependencies
 
-## First-party Git dependencies
+J2K ([frames-sg/j2k](https://github.com/frames-sg/j2k)) and JXR
+([frames-sg/jxr](https://github.com/frames-sg/jxr)) are first-party. `Cargo.toml` names each with a
+crates.io version and its Git `main` branch: builds from this repository use `main`, and the
+published crate resolves the crates.io release. JXR's `main` builds on J2K's `main`, so a build
+compiles one J2K.
 
-J2K (`frames-sg/j2k`) and JXR (`frames-sg/jxr`) are first-party code, followed on
-their `main` branches. `cargo latest`, an alias in `.cargo/config.toml`, moves
-`Cargo.lock` to their newest commits, and every CI job runs it before building
-with `--locked`, so every other dependency stays pinned. JXR's `main` builds on
-J2K `main`, so a slide reader compiles one J2K.
+`cargo latest`, an alias in `.cargo/config.toml`, moves `Cargo.lock` to their newest commits and
+leaves every other dependency pinned. CI runs it before building with `--locked`, except the
+package, publish and Python wheel jobs, which build from the committed `Cargo.lock`. The C
+artifact job runs `cargo latest` before compiling the library. To identify the Git revisions in
+a released C library, use its accompanying SBOM. SPDX records each revision in the package's
+`downloadLocation`, and CycloneDX records it in the package URL's `vcs_url`.
 
-cargo-vet treats every J2K and JXR package as first-party
-(`audit-as-crates-io = false`). They are reviewed in their own repositories, not
-audited per revision here. The audits of earlier exact J2K revisions, the
-published JXR audits, and the violation against the published CUDA engine 0.13.0
-stay in `supply-chain/audits.toml` and apply to those crates.io packages. Release
-artifacts record the exact J2K and JXR commits in their SBOMs.
+cargo-vet treats J2K and JXR packages as first-party (`audit-as-crates-io = false`); they are
+reviewed in their own repositories.
 
-## Exceptions with an expiry date
+The DICOM crates come from [frames-sg/dicom-rs](https://github.com/frames-sg/dicom-rs), branch
+`frames/core-0.9.1`: dicom-rs 0.9 with its date and time types moved from Chrono, which is
+unmaintained, to Jiff. wsi-rs uses no DICOM date or time API, so it builds against the fork and the
+crates.io release alike. The published crate resolves the crates.io release, which still depends on
+Chrono. `cargo latest` leaves the fork at its locked commit. cargo-vet checks the fork's packages as
+crates.io packages, exempted at the locked commit like the crates.io release before them.
 
-| Dependency | Why it is allowed | Owner | Review by |
-| --- | --- | --- | --- |
-| `encoding 0.2.33` | Unmaintained, pulled in by `dicom-encoding 0.9.1`. The DICOM parsers bound all text they decode, and cargo-deny still rejects any known RustSec vulnerability. dicom-rs 0.10.0 still depends on it (checked 2026-10-01). | wsi-rs maintainers | 2027-01-01 or the next dicom-rs release, whichever comes first |
+## Exceptions With an Expiry Date
+
+| Dependency        | Why it is allowed                                                                                                                                                                                                        | Owner              | Review by                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | -------------------------------------------------------------- |
+| `encoding 0.2.33` | Unmaintained, pulled in by `dicom-encoding 0.9.1`. The DICOM parsers bound all text they decode, and cargo-deny still rejects any known RustSec vulnerability. dicom-rs 0.10.1 still depends on it (checked 2026-11-20). | wsi-rs maintainers | 2027-01-01 or the next dicom-rs release, whichever comes first |

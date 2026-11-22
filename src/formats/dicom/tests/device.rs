@@ -292,7 +292,7 @@ fn concurrent_admission_charges_actual_dicom_frame_copies() {
     };
     let reqs = [tile_request(0, 0), tile_request(0, 0)];
     let expected = reader.read_tiles_cpu(&reqs).unwrap();
-    let reader = crate::core::decode_runtime::AdaptiveDecodeReader::new_managed(
+    let reader = crate::core::decode_runtime::DecodeRuntimeReader::new_managed(
         Box::new(reader),
         crate::core::decode_runtime::DecodeRuntime::default_arc(),
     );

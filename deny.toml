@@ -9,7 +9,7 @@ no-default-features = false
 version = 2
 ignore = [
     # RUSTSEC-2021-0153: `encoding` is pulled transitively by dicom-encoding
-    # 0.9.1. Reviewed 2026-10-01: dicom-rs 0.10.0 (2026-06-27) still requires
+    # 0.9.1. Reviewed 2026-11-20: dicom-rs 0.10.1 (2026-10-27) still requires
     # encoding 0.2.33, so no upstream upgrade removes it. Informational only.
     # Owner: wsi-rs maintainers. Review/expiry: 2027-01-01 or the next dicom-rs
     # release, whichever is first. See SUPPLY_CHAIN.md.
@@ -44,4 +44,8 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 # First-party J2K and JXR follow their main branches; `cargo latest` takes their
 # newest commits. See SUPPLY_CHAIN.md.
-allow-git = ["https://github.com/frames-sg/j2k", "https://github.com/frames-sg/jxr"]
+allow-git = [
+    "https://github.com/frames-sg/dicom-rs",
+    "https://github.com/frames-sg/j2k",
+    "https://github.com/frames-sg/jxr",
+]

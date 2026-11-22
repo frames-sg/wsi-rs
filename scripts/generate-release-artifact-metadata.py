@@ -1,16 +1,38 @@
 #!/usr/bin/env python3
 """Generate deterministic unsigned release metadata, checksums, and SBOMs."""
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
 import pathlib
 import re
+import urllib.parse
 
 
 def spdx_id(name: str, version: str) -> str:
     value = re.sub(r"[^A-Za-z0-9.-]", "-", f"{name}-{version}")
     return f"SPDXRef-Package-{value}"
+
+
+def git_revision(package: dict) -> str | None:
+    """Return `git+<repository>@<commit>` for a Git dependency, else None."""
+    source = package.get("source") or ""
+    if not source.startswith("git+"):
+        return None
+    location, _, commit = source.partition("#")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit(f"{package['name']}: Git source without a full commit: {source}")
+    return f"{location.split('?', 1)[0]}@{commit}"
+
+
+def purl(package: dict) -> str:
+    value = f"pkg:cargo/{package['name']}@{package['version']}"
+    revision = git_revision(package)
+    if revision:
+        value += f"?vcs_url={urllib.parse.quote(revision, safe='/:')}"
+    return value
 
 
 def main() -> None:
@@ -27,6 +49,9 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     cargo = json.loads(args.cargo_metadata.read_text(encoding="utf-8"))
     packages = sorted(cargo["packages"], key=lambda package: (package["name"], package["version"]))
+    package_ids = [spdx_id(package["name"], package["version"]) for package in packages]
+    if len(set(package_ids)) != len(package_ids):
+        raise SystemExit("cargo metadata lists one package name and version from two sources")
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
 
     release_metadata = {
@@ -59,7 +84,7 @@ def main() -> None:
         "SPDXID": spdx_id(package["name"], package["version"]),
         "name": package["name"],
         "versionInfo": package["version"],
-        "downloadLocation": "NOASSERTION",
+        "downloadLocation": git_revision(package) or "NOASSERTION",
         "filesAnalyzed": False,
         "licenseConcluded": "NOASSERTION",
         "licenseDeclared": package.get("license") or "NOASSERTION",
@@ -86,7 +111,7 @@ def main() -> None:
         "type": "library",
         "name": package["name"],
         "version": package["version"],
-        "purl": f"pkg:cargo/{package['name']}@{package['version']}",
+        "purl": purl(package),
         **({"licenses": [{"expression": package["license"]}]} if package.get("license") else {}),
     } for package in packages]
     cyclonedx = {

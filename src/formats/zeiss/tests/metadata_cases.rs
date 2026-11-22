@@ -153,6 +153,19 @@ fn scene_slot_and_canvas_geometry_handle_sparse_negative_and_metadata_free_input
         .expect("statistics canvas"),
         (20, 15)
     );
+    let negative = statistics_with_scenes(&[
+        (2, IntRect::new(-30, -25, 4, 3)),
+        (7, IntRect::new(-15, -14, 5, 4)),
+    ]);
+    assert_eq!(
+        canvas_dimensions(
+            &negative,
+            &MetadataSummary::default(),
+            std::path::Path::new("negative.czi"),
+        )
+        .expect("translating both scenes preserves the canvas size"),
+        (20, 15)
+    );
     let mut summary = MetadataSummary::default();
     summary.image.sizes.insert(Dimension::X, 12);
     summary.image.sizes.insert(Dimension::Y, 9);

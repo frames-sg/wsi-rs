@@ -124,7 +124,7 @@ fn controlled_batch_of_eight_reaches_dicom_once_in_original_order() {
             .iter()
             .map(|request| (request.col, request.row))
             .collect::<Vec<_>>()],
-        "the adaptive wrapper must admit one unchanged DICOM batch"
+        "the decode runtime reader must admit one unchanged DICOM batch"
     );
     for (tile, expected) in tiles.iter().zip(
         requests

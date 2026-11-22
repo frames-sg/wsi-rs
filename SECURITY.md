@@ -2,28 +2,25 @@
 
 ## Reporting a Vulnerability
 
-`wsi-rs` reads whole-slide image containers and passes compressed tile
-payloads into codec backends. If you find a crash, memory-safety issue,
-malformed-output bug, metadata leak, or unexpected file-system behavior, please
-report it privately rather than opening a public issue.
+wsi-rs parses untrusted slide files and passes their tile data to codecs. Report crashes,
+memory-safety bugs, wrong output, metadata leaks and unexpected file-system access privately, not in
+a public issue.
 
-Use GitHub's private vulnerability reporting for the repository. If it is
-unavailable, contact the maintainer through the repository owner's profile.
+Use GitHub's
+[private vulnerability reporting](https://github.com/frames-sg/wsi-rs/security/advisories/new). If
+it is unavailable, contact the maintainer through the repository owner's profile.
 
-Please include:
+Include:
 
-- A minimal reproducer, including the smallest input file or generated fixture
-  you can share.
-- Rust version, target triple, operating system, and cargo features used.
-- The API call, CLI command, or OpenSlide-shim call surface.
-- Expected vs. observed behavior.
+- The smallest input file or generated fixture that reproduces the problem.
+- Rust version, target triple, operating system and Cargo features.
+- The API call, command or OpenSlide-shim function that triggers it.
+- Expected and observed behavior.
 
-Reports are acknowledged within 7 days. Patches are issued as soon as possible,
-generally within 30 days for high-severity issues.
+Reports are acknowledged within 7 days. Fixes ship as soon as possible, generally within 30 days for
+high-severity issues.
 
 ## Supported Versions
 
-Supported versions are the latest published release (currently 0.8.0), the
-0.5 stabilization line, and main.
-Optional Metal behavior is triaged on supported macOS hardware when that
-hardware is available.
+The latest release on crates.io and `main`. Metal reports are triaged when supported macOS hardware
+is available.

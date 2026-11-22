@@ -638,3 +638,48 @@ fn parse_required_u64_attr_reports_missing_and_invalid_values() {
         .to_string()
         .contains("Leica dimension: invalid integer 'tall' for attribute 'sizeY'"));
 }
+
+fn leica_image_with_levels(levels: &[(usize, u64, u32)], is_macro: bool) -> LeicaImageInfo {
+    LeicaImageInfo {
+        ifd_levels: levels
+            .iter()
+            .map(|&(ifd_index, width, z)| ParsedDimension {
+                ifd_index,
+                width,
+                height: width,
+                r: 0,
+                z,
+                c: 0,
+            })
+            .collect(),
+        is_macro,
+        ..leica_image_for_ifd(0)
+    }
+}
+
+#[test]
+fn quickhash_uses_the_only_brightfield_main_image_beside_one_macro() {
+    let main = || leica_image_with_levels(&[(0, 64, 0), (1, 16, 0), (5, 16, 1)], false);
+    let macro_image = leica_image_with_levels(&[(2, 32, 0), (3, 8, 0)], true);
+    for images in [vec![main(), macro_image], vec![main()]] {
+        assert_eq!(quickhash_dimension(&images).unwrap().ifd_index, 1);
+    }
+}
+
+#[test]
+fn quickhash_uses_the_brightfield_macro_otherwise() {
+    let main = || leica_image_with_levels(&[(0, 64, 0), (1, 16, 0)], false);
+    let macro_image = || leica_image_with_levels(&[(2, 32, 0), (3, 8, 0)], true);
+    let fluorescence = || LeicaImageInfo {
+        illumination_source: Some("fluorescence".into()),
+        ..main()
+    };
+    for images in [
+        vec![main(), main(), macro_image()],
+        vec![fluorescence(), macro_image()],
+        vec![main(), macro_image(), macro_image()],
+    ] {
+        assert_eq!(quickhash_dimension(&images).unwrap().ifd_index, 3);
+    }
+    assert!(quickhash_dimension(&[fluorescence()]).is_none());
+}

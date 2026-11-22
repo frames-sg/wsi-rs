@@ -100,6 +100,19 @@ fn twelve_bit_dicom_series_is_uint16_with_regular_tiles() {
 }
 
 #[test]
+fn twelve_bit_dicom_subpixel_edge_reports_unsupported_coverage() {
+    let slide = Slide::open(fixture_root().join("mono2-extended.dcm")).unwrap();
+    let last_pixel = RegionRequest::new(0, 0, 0, (39, 27), (1, 1));
+    let pixel = slide.read_region_subpixel(&last_pixel, (0.0, 0.0)).unwrap();
+    assert_eq!(pixel.data().as_u16(), Some(&[3395; 3][..]));
+
+    let error = slide
+        .read_region_subpixel(&last_pixel, (0.5, 0.5))
+        .expect_err("the last pixel has partial coverage");
+    assert!(matches!(error, wsi_rs::WsiError::DisplayConversion(_)));
+}
+
+#[test]
 fn twelve_bit_dicom_regions_match_libjpeg_turbo_reference() {
     for (name, _) in FIXTURES {
         let reference = read_reference(name);

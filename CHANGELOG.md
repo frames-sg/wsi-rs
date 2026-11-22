@@ -171,10 +171,10 @@ bindings are on PyPI as `wsi-rs`.
   truncated: J2K's LZW decoder stopped when the input ran out, before reading
   the end code in its last bytes. J2K `main` reads to the end code.
 
-## [0.8.1] - 2026-10-27
+## 0.8.1 (unpublished) - 2026-10-27
 
-This is a GitHub source release. The fixed J2K dependency is pinned to a Git
-commit; 0.8.1 is not published on crates.io.
+0.8.1 was prepared as a GitHub source release but never tagged or published;
+its changes first shipped in 0.9.0.
 
 ### Added
 
@@ -591,8 +591,7 @@ Speed and memory:
 
 [0.9.2]: https://github.com/frames-sg/wsi-rs/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/frames-sg/wsi-rs/compare/v0.9.0...v0.9.1
-[0.9.0]: https://github.com/frames-sg/wsi-rs/compare/v0.8.1...v0.9.0
-[0.8.1]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...v0.8.1
+[0.9.0]: https://github.com/frames-sg/wsi-rs/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/frames-sg/wsi-rs/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/frames-sg/wsi-rs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/frames-sg/wsi-rs/compare/v0.5.1...v0.5.2

@@ -88,11 +88,11 @@ objc2-metal = { version = "=0.3.2", optional = true, default-features = false, f
     "MTLResource",
     "MTLTypes",
 ] }
-dicom-core = "0.9"
-dicom-object = "0.9"
-dicom-dictionary-std = "0.9"
-dicom-parser = "0.9"
-dicom-transfer-syntax-registry = { version = "0.9", default-features = false }
+dicom-core = { version = "0.9", git = "https://github.com/frames-sg/dicom-rs", branch = "frames/core-0.9.1" }
+dicom-object = { version = "0.9", git = "https://github.com/frames-sg/dicom-rs", branch = "frames/core-0.9.1" }
+dicom-dictionary-std = { version = "0.9", git = "https://github.com/frames-sg/dicom-rs", branch = "frames/core-0.9.1" }
+dicom-parser = { version = "0.9", git = "https://github.com/frames-sg/dicom-rs", branch = "frames/core-0.9.1" }
+dicom-transfer-syntax-registry = { version = "0.9", git = "https://github.com/frames-sg/dicom-rs", branch = "frames/core-0.9.1", default-features = false }
 cfb = "0.14.0"
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]

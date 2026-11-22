@@ -613,28 +613,21 @@ fn metal_tiles_match_cpu_tiles_at_every_device_level() {
     };
     for (name, codestream, _) in openjpeg_reduced_cases() {
         let fixture = write_fixture("j2k", codestream);
-        for (grid_name, grid) in [("small", SMALL_GRID), ("default", LevelGrid::DEFAULT)] {
-            // J2K's Metal batch rejects these tiles; see the ignored test below.
-            if name == "openjph_rgb_u8_53" && grid_name == "small" {
-                continue;
-            }
+        for grid in [SMALL_GRID, LevelGrid::DEFAULT] {
             let reader = open_with_grid(&fixture.path, grid);
             assert_metal_matches_cpu(&reader, &sessions, name);
         }
     }
 }
 
-/// J2K's Metal batch prepare fails on half-scale regions in the top row of
-/// this multi-tile HTJ2K codestream ("failed to decode code-block") while the
-/// same region decodes alone. Read as a batch, such tiles return an error and
-/// callers fall back to the CPU; no wrong pixels result. Remove the ignore when
-/// J2K decodes them.
+/// A Metal batch of half-scale regions from the top row of a multi-tile
+/// HTJ2K codestream matches the CPU, as each region does alone.
 #[cfg(feature = "metal")]
 #[test]
-#[ignore = "J2K Metal batch prepare rejects top-row half-scale regions of multi-tile HTJ2K"]
 fn metal_batches_half_scale_regions_of_multi_tile_htj2k() {
-    let sessions = crate::output::metal::MetalBackendSessions::system_default()
-        .expect("Metal device for the J2K batch regression");
+    let Ok(sessions) = crate::output::metal::MetalBackendSessions::system_default() else {
+        return;
+    };
     let (name, codestream, _) = openjpeg_reduced_cases()[3];
     assert_eq!(name, "openjph_rgb_u8_53");
     let fixture = write_fixture("j2k", codestream);
