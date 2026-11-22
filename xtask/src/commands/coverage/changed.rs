@@ -210,16 +210,16 @@ pub(super) fn changed_lines_are_declaration_only(
     for (index, line) in source.lines().enumerate() {
         let line_number = index as u32 + 1;
         let trimmed = line.trim();
-        let starts_wiring = module_wiring_declaration(trimmed);
+        let starts_declaration = starts_non_executable_declaration(trimmed);
         if trimmed.is_empty()
             || trimmed.starts_with("//")
             || trimmed.starts_with("#[")
-            || starts_wiring
+            || starts_declaration
             || in_use_declaration
         {
             declaration_lines.insert(line_number);
         }
-        if starts_wiring || in_use_declaration {
+        if starts_declaration || in_use_declaration {
             in_use_declaration = !trimmed.contains(';');
         }
     }
@@ -233,14 +233,21 @@ fn source_line_has_function_definition(line: &str) -> bool {
         .any(|token| token == "fn")
 }
 
-fn module_wiring_declaration(line: &str) -> bool {
+fn starts_non_executable_declaration(line: &str) -> bool {
     let line = line.trim();
     let declaration = line
         .strip_prefix("pub ")
         .or_else(|| line.strip_prefix("pub(crate) "))
         .or_else(|| line.strip_prefix("pub(super) "))
         .unwrap_or(line);
-    declaration.starts_with("mod ") || declaration.starts_with("use ")
+    declaration.starts_with("mod ")
+        || declaration.starts_with("use ")
+        || declaration
+            .strip_prefix("struct ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .is_some_and(|name| {
+                !name.is_empty() && name.chars().all(|c| c == '_' || c.is_alphanumeric())
+            })
 }
 
 pub(super) fn collect_git_diff_lines(
